@@ -420,6 +420,10 @@ pub struct ThemePartSummary {
     pub object_defaults_child_grandchild_names: Vec<Vec<Vec<String>>>,
     pub object_defaults_child_grandchild_attr_maps: Vec<Vec<Vec<BTreeMap<String, String>>>>,
     pub object_defaults_child_grandchild_texts: Vec<Vec<Vec<Option<String>>>>,
+    pub object_defaults_child_great_grandchild_names: Vec<Vec<Vec<Vec<String>>>>,
+    pub object_defaults_child_great_grandchild_attr_maps:
+        Vec<Vec<Vec<Vec<BTreeMap<String, String>>>>>,
+    pub object_defaults_child_great_grandchild_texts: Vec<Vec<Vec<Vec<Option<String>>>>>,
     pub has_object_defaults: bool,
     pub has_extra_color_scheme_list: bool,
     pub has_custom_color_list: bool,
@@ -8703,6 +8707,11 @@ fn parse_theme_part_summary(theme_xml: &[u8]) -> OmResult<ThemePartSummary> {
     let mut object_defaults_child_grandchild_attr_maps =
         Vec::<Vec<Vec<BTreeMap<String, String>>>>::new();
     let mut object_defaults_child_grandchild_texts = Vec::<Vec<Vec<Option<String>>>>::new();
+    let mut object_defaults_child_great_grandchild_names = Vec::<Vec<Vec<Vec<String>>>>::new();
+    let mut object_defaults_child_great_grandchild_attr_maps =
+        Vec::<Vec<Vec<Vec<BTreeMap<String, String>>>>>::new();
+    let mut object_defaults_child_great_grandchild_texts =
+        Vec::<Vec<Vec<Vec<Option<String>>>>>::new();
     let mut extra_color_scheme_list_count = 0usize;
     let mut custom_color_list_count = 0usize;
     let mut extension_list_count = 0usize;
@@ -9026,6 +9035,9 @@ fn parse_theme_part_summary(theme_xml: &[u8]) -> OmResult<ThemePartSummary> {
                     object_defaults_child_grandchild_names.push(Vec::new());
                     object_defaults_child_grandchild_attr_maps.push(Vec::new());
                     object_defaults_child_grandchild_texts.push(Vec::new());
+                    object_defaults_child_great_grandchild_names.push(Vec::new());
+                    object_defaults_child_great_grandchild_attr_maps.push(Vec::new());
+                    object_defaults_child_great_grandchild_texts.push(Vec::new());
                 } else if element_stack.len() == 3
                     && element_stack.first().map(String::as_str) == Some("theme")
                     && element_stack.get(1).map(String::as_str) == Some("objectDefaults")
@@ -9084,6 +9096,33 @@ fn parse_theme_part_summary(theme_xml: &[u8]) -> OmResult<ThemePartSummary> {
                             )
                         })?
                         .push(Vec::new());
+                    object_defaults_child_great_grandchild_names
+                        .last_mut()
+                        .ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "theme part encountered objectDefaults nested child before objectDefaults child",
+                            )
+                        })?
+                        .push(Vec::new());
+                    object_defaults_child_great_grandchild_attr_maps
+                        .last_mut()
+                        .ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "theme part encountered objectDefaults nested child before objectDefaults child",
+                            )
+                        })?
+                        .push(Vec::new());
+                    object_defaults_child_great_grandchild_texts
+                        .last_mut()
+                        .ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "theme part encountered objectDefaults nested child before objectDefaults child",
+                            )
+                        })?
+                        .push(Vec::new());
                 } else if element_stack.len() == 4
                     && element_stack.first().map(String::as_str) == Some("theme")
                     && element_stack.get(1).map(String::as_str) == Some("objectDefaults")
@@ -9115,6 +9154,73 @@ fn parse_theme_part_summary(theme_xml: &[u8]) -> OmResult<ThemePartSummary> {
                             OmError::new(
                                 OmErrorCode::InvalidState,
                                 "theme part encountered objectDefaults grandchild before objectDefaults nested child",
+                            )
+                        })?
+                        .push(None);
+                    object_defaults_child_great_grandchild_names
+                        .last_mut()
+                        .and_then(|children| children.last_mut())
+                        .ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "theme part encountered objectDefaults grandchild before objectDefaults nested child",
+                            )
+                        })?
+                        .push(Vec::new());
+                    object_defaults_child_great_grandchild_attr_maps
+                        .last_mut()
+                        .and_then(|children| children.last_mut())
+                        .ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "theme part encountered objectDefaults grandchild before objectDefaults nested child",
+                            )
+                        })?
+                        .push(Vec::new());
+                    object_defaults_child_great_grandchild_texts
+                        .last_mut()
+                        .and_then(|children| children.last_mut())
+                        .ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "theme part encountered objectDefaults grandchild before objectDefaults nested child",
+                            )
+                        })?
+                        .push(Vec::new());
+                } else if element_stack.len() == 5
+                    && element_stack.first().map(String::as_str) == Some("theme")
+                    && element_stack.get(1).map(String::as_str) == Some("objectDefaults")
+                {
+                    object_defaults_child_great_grandchild_names
+                        .last_mut()
+                        .and_then(|children| children.last_mut())
+                        .and_then(|grandchildren| grandchildren.last_mut())
+                        .ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "theme part encountered objectDefaults great-grandchild before objectDefaults grandchild",
+                            )
+                        })?
+                        .push(local_name.clone());
+                    object_defaults_child_great_grandchild_attr_maps
+                        .last_mut()
+                        .and_then(|children| children.last_mut())
+                        .and_then(|grandchildren| grandchildren.last_mut())
+                        .ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "theme part encountered objectDefaults great-grandchild before objectDefaults grandchild",
+                            )
+                        })?
+                        .push(read_attr_map(&element, reader.decoder())?);
+                    object_defaults_child_great_grandchild_texts
+                        .last_mut()
+                        .and_then(|children| children.last_mut())
+                        .and_then(|grandchildren| grandchildren.last_mut())
+                        .ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "theme part encountered objectDefaults great-grandchild before objectDefaults grandchild",
                             )
                         })?
                         .push(None);
@@ -11335,6 +11441,9 @@ fn parse_theme_part_summary(theme_xml: &[u8]) -> OmResult<ThemePartSummary> {
                     object_defaults_child_grandchild_names.push(Vec::new());
                     object_defaults_child_grandchild_attr_maps.push(Vec::new());
                     object_defaults_child_grandchild_texts.push(Vec::new());
+                    object_defaults_child_great_grandchild_names.push(Vec::new());
+                    object_defaults_child_great_grandchild_attr_maps.push(Vec::new());
+                    object_defaults_child_great_grandchild_texts.push(Vec::new());
                 } else if element_stack.len() == 3
                     && element_stack.first().map(String::as_str) == Some("theme")
                     && element_stack.get(1).map(String::as_str) == Some("objectDefaults")
@@ -11393,6 +11502,33 @@ fn parse_theme_part_summary(theme_xml: &[u8]) -> OmResult<ThemePartSummary> {
                             )
                         })?
                         .push(Vec::new());
+                    object_defaults_child_great_grandchild_names
+                        .last_mut()
+                        .ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "theme part encountered objectDefaults nested child before objectDefaults child",
+                            )
+                        })?
+                        .push(Vec::new());
+                    object_defaults_child_great_grandchild_attr_maps
+                        .last_mut()
+                        .ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "theme part encountered objectDefaults nested child before objectDefaults child",
+                            )
+                        })?
+                        .push(Vec::new());
+                    object_defaults_child_great_grandchild_texts
+                        .last_mut()
+                        .ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "theme part encountered objectDefaults nested child before objectDefaults child",
+                            )
+                        })?
+                        .push(Vec::new());
                 } else if element_stack.len() == 4
                     && element_stack.first().map(String::as_str) == Some("theme")
                     && element_stack.get(1).map(String::as_str) == Some("objectDefaults")
@@ -11424,6 +11560,73 @@ fn parse_theme_part_summary(theme_xml: &[u8]) -> OmResult<ThemePartSummary> {
                             OmError::new(
                                 OmErrorCode::InvalidState,
                                 "theme part encountered objectDefaults grandchild before objectDefaults nested child",
+                            )
+                        })?
+                        .push(None);
+                    object_defaults_child_great_grandchild_names
+                        .last_mut()
+                        .and_then(|children| children.last_mut())
+                        .ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "theme part encountered objectDefaults grandchild before objectDefaults nested child",
+                            )
+                        })?
+                        .push(Vec::new());
+                    object_defaults_child_great_grandchild_attr_maps
+                        .last_mut()
+                        .and_then(|children| children.last_mut())
+                        .ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "theme part encountered objectDefaults grandchild before objectDefaults nested child",
+                            )
+                        })?
+                        .push(Vec::new());
+                    object_defaults_child_great_grandchild_texts
+                        .last_mut()
+                        .and_then(|children| children.last_mut())
+                        .ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "theme part encountered objectDefaults grandchild before objectDefaults nested child",
+                            )
+                        })?
+                        .push(Vec::new());
+                } else if element_stack.len() == 5
+                    && element_stack.first().map(String::as_str) == Some("theme")
+                    && element_stack.get(1).map(String::as_str) == Some("objectDefaults")
+                {
+                    object_defaults_child_great_grandchild_names
+                        .last_mut()
+                        .and_then(|children| children.last_mut())
+                        .and_then(|grandchildren| grandchildren.last_mut())
+                        .ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "theme part encountered objectDefaults great-grandchild before objectDefaults grandchild",
+                            )
+                        })?
+                        .push(local_name.clone());
+                    object_defaults_child_great_grandchild_attr_maps
+                        .last_mut()
+                        .and_then(|children| children.last_mut())
+                        .and_then(|grandchildren| grandchildren.last_mut())
+                        .ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "theme part encountered objectDefaults great-grandchild before objectDefaults grandchild",
+                            )
+                        })?
+                        .push(read_attr_map(&element, reader.decoder())?);
+                    object_defaults_child_great_grandchild_texts
+                        .last_mut()
+                        .and_then(|children| children.last_mut())
+                        .and_then(|grandchildren| grandchildren.last_mut())
+                        .ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "theme part encountered objectDefaults great-grandchild before objectDefaults grandchild",
                             )
                         })?
                         .push(None);
@@ -13286,6 +13489,24 @@ fn parse_theme_part_summary(theme_xml: &[u8]) -> OmResult<ThemePartSummary> {
                                     OmErrorCode::InvalidState,
                                     "theme part encountered objectDefaults grandchild text before objectDefaults grandchild",
                                 )
+                        })?,
+                        &content,
+                    );
+                } else if element_stack.len() == 6
+                    && element_stack.first().map(String::as_str) == Some("theme")
+                    && element_stack.get(1).map(String::as_str) == Some("objectDefaults")
+                {
+                    append_extension_list_child_text(
+                        object_defaults_child_great_grandchild_texts
+                            .last_mut()
+                            .and_then(|children| children.last_mut())
+                            .and_then(|grandchildren| grandchildren.last_mut())
+                            .and_then(|great_grandchildren| great_grandchildren.last_mut())
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "theme part encountered objectDefaults great-grandchild text before objectDefaults great-grandchild",
+                                )
                             })?,
                         &content,
                     );
@@ -13960,6 +14181,24 @@ fn parse_theme_part_summary(theme_xml: &[u8]) -> OmResult<ThemePartSummary> {
                                 "theme part encountered clrScheme child text before clrScheme child",
                             )
                         })?,
+                        &content,
+                    );
+                } else if element_stack.len() == 6
+                    && element_stack.first().map(String::as_str) == Some("theme")
+                    && element_stack.get(1).map(String::as_str) == Some("objectDefaults")
+                {
+                    append_extension_list_child_text(
+                        object_defaults_child_great_grandchild_texts
+                            .last_mut()
+                            .and_then(|children| children.last_mut())
+                            .and_then(|grandchildren| grandchildren.last_mut())
+                            .and_then(|great_grandchildren| great_grandchildren.last_mut())
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "theme part encountered objectDefaults great-grandchild text before objectDefaults great-grandchild",
+                                )
+                            })?,
                         &content,
                     );
                 } else if element_stack.len() == 3
@@ -14723,6 +14962,9 @@ fn parse_theme_part_summary(theme_xml: &[u8]) -> OmResult<ThemePartSummary> {
                     object_defaults_child_grandchild_names,
                     object_defaults_child_grandchild_attr_maps,
                     object_defaults_child_grandchild_texts,
+                    object_defaults_child_great_grandchild_names,
+                    object_defaults_child_great_grandchild_attr_maps,
+                    object_defaults_child_great_grandchild_texts,
                     has_object_defaults: object_defaults_count == 1,
                     has_extra_color_scheme_list: extra_color_scheme_list_count == 1,
                     has_custom_color_list: custom_color_list_count == 1,
@@ -36040,6 +36282,59 @@ mod tests {
         assert_eq!(
             theme_summary.object_defaults_child_grandchild_texts,
             vec![vec![vec![Some("epsilonzeta".to_string())]]]
+        );
+    }
+
+    #[test]
+    fn load_collects_object_defaults_great_grandchild_details_in_theme_summary() {
+        let codec = XlsxCodec;
+        let loaded = codec
+            .load(
+                &workbook_with_theme_object_defaults_great_grandchild_bytes(),
+                CommonLoadOptions::default(),
+            )
+            .expect("load workbook");
+        let theme_summary = loaded
+            .support_parts
+            .theme_summaries
+            .get("xl/theme/theme1.xml")
+            .expect("typed theme summary");
+
+        assert_eq!(
+            theme_summary.object_defaults_child_great_grandchild_names,
+            vec![vec![vec![vec!["srgbClr".to_string()]]]]
+        );
+        assert_eq!(
+            theme_summary.object_defaults_child_great_grandchild_attr_maps,
+            vec![vec![vec![vec![BTreeMap::from([(
+                "val".to_string(),
+                "FF0000".to_string()
+            )])]]]]
+        );
+        assert_eq!(
+            theme_summary.object_defaults_child_great_grandchild_texts,
+            vec![vec![vec![vec![None]]]]
+        );
+    }
+
+    #[test]
+    fn load_collects_object_defaults_great_grandchild_texts_in_theme_summary() {
+        let codec = XlsxCodec;
+        let loaded = codec
+            .load(
+                &workbook_with_theme_object_defaults_great_grandchild_text_bytes(),
+                CommonLoadOptions::default(),
+            )
+            .expect("load workbook");
+        let theme_summary = loaded
+            .support_parts
+            .theme_summaries
+            .get("xl/theme/theme1.xml")
+            .expect("typed theme summary");
+
+        assert_eq!(
+            theme_summary.object_defaults_child_great_grandchild_texts,
+            vec![vec![vec![vec![Some("etathetas".to_string())]]]]
         );
     }
 
@@ -73225,6 +73520,20 @@ mod tests {
     }
 
     #[test]
+    fn dirty_save_preserves_object_defaults_great_grandchild_attr_maps() {
+        assert_dirty_save_preserves_theme_xml_for_mutated_input(
+            workbook_with_theme_object_defaults_great_grandchild_bytes(),
+        );
+    }
+
+    #[test]
+    fn dirty_save_preserves_object_defaults_great_grandchild_texts() {
+        assert_dirty_save_preserves_theme_xml_for_mutated_input(
+            workbook_with_theme_object_defaults_great_grandchild_text_bytes(),
+        );
+    }
+
+    #[test]
     fn dirty_save_preserves_theme_extra_color_scheme_list_without_object_defaults() {
         let mut package = OpcPackage::from_bytes(&workbook_with_styles_and_theme_bytes())
             .expect("base workbook package");
@@ -92102,6 +92411,82 @@ mod tests {
         let error = codec
             .save(&loaded, office_common::SaveOptions::default())
             .expect_err("save should fail when objectDefaults grandchild text drifts");
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("typed theme summary drifted"));
+        assert!(error.message.contains("xl/theme/theme1.xml"));
+    }
+
+    #[test]
+    fn save_rejects_theme_part_when_object_defaults_great_grandchild_attr_map_drifts() {
+        let codec = XlsxCodec;
+        let input = workbook_with_theme_object_defaults_great_grandchild_bytes();
+        let mut loaded = codec
+            .load(&input, CommonLoadOptions::default())
+            .expect("load workbook");
+        let sheet_id = loaded.state.worksheets[0].id;
+        let theme_xml = String::from_utf8(
+            loaded
+                .package
+                .part("xl/theme/theme1.xml")
+                .expect("theme part")
+                .bytes
+                .clone(),
+        )
+        .expect("theme xml utf8")
+        .replace(r#"val="FF0000""#, r#"val="00FF00""#);
+        loaded
+            .package
+            .replace_part_bytes("xl/theme/theme1.xml", theme_xml.into_bytes())
+            .expect("replace theme part");
+        loaded
+            .state
+            .set_range_values(
+                &office_common::RangeRef::single_cell(WorkbookId(0), sheet_id, 1, 1),
+                &office_common::OmArray::scalar(office_common::OmValue::Number(9.0)),
+            )
+            .expect("set value");
+
+        let error = codec
+            .save(&loaded, office_common::SaveOptions::default())
+            .expect_err("save should fail when objectDefaults great-grandchild attrs drift");
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("typed theme summary drifted"));
+        assert!(error.message.contains("xl/theme/theme1.xml"));
+    }
+
+    #[test]
+    fn save_rejects_theme_part_when_object_defaults_great_grandchild_text_drifts() {
+        let codec = XlsxCodec;
+        let input = workbook_with_theme_object_defaults_great_grandchild_text_bytes();
+        let mut loaded = codec
+            .load(&input, CommonLoadOptions::default())
+            .expect("load workbook");
+        let sheet_id = loaded.state.worksheets[0].id;
+        let theme_xml = String::from_utf8(
+            loaded
+                .package
+                .part("xl/theme/theme1.xml")
+                .expect("theme part")
+                .bytes
+                .clone(),
+        )
+        .expect("theme xml utf8")
+        .replace("eta<![CDATA[theta]]>s", "changed<![CDATA[theta]]>s");
+        loaded
+            .package
+            .replace_part_bytes("xl/theme/theme1.xml", theme_xml.into_bytes())
+            .expect("replace theme part");
+        loaded
+            .state
+            .set_range_values(
+                &office_common::RangeRef::single_cell(WorkbookId(0), sheet_id, 1, 1),
+                &office_common::OmArray::scalar(office_common::OmValue::Number(9.0)),
+            )
+            .expect("set value");
+
+        let error = codec
+            .save(&loaded, office_common::SaveOptions::default())
+            .expect_err("save should fail when objectDefaults great-grandchild text drifts");
         assert_eq!(error.code, OmErrorCode::InvalidState);
         assert!(error.message.contains("typed theme summary drifted"));
         assert!(error.message.contains("xl/theme/theme1.xml"));
@@ -115037,6 +115422,50 @@ mod tests {
         .replace(
             r#"<a:solidFill custom="fill"/>"#,
             r#"<a:solidFill custom="fill">epsilon<![CDATA[zeta]]></a:solidFill>"#,
+        );
+        package
+            .replace_part_bytes("xl/theme/theme1.xml", theme_xml.into_bytes())
+            .expect("replace theme part");
+        package.to_bytes().expect("package bytes")
+    }
+
+    fn workbook_with_theme_object_defaults_great_grandchild_bytes() -> Vec<u8> {
+        let mut package =
+            OpcPackage::from_bytes(&workbook_with_theme_object_defaults_grandchild_bytes())
+                .expect("base workbook package");
+        let theme_xml = String::from_utf8(
+            package
+                .part("xl/theme/theme1.xml")
+                .expect("theme part")
+                .bytes
+                .clone(),
+        )
+        .expect("theme xml utf8")
+        .replace(
+            r#"<a:solidFill custom="fill"/>"#,
+            r#"<a:solidFill custom="fill"><a:srgbClr val="FF0000"/></a:solidFill>"#,
+        );
+        package
+            .replace_part_bytes("xl/theme/theme1.xml", theme_xml.into_bytes())
+            .expect("replace theme part");
+        package.to_bytes().expect("package bytes")
+    }
+
+    fn workbook_with_theme_object_defaults_great_grandchild_text_bytes() -> Vec<u8> {
+        let mut package =
+            OpcPackage::from_bytes(&workbook_with_theme_object_defaults_great_grandchild_bytes())
+                .expect("base workbook package");
+        let theme_xml = String::from_utf8(
+            package
+                .part("xl/theme/theme1.xml")
+                .expect("theme part")
+                .bytes
+                .clone(),
+        )
+        .expect("theme xml utf8")
+        .replace(
+            r#"<a:srgbClr val="FF0000"/>"#,
+            r#"<a:srgbClr val="FF0000">eta<![CDATA[theta]]>s</a:srgbClr>"#,
         );
         package
             .replace_part_bytes("xl/theme/theme1.xml", theme_xml.into_bytes())
