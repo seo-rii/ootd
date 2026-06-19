@@ -13472,11 +13472,12 @@ impl ExcelRuntime {
                                 XL_PASTE_ALL
                                     | XL_PASTE_FORMATS
                                     | XL_PASTE_FORMULAS
+                                    | XL_PASTE_FORMULAS_AND_NUMBER_FORMATS
                                     | XL_PASTE_VALUES
                                     | XL_PASTE_VALUES_AND_NUMBER_FORMATS
                             ) {
                                 return Err(OmError::invalid_argument(
-                                    "Chart.Paste Type supports xlPasteAll, xlPasteFormats, xlPasteFormulas, xlPasteValues, and xlPasteValuesAndNumberFormats",
+                                    "Chart.Paste Type supports xlPasteAll, xlPasteFormats, xlPasteFormulas, xlPasteFormulasAndNumberFormats, xlPasteValues, and xlPasteValuesAndNumberFormats",
                                 ));
                             }
                             paste_type
@@ -118664,6 +118665,40 @@ mod tests {
                 runtime
                     .dispatch_get(series, "Values", &[])
                     .expect("Series.Values after Chart.Paste")
+            ),
+            "=Sheet1!$B$2:$C$4"
+        );
+
+        runtime
+            .dispatch_invoke(source, "Copy", &[])
+            .expect("Range.Copy before Chart.Paste formulas and number formats");
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    chart,
+                    "Paste",
+                    &[OmValue::Number(f64::from(
+                        super::XL_PASTE_FORMULAS_AND_NUMBER_FORMATS,
+                    ))],
+                )
+                .expect("Chart.Paste xlPasteFormulasAndNumberFormats"),
+            OmValue::Empty
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection after Chart.Paste formulas and number formats"),
+        );
+        let series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("SeriesCollection.Item(1) after Chart.Paste formulas and number formats"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(series, "Values", &[])
+                    .expect("Series.Values after Chart.Paste formulas and number formats")
             ),
             "=Sheet1!$B$2:$C$4"
         );
