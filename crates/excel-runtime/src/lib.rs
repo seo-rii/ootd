@@ -13469,10 +13469,13 @@ impl ExcelRuntime {
                             let paste_type = *number as i32;
                             if !matches!(
                                 paste_type,
-                                XL_PASTE_ALL | XL_PASTE_FORMATS | XL_PASTE_FORMULAS
+                                XL_PASTE_ALL
+                                    | XL_PASTE_FORMATS
+                                    | XL_PASTE_FORMULAS
+                                    | XL_PASTE_VALUES
                             ) {
                                 return Err(OmError::invalid_argument(
-                                    "Chart.Paste Type supports xlPasteAll, xlPasteFormats, and xlPasteFormulas",
+                                    "Chart.Paste Type supports xlPasteAll, xlPasteFormats, xlPasteFormulas, and xlPasteValues",
                                 ));
                             }
                             paste_type
@@ -13494,11 +13497,114 @@ impl ExcelRuntime {
                             "Chart.Paste clipboard mode is invalid",
                         ));
                     }
-                    if paste_type != XL_PASTE_FORMATS {
+                    if paste_type == XL_PASTE_VALUES {
+                        let areas = clipboard.range.areas();
+                        let pasted_values = if areas.len() == 1 {
+                            let area = areas[0];
+                            let SheetScope::Single(sheet_id) = area.scope else {
+                                return Err(OmError::unsupported(
+                                    "Chart.Paste xlPasteValues does not support 3D ranges",
+                                ));
+                            };
+                            self.get_range_values(GetRangeValuesSpec {
+                                workbook: clipboard.workbook,
+                                range: RangeRef::single_rect(
+                                    clipboard.range.workbook_id(),
+                                    sheet_id,
+                                    area.rect,
+                                ),
+                            })?
+                        } else {
+                            let mut values = Vec::new();
+                            for area in areas {
+                                let SheetScope::Single(sheet_id) = area.scope else {
+                                    return Err(OmError::unsupported(
+                                        "Chart.Paste xlPasteValues does not support 3D ranges",
+                                    ));
+                                };
+                                let area_values = self.get_range_values(GetRangeValuesSpec {
+                                    workbook: clipboard.workbook,
+                                    range: RangeRef::single_rect(
+                                        clipboard.range.workbook_id(),
+                                        sheet_id,
+                                        area.rect,
+                                    ),
+                                })?;
+                                values.extend(area_values.values);
+                            }
+                            OmArray::new(1, values.len(), values)?
+                        };
+                        {
+                            let runtime = self.runtime_workbook_mut(workbook)?;
+                            if runtime.read_only {
+                                return Err(OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "cannot modify a read-only workbook",
+                                ));
+                            }
+                            let chart =
+                                runtime
+                                    .loaded
+                                    .state
+                                    .charts
+                                    .get_mut(&chart_id)
+                                    .ok_or_else(|| {
+                                        OmError::new(OmErrorCode::NotFound, "chart not found")
+                                    })?;
+                            chart.series.clear();
+                            chart.series.push(SeriesModel {
+                                name: None,
+                                x_values: None,
+                                values: None,
+                                bubble_size: None,
+                                bar_shape: None,
+                                smooth: None,
+                                marker_style: None,
+                                marker_size: None,
+                                invert_if_negative: None,
+                                points: BTreeMap::new(),
+                                data_labels: None,
+                                point_data_labels: BTreeMap::new(),
+                                order: Some(0),
+                                axis_group: ChartAxisGroup::Primary,
+                            });
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                        self.stale_series_handles_for_chart(workbook, chart_id);
+                        let chart = self.register_chart_handle(workbook, chart_id);
+                        let OmValue::Object(series_collection) =
+                            self.dispatch_get(chart, "SeriesCollection", &[])?
+                        else {
+                            return Err(OmError::type_mismatch(
+                                "Chart.SeriesCollection did not return an object",
+                            ));
+                        };
+                        let OmValue::Object(series) = self.dispatch_invoke(
+                            series_collection,
+                            "Item",
+                            &[OmValue::Number(1.0)],
+                        )?
+                        else {
+                            return Err(OmError::type_mismatch(
+                                "SeriesCollection.Item did not return a Series object",
+                            ));
+                        };
+                        self.dispatch_set(
+                            series,
+                            "Values",
+                            OmValue::Array(pasted_values),
+                            &[],
+                        )?;
+                    } else if paste_type != XL_PASTE_FORMATS {
                         let source =
                             self.register_range_set_handle(clipboard.workbook, clipboard.range);
                         let chart = self.register_chart_handle(workbook, chart_id);
-                        self.dispatch_invoke(chart, "SetSourceData", &[OmValue::Object(source.0)])?;
+                        self.dispatch_invoke(
+                            chart,
+                            "SetSourceData",
+                            &[OmValue::Object(source.0)],
+                        )?;
                     }
                     self.cut_copy_mode = None;
                     self.clipboard = None;
@@ -118483,6 +118589,28 @@ mod tests {
                 .dispatch_invoke(worksheet, "Range", &[OmValue::Text("B2:C4".to_string())])
                 .expect("Worksheet.Range(B2:C4)"),
         );
+        runtime
+            .dispatch_set(
+                source,
+                "Value",
+                OmValue::Array(
+                    OmArray::new(
+                        3,
+                        2,
+                        vec![
+                            OmValue::Number(10.0),
+                            OmValue::Number(20.0),
+                            OmValue::Number(30.0),
+                            OmValue::Number(40.0),
+                            OmValue::Number(50.0),
+                            OmValue::Number(60.0),
+                        ],
+                    )
+                    .expect("chart paste seed values array"),
+                ),
+                &[],
+            )
+            .expect("seed chart paste source values");
 
         runtime
             .dispatch_invoke(source, "Copy", &[])
@@ -118556,6 +118684,44 @@ mod tests {
             OmValue::Bool(false)
         );
 
+        runtime
+            .dispatch_invoke(source, "Copy", &[])
+            .expect("Range.Copy before Chart.Paste values");
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    chart,
+                    "Paste",
+                    &[OmValue::Number(f64::from(super::XL_PASTE_VALUES))],
+                )
+                .expect("Chart.Paste xlPasteValues"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(application, "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Chart.Paste values"),
+            OmValue::Bool(false)
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection after Chart.Paste values"),
+        );
+        let series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("SeriesCollection.Item(1) after Chart.Paste values"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(series, "Values", &[])
+                    .expect("Series.Values after Chart.Paste values")
+            ),
+            "={10,20;30,40;50,60}"
+        );
+
         assert_eq!(
             runtime
                 .dispatch_invoke(chart, "Paste", &[])
@@ -118568,7 +118734,7 @@ mod tests {
                 .dispatch_invoke(
                     chart,
                     "Paste",
-                    &[OmValue::Number(f64::from(super::XL_PASTE_VALUES))],
+                    &[OmValue::Number(99_999.0)],
                 )
                 .expect_err("Chart.Paste rejects unsupported Type")
                 .code,
