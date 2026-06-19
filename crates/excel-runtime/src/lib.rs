@@ -15232,34 +15232,60 @@ impl ExcelRuntime {
                 workbook,
                 chart_id,
                 chart_object_parent,
-            } => match member {
-                "ClearFormats" => {
-                    if !args.is_empty() {
-                        return Err(OmError::invalid_argument(
-                            "PlotArea.ClearFormats does not accept arguments",
-                        ));
+            } => {
+                match member {
+                    "Clear" | "ClearContents" => {
+                        if !args.is_empty() {
+                            return Err(OmError::invalid_argument(format!(
+                                "PlotArea.{member} does not accept arguments"
+                            )));
+                        }
+                        {
+                            let runtime = self.runtime_workbook_mut(workbook)?;
+                            if runtime.read_only {
+                                return Err(OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "cannot modify a read-only workbook",
+                                ));
+                            }
+                            let chart = runtime.loaded.state.charts.get_mut(&chart_id).ok_or_else(
+                                || OmError::new(OmErrorCode::NotFound, "chart not found"),
+                            )?;
+                            chart.series.clear();
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                        self.stale_series_handles_for_chart(workbook, chart_id);
+                        Ok(OmValue::Empty)
                     }
-                    self.chart_model(workbook, chart_id)?;
-                    Ok(OmValue::Empty)
-                }
-                "Select" => {
-                    if !args.is_empty() {
-                        return Err(OmError::invalid_argument(
-                            "PlotArea.Select does not accept arguments",
-                        ));
+                    "ClearFormats" => {
+                        if !args.is_empty() {
+                            return Err(OmError::invalid_argument(
+                                "PlotArea.ClearFormats does not accept arguments",
+                            ));
+                        }
+                        self.chart_model(workbook, chart_id)?;
+                        Ok(OmValue::Empty)
                     }
-                    self.chart_model(workbook, chart_id)?;
-                    let chart = self.register_chart_handle_with_chart_object_parent_origin(
-                        workbook,
-                        chart_id,
-                        chart_object_parent,
-                    );
-                    self.dispatch_invoke(chart, "Select", &[])
+                    "Select" => {
+                        if !args.is_empty() {
+                            return Err(OmError::invalid_argument(
+                                "PlotArea.Select does not accept arguments",
+                            ));
+                        }
+                        self.chart_model(workbook, chart_id)?;
+                        let chart = self.register_chart_handle_with_chart_object_parent_origin(
+                            workbook,
+                            chart_id,
+                            chart_object_parent,
+                        );
+                        self.dispatch_invoke(chart, "Select", &[])
+                    }
+                    _ => Err(OmError::unsupported(format!(
+                        "PlotArea.{member} is not implemented as a method"
+                    ))),
                 }
-                _ => Err(OmError::unsupported(format!(
-                    "PlotArea.{member} is not implemented as a method"
-                ))),
-            },
+            }
             RuntimeObjectKind::Axis {
                 workbook,
                 chart_id,
@@ -16435,7 +16461,9 @@ impl ExcelRuntime {
                             | "Application"
                             | "Parent"
                             | "Select"
+                            | "Clear"
                             | "ClearFormats"
+                            | "ClearContents"
                     )
                     | (
                         "ChartTitle",
@@ -117031,6 +117059,181 @@ mod tests {
                     read_only: false,
                 })
                 .expect("reopen workbook after ChartArea clear");
+            let reopened_worksheet = expect_object_handle(
+                reopened_runtime
+                    .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                    .expect("reopened Workbook.Worksheets(1)"),
+            );
+            let reopened_chart_objects = expect_object_handle(
+                reopened_runtime
+                    .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                    .expect("reopened Worksheet.ChartObjects"),
+            );
+            let reopened_chart_object = expect_object_handle(
+                reopened_runtime
+                    .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                    .expect("reopened ChartObjects.Item(1)"),
+            );
+            let reopened_chart = expect_object_handle(
+                reopened_runtime
+                    .dispatch_get(reopened_chart_object, "Chart", &[])
+                    .expect("reopened ChartObject.Chart"),
+            );
+            let reopened_series_collection = expect_object_handle(
+                reopened_runtime
+                    .dispatch_get(reopened_chart, "SeriesCollection", &[])
+                    .expect("reopened Chart.SeriesCollection"),
+            );
+            assert_eq!(
+                expect_number(
+                    reopened_runtime
+                        .dispatch_get(reopened_series_collection, "Count", &[])
+                        .expect("reopened SeriesCollection.Count")
+                ),
+                0.0
+            );
+        }
+    }
+
+    #[test]
+    fn plotarea_clear_methods_remove_series_and_preserve_extensions_on_save() {
+        for member in ["ClearContents", "Clear"] {
+            let marker = format!("urn:plotarea-{}-preserve", member.to_ascii_lowercase());
+            let mut package =
+                OpcPackage::from_bytes(&synthetic_workbook_with_embedded_chart_bytes())
+                    .expect("embedded chart package");
+            let chart_xml = String::from_utf8(
+                package
+                    .part("xl/charts/chart1.xml")
+                    .expect("chart part")
+                    .bytes
+                    .clone(),
+            )
+            .expect("chart xml utf8")
+            .replace(
+                "</c:chartSpace>",
+                &format!(r#"<c:extLst><c:ext uri="{marker}"/></c:extLst></c:chartSpace>"#),
+            );
+            package
+                .replace_part_bytes("xl/charts/chart1.xml", chart_xml.into_bytes())
+                .expect("replace chart xml");
+
+            let mut runtime = ExcelRuntime::new();
+            let workbook = runtime
+                .open_workbook(OpenWorkbookSpec {
+                    bytes: package.to_bytes().expect("package bytes"),
+                    format_hint: Some(FileFormat::Xlsx),
+                    profile: ExcelProfile::Excel365,
+                    read_only: false,
+                })
+                .expect("open workbook with chart");
+            let worksheet = expect_object_handle(
+                runtime
+                    .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                    .expect("Workbook.Worksheets(1)"),
+            );
+            let chart_objects = expect_object_handle(
+                runtime
+                    .dispatch_get(worksheet, "ChartObjects", &[])
+                    .expect("Worksheet.ChartObjects"),
+            );
+            let chart_object = expect_object_handle(
+                runtime
+                    .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                    .expect("ChartObjects.Item(1)"),
+            );
+            let chart = expect_object_handle(
+                runtime
+                    .dispatch_get(chart_object, "Chart", &[])
+                    .expect("ChartObject.Chart"),
+            );
+            let plot_area = expect_object_handle(
+                runtime
+                    .dispatch_get(chart, "PlotArea", &[])
+                    .expect("Chart.PlotArea"),
+            );
+            let series_collection = expect_object_handle(
+                runtime
+                    .dispatch_get(chart, "SeriesCollection", &[])
+                    .expect("Chart.SeriesCollection"),
+            );
+            let first_series = expect_object_handle(
+                runtime
+                    .dispatch_invoke(series_collection, "Item", &[OmValue::Number(1.0)])
+                    .expect("SeriesCollection.Item(1)"),
+            );
+            assert_eq!(
+                expect_number(
+                    runtime
+                        .dispatch_get(series_collection, "Count", &[])
+                        .expect("SeriesCollection.Count before PlotArea clear")
+                ),
+                1.0
+            );
+            let error = runtime
+                .dispatch_invoke(plot_area, member, &[OmValue::Missing])
+                .expect_err("PlotArea clear should reject arguments");
+            assert_eq!(error.code, OmErrorCode::InvalidArgument);
+            assert_eq!(
+                runtime
+                    .dispatch_invoke(plot_area, member, &[])
+                    .unwrap_or_else(|error| panic!("PlotArea.{member} failed: {error:?}")),
+                OmValue::Empty
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(first_series, "PlotOrder", &[])
+                    .expect_err("old series handle should be stale after PlotArea clear")
+                    .code,
+                OmErrorCode::InvalidState
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(workbook.0, "Saved", &[])
+                    .expect("Workbook.Saved after PlotArea clear"),
+                OmValue::Bool(false)
+            );
+            assert_eq!(
+                expect_number(
+                    runtime
+                        .dispatch_get(series_collection, "Count", &[])
+                        .expect("SeriesCollection.Count after PlotArea clear")
+                ),
+                0.0
+            );
+
+            let saved = runtime
+                .save_workbook(
+                    workbook,
+                    SaveWorkbookSpec {
+                        format: FileFormat::Xlsx,
+                        profile: ExcelProfile::Excel365,
+                        lossless: true,
+                    },
+                )
+                .expect("save workbook after PlotArea clear");
+            let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+            let saved_chart_xml = std::str::from_utf8(
+                saved_package
+                    .part("xl/charts/chart1.xml")
+                    .expect("saved chart part")
+                    .bytes
+                    .as_slice(),
+            )
+            .expect("saved chart xml utf8");
+            assert!(saved_chart_xml.contains(format!(r#"<c:ext uri="{marker}"/>"#).as_str()));
+            assert!(!saved_chart_xml.contains("<c:ser>"));
+            assert!(!saved_chart_xml.contains("<c:f>Sheet1!$A$1:$C$1</c:f>"));
+
+            let mut reopened_runtime = ExcelRuntime::new();
+            let reopened_workbook = reopened_runtime
+                .open_workbook(OpenWorkbookSpec {
+                    bytes: saved,
+                    format_hint: Some(FileFormat::Xlsx),
+                    profile: ExcelProfile::Excel365,
+                    read_only: false,
+                })
+                .expect("reopen workbook after PlotArea clear");
             let reopened_worksheet = expect_object_handle(
                 reopened_runtime
                     .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
