@@ -97695,6 +97695,203 @@ mod tests {
     }
 
     #[test]
+    fn worksheets_add_count_creates_multiple_chart_sheets() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let application = runtime.root_application();
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let sheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Sheets", &[])
+                .expect("Workbook.Sheets"),
+        );
+        let charts = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Charts", &[])
+                .expect("Workbook.Charts"),
+        );
+
+        let added_chart = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    worksheets,
+                    "Add",
+                    &[
+                        OmValue::Missing,
+                        OmValue::Number(1.0),
+                        OmValue::Number(2.0),
+                        OmValue::Number(f64::from(super::XL_SHEET_TYPE_CHART)),
+                    ],
+                )
+                .expect("Worksheets.Add Type:=xlChart Count:=2"),
+        );
+
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(added_chart, "Name", &[])
+                    .expect("returned chart sheet name")
+            ),
+            "Chart2"
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(added_chart, "Type", &[])
+                    .expect("returned chart sheet type")
+            ),
+            f64::from(super::XL_SHEET_TYPE_CHART)
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(worksheets, "Count", &[])
+                    .expect("Worksheets.Count after chart add")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(sheets, "Count", &[])
+                    .expect("Sheets.Count after chart add")
+            ),
+            3.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(charts, "Count", &[])
+                    .expect("Charts.Count after chart add")
+            ),
+            2.0
+        );
+        for (index, expected_name) in [(1.0, "Chart1"), (2.0, "Chart2")] {
+            let chart = expect_object_handle(
+                runtime
+                    .dispatch_invoke(charts, "Item", &[OmValue::Number(index)])
+                    .expect("Charts.Item"),
+            );
+            assert_eq!(
+                expect_text(
+                    runtime
+                        .dispatch_get(chart, "Name", &[])
+                        .expect("Charts.Item.Name")
+                ),
+                expected_name
+            );
+        }
+
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveSheet", &[])
+                .expect("ActiveSheet after chart count add"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(active_sheet, "Name", &[])
+                    .expect("ActiveSheet.Name after chart count add")
+            ),
+            "Chart2"
+        );
+        let active_chart = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveChart", &[])
+                .expect("ActiveChart after chart count add"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(active_chart, "Name", &[])
+                    .expect("ActiveChart.Name after chart count add")
+            ),
+            "Chart2"
+        );
+        let selection = expect_object_handle(
+            runtime
+                .dispatch_get(application, "Selection", &[])
+                .expect("Selection after chart count add"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(selection, "Name", &[])
+                    .expect("Selection.Name after chart count add")
+            ),
+            "Chart2"
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after chart count add");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved chart count package");
+        for part in [
+            "xl/chartsheets/sheet1.xml",
+            "xl/chartsheets/sheet2.xml",
+            "xl/chartsheets/_rels/sheet1.xml.rels",
+            "xl/chartsheets/_rels/sheet2.xml.rels",
+            "xl/drawings/drawing1.xml",
+            "xl/drawings/drawing2.xml",
+            "xl/drawings/_rels/drawing1.xml.rels",
+            "xl/drawings/_rels/drawing2.xml.rels",
+            "xl/charts/chart1.xml",
+            "xl/charts/chart2.xml",
+        ] {
+            assert!(saved_package.contains(part), "missing package part {part}");
+        }
+
+        let reopened = ExcelRuntime::new()
+            .codec
+            .load(&saved, LoadOptions::default())
+            .expect("reopen saved chart count workbook");
+        assert_eq!(
+            reopened
+                .state
+                .worksheets
+                .iter()
+                .map(|worksheet| worksheet.name.clone())
+                .collect::<Vec<_>>(),
+            vec![
+                "Sheet1".to_string(),
+                "Chart1".to_string(),
+                "Chart2".to_string()
+            ]
+        );
+        assert_eq!(reopened.state.chart_sheets.len(), 2);
+        assert_eq!(reopened.state.charts.len(), 2);
+        assert_eq!(reopened.state.drawings.len(), 2);
+        for name in ["Chart1", "Chart2"] {
+            let chart_sheet = reopened
+                .state
+                .worksheets
+                .iter()
+                .find(|worksheet| worksheet.name == name)
+                .expect("reopened chart sheet");
+            assert_eq!(chart_sheet.kind, office_common::SheetKind::ChartSheet);
+            assert!(reopened.state.chart_sheets.contains_key(&chart_sheet.id));
+        }
+    }
+
+    #[test]
     fn charts_add_creates_chart_sheet_parts_and_roundtrips() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
