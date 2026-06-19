@@ -13470,6 +13470,9 @@ impl ExcelRuntime {
                             if !matches!(
                                 paste_type,
                                 XL_PASTE_ALL
+                                    | XL_PASTE_ALL_EXCEPT_BORDERS
+                                    | XL_PASTE_ALL_MERGING_CONDITIONAL_FORMATS
+                                    | XL_PASTE_ALL_USING_SOURCE_THEME
                                     | XL_PASTE_FORMATS
                                     | XL_PASTE_FORMULAS
                                     | XL_PASTE_FORMULAS_AND_NUMBER_FORMATS
@@ -13477,7 +13480,7 @@ impl ExcelRuntime {
                                     | XL_PASTE_VALUES_AND_NUMBER_FORMATS
                             ) {
                                 return Err(OmError::invalid_argument(
-                                    "Chart.Paste Type supports xlPasteAll, xlPasteFormats, xlPasteFormulas, xlPasteFormulasAndNumberFormats, xlPasteValues, and xlPasteValuesAndNumberFormats",
+                                    "Chart.Paste Type supports all-like, xlPasteFormats, xlPasteFormulas, xlPasteFormulasAndNumberFormats, xlPasteValues, and xlPasteValuesAndNumberFormats",
                                 ));
                             }
                             paste_type
@@ -118702,6 +118705,52 @@ mod tests {
             ),
             "=Sheet1!$B$2:$C$4"
         );
+
+        for (paste_type, label) in [
+            (super::XL_PASTE_ALL_EXCEPT_BORDERS, "xlPasteAllExceptBorders"),
+            (
+                super::XL_PASTE_ALL_USING_SOURCE_THEME,
+                "xlPasteAllUsingSourceTheme",
+            ),
+            (
+                super::XL_PASTE_ALL_MERGING_CONDITIONAL_FORMATS,
+                "xlPasteAllMergingConditionalFormats",
+            ),
+        ] {
+            runtime
+                .dispatch_invoke(source, "Copy", &[])
+                .unwrap_or_else(|_| panic!("Range.Copy before Chart.Paste {label}"));
+            assert_eq!(
+                runtime
+                    .dispatch_invoke(
+                        chart,
+                        "Paste",
+                        &[OmValue::Number(f64::from(paste_type))],
+                    )
+                    .unwrap_or_else(|_| panic!("Chart.Paste {label}")),
+                OmValue::Empty
+            );
+            let series_collection = expect_object_handle(
+                runtime
+                    .dispatch_get(chart, "SeriesCollection", &[])
+                    .unwrap_or_else(|_| panic!("Chart.SeriesCollection after Chart.Paste {label}")),
+            );
+            let series = expect_object_handle(
+                runtime
+                    .dispatch_invoke(series_collection, "Item", &[OmValue::Number(1.0)])
+                    .unwrap_or_else(|_| {
+                        panic!("SeriesCollection.Item(1) after Chart.Paste {label}")
+                    }),
+            );
+            assert_eq!(
+                expect_text(
+                    runtime
+                        .dispatch_get(series, "Values", &[])
+                        .unwrap_or_else(|_| panic!("Series.Values after Chart.Paste {label}"))
+                ),
+                "=Sheet1!$B$2:$C$4"
+            );
+        }
 
         runtime
             .dispatch_invoke(source, "Copy", &[])
