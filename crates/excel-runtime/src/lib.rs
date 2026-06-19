@@ -12465,7 +12465,6 @@ impl ExcelRuntime {
                         | "Duplicate"
                         | "CopyPicture"
                         | "Delete"
-                        | "ZOrder"
                         | "IncrementLeft"
                         | "IncrementTop"
                         | "IncrementRotation"
@@ -12589,7 +12588,10 @@ impl ExcelRuntime {
                         )?;
                         Ok(OmValue::Empty)
                     }
-                    "ZOrder" | "IncrementRotation" | "ScaleWidth" | "ScaleHeight" => {
+                    "ZOrder" => Err(OmError::unsupported(
+                        "ChartObject.ZOrder is a read-only property",
+                    )),
+                    "IncrementRotation" | "ScaleWidth" | "ScaleHeight" => {
                         let host_sheet_id = self
                             .chart_object_model(workbook, chart_object_id)?
                             .host_sheet_id;
@@ -130009,54 +130011,20 @@ mod tests {
                     "ZOrder",
                     &[OmValue::Number(f64::from(super::MSO_BRING_FORWARD))],
                 )
-                .expect("ChartObject.ZOrder msoBringForward"),
-            OmValue::Empty
+                .expect_err("ChartObject.ZOrder is read-only")
+                .code,
+            OmErrorCode::Unsupported
         );
-        let stepped_forward_first = expect_object_handle(
+        let initial_ordered_first = expect_object_handle(
             runtime
                 .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
-                .expect("ChartObjects.Item(1) after ChartObject.ZOrder msoBringForward"),
+                .expect("ChartObjects.Item(1) after rejected ChartObject.ZOrder"),
         );
         assert_eq!(
             expect_text(
                 runtime
-                    .dispatch_get(stepped_forward_first, "Name", &[])
-                    .expect(
-                        "first ordered ChartObject.Name after ChartObject.ZOrder msoBringForward"
-                    )
-            ),
-            "Chart 2"
-        );
-        assert_eq!(
-            expect_number(
-                runtime
-                    .dispatch_get(first_chart_object, "ZOrder", &[])
-                    .expect("first ChartObject.ZOrder after ChartObject.ZOrder msoBringForward")
-            ),
-            2.0
-        );
-        assert_eq!(
-            runtime
-                .dispatch_invoke(
-                    first_chart_object,
-                    "ZOrder",
-                    &[OmValue::Number(f64::from(super::MSO_SEND_BACKWARD))],
-                )
-                .expect("ChartObject.ZOrder msoSendBackward"),
-            OmValue::Empty
-        );
-        let stepped_backward_first = expect_object_handle(
-            runtime
-                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
-                .expect("ChartObjects.Item(1) after ChartObject.ZOrder msoSendBackward"),
-        );
-        assert_eq!(
-            expect_text(
-                runtime
-                    .dispatch_get(stepped_backward_first, "Name", &[])
-                    .expect(
-                        "first ordered ChartObject.Name after ChartObject.ZOrder msoSendBackward"
-                    )
+                    .dispatch_get(initial_ordered_first, "Name", &[])
+                    .expect("first ordered ChartObject.Name after rejected ChartObject.ZOrder")
             ),
             "Embedded Revenue Chart"
         );
@@ -130064,7 +130032,7 @@ mod tests {
             expect_number(
                 runtime
                     .dispatch_get(first_chart_object, "ZOrder", &[])
-                    .expect("first ChartObject.ZOrder after ChartObject.ZOrder msoSendBackward")
+                    .expect("first ChartObject.ZOrder after rejected ChartObject.ZOrder")
             ),
             1.0
         );
