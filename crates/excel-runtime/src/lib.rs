@@ -13473,9 +13473,10 @@ impl ExcelRuntime {
                                     | XL_PASTE_FORMATS
                                     | XL_PASTE_FORMULAS
                                     | XL_PASTE_VALUES
+                                    | XL_PASTE_VALUES_AND_NUMBER_FORMATS
                             ) {
                                 return Err(OmError::invalid_argument(
-                                    "Chart.Paste Type supports xlPasteAll, xlPasteFormats, xlPasteFormulas, and xlPasteValues",
+                                    "Chart.Paste Type supports xlPasteAll, xlPasteFormats, xlPasteFormulas, xlPasteValues, and xlPasteValuesAndNumberFormats",
                                 ));
                             }
                             paste_type
@@ -13497,7 +13498,10 @@ impl ExcelRuntime {
                             "Chart.Paste clipboard mode is invalid",
                         ));
                     }
-                    if paste_type == XL_PASTE_VALUES {
+                    if matches!(
+                        paste_type,
+                        XL_PASTE_VALUES | XL_PASTE_VALUES_AND_NUMBER_FORMATS
+                    ) {
                         let areas = clipboard.range.areas();
                         let pasted_values = if areas.len() == 1 {
                             let area = areas[0];
@@ -118718,6 +118722,40 @@ mod tests {
                 runtime
                     .dispatch_get(series, "Values", &[])
                     .expect("Series.Values after Chart.Paste values")
+            ),
+            "={10,20;30,40;50,60}"
+        );
+
+        runtime
+            .dispatch_invoke(source, "Copy", &[])
+            .expect("Range.Copy before Chart.Paste values and number formats");
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    chart,
+                    "Paste",
+                    &[OmValue::Number(f64::from(
+                        super::XL_PASTE_VALUES_AND_NUMBER_FORMATS,
+                    ))],
+                )
+                .expect("Chart.Paste xlPasteValuesAndNumberFormats"),
+            OmValue::Empty
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection after Chart.Paste values and number formats"),
+        );
+        let series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("SeriesCollection.Item(1) after Chart.Paste values and number formats"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(series, "Values", &[])
+                    .expect("Series.Values after Chart.Paste values and number formats")
             ),
             "={10,20;30,40;50,60}"
         );
