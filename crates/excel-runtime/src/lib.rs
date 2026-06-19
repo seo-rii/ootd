@@ -14665,9 +14665,16 @@ impl ExcelRuntime {
                             ));
                             Ok(OmValue::Object(target_chart))
                         }
-                        XL_LOCATION_AUTOMATIC => Err(OmError::unsupported(
-                            "Chart.Location xlLocationAutomatic is not supported yet",
-                        )),
+                        XL_LOCATION_AUTOMATIC => {
+                            let target_chart = self
+                                .register_chart_handle_with_chart_object_parent_origin(
+                                    workbook,
+                                    chart_id,
+                                    chart_object_parent,
+                                );
+                            self.active_chart = Some((workbook, chart_id, chart_object_parent));
+                            Ok(OmValue::Object(target_chart))
+                        }
                         other => Err(OmError::invalid_argument(format!(
                             "Chart.Location Where {other} is not a valid XlChartLocation value"
                         ))),
@@ -102961,10 +102968,35 @@ mod tests {
             ),
             "Renamed Location Chart"
         );
-        assert_eq!(
+        let automatic_chart_sheet = expect_object_handle(
             runtime
                 .dispatch_invoke(
                     renamed_chart,
+                    "Location",
+                    &[OmValue::Number(f64::from(super::XL_LOCATION_AUTOMATIC))],
+                )
+                .expect("chart sheet Chart.Location xlLocationAutomatic"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(charts, "Count", &[])
+                    .expect("Charts.Count after chart sheet xlLocationAutomatic")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(automatic_chart_sheet, "Name", &[])
+                    .expect("automatic chart sheet name")
+            ),
+            "Renamed Location Chart"
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    automatic_chart_sheet,
                     "Location",
                     &[OmValue::Number(f64::from(super::XL_LOCATION_AS_OBJECT))],
                 )
@@ -102975,7 +103007,7 @@ mod tests {
         let embedded_again_chart = expect_object_handle(
             runtime
                 .dispatch_invoke(
-                    renamed_chart,
+                    automatic_chart_sheet,
                     "Location",
                     &[
                         OmValue::Number(f64::from(super::XL_LOCATION_AS_OBJECT)),
@@ -103058,16 +103090,38 @@ mod tests {
             ),
             "Renamed Location Chart"
         );
-        assert_eq!(
+        let automatic_embedded_chart = expect_object_handle(
             runtime
                 .dispatch_invoke(
                     embedded_again_chart,
                     "Location",
                     &[OmValue::Number(f64::from(super::XL_LOCATION_AUTOMATIC))],
                 )
-                .expect_err("Chart.Location xlLocationAutomatic is not supported yet")
-                .code,
-            OmErrorCode::Unsupported
+                .expect("embedded Chart.Location xlLocationAutomatic"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(charts, "Count", &[])
+                    .expect("Charts.Count after embedded xlLocationAutomatic")
+            ),
+            0.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_objects, "Count", &[])
+                    .expect("ChartObjects.Count after embedded xlLocationAutomatic")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(automatic_embedded_chart, "Name", &[])
+                    .expect("automatic embedded Chart.Name")
+            ),
+            "Renamed Location Chart"
         );
 
         let saved = runtime
