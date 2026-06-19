@@ -358,6 +358,7 @@ pub struct ThemePartSummary {
     pub root_child_texts: Vec<Option<String>>,
     pub theme_elements_child_names: Vec<String>,
     pub theme_elements_child_attr_maps: Vec<BTreeMap<String, String>>,
+    pub theme_elements_child_texts: Vec<Option<String>>,
     pub color_scheme_child_names: Vec<String>,
     pub color_scheme_child_attr_maps: Vec<BTreeMap<String, String>>,
     pub color_scheme_child_texts: Vec<Option<String>>,
@@ -8653,6 +8654,7 @@ fn parse_theme_part_summary(theme_xml: &[u8]) -> OmResult<ThemePartSummary> {
     let mut root_child_texts = Vec::<Option<String>>::new();
     let mut theme_elements_child_names = Vec::<String>::new();
     let mut theme_elements_child_attr_maps = Vec::<BTreeMap<String, String>>::new();
+    let mut theme_elements_child_texts = Vec::<Option<String>>::new();
     let mut color_scheme_child_names = Vec::<String>::new();
     let mut color_scheme_child_attr_maps = Vec::<BTreeMap<String, String>>::new();
     let mut color_scheme_child_texts = Vec::<Option<String>>::new();
@@ -10680,6 +10682,7 @@ fn parse_theme_part_summary(theme_xml: &[u8]) -> OmResult<ThemePartSummary> {
                 } else if element_stack.last().map(String::as_str) == Some("themeElements") {
                     theme_elements_child_names.push(local_name.clone());
                     theme_elements_child_attr_maps.push(read_attr_map(&element, reader.decoder())?);
+                    theme_elements_child_texts.push(None);
                     let name_attr = read_name_attr(&element, reader.decoder())?;
                     match local_name.as_str() {
                         "clrScheme" => {
@@ -12512,6 +12515,7 @@ fn parse_theme_part_summary(theme_xml: &[u8]) -> OmResult<ThemePartSummary> {
                 } else if element_stack.last().map(String::as_str) == Some("themeElements") {
                     theme_elements_child_names.push(local_name.clone());
                     theme_elements_child_attr_maps.push(read_attr_map(&element, reader.decoder())?);
+                    theme_elements_child_texts.push(None);
                     let name_attr = read_name_attr(&element, reader.decoder())?;
                     match local_name.as_str() {
                         "clrScheme" => {
@@ -12995,6 +12999,15 @@ fn parse_theme_part_summary(theme_xml: &[u8]) -> OmResult<ThemePartSummary> {
                     && element_stack.first().map(String::as_str) == Some("theme")
                     && element_stack.get(1).map(String::as_str) == Some("themeElements")
                 {
+                    append_extension_list_child_text(
+                        theme_elements_child_texts.last_mut().ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "theme part encountered themeElements child text before themeElements child",
+                            )
+                        })?,
+                        &content,
+                    );
                     match element_stack.get(2).map(String::as_str) {
                         Some("clrScheme") => {
                             append_extension_list_child_text(&mut color_scheme_text, &content);
@@ -13672,6 +13685,15 @@ fn parse_theme_part_summary(theme_xml: &[u8]) -> OmResult<ThemePartSummary> {
                     && element_stack.first().map(String::as_str) == Some("theme")
                     && element_stack.get(1).map(String::as_str) == Some("themeElements")
                 {
+                    append_extension_list_child_text(
+                        theme_elements_child_texts.last_mut().ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "theme part encountered themeElements child text before themeElements child",
+                            )
+                        })?,
+                        &content,
+                    );
                     match element_stack.get(2).map(String::as_str) {
                         Some("clrScheme") => {
                             append_extension_list_child_text(&mut color_scheme_text, &content);
@@ -14366,6 +14388,7 @@ fn parse_theme_part_summary(theme_xml: &[u8]) -> OmResult<ThemePartSummary> {
                     root_child_texts,
                     theme_elements_child_names,
                     theme_elements_child_attr_maps,
+                    theme_elements_child_texts,
                     color_scheme_child_names,
                     color_scheme_child_attr_maps,
                     color_scheme_child_texts,
@@ -26599,6 +26622,10 @@ mod tests {
                 "fmtScheme".to_string()
             ]
         );
+        assert_eq!(
+            theme_summary.theme_elements_child_texts,
+            vec![None, None, None]
+        );
         assert!(theme_summary.color_scheme_child_names.is_empty());
         assert!(theme_summary.color_scheme_child_nested_names.is_empty());
         assert!(theme_summary.color_scheme_child_nested_attr_maps.is_empty());
@@ -36045,6 +36072,32 @@ mod tests {
 
         assert_eq!(
             theme_summary.theme_elements_text.as_deref(),
+            Some("alphabeta")
+        );
+    }
+
+    #[test]
+    fn load_collects_theme_elements_child_texts_in_theme_summary() {
+        let codec = XlsxCodec;
+        let loaded = codec
+            .load(
+                &workbook_with_theme_elements_child_text_bytes(),
+                CommonLoadOptions::default(),
+            )
+            .expect("load workbook");
+        let theme_summary = loaded
+            .support_parts
+            .theme_summaries
+            .get("xl/theme/theme1.xml")
+            .expect("typed theme summary");
+        let vendor_index = theme_summary
+            .theme_elements_child_names
+            .iter()
+            .position(|name| name == "vendorScheme")
+            .expect("vendorScheme child");
+
+        assert_eq!(
+            theme_summary.theme_elements_child_texts[vendor_index].as_deref(),
             Some("alphabeta")
         );
     }
@@ -80802,6 +80855,13 @@ mod tests {
     }
 
     #[test]
+    fn dirty_save_preserves_theme_elements_child_text() {
+        assert_dirty_save_preserves_theme_xml_for_mutated_input(
+            workbook_with_theme_elements_child_text_bytes(),
+        );
+    }
+
+    #[test]
     fn dirty_save_preserves_theme_scheme_container_texts() {
         assert_dirty_save_preserves_theme_xml_for_mutated_input(
             workbook_with_theme_scheme_container_text_bytes(),
@@ -90689,6 +90749,44 @@ mod tests {
         let error = codec
             .save(&loaded, office_common::SaveOptions::default())
             .expect_err("save should fail when themeElements text drifts");
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("typed theme summary drifted"));
+        assert!(error.message.contains("xl/theme/theme1.xml"));
+    }
+
+    #[test]
+    fn save_rejects_theme_part_when_theme_elements_child_text_drifts() {
+        let codec = XlsxCodec;
+        let input = workbook_with_theme_elements_child_text_bytes();
+        let mut loaded = codec
+            .load(&input, CommonLoadOptions::default())
+            .expect("load workbook");
+        let sheet_id = loaded.state.worksheets[0].id;
+        let theme_xml = String::from_utf8(
+            loaded
+                .package
+                .part("xl/theme/theme1.xml")
+                .expect("theme part")
+                .bytes
+                .clone(),
+        )
+        .expect("theme xml utf8")
+        .replace("alpha<![CDATA[beta]]>", "changed<![CDATA[beta]]>");
+        loaded
+            .package
+            .replace_part_bytes("xl/theme/theme1.xml", theme_xml.into_bytes())
+            .expect("replace theme part");
+        loaded
+            .state
+            .set_range_values(
+                &office_common::RangeRef::single_cell(WorkbookId(0), sheet_id, 1, 1),
+                &office_common::OmArray::scalar(office_common::OmValue::Number(9.0)),
+            )
+            .expect("set value");
+
+        let error = codec
+            .save(&loaded, office_common::SaveOptions::default())
+            .expect_err("save should fail when themeElements child text drifts");
         assert_eq!(error.code, OmErrorCode::InvalidState);
         assert!(error.message.contains("typed theme summary drifted"));
         assert!(error.message.contains("xl/theme/theme1.xml"));
@@ -114393,6 +114491,27 @@ mod tests {
         .replace(
             r#"<a:themeElements>"#,
             r#"<a:themeElements>alpha<![CDATA[beta]]>"#,
+        );
+        package
+            .replace_part_bytes("xl/theme/theme1.xml", theme_xml.into_bytes())
+            .expect("replace theme part");
+        package.to_bytes().expect("package bytes")
+    }
+
+    fn workbook_with_theme_elements_child_text_bytes() -> Vec<u8> {
+        let mut package = OpcPackage::from_bytes(&workbook_with_styles_and_theme_bytes())
+            .expect("base workbook package");
+        let theme_xml = String::from_utf8(
+            package
+                .part("xl/theme/theme1.xml")
+                .expect("theme part")
+                .bytes
+                .clone(),
+        )
+        .expect("theme xml utf8")
+        .replace(
+            "    <a:fmtScheme name=\"Office\"/>\n",
+            "    <a:vendorScheme custom=\"elements\">alpha<![CDATA[beta]]></a:vendorScheme>\n    <a:fmtScheme name=\"Office\"/>\n",
         );
         package
             .replace_part_bytes("xl/theme/theme1.xml", theme_xml.into_bytes())
