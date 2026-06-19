@@ -17439,6 +17439,78 @@
           }
         },
         {
+          "name": "Add",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "SeriesCollection",
+                  "sourceMember": "Add"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Series",
+                "aliasOf": "Excel.Series"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "interface",
+            "name": "Series",
+            "aliasOf": "Excel.Series"
+          },
+          "params": [
+            {
+              "name": "Source",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Rowcol",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "SeriesLabels",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "CategoryLabels",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "Replace",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            }
+          ]
+        },
+        {
           "name": "Creator",
           "memberKind": "property",
           "support": "stub",

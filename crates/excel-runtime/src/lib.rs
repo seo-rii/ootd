@@ -16720,7 +16720,13 @@ impl ExcelRuntime {
                     )
                     | (
                         "SeriesCollection",
-                        "Count" | "Item" | "NewSeries" | "Creator" | "Application" | "Parent"
+                        "Count"
+                            | "Item"
+                            | "NewSeries"
+                            | "Add"
+                            | "Creator"
+                            | "Application"
+                            | "Parent"
                     )
                     | (
                         "Series",
@@ -65305,6 +65311,23 @@ mod tests {
             OmValue::Bool(value) => value,
             other => panic!("expected bool value, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn pinned_runtime_registry_exposes_series_collection_add() {
+        let runtime = ExcelRuntime::new();
+        let series_collection = runtime
+            .dispatch_registry()
+            .focus_surfaces
+            .iter()
+            .find(|surface| surface.name == "SeriesCollection")
+            .expect("SeriesCollection focus surface");
+        let add = series_collection
+            .members
+            .iter()
+            .find(|member| member.name == "Add")
+            .expect("SeriesCollection.Add focus member");
+        assert!(matches!(add.support, office_idl::SupportState::Stub));
     }
 
     #[test]
