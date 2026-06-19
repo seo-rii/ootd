@@ -16323,7 +16323,7 @@ impl ExcelRuntime {
                         "Name",
                         "Name" | "RefersTo" | "RefersToRange" | "Application" | "Parent" | "Delete"
                     )
-                    | ("WorksheetFunction", "Application" | "Parent")
+                    | ("WorksheetFunction", "Application" | "Creator" | "Parent")
                     | (
                         "ChartObjects",
                         "Count"
@@ -18600,6 +18600,7 @@ impl ExcelRuntime {
 
         match member {
             "Application" | "Parent" => Ok(OmValue::Object(self.root_application())),
+            "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
             _ => Err(OmError::unsupported(format!(
                 "WorksheetFunction.{member} is not implemented as a property"
             ))),
@@ -78697,6 +78698,14 @@ mod tests {
                 .dispatch_get(worksheet_function, "Parent", &[])
                 .expect("WorksheetFunction.Parent"),
             OmValue::Object(application)
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(worksheet_function, "Creator", &[])
+                    .expect("WorksheetFunction.Creator")
+            ),
+            f64::from(super::XL_CREATOR_CODE)
         );
 
         let first_sheet = expect_object_handle(
