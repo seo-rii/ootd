@@ -12538,6 +12538,10 @@ impl ExcelRuntime {
                     "ZOrder" => Err(OmError::unsupported(
                         "ChartObject.ZOrder is a read-only property",
                     )),
+                    "IncrementLeft" | "IncrementTop" | "IncrementRotation" | "ScaleWidth"
+                    | "ScaleHeight" => Err(OmError::unsupported(format!(
+                        "ChartObject.{member} is exposed through ChartObject.ShapeRange.{member}"
+                    ))),
                     "Activate" | "Select" => {
                         if member == "Activate" && !args.is_empty() {
                             return Err(OmError::invalid_argument(format!(
@@ -65284,6 +65288,47 @@ mod tests {
             .find(|member| member.name == "Location")
             .expect("Chart.Location focus member");
         assert!(matches!(location.support, office_idl::SupportState::Stub));
+        let chart_object = runtime
+            .dispatch_registry()
+            .focus_surfaces
+            .iter()
+            .find(|surface| surface.name == "ChartObject")
+            .expect("ChartObject focus surface");
+        for member_name in [
+            "IncrementLeft",
+            "IncrementTop",
+            "IncrementRotation",
+            "ScaleWidth",
+            "ScaleHeight",
+        ] {
+            assert!(
+                !chart_object
+                    .members
+                    .iter()
+                    .any(|member| member.name == member_name),
+                "ChartObject.{member_name} should stay off the direct focus surface"
+            );
+        }
+        let shape_range = runtime
+            .dispatch_registry()
+            .focus_surfaces
+            .iter()
+            .find(|surface| surface.name == "ShapeRange")
+            .expect("ShapeRange focus surface");
+        for member_name in [
+            "IncrementLeft",
+            "IncrementTop",
+            "IncrementRotation",
+            "ScaleWidth",
+            "ScaleHeight",
+        ] {
+            let member = shape_range
+                .members
+                .iter()
+                .find(|member| member.name == member_name)
+                .unwrap_or_else(|| panic!("ShapeRange.{member_name} focus member"));
+            assert!(matches!(member.support, office_idl::SupportState::Stub));
+        }
     }
 
     #[test]
