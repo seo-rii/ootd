@@ -148,8 +148,8 @@ fn loads_office_idl_excel_om_template_and_summarizes_surface() {
     assert_eq!(summary.enum_count, 8);
     assert_eq!(summary.interface_count, 49);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 703);
-    assert_eq!(summary.stub_member_count, 703);
+    assert_eq!(summary.member_count, 704);
+    assert_eq!(summary.stub_member_count, 704);
     assert_eq!(
         document.interfaces[0].members[0]
             .metadata
@@ -1880,7 +1880,7 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
     assert_eq!(gridlines.member_count, 7);
     assert_eq!(display_unit_label.member_count, 9);
     assert_eq!(axis_title.member_count, 9);
-    assert_eq!(series_collection.member_count, 6);
+    assert_eq!(series_collection.member_count, 7);
     assert_eq!(series.member_count, 23);
     assert_eq!(data_labels.member_count, 24);
     assert_eq!(data_label.member_count, 22);
@@ -2968,8 +2968,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(coverage.library, "Excel");
     assert_eq!(coverage.version, "16.0");
-    assert_eq!(coverage.member_count, 703);
-    assert_eq!(coverage.support_counts.stub, 703);
+    assert_eq!(coverage.member_count, 704);
+    assert_eq!(coverage.support_counts.stub, 704);
     assert!(coverage.missing_focus_surfaces.is_empty());
 
     let application_coverage = coverage
@@ -4039,14 +4039,15 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         );
     }
 
-    assert_eq!(series_collection_coverage.member_count, 6);
-    assert_eq!(series_collection_coverage.support_counts.stub, 6);
+    assert_eq!(series_collection_coverage.member_count, 7);
+    assert_eq!(series_collection_coverage.support_counts.stub, 7);
     assert_eq!(
         series_collection_coverage.stub_members,
         vec![
             "Count".to_string(),
             "Item".to_string(),
             "NewSeries".to_string(),
+            "Add".to_string(),
             "Creator".to_string(),
             "Application".to_string(),
             "Parent".to_string()
