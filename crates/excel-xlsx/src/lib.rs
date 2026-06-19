@@ -93,6 +93,7 @@ pub struct StylesheetSummary {
     pub root_text: Option<String>,
     pub root_child_names: Vec<String>,
     pub root_child_attr_maps: Vec<BTreeMap<String, String>>,
+    pub root_child_texts: Vec<Option<String>>,
     pub has_colors: bool,
     pub colors_attr_map: Option<BTreeMap<String, String>>,
     pub colors_text: Option<String>,
@@ -4247,6 +4248,7 @@ fn parse_stylesheet_summary(styles_xml: &[u8]) -> OmResult<StylesheetSummary> {
     let mut root_text = None::<String>;
     let mut root_child_names = Vec::<String>::new();
     let mut root_child_attr_maps = Vec::<BTreeMap<String, String>>::new();
+    let mut root_child_texts = Vec::<Option<String>>::new();
     let mut colors_attr_map = None::<BTreeMap<String, String>>;
     let mut colors_text = None::<String>;
     let mut colors_child_names = Vec::<String>::new();
@@ -4661,6 +4663,7 @@ fn parse_stylesheet_summary(styles_xml: &[u8]) -> OmResult<StylesheetSummary> {
                 if element_stack.len() == 1 {
                     root_child_names.push(local_name.clone());
                     root_child_attr_maps.push(parse_child_attrs(&element, reader.decoder())?);
+                    root_child_texts.push(None);
                     match local_name.as_str() {
                         "colors" => {
                             colors_count += 1;
@@ -5984,6 +5987,7 @@ fn parse_stylesheet_summary(styles_xml: &[u8]) -> OmResult<StylesheetSummary> {
                         .to_string();
                     root_child_names.push(local_name.clone());
                     root_child_attr_maps.push(parse_child_attrs(&element, reader.decoder())?);
+                    root_child_texts.push(None);
                     match local_name.as_str() {
                         "colors" => {
                             colors_count += 1;
@@ -7339,6 +7343,19 @@ fn parse_stylesheet_summary(styles_xml: &[u8]) -> OmResult<StylesheetSummary> {
             }
             Ok(Event::Text(text)) => {
                 let content = text.xml_content().map_err(xml_error)?;
+                if element_stack.len() == 2
+                    && element_stack.first().map(String::as_str) == Some("styleSheet")
+                {
+                    append_summary_text(
+                        root_child_texts.last_mut().ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "styles.xml encountered root child text before root child",
+                            )
+                        })?,
+                        &content,
+                    );
+                }
                 if element_stack.len() == 1
                     && element_stack.first().map(String::as_str) == Some("styleSheet")
                 {
@@ -7794,6 +7811,19 @@ fn parse_stylesheet_summary(styles_xml: &[u8]) -> OmResult<StylesheetSummary> {
             }
             Ok(Event::CData(text)) => {
                 let content = text.xml_content().map_err(xml_error)?;
+                if element_stack.len() == 2
+                    && element_stack.first().map(String::as_str) == Some("styleSheet")
+                {
+                    append_summary_text(
+                        root_child_texts.last_mut().ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "styles.xml encountered root child text before root child",
+                            )
+                        })?,
+                        &content,
+                    );
+                }
                 if element_stack.len() == 1
                     && element_stack.first().map(String::as_str) == Some("styleSheet")
                 {
@@ -8534,6 +8564,7 @@ fn parse_stylesheet_summary(styles_xml: &[u8]) -> OmResult<StylesheetSummary> {
         root_text,
         root_child_names,
         root_child_attr_maps,
+        root_child_texts,
         has_colors: colors_count == 1,
         colors_attr_map,
         colors_text,
@@ -26465,6 +26496,10 @@ mod tests {
                 "tableStyles".to_string(),
             ]
         );
+        assert_eq!(
+            styles_summary.root_child_texts,
+            vec![None, None, None, None, None, None, None]
+        );
         assert!(!styles_summary.has_colors);
         assert!(styles_summary.colors_child_names.is_empty());
         assert!(!styles_summary.has_indexed_colors);
@@ -37654,6 +37689,32 @@ mod tests {
             .expect("typed styles summary");
 
         assert_eq!(styles_summary.root_text.as_deref(), Some("alphabeta"));
+    }
+
+    #[test]
+    fn load_collects_stylesheet_root_child_texts_in_styles_summary() {
+        let codec = XlsxCodec;
+        let loaded = codec
+            .load(
+                &workbook_with_stylesheet_root_child_text_bytes(),
+                CommonLoadOptions::default(),
+            )
+            .expect("load workbook");
+        let styles_summary = loaded
+            .support_parts
+            .styles_summary
+            .as_ref()
+            .expect("typed styles summary");
+        let metadata_index = styles_summary
+            .root_child_names
+            .iter()
+            .position(|name| name == "metadata")
+            .expect("metadata root child");
+
+        assert_eq!(
+            styles_summary.root_child_texts[metadata_index].as_deref(),
+            Some("alphabeta")
+        );
     }
 
     #[test]
@@ -65448,6 +65509,13 @@ mod tests {
     fn dirty_save_preserves_stylesheet_root_text() {
         assert_dirty_save_preserves_styles_xml_for_mutated_input(
             workbook_with_stylesheet_root_text_bytes(),
+        );
+    }
+
+    #[test]
+    fn dirty_save_preserves_stylesheet_root_child_text() {
+        assert_dirty_save_preserves_styles_xml_for_mutated_input(
+            workbook_with_stylesheet_root_child_text_bytes(),
         );
     }
 
@@ -104462,6 +104530,36 @@ mod tests {
     }
 
     #[test]
+    fn save_rejects_stylesheet_when_root_child_text_drifts() {
+        let codec = XlsxCodec;
+        let input = workbook_with_stylesheet_root_child_text_bytes();
+        let mut loaded = codec
+            .load(&input, CommonLoadOptions::default())
+            .expect("load workbook");
+        let styles_xml = String::from_utf8(
+            loaded
+                .package
+                .part("xl/styles.xml")
+                .expect("styles part")
+                .bytes
+                .clone(),
+        )
+        .expect("styles xml utf8")
+        .replace("alpha<![CDATA[beta]]>", "changed<![CDATA[beta]]>");
+        loaded
+            .package
+            .replace_part_bytes("xl/styles.xml", styles_xml.into_bytes())
+            .expect("replace styles part");
+
+        let error = codec
+            .save(&loaded, office_common::SaveOptions::default())
+            .expect_err("save should fail when styles root child text drifts");
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("typed styles summary drifted"));
+        assert!(error.message.contains("xl/styles.xml"));
+    }
+
+    #[test]
     fn save_rejects_stylesheet_when_root_cdata_text_drifts() {
         let codec = XlsxCodec;
         let input = workbook_with_stylesheet_root_text_bytes();
@@ -113906,6 +114004,27 @@ mod tests {
         .replace(
             r#"<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">"#,
             r#"<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">alpha<![CDATA[beta]]>"#,
+        );
+        package
+            .replace_part_bytes("xl/styles.xml", styles_xml.into_bytes())
+            .expect("replace styles part");
+        package.to_bytes().expect("package bytes")
+    }
+
+    fn workbook_with_stylesheet_root_child_text_bytes() -> Vec<u8> {
+        let mut package = OpcPackage::from_bytes(&workbook_with_styles_and_theme_bytes())
+            .expect("base workbook package");
+        let styles_xml = String::from_utf8(
+            package
+                .part("xl/styles.xml")
+                .expect("styles part")
+                .bytes
+                .clone(),
+        )
+        .expect("styles xml utf8")
+        .replace(
+            "  <tableStyles count=\"0\" defaultTableStyle=\"TableStyleMedium2\" defaultPivotStyle=\"PivotStyleMedium9\"/>\n",
+            "  <metadata custom=\"meta\">alpha<![CDATA[beta]]></metadata>\n  <tableStyles count=\"0\" defaultTableStyle=\"TableStyleMedium2\" defaultPivotStyle=\"PivotStyleMedium9\"/>\n",
         );
         package
             .replace_part_bytes("xl/styles.xml", styles_xml.into_bytes())
