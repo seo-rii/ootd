@@ -414,6 +414,9 @@ pub struct ThemePartSummary {
     pub object_defaults_child_names: Vec<String>,
     pub object_defaults_child_attr_maps: Vec<BTreeMap<String, String>>,
     pub object_defaults_child_texts: Vec<Option<String>>,
+    pub object_defaults_child_nested_names: Vec<Vec<String>>,
+    pub object_defaults_child_nested_attr_maps: Vec<Vec<BTreeMap<String, String>>>,
+    pub object_defaults_child_nested_texts: Vec<Vec<Option<String>>>,
     pub has_object_defaults: bool,
     pub has_extra_color_scheme_list: bool,
     pub has_custom_color_list: bool,
@@ -8690,6 +8693,9 @@ fn parse_theme_part_summary(theme_xml: &[u8]) -> OmResult<ThemePartSummary> {
     let mut object_defaults_child_names = Vec::<String>::new();
     let mut object_defaults_child_attr_maps = Vec::<BTreeMap<String, String>>::new();
     let mut object_defaults_child_texts = Vec::<Option<String>>::new();
+    let mut object_defaults_child_nested_names = Vec::<Vec<String>>::new();
+    let mut object_defaults_child_nested_attr_maps = Vec::<Vec<BTreeMap<String, String>>>::new();
+    let mut object_defaults_child_nested_texts = Vec::<Vec<Option<String>>>::new();
     let mut extra_color_scheme_list_count = 0usize;
     let mut custom_color_list_count = 0usize;
     let mut extension_list_count = 0usize;
@@ -9007,6 +9013,40 @@ fn parse_theme_part_summary(theme_xml: &[u8]) -> OmResult<ThemePartSummary> {
                     object_defaults_child_attr_maps
                         .push(read_attr_map(&element, reader.decoder())?);
                     object_defaults_child_texts.push(None);
+                    object_defaults_child_nested_names.push(Vec::new());
+                    object_defaults_child_nested_attr_maps.push(Vec::new());
+                    object_defaults_child_nested_texts.push(Vec::new());
+                } else if element_stack.len() == 3
+                    && element_stack.first().map(String::as_str) == Some("theme")
+                    && element_stack.get(1).map(String::as_str) == Some("objectDefaults")
+                {
+                    object_defaults_child_nested_names
+                        .last_mut()
+                        .ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "theme part encountered objectDefaults nested child before objectDefaults child",
+                            )
+                        })?
+                        .push(local_name.clone());
+                    object_defaults_child_nested_attr_maps
+                        .last_mut()
+                        .ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "theme part encountered objectDefaults nested child before objectDefaults child",
+                            )
+                        })?
+                        .push(read_attr_map(&element, reader.decoder())?);
+                    object_defaults_child_nested_texts
+                        .last_mut()
+                        .ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "theme part encountered objectDefaults nested child before objectDefaults child",
+                            )
+                        })?
+                        .push(None);
                 } else if element_stack.len() == 2
                     && element_stack.first().map(String::as_str) == Some("theme")
                     && element_stack.last().map(String::as_str) == Some("extraClrSchemeLst")
@@ -11218,6 +11258,40 @@ fn parse_theme_part_summary(theme_xml: &[u8]) -> OmResult<ThemePartSummary> {
                     object_defaults_child_attr_maps
                         .push(read_attr_map(&element, reader.decoder())?);
                     object_defaults_child_texts.push(None);
+                    object_defaults_child_nested_names.push(Vec::new());
+                    object_defaults_child_nested_attr_maps.push(Vec::new());
+                    object_defaults_child_nested_texts.push(Vec::new());
+                } else if element_stack.len() == 3
+                    && element_stack.first().map(String::as_str) == Some("theme")
+                    && element_stack.get(1).map(String::as_str) == Some("objectDefaults")
+                {
+                    object_defaults_child_nested_names
+                        .last_mut()
+                        .ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "theme part encountered objectDefaults nested child before objectDefaults child",
+                            )
+                        })?
+                        .push(local_name.clone());
+                    object_defaults_child_nested_attr_maps
+                        .last_mut()
+                        .ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "theme part encountered objectDefaults nested child before objectDefaults child",
+                            )
+                        })?
+                        .push(read_attr_map(&element, reader.decoder())?);
+                    object_defaults_child_nested_texts
+                        .last_mut()
+                        .ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "theme part encountered objectDefaults nested child before objectDefaults child",
+                            )
+                        })?
+                        .push(None);
                 } else if element_stack.len() == 2
                     && element_stack.first().map(String::as_str) == Some("theme")
                     && element_stack.last().map(String::as_str) == Some("extraClrSchemeLst")
@@ -13047,6 +13121,22 @@ fn parse_theme_part_summary(theme_xml: &[u8]) -> OmResult<ThemePartSummary> {
                         })?,
                         &content,
                     );
+                } else if element_stack.len() == 4
+                    && element_stack.first().map(String::as_str) == Some("theme")
+                    && element_stack.get(1).map(String::as_str) == Some("objectDefaults")
+                {
+                    append_extension_list_child_text(
+                        object_defaults_child_nested_texts
+                            .last_mut()
+                            .and_then(|children| children.last_mut())
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "theme part encountered objectDefaults nested child text before objectDefaults nested child",
+                                )
+                            })?,
+                        &content,
+                    );
                 } else if element_stack.len() == 3
                     && element_stack.first().map(String::as_str) == Some("theme")
                     && element_stack.get(1).map(String::as_str) == Some("extraClrSchemeLst")
@@ -13731,6 +13821,22 @@ fn parse_theme_part_summary(theme_xml: &[u8]) -> OmResult<ThemePartSummary> {
                                 "theme part encountered objectDefaults child text before objectDefaults child",
                             )
                         })?,
+                        &content,
+                    );
+                } else if element_stack.len() == 4
+                    && element_stack.first().map(String::as_str) == Some("theme")
+                    && element_stack.get(1).map(String::as_str) == Some("objectDefaults")
+                {
+                    append_extension_list_child_text(
+                        object_defaults_child_nested_texts
+                            .last_mut()
+                            .and_then(|children| children.last_mut())
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "theme part encountered objectDefaults nested child text before objectDefaults nested child",
+                                )
+                            })?,
                         &content,
                     );
                 } else if element_stack.len() == 3
@@ -14442,6 +14548,9 @@ fn parse_theme_part_summary(theme_xml: &[u8]) -> OmResult<ThemePartSummary> {
                     object_defaults_child_names,
                     object_defaults_child_attr_maps,
                     object_defaults_child_texts,
+                    object_defaults_child_nested_names,
+                    object_defaults_child_nested_attr_maps,
+                    object_defaults_child_nested_texts,
                     has_object_defaults: object_defaults_count == 1,
                     has_extra_color_scheme_list: extra_color_scheme_list_count == 1,
                     has_custom_color_list: custom_color_list_count == 1,
@@ -35650,6 +35759,21 @@ mod tests {
                 "shape".to_string()
             )])]
         );
+        assert_eq!(
+            theme_summary.object_defaults_child_nested_names,
+            vec![vec!["spPr".to_string()]]
+        );
+        assert_eq!(
+            theme_summary.object_defaults_child_nested_attr_maps,
+            vec![vec![BTreeMap::from([(
+                "rotWithShape".to_string(),
+                "1".to_string()
+            )])]]
+        );
+        assert_eq!(
+            theme_summary.object_defaults_child_nested_texts,
+            vec![vec![None]]
+        );
     }
 
     #[test]
@@ -35670,6 +35794,27 @@ mod tests {
         assert_eq!(
             theme_summary.object_defaults_child_texts,
             vec![Some("alphabeta".to_string())]
+        );
+    }
+
+    #[test]
+    fn load_collects_object_defaults_nested_child_texts_in_theme_summary() {
+        let codec = XlsxCodec;
+        let loaded = codec
+            .load(
+                &workbook_with_theme_object_defaults_nested_child_text_bytes(),
+                CommonLoadOptions::default(),
+            )
+            .expect("load workbook");
+        let theme_summary = loaded
+            .support_parts
+            .theme_summaries
+            .get("xl/theme/theme1.xml")
+            .expect("typed theme summary");
+
+        assert_eq!(
+            theme_summary.object_defaults_child_nested_texts,
+            vec![vec![Some("gammadelta".to_string())]]
         );
     }
 
@@ -72834,6 +72979,13 @@ mod tests {
     }
 
     #[test]
+    fn dirty_save_preserves_object_defaults_nested_child_texts() {
+        assert_dirty_save_preserves_theme_xml_for_mutated_input(
+            workbook_with_theme_object_defaults_nested_child_text_bytes(),
+        );
+    }
+
+    #[test]
     fn dirty_save_preserves_theme_extra_color_scheme_list_without_object_defaults() {
         let mut package = OpcPackage::from_bytes(&workbook_with_styles_and_theme_bytes())
             .expect("base workbook package");
@@ -91559,6 +91711,82 @@ mod tests {
         let error = codec
             .save(&loaded, office_common::SaveOptions::default())
             .expect_err("save should fail when objectDefaults child cdata text drifts");
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("typed theme summary drifted"));
+        assert!(error.message.contains("xl/theme/theme1.xml"));
+    }
+
+    #[test]
+    fn save_rejects_theme_part_when_object_defaults_nested_attr_map_drifts() {
+        let codec = XlsxCodec;
+        let input = workbook_with_theme_object_defaults_child_bytes();
+        let mut loaded = codec
+            .load(&input, CommonLoadOptions::default())
+            .expect("load workbook");
+        let sheet_id = loaded.state.worksheets[0].id;
+        let theme_xml = String::from_utf8(
+            loaded
+                .package
+                .part("xl/theme/theme1.xml")
+                .expect("theme part")
+                .bytes
+                .clone(),
+        )
+        .expect("theme xml utf8")
+        .replace(r#"rotWithShape="1""#, r#"rotWithShape="0""#);
+        loaded
+            .package
+            .replace_part_bytes("xl/theme/theme1.xml", theme_xml.into_bytes())
+            .expect("replace theme part");
+        loaded
+            .state
+            .set_range_values(
+                &office_common::RangeRef::single_cell(WorkbookId(0), sheet_id, 1, 1),
+                &office_common::OmArray::scalar(office_common::OmValue::Number(9.0)),
+            )
+            .expect("set value");
+
+        let error = codec
+            .save(&loaded, office_common::SaveOptions::default())
+            .expect_err("save should fail when objectDefaults nested attrs drift");
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("typed theme summary drifted"));
+        assert!(error.message.contains("xl/theme/theme1.xml"));
+    }
+
+    #[test]
+    fn save_rejects_theme_part_when_object_defaults_nested_child_text_drifts() {
+        let codec = XlsxCodec;
+        let input = workbook_with_theme_object_defaults_nested_child_text_bytes();
+        let mut loaded = codec
+            .load(&input, CommonLoadOptions::default())
+            .expect("load workbook");
+        let sheet_id = loaded.state.worksheets[0].id;
+        let theme_xml = String::from_utf8(
+            loaded
+                .package
+                .part("xl/theme/theme1.xml")
+                .expect("theme part")
+                .bytes
+                .clone(),
+        )
+        .expect("theme xml utf8")
+        .replace("gamma<![CDATA[delta]]>", "changed<![CDATA[delta]]>");
+        loaded
+            .package
+            .replace_part_bytes("xl/theme/theme1.xml", theme_xml.into_bytes())
+            .expect("replace theme part");
+        loaded
+            .state
+            .set_range_values(
+                &office_common::RangeRef::single_cell(WorkbookId(0), sheet_id, 1, 1),
+                &office_common::OmArray::scalar(office_common::OmValue::Number(9.0)),
+            )
+            .expect("set value");
+
+        let error = codec
+            .save(&loaded, office_common::SaveOptions::default())
+            .expect_err("save should fail when objectDefaults nested child text drifts");
         assert_eq!(error.code, OmErrorCode::InvalidState);
         assert!(error.message.contains("typed theme summary drifted"));
         assert!(error.message.contains("xl/theme/theme1.xml"));
@@ -114428,6 +114656,28 @@ mod tests {
         .replace(
             "    <a:spDef custom=\"shape\">\n",
             "    <a:spDef custom=\"shape\">alpha<![CDATA[beta]]>\n",
+        );
+        package
+            .replace_part_bytes("xl/theme/theme1.xml", theme_xml.into_bytes())
+            .expect("replace theme part");
+        package.to_bytes().expect("package bytes")
+    }
+
+    fn workbook_with_theme_object_defaults_nested_child_text_bytes() -> Vec<u8> {
+        let mut package =
+            OpcPackage::from_bytes(&workbook_with_theme_object_defaults_child_bytes())
+                .expect("base workbook package");
+        let theme_xml = String::from_utf8(
+            package
+                .part("xl/theme/theme1.xml")
+                .expect("theme part")
+                .bytes
+                .clone(),
+        )
+        .expect("theme xml utf8")
+        .replace(
+            r#"<a:spPr rotWithShape="1"/>"#,
+            r#"<a:spPr rotWithShape="1">gamma<![CDATA[delta]]></a:spPr>"#,
         );
         package
             .replace_part_bytes("xl/theme/theme1.xml", theme_xml.into_bytes())
