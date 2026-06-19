@@ -12465,11 +12465,6 @@ impl ExcelRuntime {
                         | "Duplicate"
                         | "CopyPicture"
                         | "Delete"
-                        | "IncrementLeft"
-                        | "IncrementTop"
-                        | "IncrementRotation"
-                        | "ScaleWidth"
-                        | "ScaleHeight"
                         | "SendToBack"
                 ) {
                     self.focus_member_supported("ChartObject", member, false)?;
@@ -12540,71 +12535,9 @@ impl ExcelRuntime {
                             self.delete_chart_object(workbook, chart_object_id)?,
                         ))
                     }
-                    "IncrementLeft" | "IncrementTop" => {
-                        if args.len() != 1 {
-                            return Err(OmError::invalid_argument(format!(
-                                "ChartObject.{member} expects one numeric increment argument"
-                            )));
-                        }
-                        let OmValue::Number(increment) = &args[0] else {
-                            return Err(OmError::type_mismatch(format!(
-                                "ChartObject.{member} expects a numeric increment"
-                            )));
-                        };
-                        if !increment.is_finite() {
-                            return Err(OmError::invalid_argument(format!(
-                                "ChartObject.{member} expects a finite numeric increment"
-                            )));
-                        }
-                        let geometry_member = if member == "IncrementLeft" {
-                            "Left"
-                        } else {
-                            "Top"
-                        };
-                        let chart_object_handle = self
-                            .register_chart_object_handle_with_parent_origin(
-                                workbook,
-                                chart_object_id,
-                                parent,
-                            );
-                        let OmValue::Number(current) =
-                            self.dispatch_get(chart_object_handle, geometry_member, &[])?
-                        else {
-                            return Err(OmError::type_mismatch(format!(
-                                "ChartObject.{geometry_member} did not return a numeric value"
-                            )));
-                        };
-                        let next = current + *increment;
-                        if !next.is_finite() {
-                            return Err(OmError::invalid_argument(format!(
-                                "ChartObject.{member} result is not finite"
-                            )));
-                        }
-                        self.dispatch_set(
-                            chart_object_handle,
-                            geometry_member,
-                            OmValue::Number(next),
-                            &[],
-                        )?;
-                        Ok(OmValue::Empty)
-                    }
                     "ZOrder" => Err(OmError::unsupported(
                         "ChartObject.ZOrder is a read-only property",
                     )),
-                    "IncrementRotation" | "ScaleWidth" | "ScaleHeight" => {
-                        let host_sheet_id = self
-                            .chart_object_model(workbook, chart_object_id)?
-                            .host_sheet_id;
-                        let shape_range = self.register_shape_range_handle(
-                            workbook,
-                            ShapeRangeSource::ChartObject {
-                                chart_object_id,
-                                parent: parent
-                                    .unwrap_or(ChartObjectsParent::Worksheet(host_sheet_id)),
-                            },
-                        );
-                        self.dispatch_invoke(shape_range, member, args)
-                    }
                     "Activate" | "Select" => {
                         if member == "Activate" && !args.is_empty() {
                             return Err(OmError::invalid_argument(format!(
@@ -16301,11 +16234,6 @@ impl ExcelRuntime {
                             | "Duplicate"
                             | "CopyPicture"
                             | "Delete"
-                            | "IncrementLeft"
-                            | "IncrementTop"
-                            | "IncrementRotation"
-                            | "ScaleWidth"
-                            | "ScaleHeight"
                             | "SendToBack"
                     )
                     | (
@@ -65356,27 +65284,6 @@ mod tests {
             .find(|member| member.name == "Location")
             .expect("Chart.Location focus member");
         assert!(matches!(location.support, office_idl::SupportState::Stub));
-
-        let chart_object = runtime
-            .dispatch_registry()
-            .focus_surfaces
-            .iter()
-            .find(|surface| surface.name == "ChartObject")
-            .expect("ChartObject focus surface");
-        for member_name in [
-            "IncrementLeft",
-            "IncrementTop",
-            "IncrementRotation",
-            "ScaleWidth",
-            "ScaleHeight",
-        ] {
-            let member = chart_object
-                .members
-                .iter()
-                .find(|member| member.name == member_name)
-                .unwrap_or_else(|| panic!("ChartObject.{member_name} focus member"));
-            assert!(matches!(member.support, office_idl::SupportState::Stub));
-        }
     }
 
     #[test]
@@ -105340,13 +105247,20 @@ mod tests {
         runtime
             .dispatch_invoke(second_shape, "IncrementTop", &[OmValue::Number(2.0)])
             .expect("single ShapeRange.IncrementTop");
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    second_chart_object,
+                    "IncrementRotation",
+                    &[OmValue::Number(7.5)],
+                )
+                .expect_err("ChartObject.IncrementRotation stays off the direct OM surface")
+                .code,
+            OmErrorCode::Unsupported
+        );
         runtime
-            .dispatch_invoke(
-                second_chart_object,
-                "IncrementRotation",
-                &[OmValue::Number(7.5)],
-            )
-            .expect("single ChartObject.IncrementRotation");
+            .dispatch_invoke(second_shape, "IncrementRotation", &[OmValue::Number(7.5)])
+            .expect("single ShapeRange.IncrementRotation");
         assert_eq!(
             expect_number(
                 runtime
@@ -105615,21 +105529,41 @@ mod tests {
         let first_chart_object = expect_object_handle(
             runtime
                 .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
-                .expect("ChartObjects.Item(1) before direct ChartObject scale"),
+                .expect("ChartObjects.Item(1) before single ShapeRange scale"),
+        );
+        let first_chart_shape_range = expect_object_handle(
+            runtime
+                .dispatch_get(first_chart_object, "ShapeRange", &[])
+                .expect("ChartObject.ShapeRange before single scale"),
         );
         let direct_left = expect_number(
             runtime
                 .dispatch_get(first_chart_object, "Left", &[])
-                .expect("ChartObject.Left before direct ScaleWidth"),
+                .expect("ChartObject.Left before single ShapeRange ScaleWidth"),
         );
         let direct_width = expect_number(
             runtime
                 .dispatch_get(first_chart_object, "Width", &[])
-                .expect("ChartObject.Width before direct ScaleWidth"),
+                .expect("ChartObject.Width before single ShapeRange ScaleWidth"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    first_chart_object,
+                    "ScaleWidth",
+                    &[
+                        OmValue::Number(2.0),
+                        OmValue::Bool(false),
+                        OmValue::Number(f64::from(super::MSO_SCALE_FROM_TOP_LEFT)),
+                    ],
+                )
+                .expect_err("ChartObject.ScaleWidth stays off the direct OM surface")
+                .code,
+            OmErrorCode::Unsupported
         );
         runtime
             .dispatch_invoke(
-                first_chart_object,
+                first_chart_shape_range,
                 "ScaleWidth",
                 &[
                     OmValue::Number(2.0),
@@ -105637,12 +105571,12 @@ mod tests {
                     OmValue::Number(f64::from(super::MSO_SCALE_FROM_TOP_LEFT)),
                 ],
             )
-            .expect("ChartObject.ScaleWidth from top-left");
+            .expect("single ShapeRange.ScaleWidth from top-left");
         assert_close(
             expect_number(
                 runtime
                     .dispatch_get(first_chart_object, "Left", &[])
-                    .expect("ChartObject.Left after direct ScaleWidth"),
+                    .expect("ChartObject.Left after single ShapeRange ScaleWidth"),
             ),
             direct_left,
         );
@@ -105650,7 +105584,7 @@ mod tests {
             expect_number(
                 runtime
                     .dispatch_get(first_chart_object, "Width", &[])
-                    .expect("ChartObject.Width after direct ScaleWidth"),
+                    .expect("ChartObject.Width after single ShapeRange ScaleWidth"),
             ),
             direct_width * 2.0,
         );
@@ -105658,16 +105592,31 @@ mod tests {
         let direct_top = expect_number(
             runtime
                 .dispatch_get(first_chart_object, "Top", &[])
-                .expect("ChartObject.Top before direct ScaleHeight"),
+                .expect("ChartObject.Top before single ShapeRange ScaleHeight"),
         );
         let direct_height = expect_number(
             runtime
                 .dispatch_get(first_chart_object, "Height", &[])
-                .expect("ChartObject.Height before direct ScaleHeight"),
+                .expect("ChartObject.Height before single ShapeRange ScaleHeight"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    first_chart_object,
+                    "ScaleHeight",
+                    &[
+                        OmValue::Number(0.5),
+                        OmValue::Bool(false),
+                        OmValue::Number(f64::from(super::MSO_SCALE_FROM_MIDDLE)),
+                    ],
+                )
+                .expect_err("ChartObject.ScaleHeight stays off the direct OM surface")
+                .code,
+            OmErrorCode::Unsupported
         );
         runtime
             .dispatch_invoke(
-                first_chart_object,
+                first_chart_shape_range,
                 "ScaleHeight",
                 &[
                     OmValue::Number(0.5),
@@ -105675,12 +105624,12 @@ mod tests {
                     OmValue::Number(f64::from(super::MSO_SCALE_FROM_MIDDLE)),
                 ],
             )
-            .expect("ChartObject.ScaleHeight from middle");
+            .expect("single ShapeRange.ScaleHeight from middle");
         assert_close(
             expect_number(
                 runtime
                     .dispatch_get(first_chart_object, "Top", &[])
-                    .expect("ChartObject.Top after direct ScaleHeight"),
+                    .expect("ChartObject.Top after single ShapeRange ScaleHeight"),
             ),
             direct_top + direct_height * 0.25,
         );
@@ -105688,7 +105637,7 @@ mod tests {
             expect_number(
                 runtime
                     .dispatch_get(first_chart_object, "Height", &[])
-                    .expect("ChartObject.Height after direct ScaleHeight"),
+                    .expect("ChartObject.Height after single ShapeRange ScaleHeight"),
             ),
             direct_height * 0.5,
         );
@@ -106986,12 +106935,39 @@ mod tests {
         runtime
             .dispatch_set(chart_object, "Height", OmValue::Number(70.0), &[])
             .expect("set ChartObject.Height");
+        let chart_object_shape_range = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "ShapeRange", &[])
+                .expect("ChartObject.ShapeRange for geometry increment"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart_object, "IncrementLeft", &[OmValue::Number(4.0)])
+                .expect_err("ChartObject.IncrementLeft stays off the direct OM surface")
+                .code,
+            OmErrorCode::Unsupported
+        );
         runtime
-            .dispatch_invoke(chart_object, "IncrementLeft", &[OmValue::Number(4.0)])
-            .expect("ChartObject.IncrementLeft");
+            .dispatch_invoke(
+                chart_object_shape_range,
+                "IncrementLeft",
+                &[OmValue::Number(4.0)],
+            )
+            .expect("ShapeRange.IncrementLeft");
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart_object, "IncrementTop", &[OmValue::Number(-2.0)])
+                .expect_err("ChartObject.IncrementTop stays off the direct OM surface")
+                .code,
+            OmErrorCode::Unsupported
+        );
         runtime
-            .dispatch_invoke(chart_object, "IncrementTop", &[OmValue::Number(-2.0)])
-            .expect("ChartObject.IncrementTop");
+            .dispatch_invoke(
+                chart_object_shape_range,
+                "IncrementTop",
+                &[OmValue::Number(-2.0)],
+            )
+            .expect("ShapeRange.IncrementTop");
         assert_eq!(
             expect_number(
                 runtime
