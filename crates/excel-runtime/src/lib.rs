@@ -65354,6 +65354,27 @@ mod tests {
             .find(|member| member.name == "Location")
             .expect("Chart.Location focus member");
         assert!(matches!(location.support, office_idl::SupportState::Stub));
+
+        let chart_object = runtime
+            .dispatch_registry()
+            .focus_surfaces
+            .iter()
+            .find(|surface| surface.name == "ChartObject")
+            .expect("ChartObject focus surface");
+        for member_name in [
+            "IncrementLeft",
+            "IncrementTop",
+            "IncrementRotation",
+            "ScaleWidth",
+            "ScaleHeight",
+        ] {
+            let member = chart_object
+                .members
+                .iter()
+                .find(|member| member.name == member_name)
+                .unwrap_or_else(|| panic!("ChartObject.{member_name} focus member"));
+            assert!(matches!(member.support, office_idl::SupportState::Stub));
+        }
     }
 
     #[test]
