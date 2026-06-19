@@ -148,8 +148,8 @@ fn loads_office_idl_excel_om_template_and_summarizes_surface() {
     assert_eq!(summary.enum_count, 8);
     assert_eq!(summary.interface_count, 49);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 707);
-    assert_eq!(summary.stub_member_count, 707);
+    assert_eq!(summary.member_count, 708);
+    assert_eq!(summary.stub_member_count, 708);
     assert_eq!(
         document.interfaces[0].members[0]
             .metadata
@@ -1843,7 +1843,7 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
     assert_eq!(worksheets.member_count, 13);
     assert_eq!(worksheet.member_count, 28);
     assert_eq!(range.member_count, 51);
-    assert_eq!(areas.member_count, 4);
+    assert_eq!(areas.member_count, 5);
     assert_eq!(names.member_count, 5);
     assert_eq!(name.member_count, 6);
     assert_eq!(chart_objects.member_count, 23);
@@ -2968,8 +2968,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(coverage.library, "Excel");
     assert_eq!(coverage.version, "16.0");
-    assert_eq!(coverage.member_count, 707);
-    assert_eq!(coverage.support_counts.stub, 707);
+    assert_eq!(coverage.member_count, 708);
+    assert_eq!(coverage.support_counts.stub, 708);
     assert!(coverage.missing_focus_surfaces.is_empty());
 
     let application_coverage = coverage
@@ -3434,14 +3434,15 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         ]
     );
 
-    assert_eq!(areas_coverage.member_count, 4);
-    assert_eq!(areas_coverage.support_counts.stub, 4);
+    assert_eq!(areas_coverage.member_count, 5);
+    assert_eq!(areas_coverage.support_counts.stub, 5);
     assert_eq!(
         areas_coverage.stub_members,
         vec![
             "Count".to_string(),
             "Item".to_string(),
             "Application".to_string(),
+            "Creator".to_string(),
             "Parent".to_string()
         ]
     );

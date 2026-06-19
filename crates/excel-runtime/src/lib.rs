@@ -18537,6 +18537,14 @@ impl ExcelRuntime {
                 }
                 Ok(OmValue::Object(self.root_application()))
             }
+            "Creator" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Areas.Creator does not accept arguments",
+                    ));
+                }
+                Ok(OmValue::Number(f64::from(XL_CREATOR_CODE)))
+            }
             "Parent" => {
                 if !args.is_empty() {
                     return Err(OmError::invalid_argument(
@@ -84157,6 +84165,21 @@ mod tests {
                     .expect("Areas.Application")
             ),
             runtime.root_application()
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(areas, "Creator", &[])
+                    .expect("Areas.Creator")
+            ),
+            f64::from(super::XL_CREATOR_CODE)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(areas, "Creator", &[OmValue::Missing])
+                .expect_err("Areas.Creator rejects arguments")
+                .code,
+            OmErrorCode::InvalidArgument
         );
         let areas_parent = expect_object_handle(
             runtime
