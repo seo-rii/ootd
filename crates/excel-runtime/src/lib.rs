@@ -65342,6 +65342,18 @@ mod tests {
                 .unwrap_or_else(|| panic!("PlotArea.{member_name} focus member"));
             assert!(matches!(member.support, office_idl::SupportState::Stub));
         }
+        let chart = runtime
+            .dispatch_registry()
+            .focus_surfaces
+            .iter()
+            .find(|surface| surface.name == "Chart")
+            .expect("Chart focus surface");
+        let location = chart
+            .members
+            .iter()
+            .find(|member| member.name == "Location")
+            .expect("Chart.Location focus member");
+        assert!(matches!(location.support, office_idl::SupportState::Stub));
     }
 
     #[test]

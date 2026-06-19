@@ -148,8 +148,8 @@ fn loads_office_idl_excel_om_template_and_summarizes_surface() {
     assert_eq!(summary.enum_count, 8);
     assert_eq!(summary.interface_count, 49);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 706);
-    assert_eq!(summary.stub_member_count, 706);
+    assert_eq!(summary.member_count, 707);
+    assert_eq!(summary.stub_member_count, 707);
     assert_eq!(
         document.interfaces[0].members[0]
             .metadata
@@ -1849,7 +1849,7 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
     assert_eq!(chart_objects.member_count, 23);
     assert_eq!(chart_object.member_count, 30);
     assert_eq!(shape_range.member_count, 46);
-    assert_eq!(chart.member_count, 77);
+    assert_eq!(chart.member_count, 78);
     assert_eq!(chart_area.member_count, 14);
     assert_eq!(plot_area.member_count, 9);
     assert_eq!(chart_title.member_count, 9);
@@ -2968,8 +2968,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(coverage.library, "Excel");
     assert_eq!(coverage.version, "16.0");
-    assert_eq!(coverage.member_count, 706);
-    assert_eq!(coverage.support_counts.stub, 706);
+    assert_eq!(coverage.member_count, 707);
+    assert_eq!(coverage.support_counts.stub, 707);
     assert!(coverage.missing_focus_surfaces.is_empty());
 
     let application_coverage = coverage
@@ -3596,8 +3596,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         ]
     );
 
-    assert_eq!(chart_coverage.member_count, 77);
-    assert_eq!(chart_coverage.support_counts.stub, 77);
+    assert_eq!(chart_coverage.member_count, 78);
+    assert_eq!(chart_coverage.support_counts.stub, 78);
     assert_eq!(
         chart_coverage.stub_members,
         vec![
@@ -3663,6 +3663,7 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
             "ApplyLayout".to_string(),
             "ApplyCustomType".to_string(),
             "SetSourceData".to_string(),
+            "Location".to_string(),
             "ChartWizard".to_string(),
             "ApplyDataLabels".to_string(),
             "ApplyChartTemplate".to_string(),

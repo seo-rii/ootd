@@ -9801,6 +9801,51 @@
           ]
         },
         {
+          "name": "Location",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "Location"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Chart",
+                "aliasOf": "Excel.Chart"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "interface",
+            "name": "Chart",
+            "aliasOf": "Excel.Chart"
+          },
+          "params": [
+            {
+              "name": "Where",
+              "type": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "XlChartLocation"
+              }
+            },
+            {
+              "name": "Name",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            }
+          ]
+        },
+        {
           "name": "ChartWizard",
           "memberKind": "method",
           "support": "stub",
