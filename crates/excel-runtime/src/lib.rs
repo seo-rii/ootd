@@ -843,6 +843,7 @@ enum ChartObjectsParent {
 #[derive(Debug, Clone)]
 enum RuntimeObjectKind {
     Application,
+    WorksheetFunction,
     WorkbooksCollection,
     Workbook {
         workbook: WorkbookHandle,
@@ -2588,6 +2589,9 @@ impl ExcelRuntime {
 
         match object {
             RuntimeObjectKind::Application => self.dispatch_get_application(member, args),
+            RuntimeObjectKind::WorksheetFunction => {
+                self.dispatch_get_worksheet_function(member, args)
+            }
             RuntimeObjectKind::WorkbooksCollection => self.dispatch_get_workbooks(member, args),
             RuntimeObjectKind::Workbook { workbook } => {
                 self.dispatch_get_workbook(workbook, member, args)
@@ -3226,6 +3230,9 @@ impl ExcelRuntime {
                     ))),
                 }
             }
+            RuntimeObjectKind::WorksheetFunction => Err(OmError::unsupported(format!(
+                "WorksheetFunction.{member} is not writable"
+            ))),
             RuntimeObjectKind::Workbook { workbook } => {
                 self.focus_member_supported("Workbook", member, true)?;
                 if !args.is_empty() {
@@ -8993,6 +9000,9 @@ impl ExcelRuntime {
 
         match object {
             RuntimeObjectKind::Application => self.dispatch_invoke_application(member, args),
+            RuntimeObjectKind::WorksheetFunction => {
+                self.dispatch_invoke_worksheet_function(member, args)
+            }
             RuntimeObjectKind::WorkbooksCollection => self.dispatch_invoke_workbooks(member, args),
             RuntimeObjectKind::Workbook { workbook } => {
                 self.dispatch_invoke_workbook(workbook, member, args)
@@ -16252,6 +16262,7 @@ impl ExcelRuntime {
 
     fn runtime_object_focus_surface(object: &RuntimeObjectKind) -> Option<&'static str> {
         match object {
+            RuntimeObjectKind::WorksheetFunction => Some("WorksheetFunction"),
             RuntimeObjectKind::ChartObjects { .. } => Some("ChartObjects"),
             RuntimeObjectKind::ChartObject { .. } => Some("ChartObject"),
             RuntimeObjectKind::ShapeRange { .. } => Some("ShapeRange"),
@@ -16298,6 +16309,7 @@ impl ExcelRuntime {
             && matches!(
                 (surface, member),
                 ("Application" | "Workbook" | "Worksheet", "Names")
+                    | ("Application", "WorksheetFunction")
                     | (
                         "Workbook" | "Worksheet",
                         "PrintPreview" | "PrintOut" | "CheckSpelling" | "ExportAsFixedFormat"
@@ -16311,6 +16323,7 @@ impl ExcelRuntime {
                         "Name",
                         "Name" | "RefersTo" | "RefersToRange" | "Application" | "Parent" | "Delete"
                     )
+                    | ("WorksheetFunction", "Application" | "Parent")
                     | (
                         "ChartObjects",
                         "Count"
@@ -16993,6 +17006,16 @@ impl ExcelRuntime {
                 } else {
                     self.dispatch_invoke(handle, "Item", args)
                 }
+            }
+            "WorksheetFunction" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Application.WorksheetFunction does not accept index arguments",
+                    ));
+                }
+                Ok(OmValue::Object(
+                    self.register_object(RuntimeObjectKind::WorksheetFunction),
+                ))
             }
             "ActiveWorkbook" => Ok(self
                 .active_workbook
@@ -18561,6 +18584,129 @@ impl ExcelRuntime {
                 "Areas.{member} is not implemented as a method"
             ))),
         }
+    }
+
+    fn dispatch_get_worksheet_function(
+        &mut self,
+        member: &str,
+        args: &[OmValue],
+    ) -> OmResult<OmValue> {
+        self.focus_member_supported("WorksheetFunction", member, false)?;
+        if !args.is_empty() {
+            return Err(OmError::invalid_argument(format!(
+                "WorksheetFunction.{member} does not accept arguments"
+            )));
+        }
+
+        match member {
+            "Application" | "Parent" => Ok(OmValue::Object(self.root_application())),
+            _ => Err(OmError::unsupported(format!(
+                "WorksheetFunction.{member} is not implemented as a property"
+            ))),
+        }
+    }
+
+    fn dispatch_invoke_worksheet_function(
+        &mut self,
+        member: &str,
+        args: &[OmValue],
+    ) -> OmResult<OmValue> {
+        let Some(active_workbook) = self.active_workbook else {
+            return Err(OmError::invalid_state(
+                "Application.WorksheetFunction requires an active workbook",
+            ));
+        };
+        let active_sheet = self.active_sheet_id(active_workbook)?;
+        let function_name = worksheet_function_formula_name(member)?;
+        let mut formula_args = Vec::with_capacity(args.len());
+        for arg in args {
+            formula_args.push(self.worksheet_function_formula_arg(active_workbook, arg)?);
+        }
+        let expression = format!("={function_name}({})", formula_args.join(","));
+        self.evaluate_formula_expression(
+            active_workbook,
+            active_sheet,
+            &expression,
+            &format!("WorksheetFunction.{member}"),
+        )
+    }
+
+    fn worksheet_function_formula_arg(
+        &self,
+        active_workbook: WorkbookHandle,
+        value: &OmValue,
+    ) -> OmResult<String> {
+        match value {
+            OmValue::Missing | OmValue::Empty | OmValue::Null => Ok(String::new()),
+            OmValue::Bool(value) => Ok(if *value { "TRUE" } else { "FALSE" }.to_string()),
+            OmValue::Number(value) => {
+                if !value.is_finite() {
+                    return Err(OmError::invalid_argument(
+                        "WorksheetFunction numeric arguments must be finite",
+                    ));
+                }
+                Ok(value.to_string())
+            }
+            OmValue::Text(value) => Ok(format_formula_string_literal(value)),
+            OmValue::Error(value) => Ok(formula_cell_error_text(*value).to_string()),
+            OmValue::Object(handle) => match self.runtime_object(*handle)? {
+                RuntimeObjectKind::Range {
+                    workbook, range, ..
+                } => {
+                    if workbook != active_workbook {
+                        return Err(OmError::unsupported(
+                            "WorksheetFunction range arguments must belong to the active workbook",
+                        ));
+                    }
+                    self.worksheet_function_range_reference_text(workbook, &range)
+                }
+                _ => Err(OmError::type_mismatch(
+                    "WorksheetFunction object arguments must be Range objects",
+                )),
+            },
+            OmValue::Array(array) => self.worksheet_function_array_literal(active_workbook, array),
+        }
+    }
+
+    fn worksheet_function_array_literal(
+        &self,
+        active_workbook: WorkbookHandle,
+        array: &OmArray,
+    ) -> OmResult<String> {
+        let mut rows = Vec::with_capacity(array.rows);
+        for row in 0..array.rows {
+            let mut cols = Vec::with_capacity(array.cols);
+            for col in 0..array.cols {
+                let value = array.get(row, col).ok_or_else(|| {
+                    OmError::invalid_argument("WorksheetFunction array dimensions are invalid")
+                })?;
+                cols.push(self.worksheet_function_formula_arg(active_workbook, value)?);
+            }
+            rows.push(cols.join(","));
+        }
+        Ok(format!("{{{}}}", rows.join(";")))
+    }
+
+    fn worksheet_function_range_reference_text(
+        &self,
+        workbook: WorkbookHandle,
+        range: &RangeSet,
+    ) -> OmResult<String> {
+        let mut parts = Vec::with_capacity(range.areas().len());
+        for area in range.areas() {
+            let SheetScope::Single(sheet_id) = area.scope else {
+                return Err(OmError::unsupported(
+                    "WorksheetFunction range arguments do not support 3D references yet",
+                ));
+            };
+            let worksheet_name = self.worksheet_model(workbook, sheet_id)?.name.clone();
+            parts.push(format!(
+                "{}{}",
+                formula_sheet_address_qualifier(&worksheet_name),
+                format_rect_address_with_flags(area.rect, true, true)
+            ));
+        }
+        Ok(parts.join(","))
     }
 
     fn dispatch_get_names(
@@ -43512,7 +43658,9 @@ fn update_series_plot_order(
 
 fn runtime_object_owner(object: RuntimeObjectKind) -> Option<WorkbookHandle> {
     match object {
-        RuntimeObjectKind::Application | RuntimeObjectKind::WorkbooksCollection => None,
+        RuntimeObjectKind::Application
+        | RuntimeObjectKind::WorksheetFunction
+        | RuntimeObjectKind::WorkbooksCollection => None,
         RuntimeObjectKind::Workbook { workbook }
         | RuntimeObjectKind::WorksheetsCollection { workbook, .. }
         | RuntimeObjectKind::Worksheet { workbook, .. }
@@ -49272,6 +49420,33 @@ fn formula_cell_error_text(error: CellError) -> &'static str {
         CellError::Blocked => "#BLOCKED!",
         CellError::Unknown => "#UNKNOWN!",
     }
+}
+
+fn format_formula_string_literal(value: &str) -> String {
+    format!("\"{}\"", value.replace('"', "\"\""))
+}
+
+fn worksheet_function_formula_name(member: &str) -> OmResult<String> {
+    let mut name = String::with_capacity(member.len());
+    for ch in member.chars() {
+        if ch.is_ascii_alphanumeric() {
+            name.push(ch.to_ascii_uppercase());
+        } else if ch == '.' || ch == '_' {
+            name.push('.');
+        } else {
+            return Err(OmError::new(
+                OmErrorCode::NotFound,
+                format!("WorksheetFunction.{member} is not a valid worksheet function name"),
+            ));
+        }
+    }
+    if name.is_empty() || !name.as_bytes()[0].is_ascii_alphabetic() {
+        return Err(OmError::new(
+            OmErrorCode::NotFound,
+            format!("WorksheetFunction.{member} is not a valid worksheet function name"),
+        ));
+    }
+    Ok(name)
 }
 
 fn formula_eval_error_text(error: FormulaEvalError) -> &'static str {
@@ -78491,6 +78666,142 @@ mod tests {
                 .expect_err("Application.Evaluate should reject non-text arguments")
                 .code,
             OmErrorCode::TypeMismatch
+        );
+    }
+
+    #[test]
+    fn application_worksheet_function_evaluates_scalar_and_range_arguments() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let application = runtime.root_application();
+        let worksheet_function = expect_object_handle(
+            runtime
+                .dispatch_get(application, "WorksheetFunction", &[])
+                .expect("Application.WorksheetFunction"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(worksheet_function, "Application", &[])
+                .expect("WorksheetFunction.Application"),
+            OmValue::Object(application)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(worksheet_function, "Parent", &[])
+                .expect("WorksheetFunction.Parent"),
+            OmValue::Object(application)
+        );
+
+        let first_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let first_source = expect_object_handle(
+            runtime
+                .dispatch_invoke(first_sheet, "Range", &[OmValue::Text("A1:A3".to_string())])
+                .expect("Sheet1.Range(A1:A3)"),
+        );
+        runtime
+            .dispatch_set(
+                first_source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        3,
+                        1,
+                        vec![
+                            OmValue::Number(4.0),
+                            OmValue::Number(6.0),
+                            OmValue::Text("ignored".to_string()),
+                        ],
+                    )
+                    .expect("source values"),
+                ),
+                &[],
+            )
+            .expect("set Sheet1 source values");
+
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "Sum",
+                        &[OmValue::Object(first_source), OmValue::Number(5.0)],
+                    )
+                    .expect("WorksheetFunction.Sum")
+            ),
+            15.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "Max",
+                        &[OmValue::Object(first_source), OmValue::Number(5.0)],
+                    )
+                    .expect("WorksheetFunction.Max")
+            ),
+            6.0
+        );
+
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let second_sheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets, "Add", &[])
+                .expect("Worksheets.Add"),
+        );
+        let second_source = expect_object_handle(
+            runtime
+                .dispatch_invoke(second_sheet, "Range", &[OmValue::Text("A1:A2".to_string())])
+                .expect("Sheet2.Range(A1:A2)"),
+        );
+        runtime
+            .dispatch_set(
+                second_source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(2, 1, vec![OmValue::Number(10.0), OmValue::Number(20.0)])
+                        .expect("second source values"),
+                ),
+                &[],
+            )
+            .expect("set Sheet2 source values");
+        runtime
+            .dispatch_invoke(first_sheet, "Activate", &[])
+            .expect("activate first sheet");
+
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "Sum",
+                        &[OmValue::Object(second_source)],
+                    )
+                    .expect("WorksheetFunction.Sum sheet-qualified range")
+            ),
+            30.0
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(worksheet_function, "Bad Name", &[])
+                .expect_err("WorksheetFunction invalid member should reject names with spaces")
+                .code,
+            OmErrorCode::NotFound
         );
     }
 
