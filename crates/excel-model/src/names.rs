@@ -83,6 +83,52 @@ impl DefinedNameTable {
         Ok(false)
     }
 
+    pub fn rename_by_id(
+        &mut self,
+        id: DefinedNameId,
+        display_name: impl Into<String>,
+        validation_mode: NameValidationMode,
+    ) -> OmResult<bool> {
+        let display_name = display_name.into();
+        validate_defined_name(&display_name, validation_mode)?;
+
+        let defined_name = self.names_by_id.get(&id).ok_or_else(|| {
+            OmError::new(
+                OmErrorCode::NotFound,
+                format!("defined name id {} was not found", id.0),
+            )
+        })?;
+        if defined_name.display_name == display_name {
+            return Ok(false);
+        }
+
+        let old_key = defined_name.key();
+        let new_key = NameKey::new(defined_name.scope, &display_name);
+        if self
+            .ids_by_key
+            .get(&new_key)
+            .is_some_and(|existing_id| *existing_id != id)
+        {
+            return Err(OmError::invalid_argument(format!(
+                "defined name '{}' already exists in this scope",
+                display_name,
+            )));
+        }
+
+        let defined_name = self.names_by_id.get_mut(&id).ok_or_else(|| {
+            OmError::new(
+                OmErrorCode::NotFound,
+                format!("defined name id {} was not found", id.0),
+            )
+        })?;
+        defined_name.display_name = display_name;
+        defined_name.canonical_name = canonicalize_excel_name(&defined_name.display_name);
+        self.ids_by_key.remove(&old_key);
+        self.ids_by_key.insert(new_key, id);
+        self.dirty = true;
+        Ok(true)
+    }
+
     pub fn lookup_in_scope(&self, scope: NameScope, name: &str) -> Option<&DefinedName> {
         let key = NameKey::new(scope, name);
         self.ids_by_key
@@ -416,6 +462,98 @@ mod tests {
                 .expect("set same RefersTo")
         );
         assert!(!table.is_dirty());
+    }
+
+    #[test]
+    fn rename_by_id_updates_lookup_key_and_dirty_state() {
+        let mut table = DefinedNameTable::default();
+        let id = table
+            .add(
+                NameScope::Workbook,
+                "Total",
+                source("Sheet1!$A$1"),
+                NameValidationMode::StrictExcel,
+            )
+            .expect("add name");
+        table.mark_clean();
+
+        assert!(
+            table
+                .rename_by_id(id, "Revenue", NameValidationMode::StrictExcel)
+                .expect("rename name")
+        );
+        assert!(table.is_dirty());
+        assert!(
+            table
+                .lookup_in_scope(NameScope::Workbook, "total")
+                .is_none()
+        );
+        let renamed = table
+            .lookup_in_scope(NameScope::Workbook, "revenue")
+            .expect("renamed lookup");
+        assert_eq!(renamed.id, id);
+        assert_eq!(renamed.display_name, "Revenue");
+        assert_eq!(renamed.canonical_name, "REVENUE");
+        assert_eq!(renamed.refers_to.text, "Sheet1!$A$1");
+
+        table.mark_clean();
+        assert!(
+            table
+                .rename_by_id(id, "revenue", NameValidationMode::StrictExcel)
+                .expect("case-only rename")
+        );
+        assert!(table.is_dirty());
+        let case_renamed = table
+            .lookup_in_scope(NameScope::Workbook, "REVENUE")
+            .expect("case-only renamed lookup");
+        assert_eq!(case_renamed.display_name, "revenue");
+        assert_eq!(case_renamed.canonical_name, "REVENUE");
+
+        table.mark_clean();
+        assert!(
+            !table
+                .rename_by_id(id, "revenue", NameValidationMode::StrictExcel)
+                .expect("same rename")
+        );
+        assert!(!table.is_dirty());
+    }
+
+    #[test]
+    fn rename_by_id_rejects_duplicate_and_invalid_names() {
+        let mut table = DefinedNameTable::default();
+        let id = table
+            .add(
+                NameScope::Workbook,
+                "Total",
+                source("Sheet1!$A$1"),
+                NameValidationMode::StrictExcel,
+            )
+            .expect("add name");
+        table
+            .add(
+                NameScope::Workbook,
+                "Revenue",
+                source("Sheet1!$B$1"),
+                NameValidationMode::StrictExcel,
+            )
+            .expect("add duplicate target");
+
+        let duplicate = table
+            .rename_by_id(id, "revenue", NameValidationMode::StrictExcel)
+            .expect_err("duplicate rename should fail");
+        assert_eq!(duplicate.code, OmErrorCode::InvalidArgument);
+        let invalid = table
+            .rename_by_id(id, "A1", NameValidationMode::StrictExcel)
+            .expect_err("invalid rename should fail");
+        assert_eq!(invalid.code, OmErrorCode::InvalidArgument);
+        let missing = table
+            .rename_by_id(
+                DefinedNameId(999),
+                "Missing",
+                NameValidationMode::StrictExcel,
+            )
+            .expect_err("missing rename should fail");
+        assert_eq!(missing.code, OmErrorCode::NotFound);
     }
 
     #[test]

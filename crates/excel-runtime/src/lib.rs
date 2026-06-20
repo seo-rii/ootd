@@ -3669,6 +3669,28 @@ impl ExcelRuntime {
                     )));
                 }
                 match member {
+                    "Name" => {
+                        let OmValue::Text(name) = value else {
+                            return Err(OmError::type_mismatch(
+                                "Name.Name expects a string value",
+                            ));
+                        };
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        if runtime.loaded.state.defined_names.rename_by_id(
+                            name_id,
+                            name,
+                            NameValidationMode::StrictExcel,
+                        )? {
+                            runtime.dirty = true;
+                        }
+                        Ok(())
+                    }
                     "Visible" => {
                         let OmValue::Bool(visible) = value else {
                             return Err(OmError::type_mismatch(
@@ -16367,7 +16389,8 @@ impl ExcelRuntime {
                 (surface, member),
                 (
                     "Name",
-                    "Visible"
+                    "Name"
+                        | "Visible"
                         | "RefersTo"
                         | "RefersToLocal"
                         | "RefersToR1C1"
@@ -66806,6 +66829,201 @@ mod tests {
                     .expect("Names.Count after delete")
             ),
             0.0
+        );
+    }
+
+    #[test]
+    fn name_name_setter_renames_defined_name_and_lookup_key() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime.create_workbook().expect("workbook");
+
+        let names = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Names", &[])
+                .expect("Workbook.Names"),
+        );
+        let name = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    names,
+                    "Add",
+                    &[
+                        OmValue::Text("Total".to_string()),
+                        OmValue::Text("=Sheet1!$A$1".to_string()),
+                    ],
+                )
+                .expect("Names.Add Total"),
+        );
+        runtime
+            .dispatch_invoke(
+                names,
+                "Add",
+                &[
+                    OmValue::Text("TakenName".to_string()),
+                    OmValue::Text("=Sheet1!$B$1".to_string()),
+                ],
+            )
+            .expect("Names.Add TakenName");
+
+        runtime
+            .dispatch_set(workbook.0, "Saved", OmValue::Bool(true), &[])
+            .expect("clear dirty state before Name.Name set");
+        runtime
+            .dispatch_set(
+                name,
+                "Name",
+                OmValue::Text("RevenueTotal".to_string()),
+                &[],
+            )
+            .expect("Name.Name set");
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(name, "Name", &[])
+                    .expect("Name.Name after set")
+            ),
+            "RevenueTotal"
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(names, "Item", &[OmValue::Text("Total".to_string())])
+                .expect_err("old Names.Item lookup should fail after Name.Name set")
+                .code,
+            OmErrorCode::NotFound
+        );
+        let renamed_item = expect_object_handle(
+            runtime
+                .dispatch_get(
+                    names,
+                    "Item",
+                    &[OmValue::Text("revenuetotal".to_string())],
+                )
+                .expect("new Names.Item lookup after Name.Name set"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(renamed_item, "RefersTo", &[])
+                    .expect("renamed Name.RefersTo")
+            ),
+            "=Sheet1!$A$1"
+        );
+        {
+            let runtime_workbook = runtime.runtime_workbook(workbook).expect("runtime workbook");
+            let defined_name = runtime_workbook
+                .loaded
+                .state
+                .defined_names
+                .lookup_in_scope(office_common::NameScope::Workbook, "revenuetotal")
+                .expect("renamed defined name");
+            assert_eq!(defined_name.display_name, "RevenueTotal");
+            assert_eq!(defined_name.canonical_name, "REVENUETOTAL");
+            assert_eq!(defined_name.refers_to.text, "Sheet1!$A$1");
+        }
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved after Name.Name set")
+        ));
+
+        runtime
+            .dispatch_set(workbook.0, "Saved", OmValue::Bool(true), &[])
+            .expect("clear dirty state before same Name.Name set");
+        runtime
+            .dispatch_set(
+                name,
+                "Name",
+                OmValue::Text("RevenueTotal".to_string()),
+                &[],
+            )
+            .expect("same Name.Name set");
+        assert!(expect_bool(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved after same Name.Name set")
+        ));
+
+        runtime
+            .dispatch_set(
+                name,
+                "Name",
+                OmValue::Text("revenuetotal".to_string()),
+                &[],
+            )
+            .expect("case-only Name.Name set");
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(name, "Name", &[])
+                    .expect("Name.Name after case-only set")
+            ),
+            "revenuetotal"
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after Name.Name setter");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved workbook package");
+        let workbook_xml = String::from_utf8(
+            saved_package
+                .part("xl/workbook.xml")
+                .expect("saved workbook xml")
+                .bytes
+                .clone(),
+        )
+        .expect("workbook xml utf8");
+        assert!(workbook_xml
+            .contains(r#"<definedName name="revenuetotal">Sheet1!$A$1</definedName>"#));
+
+        assert_eq!(
+            runtime
+                .dispatch_set(name, "Name", OmValue::Number(1.0), &[])
+                .expect_err("Name.Name rejects non-text")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(
+                    name,
+                    "Name",
+                    OmValue::Text("A1".to_string()),
+                    &[],
+                )
+                .expect_err("Name.Name rejects invalid names")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(
+                    name,
+                    "Name",
+                    OmValue::Text("TakenName".to_string()),
+                    &[],
+                )
+                .expect_err("Name.Name rejects duplicates")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(
+                    name,
+                    "Name",
+                    OmValue::Text("AnotherName".to_string()),
+                    &[OmValue::Missing],
+                )
+                .expect_err("Name.Name rejects arguments")
+                .code,
+            OmErrorCode::InvalidArgument
         );
     }
 
