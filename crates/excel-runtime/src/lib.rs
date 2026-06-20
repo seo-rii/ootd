@@ -16359,6 +16359,9 @@ impl ExcelRuntime {
                         "Name",
                         "Name"
                             | "RefersTo"
+                            | "RefersToLocal"
+                            | "RefersToR1C1"
+                            | "RefersToR1C1Local"
                             | "RefersToRange"
                             | "Visible"
                             | "Application"
@@ -19037,13 +19040,21 @@ impl ExcelRuntime {
                     .metadata
                     .hidden,
             )),
-            "RefersTo" => {
-                let refers_to = self.defined_name(workbook, name_id)?.refers_to.text.clone();
-                if refers_to.starts_with('=') {
-                    Ok(OmValue::Text(refers_to))
+            "RefersTo" | "RefersToLocal" | "RefersToR1C1" | "RefersToR1C1Local" => {
+                let refers_to = self.defined_name(workbook, name_id)?.refers_to.clone();
+                let reference = refers_to.text.trim_start_matches('=');
+                let reference = if matches!(member, "RefersToR1C1" | "RefersToR1C1Local") {
+                    if refers_to.is_r1c1 {
+                        reference.to_string()
+                    } else {
+                        convert_formula_a1_to_r1c1(reference, 1, 1)
+                    }
+                } else if refers_to.is_r1c1 {
+                    convert_formula_r1c1_to_a1(reference, 1, 1)
                 } else {
-                    Ok(OmValue::Text(format!("={refers_to}")))
-                }
+                    reference.to_string()
+                };
+                Ok(OmValue::Text(format!("={reference}")))
             }
             "RefersToRange" => {
                 let refers_to = self.defined_name(workbook, name_id)?.refers_to.clone();
@@ -66971,6 +66982,30 @@ mod tests {
                     .dispatch_get(name, "RefersTo", &[])
                     .expect("Name.RefersTo R1C1")
             ),
+            "=Sheet1!$A$1"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(name, "RefersToLocal", &[])
+                    .expect("Name.RefersToLocal R1C1")
+            ),
+            "=Sheet1!$A$1"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(name, "RefersToR1C1", &[])
+                    .expect("Name.RefersToR1C1 R1C1")
+            ),
+            "=Sheet1!R1C1"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(name, "RefersToR1C1Local", &[])
+                    .expect("Name.RefersToR1C1Local R1C1")
+            ),
             "=Sheet1!R1C1"
         );
         let refers_to_range = expect_object_handle(
@@ -67077,6 +67112,30 @@ mod tests {
             ),
             "=Sheet1!$B$2"
         );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(local_name, "RefersToLocal", &[])
+                    .expect("RefersToLocal RefersToLocal")
+            ),
+            "=Sheet1!$B$2"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(local_name, "RefersToR1C1", &[])
+                    .expect("RefersToLocal RefersToR1C1")
+            ),
+            "=Sheet1!R2C2"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(local_name, "RefersToR1C1Local", &[])
+                    .expect("RefersToLocal RefersToR1C1Local")
+            ),
+            "=Sheet1!R2C2"
+        );
         let local_refers_to_range = expect_object_handle(
             runtime
                 .dispatch_get(local_name, "RefersToRange", &[])
@@ -67121,6 +67180,22 @@ mod tests {
             .expect("R1C1 local defined name");
         assert_eq!(defined_name.refers_to.text, "Sheet1!R2C2");
         assert!(defined_name.refers_to.is_r1c1);
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(r1c1_local_name, "RefersTo", &[])
+                    .expect("RefersToR1C1Local RefersTo")
+            ),
+            "=Sheet1!$B$2"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(r1c1_local_name, "RefersToR1C1", &[])
+                    .expect("RefersToR1C1Local RefersToR1C1")
+            ),
+            "=Sheet1!R2C2"
+        );
         let r1c1_local_refers_to_range = expect_object_handle(
             runtime
                 .dispatch_get(r1c1_local_name, "RefersToRange", &[])
