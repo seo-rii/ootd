@@ -86,6 +86,10 @@ pub struct DefinedNameMetadata {
     pub function: bool,
     pub vb_procedure: bool,
     pub xlm: bool,
+    #[serde(default)]
+    pub function_group_id: Option<u32>,
+    #[serde(default)]
+    pub shortcut_key: Option<String>,
     pub workbook_parameter: bool,
     pub description: Option<String>,
     pub comment: Option<String>,
@@ -100,6 +104,8 @@ impl Default for DefinedNameMetadata {
             function: false,
             vb_procedure: false,
             xlm: false,
+            function_group_id: None,
+            shortcut_key: None,
             workbook_parameter: false,
             description: None,
             comment: None,

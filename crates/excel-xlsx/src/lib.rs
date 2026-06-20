@@ -1962,6 +1962,8 @@ struct ParsedDefinedNameRecord {
     function: bool,
     vb_procedure: bool,
     xlm: bool,
+    function_group_id: Option<u32>,
+    shortcut_key: Option<String>,
     workbook_parameter: bool,
     description: Option<String>,
     comment: Option<String>,
@@ -2097,6 +2099,8 @@ fn parse_workbook(
         defined_name.metadata.function = record.function;
         defined_name.metadata.vb_procedure = record.vb_procedure;
         defined_name.metadata.xlm = record.xlm;
+        defined_name.metadata.function_group_id = record.function_group_id;
+        defined_name.metadata.shortcut_key = record.shortcut_key;
         defined_name.metadata.workbook_parameter = record.workbook_parameter;
         defined_name.metadata.description = record.description;
         defined_name.metadata.comment = record.comment;
@@ -2146,6 +2150,8 @@ fn parse_defined_name_record(
     let mut function = false;
     let mut vb_procedure = false;
     let mut xlm = false;
+    let mut function_group_id = None;
+    let mut shortcut_key = None;
     let mut workbook_parameter = false;
     let mut description = None;
     let mut comment = None;
@@ -2163,6 +2169,8 @@ fn parse_defined_name_record(
             "function" => function = parse_ooxml_bool(value.as_str())?,
             "vbProcedure" => vb_procedure = parse_ooxml_bool(value.as_str())?,
             "xlm" => xlm = parse_ooxml_bool(value.as_str())?,
+            "functionGroupId" => function_group_id = value.parse::<u32>().ok(),
+            "shortcutKey" => shortcut_key = Some(value),
             "workbookParameter" => workbook_parameter = parse_ooxml_bool(value.as_str())?,
             "description" => description = Some(value),
             "comment" => comment = Some(value),
@@ -2179,6 +2187,8 @@ fn parse_defined_name_record(
         function,
         vb_procedure,
         xlm,
+        function_group_id,
+        shortcut_key,
         workbook_parameter,
         description,
         comment,
@@ -20769,6 +20779,16 @@ fn write_defined_names<W: Write>(
         if defined_name.metadata.xlm {
             element.push_attribute(("xlm", "1"));
         }
+        let function_group_id = defined_name
+            .metadata
+            .function_group_id
+            .map(|function_group_id| function_group_id.to_string());
+        if let Some(function_group_id) = function_group_id.as_deref() {
+            element.push_attribute(("functionGroupId", function_group_id));
+        }
+        if let Some(shortcut_key) = defined_name.metadata.shortcut_key.as_deref() {
+            element.push_attribute(("shortcutKey", shortcut_key));
+        }
         if defined_name.metadata.workbook_parameter {
             element.push_attribute(("workbookParameter", "1"));
         }
@@ -23528,7 +23548,7 @@ mod tests {
     <sheet name="Sheet2" sheetId="2" r:id="rId2"/>
   </sheets>
   <definedNames>
-    <definedName name="GlobalTotal" hidden="1" comment="kept">Sheet1!$A$1</definedName>
+    <definedName name="GlobalTotal" hidden="1" function="1" functionGroupId="14" shortcutKey="G" comment="kept">Sheet1!$A$1</definedName>
     <definedName name="_xlnm.Print_Area" localSheetId="1">Sheet2!$A:$D</definedName>
   </definedNames>
 </workbook>"#,
@@ -23543,6 +23563,9 @@ mod tests {
             .expect("global defined name");
         assert_eq!(global.refers_to.text, "Sheet1!$A$1");
         assert!(global.metadata.hidden);
+        assert!(global.metadata.function);
+        assert_eq!(global.metadata.function_group_id, Some(14));
+        assert_eq!(global.metadata.shortcut_key.as_deref(), Some("G"));
         assert_eq!(global.metadata.comment.as_deref(), Some("kept"));
 
         let local = workbook

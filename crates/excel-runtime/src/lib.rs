@@ -19038,18 +19038,103 @@ impl ExcelRuntime {
                     .map(|value| coerce_optional_bool_arg(value, true, "Names.Add Visible"))
                     .transpose()?
                     .unwrap_or(true);
-                for (arg_index, label) in [
-                    (3, "Names.Add MacroType"),
-                    (4, "Names.Add ShortcutKey"),
-                    (5, "Names.Add Category"),
-                    (8, "Names.Add CategoryLocal"),
-                ] {
-                    if args.get(arg_index).is_some_and(|value| !om_value_is_omitted(value)) {
-                        return Err(OmError::unsupported(format!(
-                            "{label} is not implemented"
-                        )));
-                    }
+                let macro_type = match args.get(3) {
+                    None | Some(OmValue::Missing | OmValue::Empty | OmValue::Null) => 3,
+                    Some(value) => coerce_u32_arg(value, "Names.Add MacroType")?,
+                };
+                if !matches!(macro_type, 1 | 2 | 3) {
+                    return Err(OmError::invalid_argument(
+                        "Names.Add MacroType supports 1, 2, 3, or omitted",
+                    ));
                 }
+                let shortcut_key = match args.get(4) {
+                    None | Some(OmValue::Missing | OmValue::Empty | OmValue::Null) => None,
+                    Some(OmValue::Text(shortcut_key)) => {
+                        let mut chars = shortcut_key.chars();
+                        match (chars.next(), chars.next()) {
+                            (Some(ch), None) if ch.is_ascii_alphabetic() => {
+                                Some(shortcut_key.clone())
+                            }
+                            _ => {
+                                return Err(OmError::invalid_argument(
+                                    "Names.Add ShortcutKey expects a single letter",
+                                ));
+                            }
+                        }
+                    }
+                    Some(_) => {
+                        return Err(OmError::type_mismatch(
+                            "Names.Add ShortcutKey expects a string when provided",
+                        ));
+                    }
+                };
+                if shortcut_key.is_some() && macro_type != 2 {
+                    return Err(OmError::invalid_argument(
+                        "Names.Add ShortcutKey applies only when MacroType is 2",
+                    ));
+                }
+                let category_arg = match (
+                    args.get(5).filter(|value| !om_value_is_omitted(value)),
+                    args.get(8).filter(|value| !om_value_is_omitted(value)),
+                ) {
+                    (None, None) => None,
+                    (Some(_), Some(_)) => {
+                        return Err(OmError::invalid_argument(
+                            "Names.Add accepts only one of Category and CategoryLocal",
+                        ));
+                    }
+                    (Some(value), None) => Some((value, "Names.Add Category")),
+                    (None, Some(value)) => Some((value, "Names.Add CategoryLocal")),
+                };
+                let function_group_id = if let Some((value, label)) = category_arg {
+                    if !matches!(macro_type, 1 | 2) {
+                        return Err(OmError::invalid_argument(
+                            "Names.Add Category applies only when MacroType is 1 or 2",
+                        ));
+                    }
+                    match value {
+                        OmValue::Number(_) => Some(coerce_u32_arg(value, label)?),
+                        OmValue::Text(category) => {
+                            let normalized = category.trim().to_ascii_lowercase();
+                            let category_id = match normalized.as_str() {
+                                "financial" => 1,
+                                "date and time" | "date & time" => 2,
+                                "math and trig" | "math & trig" => 3,
+                                "statistical" => 4,
+                                "lookup and reference" | "lookup & reference" => 5,
+                                "database" => 6,
+                                "text" => 7,
+                                "logical" => 8,
+                                "information" => 9,
+                                "commands" | "command" => 10,
+                                "customizing" | "customization" => 11,
+                                "macro control" => 12,
+                                "dde / external" | "dde/external" | "dde external" => 13,
+                                "user defined" | "user-defined" => 14,
+                                "engineering" => 15,
+                                "cube" => 16,
+                                "" => {
+                                    return Err(OmError::invalid_argument(format!(
+                                        "{label} expects a category name or number"
+                                    )));
+                                }
+                                _ => {
+                                    return Err(OmError::unsupported(format!(
+                                        "{label} custom categories are not implemented"
+                                    )));
+                                }
+                            };
+                            Some(category_id)
+                        }
+                        _ => {
+                            return Err(OmError::type_mismatch(format!(
+                                "{label} expects a category name or number"
+                            )));
+                        }
+                    }
+                } else {
+                    None
+                };
                 let name_id = {
                     let runtime = self.runtime_workbook_mut(workbook)?;
                     if runtime.read_only {
@@ -19060,6 +19145,10 @@ impl ExcelRuntime {
                     }
                     let mut metadata = DefinedNameMetadata::default();
                     metadata.hidden = !visible;
+                    metadata.function = macro_type == 1;
+                    metadata.vb_procedure = macro_type == 2;
+                    metadata.function_group_id = function_group_id;
+                    metadata.shortcut_key = shortcut_key;
                     let name_id = runtime.loaded.state.defined_names.add_with_metadata(
                         runtime_name_scope(scope),
                         name,
@@ -67101,19 +67190,116 @@ mod tests {
                 .code,
             OmErrorCode::TypeMismatch
         );
+        let command_macro_name = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    names,
+                    "Add",
+                    &[
+                        OmValue::Text("CommandMacro".to_string()),
+                        OmValue::Text("=Sheet1!$B$1".to_string()),
+                        OmValue::Missing,
+                        OmValue::Number(2.0),
+                        OmValue::Text("Z".to_string()),
+                        OmValue::Number(10.0),
+                    ],
+                )
+                .expect("Names.Add command macro"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(command_macro_name, "Name", &[])
+                    .expect("command macro Name.Name")
+            ),
+            "CommandMacro"
+        );
+        let worksheet_function_name = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    names,
+                    "Add",
+                    &[
+                        OmValue::Text("WorksheetFunction".to_string()),
+                        OmValue::Text("=Sheet1!$C$1".to_string()),
+                        OmValue::Missing,
+                        OmValue::Number(1.0),
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Text("Math & Trig".to_string()),
+                    ],
+                )
+                .expect("Names.Add function category local"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(worksheet_function_name, "Name", &[])
+                    .expect("worksheet function Name.Name")
+            ),
+            "WorksheetFunction"
+        );
+        {
+            let runtime_workbook = runtime.runtime_workbook(workbook).expect("runtime workbook");
+            let command_macro = runtime_workbook
+                .loaded
+                .state
+                .defined_names
+                .lookup_in_scope(office_common::NameScope::Workbook, "commandmacro")
+                .expect("command macro defined name");
+            assert!(!command_macro.metadata.function);
+            assert!(command_macro.metadata.vb_procedure);
+            assert_eq!(
+                command_macro.metadata.shortcut_key.as_deref(),
+                Some("Z")
+            );
+            assert_eq!(command_macro.metadata.function_group_id, Some(10));
+
+            let worksheet_function = runtime_workbook
+                .loaded
+                .state
+                .defined_names
+                .lookup_in_scope(office_common::NameScope::Workbook, "worksheetfunction")
+                .expect("worksheet function defined name");
+            assert!(worksheet_function.metadata.function);
+            assert!(!worksheet_function.metadata.vb_procedure);
+            assert_eq!(worksheet_function.metadata.function_group_id, Some(3));
+            assert_eq!(worksheet_function.metadata.shortcut_key, None);
+        }
         assert_eq!(
             runtime
                 .dispatch_invoke(
                     names,
                     "Add",
                     &[
-                        OmValue::Text("BadMacroType".to_string()),
+                        OmValue::Text("BadShortcut".to_string()),
                         OmValue::Text("=Sheet1!$A$1".to_string()),
                         OmValue::Missing,
                         OmValue::Number(1.0),
+                        OmValue::Text("Z".to_string()),
                     ],
                 )
-                .expect_err("Names.Add MacroType remains unsupported")
+                .expect_err("Names.Add ShortcutKey requires command macro")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    names,
+                    "Add",
+                    &[
+                        OmValue::Text("BadCategory".to_string()),
+                        OmValue::Text("=Sheet1!$A$1".to_string()),
+                        OmValue::Missing,
+                        OmValue::Number(1.0),
+                        OmValue::Missing,
+                        OmValue::Text("Custom Bucket".to_string()),
+                    ],
+                )
+                .expect_err("Names.Add custom category remains unsupported")
                 .code,
             OmErrorCode::Unsupported
         );
@@ -67139,6 +67325,12 @@ mod tests {
         .expect("workbook xml utf8");
         assert!(workbook_xml.contains(
             r#"<definedName name="HiddenTotal" hidden="1">Sheet1!$A$1</definedName>"#
+        ));
+        assert!(workbook_xml.contains(
+            r#"<definedName name="CommandMacro" vbProcedure="1" functionGroupId="10" shortcutKey="Z">Sheet1!$B$1</definedName>"#
+        ));
+        assert!(workbook_xml.contains(
+            r#"<definedName name="WorksheetFunction" function="1" functionGroupId="3">Sheet1!$C$1</definedName>"#
         ));
     }
 
