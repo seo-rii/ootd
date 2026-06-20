@@ -49,6 +49,21 @@ impl DefinedNameTable {
         self.names_by_id.get(&id)
     }
 
+    pub fn set_hidden_by_id(&mut self, id: DefinedNameId, hidden: bool) -> OmResult<bool> {
+        let defined_name = self.names_by_id.get_mut(&id).ok_or_else(|| {
+            OmError::new(
+                OmErrorCode::NotFound,
+                format!("defined name id {} was not found", id.0),
+            )
+        })?;
+        if defined_name.metadata.hidden != hidden {
+            defined_name.metadata.hidden = hidden;
+            self.dirty = true;
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
     pub fn lookup_in_scope(&self, scope: NameScope, name: &str) -> Option<&DefinedName> {
         let key = NameKey::new(scope, name);
         self.ids_by_key
@@ -467,6 +482,32 @@ mod tests {
         let defined_name = table.get(id).expect("hidden name by id");
         assert!(defined_name.metadata.hidden);
         assert!(table.is_dirty());
+    }
+
+    #[test]
+    fn set_hidden_by_id_updates_metadata_and_dirty_state() {
+        let mut table = DefinedNameTable::default();
+        let id = table
+            .add(
+                NameScope::Workbook,
+                "Total",
+                source("Sheet1!$A$1"),
+                NameValidationMode::StrictExcel,
+            )
+            .expect("add name");
+        table.mark_clean();
+
+        assert!(table.set_hidden_by_id(id, true).expect("set hidden true"));
+        assert!(table.get(id).expect("defined name by id").metadata.hidden);
+        assert!(table.is_dirty());
+
+        table.mark_clean();
+        assert!(
+            !table
+                .set_hidden_by_id(id, true)
+                .expect("set hidden true again")
+        );
+        assert!(!table.is_dirty());
     }
 
     #[test]

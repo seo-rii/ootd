@@ -3657,13 +3657,45 @@ impl ExcelRuntime {
                     }
                 }
             }
-            RuntimeObjectKind::Areas { .. } => Err(OmError::unsupported(format!(
-                "member {member} is not writable for this object handle"
-            ))),
-            RuntimeObjectKind::Names { .. } | RuntimeObjectKind::Name { .. } => {
+            RuntimeObjectKind::Areas { .. } | RuntimeObjectKind::Names { .. } => {
                 Err(OmError::unsupported(format!(
                     "member {member} is not writable for this object handle"
                 )))
+            }
+            RuntimeObjectKind::Name { workbook, name_id } => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(format!(
+                        "Name.{member} does not accept index arguments"
+                    )));
+                }
+                match member {
+                    "Visible" => {
+                        let OmValue::Bool(visible) = value else {
+                            return Err(OmError::type_mismatch(
+                                "Name.Visible expects a boolean value",
+                            ));
+                        };
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        if runtime
+                            .loaded
+                            .state
+                            .defined_names
+                            .set_hidden_by_id(name_id, !visible)?
+                        {
+                            runtime.dirty = true;
+                        }
+                        Ok(())
+                    }
+                    _ => Err(OmError::unsupported(format!(
+                        "Name.{member} is not writable"
+                    ))),
+                }
             }
             RuntimeObjectKind::ChartObject {
                 workbook,
@@ -16306,6 +16338,9 @@ impl ExcelRuntime {
     }
 
     fn focus_member_supported(&self, surface: &str, member: &str, write: bool) -> OmResult<()> {
+        if write && matches!((surface, member), ("Name", "Visible")) {
+            return Ok(());
+        }
         if !write
             && matches!(
                 (surface, member),
@@ -16322,7 +16357,13 @@ impl ExcelRuntime {
                     | ("Names", "Count" | "Item" | "Add" | "Application" | "Parent")
                     | (
                         "Name",
-                        "Name" | "RefersTo" | "RefersToRange" | "Application" | "Parent" | "Delete"
+                        "Name"
+                            | "RefersTo"
+                            | "RefersToRange"
+                            | "Visible"
+                            | "Application"
+                            | "Parent"
+                            | "Delete"
                     )
                     | ("WorksheetFunction", "Application" | "Creator" | "Parent")
                     | (
@@ -18989,6 +19030,12 @@ impl ExcelRuntime {
         match member {
             "Name" => Ok(OmValue::Text(
                 self.defined_name(workbook, name_id)?.display_name.clone(),
+            )),
+            "Visible" => Ok(OmValue::Bool(
+                !self
+                    .defined_name(workbook, name_id)?
+                    .metadata
+                    .hidden,
             )),
             "RefersTo" => {
                 let refers_to = self.defined_name(workbook, name_id)?.refers_to.text.clone();
@@ -66704,6 +66751,11 @@ mod tests {
             ),
             "HiddenTotal"
         );
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(hidden_name, "Visible", &[])
+                .expect("hidden Name.Visible")
+        ));
         let runtime_workbook = runtime.runtime_workbook(workbook).expect("runtime workbook");
         let defined_name = runtime_workbook
             .loaded
@@ -66772,6 +66824,105 @@ mod tests {
         assert!(workbook_xml.contains(
             r#"<definedName name="HiddenTotal" hidden="1">Sheet1!$A$1</definedName>"#
         ));
+    }
+
+    #[test]
+    fn name_visible_setter_updates_hidden_metadata() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime.create_workbook().expect("workbook");
+
+        let names = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Names", &[])
+                .expect("Workbook.Names"),
+        );
+        let name = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    names,
+                    "Add",
+                    &[
+                        OmValue::Text("ToggleVisible".to_string()),
+                        OmValue::Text("=Sheet1!$A$1".to_string()),
+                    ],
+                )
+                .expect("Names.Add"),
+        );
+        assert!(expect_bool(
+            runtime
+                .dispatch_get(name, "Visible", &[])
+                .expect("Name.Visible before set")
+        ));
+
+        runtime
+            .dispatch_set(name, "Visible", OmValue::Bool(false), &[])
+            .expect("Name.Visible false");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(name, "Visible", &[])
+                .expect("Name.Visible after false")
+        ));
+        let runtime_workbook = runtime.runtime_workbook(workbook).expect("runtime workbook");
+        let defined_name = runtime_workbook
+            .loaded
+            .state
+            .defined_names
+            .lookup_in_scope(office_common::NameScope::Workbook, "togglevisible")
+            .expect("defined name");
+        assert!(defined_name.metadata.hidden);
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved after Name.Visible")
+        ));
+
+        assert_eq!(
+            runtime
+                .dispatch_set(name, "Visible", OmValue::Text("no".to_string()), &[])
+                .expect_err("Name.Visible rejects text")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after hidden setter");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved workbook package");
+        let workbook_xml = String::from_utf8(
+            saved_package
+                .part("xl/workbook.xml")
+                .expect("saved workbook xml")
+                .bytes
+                .clone(),
+        )
+        .expect("workbook xml utf8");
+        assert!(workbook_xml.contains(
+            r#"<definedName name="ToggleVisible" hidden="1">Sheet1!$A$1</definedName>"#
+        ));
+
+        runtime
+            .dispatch_set(name, "Visible", OmValue::Bool(true), &[])
+            .expect("Name.Visible true");
+        assert!(expect_bool(
+            runtime
+                .dispatch_get(name, "Visible", &[])
+                .expect("Name.Visible after true")
+        ));
+        let runtime_workbook = runtime.runtime_workbook(workbook).expect("runtime workbook");
+        let defined_name = runtime_workbook
+            .loaded
+            .state
+            .defined_names
+            .lookup_in_scope(office_common::NameScope::Workbook, "togglevisible")
+            .expect("defined name after visible true");
+        assert!(!defined_name.metadata.hidden);
     }
 
     #[test]
