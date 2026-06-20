@@ -19089,7 +19089,15 @@ impl ExcelRuntime {
             }
             "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
             "Application" => Ok(OmValue::Object(self.root_application())),
-            "Parent" => Ok(OmValue::Object(workbook.0)),
+            "Parent" => {
+                let scope = self.defined_name(workbook, name_id)?.scope;
+                match scope {
+                    NameScope::Workbook => Ok(OmValue::Object(workbook.0)),
+                    NameScope::Worksheet(sheet_id) => Ok(OmValue::Object(
+                        self.register_worksheet_handle(workbook, sheet_id).0,
+                    )),
+                }
+            }
             _ => Err(OmError::unsupported(format!(
                 "Name.{member} is not implemented"
             ))),
@@ -66698,6 +66706,14 @@ mod tests {
                 .expect("Names.Add"),
         );
         assert_eq!(
+            expect_object_handle(
+                runtime
+                    .dispatch_get(name, "Parent", &[])
+                    .expect("workbook Name.Parent")
+            ),
+            workbook.0
+        );
+        assert_eq!(
             expect_number(
                 runtime
                     .dispatch_get(name, "Creator", &[])
@@ -67311,16 +67327,31 @@ mod tests {
                 .expect("Worksheet.Names"),
         );
 
-        runtime
-            .dispatch_invoke(
-                worksheet_names,
-                "Add",
-                &[
-                    OmValue::Text("LocalTotal".to_string()),
-                    OmValue::Text("=Sheet1!$B$2".to_string()),
-                ],
-            )
-            .expect("Worksheet.Names.Add");
+        let local_name = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    worksheet_names,
+                    "Add",
+                    &[
+                        OmValue::Text("LocalTotal".to_string()),
+                        OmValue::Text("=Sheet1!$B$2".to_string()),
+                    ],
+                )
+                .expect("Worksheet.Names.Add"),
+        );
+        let local_parent = expect_object_handle(
+            runtime
+                .dispatch_get(local_name, "Parent", &[])
+                .expect("worksheet Name.Parent"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(local_parent, "Name", &[])
+                    .expect("worksheet Name.Parent.Name")
+            ),
+            "Sheet1"
+        );
 
         assert_eq!(
             expect_number(
