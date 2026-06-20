@@ -16354,7 +16354,7 @@ impl ExcelRuntime {
                     | ("Range", "CopyPicture")
                     | ("Application", "ActiveChart")
                     | ("Worksheet", "ChartObjects")
-                    | ("Names", "Count" | "Item" | "Add" | "Application" | "Parent")
+                    | ("Names", "Count" | "Item" | "Add" | "Creator" | "Application" | "Parent")
                     | (
                         "Name",
                         "Name"
@@ -16364,6 +16364,7 @@ impl ExcelRuntime {
                             | "RefersToR1C1Local"
                             | "RefersToRange"
                             | "Visible"
+                            | "Creator"
                             | "Application"
                             | "Parent"
                             | "Delete"
@@ -18792,6 +18793,14 @@ impl ExcelRuntime {
                 }
                 Ok(OmValue::Object(self.root_application()))
             }
+            "Creator" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(
+                        "Names.Creator does not accept arguments",
+                    ));
+                }
+                Ok(OmValue::Number(f64::from(XL_CREATOR_CODE)))
+            }
             "Parent" => {
                 if !args.is_empty() {
                     return Err(OmError::invalid_argument(
@@ -19078,6 +19087,7 @@ impl ExcelRuntime {
                     self.register_range_set_handle(workbook, range).0,
                 ))
             }
+            "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
             "Application" => Ok(OmValue::Object(self.root_application())),
             "Parent" => Ok(OmValue::Object(workbook.0)),
             _ => Err(OmError::unsupported(format!(
@@ -66659,6 +66669,21 @@ mod tests {
             ),
             0.0
         );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(names, "Creator", &[])
+                    .expect("Names.Creator")
+            ),
+            f64::from(super::XL_CREATOR_CODE)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(names, "Creator", &[OmValue::Missing])
+                .expect_err("Names.Creator rejects args")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
 
         let name = expect_object_handle(
             runtime
@@ -66671,6 +66696,21 @@ mod tests {
                     ],
                 )
                 .expect("Names.Add"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(name, "Creator", &[])
+                    .expect("Name.Creator")
+            ),
+            f64::from(super::XL_CREATOR_CODE)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(name, "Creator", &[OmValue::Missing])
+                .expect_err("Name.Creator rejects args")
+                .code,
+            OmErrorCode::InvalidArgument
         );
         assert_eq!(
             expect_text(runtime.dispatch_get(name, "Name", &[]).expect("Name.Name")),
