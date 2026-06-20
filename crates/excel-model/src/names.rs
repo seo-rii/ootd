@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
 use office_common::{
-    DefinedName, DefinedNameId, FormulaSource, NameKey, NameScope, NameValidationMode, OmError,
-    OmErrorCode, OmResult, SheetId, canonicalize_excel_name,
+    DefinedName, DefinedNameId, DefinedNameMetadata, FormulaSource, NameKey, NameScope,
+    NameValidationMode, OmError, OmErrorCode, OmResult, SheetId, canonicalize_excel_name,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -73,6 +73,23 @@ impl DefinedNameTable {
         refers_to: FormulaSource,
         validation_mode: NameValidationMode,
     ) -> OmResult<DefinedNameId> {
+        self.add_with_metadata(
+            scope,
+            display_name,
+            refers_to,
+            DefinedNameMetadata::default(),
+            validation_mode,
+        )
+    }
+
+    pub fn add_with_metadata(
+        &mut self,
+        scope: NameScope,
+        display_name: impl Into<String>,
+        refers_to: FormulaSource,
+        mut metadata: DefinedNameMetadata,
+        validation_mode: NameValidationMode,
+    ) -> OmResult<DefinedNameId> {
         let display_name = display_name.into();
         validate_defined_name(&display_name, validation_mode)?;
 
@@ -89,7 +106,11 @@ impl DefinedNameTable {
             .next_id
             .checked_add(1)
             .ok_or_else(|| OmError::new(OmErrorCode::InvalidState, "defined name id overflow"))?;
-        let defined_name = DefinedName::new(id, scope, display_name, refers_to);
+        let mut defined_name = DefinedName::new(id, scope, display_name, refers_to);
+        if metadata.builtin.is_none() {
+            metadata.builtin = defined_name.metadata.builtin.clone();
+        }
+        defined_name.metadata = metadata;
 
         self.ids_by_key.insert(key, id);
         self.names_by_id.insert(id, defined_name);
@@ -424,6 +445,27 @@ mod tests {
         table
             .remove(NameScope::Workbook, "Total")
             .expect("remove name");
+        assert!(table.is_dirty());
+    }
+
+    #[test]
+    fn add_with_metadata_preserves_hidden_flag() {
+        let mut table = DefinedNameTable::default();
+        let mut metadata = office_common::DefinedNameMetadata::default();
+        metadata.hidden = true;
+
+        let id = table
+            .add_with_metadata(
+                NameScope::Workbook,
+                "HiddenTotal",
+                source("Sheet1!$A$1"),
+                metadata,
+                NameValidationMode::StrictExcel,
+            )
+            .expect("add hidden name");
+
+        let defined_name = table.get(id).expect("hidden name by id");
+        assert!(defined_name.metadata.hidden);
         assert!(table.is_dirty());
     }
 

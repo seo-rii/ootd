@@ -14,13 +14,14 @@ use excel_xlsx::{
 };
 use office_codegen::{OmFocusSurfaceRegistry, build_focus_surface_registry_from_json};
 use office_common::{
-    AbsoluteAnchor, CellError, CellValue, ChartId, ChartObjectId, DefinedNameId, DrawingAnchor,
-    DrawingId, ExcelProfile, FileFormat, FormulaSource, GetRangeValuesSpec, LoadOptions, NameScope,
-    NameValidationMode, ObjectHandle, ObjectPlacement, OmArray, OmError, OmErrorCode, OmResult,
-    OmValue, OpaquePart, OpenWorkbookSpec, PointEmu, RangeArea, RangeHandle, RangeRef, RangeSet,
-    Rect, ReferenceTarget, SaveOptions, SaveWorkbookSpec, SetRangeValuesSpec, SheetId, SheetKind,
-    SheetScope, SheetVisibility, SizeEmu, WorkbookHandle, WorkbookId, WorkbookModel,
-    WorksheetHandle, WorksheetModel,
+    AbsoluteAnchor, CellError, CellValue, ChartId, ChartObjectId, DefinedNameId,
+    DefinedNameMetadata, DrawingAnchor, DrawingId, ExcelProfile, FileFormat, FormulaSource,
+    GetRangeValuesSpec, LoadOptions, NameScope, NameValidationMode, ObjectHandle,
+    ObjectPlacement, OmArray, OmError, OmErrorCode, OmResult, OmValue, OpaquePart,
+    OpenWorkbookSpec, PointEmu, RangeArea, RangeHandle, RangeRef, RangeSet, Rect, ReferenceTarget,
+    SaveOptions, SaveWorkbookSpec, SetRangeValuesSpec, SheetId, SheetKind, SheetScope,
+    SheetVisibility, SizeEmu, WorkbookHandle, WorkbookId, WorkbookModel, WorksheetHandle,
+    WorksheetModel,
 };
 use office_idl::{AccessMode, SupportState};
 use office_opc::{CompressionMethod, OpcPackage, OpcPart};
@@ -18817,9 +18818,9 @@ impl ExcelRuntime {
                 ))
             }
             "Add" => {
-                if args.len() != 2 {
+                if args.len() < 2 || args.len() > 11 {
                     return Err(OmError::invalid_argument(
-                        "Names.Add expects Name and RefersTo arguments",
+                        "Names.Add expects Name, RefersTo, and optional Visible, MacroType, ShortcutKey, Category, NameLocal, RefersToLocal, CategoryLocal, RefersToR1C1, and RefersToR1C1Local arguments",
                     ));
                 }
                 let name = match &args[0] {
@@ -18836,6 +18837,33 @@ impl ExcelRuntime {
                         ));
                     }
                 };
+                let visible = args
+                    .get(2)
+                    .map(|value| coerce_optional_bool_arg(value, true, "Names.Add Visible"))
+                    .transpose()?
+                    .unwrap_or(true);
+                for (index, label) in [
+                    "Names.Add MacroType",
+                    "Names.Add ShortcutKey",
+                    "Names.Add Category",
+                    "Names.Add NameLocal",
+                    "Names.Add RefersToLocal",
+                    "Names.Add CategoryLocal",
+                    "Names.Add RefersToR1C1",
+                    "Names.Add RefersToR1C1Local",
+                ]
+                .iter()
+                .enumerate()
+                {
+                    if args
+                        .get(index + 3)
+                        .is_some_and(|value| !om_value_is_omitted(value))
+                    {
+                        return Err(OmError::unsupported(format!(
+                            "{label} is not implemented"
+                        )));
+                    }
+                }
                 let name_id = {
                     let runtime = self.runtime_workbook_mut(workbook)?;
                     if runtime.read_only {
@@ -18844,13 +18872,16 @@ impl ExcelRuntime {
                             "cannot modify a read-only workbook",
                         ));
                     }
-                    let name_id = runtime.loaded.state.add_defined_name(
+                    let mut metadata = DefinedNameMetadata::default();
+                    metadata.hidden = !visible;
+                    let name_id = runtime.loaded.state.defined_names.add_with_metadata(
                         runtime_name_scope(scope),
                         name,
                         FormulaSource {
                             text: refers_to,
                             is_r1c1: false,
                         },
+                        metadata,
                         NameValidationMode::StrictExcel,
                     )?;
                     runtime.dirty = true;
@@ -66553,6 +66584,116 @@ mod tests {
             ),
             0.0
         );
+    }
+
+    #[test]
+    fn names_add_visible_false_creates_hidden_defined_name() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime.create_workbook().expect("workbook");
+
+        let names = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Names", &[])
+                .expect("Workbook.Names"),
+        );
+        let hidden_name = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    names,
+                    "Add",
+                    &[
+                        OmValue::Text("HiddenTotal".to_string()),
+                        OmValue::Text("=Sheet1!$A$1".to_string()),
+                        OmValue::Bool(false),
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                    ],
+                )
+                .expect("Names.Add hidden"),
+        );
+
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(hidden_name, "Name", &[])
+                    .expect("hidden Name.Name")
+            ),
+            "HiddenTotal"
+        );
+        let runtime_workbook = runtime.runtime_workbook(workbook).expect("runtime workbook");
+        let defined_name = runtime_workbook
+            .loaded
+            .state
+            .defined_names
+            .lookup_in_scope(office_common::NameScope::Workbook, "hiddentotal")
+            .expect("hidden defined name");
+        assert!(defined_name.metadata.hidden);
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved after hidden name")
+        ));
+
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    names,
+                    "Add",
+                    &[
+                        OmValue::Text("BadVisible".to_string()),
+                        OmValue::Text("=Sheet1!$A$1".to_string()),
+                        OmValue::Text("no".to_string()),
+                    ],
+                )
+                .expect_err("Names.Add Visible rejects text")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    names,
+                    "Add",
+                    &[
+                        OmValue::Text("BadMacroType".to_string()),
+                        OmValue::Text("=Sheet1!$A$1".to_string()),
+                        OmValue::Missing,
+                        OmValue::Number(1.0),
+                    ],
+                )
+                .expect_err("Names.Add MacroType remains unsupported")
+                .code,
+            OmErrorCode::Unsupported
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after hidden name");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved workbook package");
+        let workbook_xml = String::from_utf8(
+            saved_package
+                .part("xl/workbook.xml")
+                .expect("saved workbook xml")
+                .bytes
+                .clone(),
+        )
+        .expect("workbook xml utf8");
+        assert!(workbook_xml.contains(
+            r#"<definedName name="HiddenTotal" hidden="1">Sheet1!$A$1</definedName>"#
+        ));
     }
 
     #[test]
