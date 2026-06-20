@@ -28716,16 +28716,11 @@ impl ExcelRuntime {
                     ));
                 }
                 if let Some(value) = args.get(6) {
-                    let no_html_formatting = coerce_optional_bool_arg(
+                    coerce_optional_bool_arg(
                         value,
                         false,
                         "Worksheet.PasteSpecial NoHTMLFormatting",
                     )?;
-                    if no_html_formatting {
-                        return Err(OmError::unsupported(
-                            "Worksheet.PasteSpecial NoHTMLFormatting is not supported",
-                        ));
-                    }
                 }
                 self.dispatch_invoke_worksheet(workbook, sheet_id, "Paste", &[])
             }
@@ -93258,7 +93253,7 @@ mod tests {
                         OmValue::Missing,
                         OmValue::Missing,
                         OmValue::Text(String::new()),
-                        OmValue::Bool(false),
+                        OmValue::Bool(true),
                     ],
                 )
                 .expect("Worksheet.PasteSpecial with default OLE args"),
@@ -93495,12 +93490,12 @@ mod tests {
                         OmValue::Missing,
                         OmValue::Missing,
                         OmValue::Missing,
-                        OmValue::Bool(true),
+                        OmValue::Text("bad".to_string()),
                     ],
                 )
-                .expect_err("Worksheet.PasteSpecial rejects NoHTMLFormatting")
+                .expect_err("Worksheet.PasteSpecial rejects non-bool NoHTMLFormatting")
                 .code,
-            OmErrorCode::Unsupported
+            OmErrorCode::TypeMismatch
         );
     }
 
