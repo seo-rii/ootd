@@ -18829,11 +18829,32 @@ impl ExcelRuntime {
                         return Err(OmError::type_mismatch("Names.Add Name expects a string"));
                     }
                 };
-                let refers_to = match &args[1] {
-                    OmValue::Text(refers_to) => refers_to.trim_start_matches('=').to_string(),
+                let refers_to_r1c1 = match args.get(9) {
+                    None | Some(OmValue::Missing | OmValue::Empty | OmValue::Null) => None,
+                    Some(OmValue::Text(refers_to)) => {
+                        Some(refers_to.trim_start_matches('=').to_string())
+                    }
+                    Some(_) => {
+                        return Err(OmError::type_mismatch(
+                            "Names.Add RefersToR1C1 expects a string when provided",
+                        ));
+                    }
+                };
+                let (refers_to, is_r1c1) = match (&args[1], refers_to_r1c1) {
+                    (OmValue::Text(refers_to), None) => {
+                        (refers_to.trim_start_matches('=').to_string(), false)
+                    }
+                    (OmValue::Missing | OmValue::Empty | OmValue::Null, Some(refers_to)) => {
+                        (refers_to, true)
+                    }
+                    (OmValue::Text(_), Some(_)) => {
+                        return Err(OmError::invalid_argument(
+                            "Names.Add accepts only one of RefersTo and RefersToR1C1",
+                        ));
+                    }
                     _ => {
                         return Err(OmError::type_mismatch(
-                            "Names.Add RefersTo expects a string",
+                            "Names.Add RefersTo expects a string unless RefersToR1C1 is provided",
                         ));
                     }
                 };
@@ -18849,14 +18870,14 @@ impl ExcelRuntime {
                     "Names.Add NameLocal",
                     "Names.Add RefersToLocal",
                     "Names.Add CategoryLocal",
-                    "Names.Add RefersToR1C1",
                     "Names.Add RefersToR1C1Local",
                 ]
                 .iter()
                 .enumerate()
                 {
+                    let arg_index = if index < 6 { index + 3 } else { index + 4 };
                     if args
-                        .get(index + 3)
+                        .get(arg_index)
                         .is_some_and(|value| !om_value_is_omitted(value))
                     {
                         return Err(OmError::unsupported(format!(
@@ -18879,7 +18900,7 @@ impl ExcelRuntime {
                         name,
                         FormulaSource {
                             text: refers_to,
-                            is_r1c1: false,
+                            is_r1c1,
                         },
                         metadata,
                         NameValidationMode::StrictExcel,
@@ -18925,9 +18946,13 @@ impl ExcelRuntime {
                 }
             }
             "RefersToRange" => {
-                let refers_to = self.defined_name(workbook, name_id)?.refers_to.text.clone();
-                let reference = refers_to.trim_start_matches('=');
-                let (target_workbook, range) = self.resolve_application_range_text(reference)?;
+                let refers_to = self.defined_name(workbook, name_id)?.refers_to.clone();
+                let mut reference = refers_to.text.trim_start_matches('=').to_string();
+                if refers_to.is_r1c1 {
+                    reference = convert_formula_r1c1_to_a1(reference.as_str(), 1, 1);
+                }
+                let (target_workbook, range) =
+                    self.resolve_application_range_text(reference.as_str())?;
                 if target_workbook != workbook {
                     return Err(OmError::unsupported(
                         "Name.RefersToRange cross-workbook references are not supported",
@@ -66694,6 +66719,114 @@ mod tests {
         assert!(workbook_xml.contains(
             r#"<definedName name="HiddenTotal" hidden="1">Sheet1!$A$1</definedName>"#
         ));
+    }
+
+    #[test]
+    fn names_add_accepts_refers_to_r1c1_source() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime.create_workbook().expect("workbook");
+
+        let names = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Names", &[])
+                .expect("Workbook.Names"),
+        );
+        let name = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    names,
+                    "Add",
+                    &[
+                        OmValue::Text("R1C1Total".to_string()),
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Text("=Sheet1!R1C1".to_string()),
+                    ],
+                )
+                .expect("Names.Add RefersToR1C1"),
+        );
+
+        let runtime_workbook = runtime.runtime_workbook(workbook).expect("runtime workbook");
+        let defined_name = runtime_workbook
+            .loaded
+            .state
+            .defined_names
+            .lookup_in_scope(office_common::NameScope::Workbook, "r1c1total")
+            .expect("R1C1 defined name");
+        assert_eq!(defined_name.refers_to.text, "Sheet1!R1C1");
+        assert!(defined_name.refers_to.is_r1c1);
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(name, "RefersTo", &[])
+                    .expect("Name.RefersTo R1C1")
+            ),
+            "=Sheet1!R1C1"
+        );
+        let refers_to_range = expect_object_handle(
+            runtime
+                .dispatch_get(name, "RefersToRange", &[])
+                .expect("Name.RefersToRange R1C1"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(refers_to_range, "Address", &[])
+                    .expect("R1C1 RefersToRange.Address")
+            ),
+            "$A$1"
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    names,
+                    "Add",
+                    &[
+                        OmValue::Text("AmbiguousRef".to_string()),
+                        OmValue::Text("=Sheet1!$A$1".to_string()),
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Text("=Sheet1!R1C1".to_string()),
+                    ],
+                )
+                .expect_err("Names.Add rejects both reference forms")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    names,
+                    "Add",
+                    &[
+                        OmValue::Text("BadR1C1".to_string()),
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Number(1.0),
+                    ],
+                )
+                .expect_err("Names.Add RefersToR1C1 rejects non-text")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
     }
 
     #[test]
