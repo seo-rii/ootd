@@ -18823,13 +18823,71 @@ impl ExcelRuntime {
                         "Names.Add expects Name, RefersTo, and optional Visible, MacroType, ShortcutKey, Category, NameLocal, RefersToLocal, CategoryLocal, RefersToR1C1, and RefersToR1C1Local arguments",
                     ));
                 }
-                let name = match &args[0] {
-                    OmValue::Text(name) => name.clone(),
-                    _ => {
-                        return Err(OmError::type_mismatch("Names.Add Name expects a string"));
+                let name_local = match args.get(6) {
+                    None | Some(OmValue::Missing | OmValue::Empty | OmValue::Null) => None,
+                    Some(OmValue::Text(name)) => Some(name.clone()),
+                    Some(_) => {
+                        return Err(OmError::type_mismatch(
+                            "Names.Add NameLocal expects a string when provided",
+                        ));
                     }
                 };
-                let refers_to_r1c1 = match args.get(9) {
+                let name = match (&args[0], name_local) {
+                    (OmValue::Text(name), None) => name.clone(),
+                    (OmValue::Missing | OmValue::Empty | OmValue::Null, Some(name)) => name,
+                    (OmValue::Text(_), Some(_)) => {
+                        return Err(OmError::invalid_argument(
+                            "Names.Add accepts only one of Name and NameLocal",
+                        ));
+                    }
+                    _ => {
+                        return Err(OmError::type_mismatch(
+                            "Names.Add Name expects a string unless NameLocal is provided",
+                        ));
+                    }
+                };
+                let refers_to_local = match args.get(7) {
+                    None | Some(OmValue::Missing | OmValue::Empty | OmValue::Null) => None,
+                    Some(OmValue::Text(refers_to)) => {
+                        Some(refers_to.trim_start_matches('=').to_string())
+                    }
+                    Some(_) => {
+                        return Err(OmError::type_mismatch(
+                            "Names.Add RefersToLocal expects a string when provided",
+                        ));
+                    }
+                };
+                let refers_to_a1 = match (&args[1], refers_to_local) {
+                    (OmValue::Text(refers_to), None) => {
+                        Some(refers_to.trim_start_matches('=').to_string())
+                    }
+                    (OmValue::Missing | OmValue::Empty | OmValue::Null, Some(refers_to)) => {
+                        Some(refers_to)
+                    }
+                    (OmValue::Text(_), Some(_)) => {
+                        return Err(OmError::invalid_argument(
+                            "Names.Add accepts only one of RefersTo and RefersToLocal",
+                        ));
+                    }
+                    (OmValue::Missing | OmValue::Empty | OmValue::Null, None) => None,
+                    _ => {
+                        return Err(OmError::type_mismatch(
+                            "Names.Add RefersTo expects a string unless RefersToLocal or RefersToR1C1 is provided",
+                        ));
+                    }
+                };
+                let refers_to_r1c1_local = match args.get(10) {
+                    None | Some(OmValue::Missing | OmValue::Empty | OmValue::Null) => None,
+                    Some(OmValue::Text(refers_to)) => {
+                        Some(refers_to.trim_start_matches('=').to_string())
+                    }
+                    Some(_) => {
+                        return Err(OmError::type_mismatch(
+                            "Names.Add RefersToR1C1Local expects a string when provided",
+                        ));
+                    }
+                };
+                let refers_to_r1c1_direct = match args.get(9) {
                     None | Some(OmValue::Missing | OmValue::Empty | OmValue::Null) => None,
                     Some(OmValue::Text(refers_to)) => {
                         Some(refers_to.trim_start_matches('=').to_string())
@@ -18840,21 +18898,26 @@ impl ExcelRuntime {
                         ));
                     }
                 };
-                let (refers_to, is_r1c1) = match (&args[1], refers_to_r1c1) {
-                    (OmValue::Text(refers_to), None) => {
-                        (refers_to.trim_start_matches('=').to_string(), false)
-                    }
-                    (OmValue::Missing | OmValue::Empty | OmValue::Null, Some(refers_to)) => {
-                        (refers_to, true)
-                    }
-                    (OmValue::Text(_), Some(_)) => {
+                let refers_to_r1c1 = match (refers_to_r1c1_direct, refers_to_r1c1_local) {
+                    (Some(_), Some(_)) => {
                         return Err(OmError::invalid_argument(
-                            "Names.Add accepts only one of RefersTo and RefersToR1C1",
+                            "Names.Add accepts only one of RefersToR1C1 and RefersToR1C1Local",
                         ));
                     }
-                    _ => {
+                    (Some(refers_to), None) | (None, Some(refers_to)) => Some(refers_to),
+                    (None, None) => None,
+                };
+                let (refers_to, is_r1c1) = match (refers_to_a1, refers_to_r1c1) {
+                    (Some(refers_to), None) => (refers_to, false),
+                    (None, Some(refers_to)) => (refers_to, true),
+                    (Some(_), Some(_)) => {
+                        return Err(OmError::invalid_argument(
+                            "Names.Add accepts only one A1 or R1C1 reference argument",
+                        ));
+                    }
+                    (None, None) => {
                         return Err(OmError::type_mismatch(
-                            "Names.Add RefersTo expects a string unless RefersToR1C1 is provided",
+                            "Names.Add expects RefersTo, RefersToLocal, RefersToR1C1, or RefersToR1C1Local",
                         ));
                     }
                 };
@@ -18863,23 +18926,13 @@ impl ExcelRuntime {
                     .map(|value| coerce_optional_bool_arg(value, true, "Names.Add Visible"))
                     .transpose()?
                     .unwrap_or(true);
-                for (index, label) in [
-                    "Names.Add MacroType",
-                    "Names.Add ShortcutKey",
-                    "Names.Add Category",
-                    "Names.Add NameLocal",
-                    "Names.Add RefersToLocal",
-                    "Names.Add CategoryLocal",
-                    "Names.Add RefersToR1C1Local",
-                ]
-                .iter()
-                .enumerate()
-                {
-                    let arg_index = if index < 6 { index + 3 } else { index + 4 };
-                    if args
-                        .get(arg_index)
-                        .is_some_and(|value| !om_value_is_omitted(value))
-                    {
+                for (arg_index, label) in [
+                    (3, "Names.Add MacroType"),
+                    (4, "Names.Add ShortcutKey"),
+                    (5, "Names.Add Category"),
+                    (8, "Names.Add CategoryLocal"),
+                ] {
+                    if args.get(arg_index).is_some_and(|value| !om_value_is_omitted(value)) {
                         return Err(OmError::unsupported(format!(
                             "{label} is not implemented"
                         )));
@@ -66826,6 +66879,149 @@ mod tests {
                 .expect_err("Names.Add RefersToR1C1 rejects non-text")
                 .code,
             OmErrorCode::TypeMismatch
+        );
+    }
+
+    #[test]
+    fn names_add_accepts_local_name_and_reference_variants() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime.create_workbook().expect("workbook");
+
+        let names = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Names", &[])
+                .expect("Workbook.Names"),
+        );
+        let local_name = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    names,
+                    "Add",
+                    &[
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Text("LocalTotal".to_string()),
+                        OmValue::Text("=Sheet1!$B$2".to_string()),
+                    ],
+                )
+                .expect("Names.Add NameLocal RefersToLocal"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(local_name, "Name", &[])
+                    .expect("NameLocal Name")
+            ),
+            "LocalTotal"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(local_name, "RefersTo", &[])
+                    .expect("RefersToLocal RefersTo")
+            ),
+            "=Sheet1!$B$2"
+        );
+        let local_refers_to_range = expect_object_handle(
+            runtime
+                .dispatch_get(local_name, "RefersToRange", &[])
+                .expect("RefersToLocal RefersToRange"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(local_refers_to_range, "Address", &[])
+                    .expect("RefersToLocal RefersToRange.Address")
+            ),
+            "$B$2"
+        );
+
+        let r1c1_local_name = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    names,
+                    "Add",
+                    &[
+                        OmValue::Text("R1C1LocalTotal".to_string()),
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Text("=Sheet1!R2C2".to_string()),
+                    ],
+                )
+                .expect("Names.Add RefersToR1C1Local"),
+        );
+        let runtime_workbook = runtime.runtime_workbook(workbook).expect("runtime workbook");
+        let defined_name = runtime_workbook
+            .loaded
+            .state
+            .defined_names
+            .lookup_in_scope(office_common::NameScope::Workbook, "r1c1localtotal")
+            .expect("R1C1 local defined name");
+        assert_eq!(defined_name.refers_to.text, "Sheet1!R2C2");
+        assert!(defined_name.refers_to.is_r1c1);
+        let r1c1_local_refers_to_range = expect_object_handle(
+            runtime
+                .dispatch_get(r1c1_local_name, "RefersToRange", &[])
+                .expect("RefersToR1C1Local RefersToRange"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(r1c1_local_refers_to_range, "Address", &[])
+                    .expect("RefersToR1C1Local RefersToRange.Address")
+            ),
+            "$B$2"
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    names,
+                    "Add",
+                    &[
+                        OmValue::Text("DirectAndLocalName".to_string()),
+                        OmValue::Text("=Sheet1!$A$1".to_string()),
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Text("LocalName".to_string()),
+                    ],
+                )
+                .expect_err("Names.Add rejects Name and NameLocal")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    names,
+                    "Add",
+                    &[
+                        OmValue::Text("DirectAndLocalRef".to_string()),
+                        OmValue::Text("=Sheet1!$A$1".to_string()),
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Text("=Sheet1!$B$2".to_string()),
+                    ],
+                )
+                .expect_err("Names.Add rejects RefersTo and RefersToLocal")
+                .code,
+            OmErrorCode::InvalidArgument
         );
     }
 
