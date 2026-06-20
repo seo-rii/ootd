@@ -64,6 +64,25 @@ impl DefinedNameTable {
         Ok(false)
     }
 
+    pub fn set_refers_to_by_id(
+        &mut self,
+        id: DefinedNameId,
+        refers_to: FormulaSource,
+    ) -> OmResult<bool> {
+        let defined_name = self.names_by_id.get_mut(&id).ok_or_else(|| {
+            OmError::new(
+                OmErrorCode::NotFound,
+                format!("defined name id {} was not found", id.0),
+            )
+        })?;
+        if defined_name.refers_to != refers_to {
+            defined_name.refers_to = refers_to;
+            self.dirty = true;
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
     pub fn lookup_in_scope(&self, scope: NameScope, name: &str) -> Option<&DefinedName> {
         let key = NameKey::new(scope, name);
         self.ids_by_key
@@ -352,6 +371,51 @@ mod tests {
             .lookup(Some(SheetId(3)), "total")
             .expect("workbook fallback");
         assert_eq!(found.refers_to.text, "Sheet1!$A$1");
+    }
+
+    #[test]
+    fn set_refers_to_by_id_updates_source_and_dirty_state() {
+        let mut table = DefinedNameTable::default();
+        let id = table
+            .add(
+                NameScope::Workbook,
+                "Total",
+                source("Sheet1!$A$1"),
+                NameValidationMode::StrictExcel,
+            )
+            .expect("add name");
+        table.mark_clean();
+
+        assert!(
+            table
+                .set_refers_to_by_id(
+                    id,
+                    FormulaSource {
+                        text: "Sheet1!$B$2".to_string(),
+                        is_r1c1: false,
+                    },
+                )
+                .expect("set RefersTo")
+        );
+        assert!(table.is_dirty());
+        assert_eq!(
+            table.get(id).expect("updated name").refers_to.text,
+            "Sheet1!$B$2"
+        );
+
+        table.mark_clean();
+        assert!(
+            !table
+                .set_refers_to_by_id(
+                    id,
+                    FormulaSource {
+                        text: "Sheet1!$B$2".to_string(),
+                        is_r1c1: false,
+                    },
+                )
+                .expect("set same RefersTo")
+        );
+        assert!(!table.is_dirty());
     }
 
     #[test]

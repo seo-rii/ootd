@@ -3692,6 +3692,30 @@ impl ExcelRuntime {
                         }
                         Ok(())
                     }
+                    "RefersTo" | "RefersToLocal" | "RefersToR1C1" | "RefersToR1C1Local" => {
+                        let OmValue::Text(refers_to) = value else {
+                            return Err(OmError::type_mismatch(format!(
+                                "Name.{member} expects a string value"
+                            )));
+                        };
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        if runtime.loaded.state.defined_names.set_refers_to_by_id(
+                            name_id,
+                            FormulaSource {
+                                text: refers_to.trim_start_matches('=').to_string(),
+                                is_r1c1: matches!(member, "RefersToR1C1" | "RefersToR1C1Local"),
+                            },
+                        )? {
+                            runtime.dirty = true;
+                        }
+                        Ok(())
+                    }
                     _ => Err(OmError::unsupported(format!(
                         "Name.{member} is not writable"
                     ))),
@@ -16338,7 +16362,19 @@ impl ExcelRuntime {
     }
 
     fn focus_member_supported(&self, surface: &str, member: &str, write: bool) -> OmResult<()> {
-        if write && matches!((surface, member), ("Name", "Visible")) {
+        if write
+            && matches!(
+                (surface, member),
+                (
+                    "Name",
+                    "Visible"
+                        | "RefersTo"
+                        | "RefersToLocal"
+                        | "RefersToR1C1"
+                        | "RefersToR1C1Local"
+                )
+            )
+        {
             return Ok(());
         }
         if !write
@@ -66985,6 +67021,195 @@ mod tests {
             .lookup_in_scope(office_common::NameScope::Workbook, "togglevisible")
             .expect("defined name after visible true");
         assert!(!defined_name.metadata.hidden);
+    }
+
+    #[test]
+    fn name_refers_to_setters_update_source_and_range() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime.create_workbook().expect("workbook");
+
+        let names = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Names", &[])
+                .expect("Workbook.Names"),
+        );
+        let name = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    names,
+                    "Add",
+                    &[
+                        OmValue::Text("MutableTotal".to_string()),
+                        OmValue::Text("=Sheet1!$A$1".to_string()),
+                    ],
+                )
+                .expect("Names.Add"),
+        );
+
+        runtime
+            .dispatch_set(workbook.0, "Saved", OmValue::Bool(true), &[])
+            .expect("clear dirty state before RefersTo set");
+        runtime
+            .dispatch_set(
+                name,
+                "RefersTo",
+                OmValue::Text("=Sheet1!$B$2".to_string()),
+                &[],
+            )
+            .expect("Name.RefersTo set");
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(name, "RefersTo", &[])
+                    .expect("Name.RefersTo after set")
+            ),
+            "=Sheet1!$B$2"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(name, "RefersToR1C1", &[])
+                    .expect("Name.RefersToR1C1 after A1 set")
+            ),
+            "=Sheet1!R2C2"
+        );
+        let refers_to_range = expect_object_handle(
+            runtime
+                .dispatch_get(name, "RefersToRange", &[])
+                .expect("Name.RefersToRange after A1 set"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(refers_to_range, "Address", &[])
+                    .expect("RefersToRange.Address after A1 set")
+            ),
+            "$B$2"
+        );
+        {
+            let runtime_workbook = runtime.runtime_workbook(workbook).expect("runtime workbook");
+            let defined_name = runtime_workbook
+                .loaded
+                .state
+                .defined_names
+                .lookup_in_scope(office_common::NameScope::Workbook, "mutabletotal")
+                .expect("defined name after A1 set");
+            assert_eq!(defined_name.refers_to.text, "Sheet1!$B$2");
+            assert!(!defined_name.refers_to.is_r1c1);
+        }
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved after RefersTo set")
+        ));
+
+        runtime
+            .dispatch_set(workbook.0, "Saved", OmValue::Bool(true), &[])
+            .expect("clear dirty state before same RefersTo set");
+        runtime
+            .dispatch_set(
+                name,
+                "RefersToLocal",
+                OmValue::Text("=Sheet1!$B$2".to_string()),
+                &[],
+            )
+            .expect("Name.RefersToLocal same set");
+        assert!(expect_bool(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved after same RefersToLocal set")
+        ));
+
+        runtime
+            .dispatch_set(
+                name,
+                "RefersToR1C1",
+                OmValue::Text("=Sheet1!R3C3".to_string()),
+                &[],
+            )
+            .expect("Name.RefersToR1C1 set");
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(name, "RefersTo", &[])
+                    .expect("Name.RefersTo after R1C1 set")
+            ),
+            "=Sheet1!$C$3"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(name, "RefersToR1C1Local", &[])
+                    .expect("Name.RefersToR1C1Local after R1C1 set")
+            ),
+            "=Sheet1!R3C3"
+        );
+        let r1c1_refers_to_range = expect_object_handle(
+            runtime
+                .dispatch_get(name, "RefersToRange", &[])
+                .expect("Name.RefersToRange after R1C1 set"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(r1c1_refers_to_range, "Address", &[])
+                    .expect("RefersToRange.Address after R1C1 set")
+            ),
+            "$C$3"
+        );
+        {
+            let runtime_workbook = runtime.runtime_workbook(workbook).expect("runtime workbook");
+            let defined_name = runtime_workbook
+                .loaded
+                .state
+                .defined_names
+                .lookup_in_scope(office_common::NameScope::Workbook, "mutabletotal")
+                .expect("defined name after R1C1 set");
+            assert_eq!(defined_name.refers_to.text, "Sheet1!R3C3");
+            assert!(defined_name.refers_to.is_r1c1);
+        }
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after RefersTo setters");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved workbook package");
+        let workbook_xml = String::from_utf8(
+            saved_package
+                .part("xl/workbook.xml")
+                .expect("saved workbook xml")
+                .bytes
+                .clone(),
+        )
+        .expect("workbook xml utf8");
+        assert!(workbook_xml
+            .contains(r#"<definedName name="MutableTotal">Sheet1!R3C3</definedName>"#));
+
+        assert_eq!(
+            runtime
+                .dispatch_set(name, "RefersTo", OmValue::Number(1.0), &[])
+                .expect_err("Name.RefersTo rejects non-text")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(
+                    name,
+                    "RefersTo",
+                    OmValue::Text("=Sheet1!$A$1".to_string()),
+                    &[OmValue::Missing],
+                )
+                .expect_err("Name.RefersTo rejects arguments")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
     }
 
     #[test]
