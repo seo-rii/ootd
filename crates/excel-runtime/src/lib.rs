@@ -4945,6 +4945,7 @@ impl ExcelRuntime {
                         let mut current = String::new();
                         let mut depth = 0usize;
                         let mut in_string = false;
+                        let mut in_reference_quote = false;
                         let mut chars = inner.chars().peekable();
                         while let Some(ch) = chars.next() {
                             if ch == '"' {
@@ -4956,7 +4957,16 @@ impl ExcelRuntime {
                                 }
                                 continue;
                             }
-                            if !in_string {
+                            if ch == '\'' && !in_string {
+                                current.push(ch);
+                                if in_reference_quote && chars.peek() == Some(&'\'') {
+                                    current.push(chars.next().expect("peeked quote"));
+                                } else {
+                                    in_reference_quote = !in_reference_quote;
+                                }
+                                continue;
+                            }
+                            if !in_string && !in_reference_quote {
                                 match ch {
                                     '(' | '{' => depth += 1,
                                     ')' | '}' => {
@@ -4976,7 +4986,7 @@ impl ExcelRuntime {
                             }
                             current.push(ch);
                         }
-                        if in_string || depth != 0 {
+                        if in_string || in_reference_quote || depth != 0 {
                             return Err(OmError::invalid_argument(
                                 "Series.Formula has unbalanced delimiters",
                             ));
@@ -137630,6 +137640,113 @@ mod tests {
                     .expect("reopened Series.Formula")
             ),
             "=SERIES(Sheet1!$C$1,Sheet1!$A$1:$A$3,Sheet1!$B$1:$B$3,1)"
+        );
+    }
+
+    #[test]
+    fn chart_series_formula_setter_accepts_commas_in_quoted_sheet_names() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("Worksheets.Item(1)"),
+        );
+        runtime
+            .dispatch_set(
+                worksheet,
+                "Name",
+                OmValue::Text("Data, 2026".to_string()),
+                &[],
+            )
+            .expect("rename worksheet with comma");
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    chart_objects,
+                    "Add",
+                    &[
+                        OmValue::Number(12.0),
+                        OmValue::Number(18.0),
+                        OmValue::Number(240.0),
+                        OmValue::Number(160.0),
+                    ],
+                )
+                .expect("ChartObjects.Add"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection"),
+        );
+        let series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "NewSeries", &[])
+                .expect("SeriesCollection.NewSeries"),
+        );
+        let formula =
+            "=SERIES('Data, 2026'!$C$1,'Data, 2026'!$A$1:$A$3,'Data, 2026'!$B$1:$B$3,1)";
+        runtime
+            .dispatch_set(
+                series,
+                "Formula",
+                OmValue::Text(formula.to_string()),
+                &[],
+            )
+            .expect("set Series.Formula with quoted sheet commas");
+
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(series, "Formula", &[])
+                    .expect("Series.Formula after quoted comma setter")
+            ),
+            formula
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(series, "Values", &[])
+                .expect("Series.Values after quoted comma Formula"),
+            OmValue::Text("='Data, 2026'!$B$1:$B$3".to_string())
+        );
+        let state = runtime.workbook_state(workbook).expect("workbook state");
+        let sheet_id = state.worksheets[0].id;
+        let chart = state.charts.values().next().expect("chart model");
+        let values = chart.series[0].values.as_ref().expect("series values");
+        let Some(ReferenceTarget::Range(range)) = values.resolved.as_ref() else {
+            panic!("quoted sheet comma formula values should resolve to a range");
+        };
+        assert_eq!(range.areas()[0].scope, SheetScope::Single(sheet_id));
+        assert_eq!(
+            range.areas()[0].rect,
+            Rect {
+                row_first: 1,
+                row_last: 3,
+                col_first: 2,
+                col_last: 2,
+            }
         );
     }
 
