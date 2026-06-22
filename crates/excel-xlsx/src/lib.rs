@@ -19051,6 +19051,31 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         }
                     }
                 }
+                if active_cache_depth == 0
+                    && active_literal.is_none()
+                    && local_name == b"v"
+                    && active_series.is_some()
+                    && detect_series_formula_slot(&element_path)
+                        == Some(ChartSeriesFormulaSlot::Name)
+                {
+                    active_literal = Some((
+                        ChartSeriesFormulaSlot::Name,
+                        ChartCacheKindSummary::String,
+                        Vec::new(),
+                    ));
+                    active_literal_point_index = Some(0);
+                }
+                if active_literal.is_some()
+                    && active_literal_point_index.is_some()
+                    && local_name == b"v"
+                    && let Some((_, _, points)) = active_literal.as_mut()
+                    && let Some(index) = active_literal_point_index
+                {
+                    points.push(ChartSourceLiteralPointSummary {
+                        index,
+                        value: String::new(),
+                    });
+                }
             }
             Ok(Event::Text(text)) => {
                 let text_value = text.xml_content().map_err(xml_error)?;
@@ -25136,6 +25161,80 @@ mod tests {
         assert_eq!(array.values[2], OmValue::Error(CellError::Python));
         assert_eq!(array.values[3], OmValue::Error(CellError::Unknown));
         assert_eq!(array.values[4], OmValue::Number(20.0));
+    }
+
+    #[test]
+    fn parse_chart_part_summary_collects_empty_literal_points() {
+        let chart_xml = br#"<?xml version="1.0" encoding="UTF-8"?>
+<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart">
+  <c:chart>
+    <c:plotArea>
+      <c:barChart>
+        <c:ser>
+          <c:idx val="0"/><c:order val="0"/>
+          <c:cat><c:strLit><c:ptCount val="2"/><c:pt idx="0"><c:v/></c:pt><c:pt idx="1"><c:v>Filled</c:v></c:pt></c:strLit></c:cat>
+          <c:val><c:numLit><c:ptCount val="2"/><c:pt idx="0"><c:v/></c:pt><c:pt idx="1"><c:v>7</c:v></c:pt></c:numLit></c:val>
+        </c:ser>
+      </c:barChart>
+    </c:plotArea>
+  </c:chart>
+</c:chartSpace>"#;
+        let summary = super::parse_chart_part_summary(chart_xml).expect("chart summary");
+        let series = summary.series.first().expect("series summary");
+        assert_eq!(
+            series.category_literal,
+            Some(ChartSourceLiteralSummary {
+                kind: ChartCacheKindSummary::String,
+                points: vec![
+                    ChartSourceLiteralPointSummary {
+                        index: 0,
+                        value: String::new(),
+                    },
+                    ChartSourceLiteralPointSummary {
+                        index: 1,
+                        value: "Filled".to_string(),
+                    },
+                ],
+            })
+        );
+        assert_eq!(
+            series.values_literal,
+            Some(ChartSourceLiteralSummary {
+                kind: ChartCacheKindSummary::Number,
+                points: vec![
+                    ChartSourceLiteralPointSummary {
+                        index: 0,
+                        value: String::new(),
+                    },
+                    ChartSourceLiteralPointSummary {
+                        index: 1,
+                        value: "7".to_string(),
+                    },
+                ],
+            })
+        );
+
+        let worksheets = vec![WorksheetModel {
+            id: SheetId(1),
+            workbook_id: WorkbookId(1),
+            name: "Sheet1".to_string(),
+            kind: SheetKind::Worksheet,
+            visibility: SheetVisibility::Visible,
+            relationship_id: None,
+            part_uri: None,
+        }];
+        let model_series = super::chart_series_from_summary(
+            Some(&summary),
+            WorkbookId(1),
+            &worksheets,
+            &DefinedNameTable::default(),
+            Some(SheetId(1)),
+        );
+        let model_series = model_series.first().expect("model series");
+        let x_values = model_series.x_values.as_ref().expect("literal x values");
+        assert_eq!(x_values.raw.text, r#"{"","Filled"}"#);
+        let values = model_series.values.as_ref().expect("literal values");
+        assert_eq!(values.raw.text, r#"{"",7}"#);
     }
 
     #[test]
