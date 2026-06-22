@@ -801,16 +801,19 @@ fn chart_source_external_workbook_name(reference: &str) -> Option<&str> {
 
     let mut chars = reference.char_indices().peekable();
     let (_, first) = chars.next()?;
-    let (_, second) = chars.next()?;
-    if first != '\'' || second != '[' {
+    if first != '\'' {
         return None;
     }
 
+    let mut open_bracket_index = None;
     let mut close_bracket_index = None;
     let mut close_quote_index = None;
     while let Some((index, ch)) = chars.next() {
         match ch {
-            ']' if close_bracket_index.is_none() => close_bracket_index = Some(index),
+            '[' if open_bracket_index.is_none() => open_bracket_index = Some(index),
+            ']' if open_bracket_index.is_some() && close_bracket_index.is_none() => {
+                close_bracket_index = Some(index)
+            }
             '\'' => {
                 if chars.peek().is_some_and(|(_, next)| *next == '\'') {
                     chars.next();
@@ -822,10 +825,17 @@ fn chart_source_external_workbook_name(reference: &str) -> Option<&str> {
             _ => {}
         }
     }
+    let open_bracket_index = open_bracket_index?;
     let close_bracket_index = close_bracket_index?;
     let close_quote_index = close_quote_index?;
-    let workbook_name = &reference[2..close_bracket_index];
+    let workbook_name_start = if open_bracket_index == 1 {
+        open_bracket_index + 1
+    } else {
+        1
+    };
+    let workbook_name = &reference[workbook_name_start..close_bracket_index];
     if workbook_name.is_empty()
+        || open_bracket_index >= close_bracket_index
         || close_bracket_index > close_quote_index
         || !reference[close_quote_index + 1..]
             .trim_start()
@@ -1736,6 +1746,36 @@ mod tests {
             panic!("expected quoted direct external range target");
         };
         assert_eq!(external.text, "'[Other.xlsx]Data 2026'!$C$1");
+
+        let Some(ReferenceTarget::External(external)) = resolve_chart_source_reference_with_names(
+            "='C:\\Reports\\[Other.xlsx]Data 2026'!$D$1:$D$3",
+            workbook_id,
+            Some("Workbook.xlsx"),
+            &worksheets,
+            &defined_names,
+            None,
+        ) else {
+            panic!("expected path-prefixed quoted external range target");
+        };
+        assert_eq!(
+            external.text,
+            "'C:\\Reports\\[Other.xlsx]Data 2026'!$D$1:$D$3"
+        );
+
+        let target = resolve_chart_source_reference_with_names(
+            "='[Workbook.xlsx]Data'!$A$1",
+            workbook_id,
+            Some("Workbook.xlsx"),
+            &worksheets,
+            &defined_names,
+            None,
+        )
+        .expect("same workbook quoted range target");
+        let ReferenceTarget::Range(range) = target else {
+            panic!("expected same workbook quoted target to stay internal");
+        };
+        assert_eq!(range.areas()[0].scope, SheetScope::Single(SheetId(3)));
+        assert_eq!(range.areas()[0].rect, Rect::single_cell(1, 1));
 
         assert!(
             resolve_chart_source_reference_with_names(
