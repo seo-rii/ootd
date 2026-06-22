@@ -43928,22 +43928,30 @@ fn series_formula_text(series: &SeriesModel, series_index: usize) -> String {
     let formula_arg_text = |source: Option<&excel_model::ChartSourceExpr>| {
         source.map(|source| {
             let text = source.raw.text.trim_start_matches('=').to_string();
+            let mut in_string = false;
             let mut in_quote = false;
             let mut depth = 0usize;
             let mut has_top_level_comma = false;
             let mut chars = text.chars().peekable();
             while let Some(ch) = chars.next() {
                 match ch {
-                    '\'' => {
+                    '"' if !in_quote => {
+                        if in_string && chars.peek() == Some(&'"') {
+                            chars.next();
+                        } else {
+                            in_string = !in_string;
+                        }
+                    }
+                    '\'' if !in_string => {
                         if in_quote && chars.peek() == Some(&'\'') {
                             chars.next();
                         } else {
                             in_quote = !in_quote;
                         }
                     }
-                    '(' | '{' if !in_quote => depth += 1,
-                    ')' | '}' if !in_quote && depth > 0 => depth -= 1,
-                    ',' if !in_quote && depth == 0 => {
+                    '(' | '{' if !in_string && !in_quote => depth += 1,
+                    ')' | '}' if !in_string && !in_quote && depth > 0 => depth -= 1,
+                    ',' if !in_string && !in_quote && depth == 0 => {
                         has_top_level_comma = true;
                         break;
                     }
@@ -137810,7 +137818,7 @@ mod tests {
                 series,
                 "Formula",
                 OmValue::Text(
-                    r#"=SERIES("Formula Name",{"East","West"},{30,#N/A,#PYTHON!,#UNKNOWN!,40},1)"#
+                    r#"=SERIES("Formula, Name",{"East","West"},{30,#N/A,#PYTHON!,#UNKNOWN!,40},1)"#
                         .to_string(),
                 ),
                 &[],
@@ -137822,7 +137830,7 @@ mod tests {
                     .dispatch_get(series, "Formula", &[])
                     .expect("Series.Formula after literal setter")
             ),
-            r#"=SERIES("Formula Name",{"East","West"},{30,#N/A,#PYTHON!,#UNKNOWN!,40},1)"#
+            r#"=SERIES("Formula, Name",{"East","West"},{30,#N/A,#PYTHON!,#UNKNOWN!,40},1)"#
         );
 
         let saved = runtime
@@ -137844,7 +137852,7 @@ mod tests {
                 .as_slice(),
         )
         .expect("saved chart xml utf8");
-        assert!(saved_chart_xml.contains(r#"<c:tx><c:v>Formula Name</c:v></c:tx>"#));
+        assert!(saved_chart_xml.contains(r#"<c:tx><c:v>Formula, Name</c:v></c:tx>"#));
         assert!(saved_chart_xml.contains(
             r#"<c:cat><c:strLit><c:ptCount val="2"/><c:pt idx="0"><c:v>East</c:v></c:pt><c:pt idx="1"><c:v>West</c:v></c:pt></c:strLit></c:cat>"#
         ));
@@ -137902,7 +137910,7 @@ mod tests {
                     .dispatch_get(reopened_series, "Formula", &[])
                     .expect("reopened Series.Formula")
             ),
-            r#"=SERIES("Formula Name",{"East","West"},{30,#N/A,#PYTHON!,#UNKNOWN!,40},1)"#
+            r#"=SERIES("Formula, Name",{"East","West"},{30,#N/A,#PYTHON!,#UNKNOWN!,40},1)"#
         );
     }
 
