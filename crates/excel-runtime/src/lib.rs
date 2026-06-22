@@ -137804,10 +137804,12 @@ mod tests {
 
         let bubble_sizes = OmArray::new(
             1,
-            3,
+            5,
             vec![
                 OmValue::Number(3.0),
-                OmValue::Number(4.0),
+                OmValue::Error(CellError::NA),
+                OmValue::Error(CellError::Python),
+                OmValue::Error(CellError::Unknown),
                 OmValue::Number(5.0),
             ],
         )
@@ -137824,7 +137826,7 @@ mod tests {
             runtime
                 .dispatch_get(series, "BubbleSizes", &[])
                 .expect("Series.BubbleSizes after array setter"),
-            OmValue::Text("={3,4,5}".to_string())
+            OmValue::Text("={3,#N/A,#PYTHON!,#UNKNOWN!,5}".to_string())
         );
         {
             let state = runtime
@@ -137860,7 +137862,7 @@ mod tests {
         )
         .expect("saved chart xml utf8");
         assert!(saved_array_chart_xml.contains(
-            r#"<c:bubbleSize><c:numLit><c:ptCount val="3"/><c:pt idx="0"><c:v>3</c:v></c:pt><c:pt idx="1"><c:v>4</c:v></c:pt><c:pt idx="2"><c:v>5</c:v></c:pt></c:numLit></c:bubbleSize>"#
+            r#"<c:bubbleSize><c:numLit><c:ptCount val="5"/><c:pt idx="0"><c:v>3</c:v></c:pt><c:pt idx="1"><c:v>#N/A</c:v></c:pt><c:pt idx="2"><c:v>#PYTHON!</c:v></c:pt><c:pt idx="3"><c:v>#UNKNOWN!</c:v></c:pt><c:pt idx="4"><c:v>5</c:v></c:pt></c:numLit></c:bubbleSize>"#
         ));
 
         let mut reopened_array_runtime = ExcelRuntime::new();
@@ -137918,7 +137920,7 @@ mod tests {
             reopened_array_runtime
                 .dispatch_get(reopened_array_series, "BubbleSizes", &[])
                 .expect("reopened Series.BubbleSizes from array"),
-            OmValue::Text("={3,4,5}".to_string())
+            OmValue::Text("={3,#N/A,#PYTHON!,#UNKNOWN!,5}".to_string())
         );
 
         runtime
