@@ -137652,6 +137652,145 @@ mod tests {
     }
 
     #[test]
+    fn chart_series_formula_setter_preserves_external_sources() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("Worksheets.Item(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    chart_objects,
+                    "Add",
+                    &[
+                        OmValue::Number(12.0),
+                        OmValue::Number(18.0),
+                        OmValue::Number(240.0),
+                        OmValue::Number(160.0),
+                    ],
+                )
+                .expect("ChartObjects.Add"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection"),
+        );
+        let series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "NewSeries", &[])
+                .expect("SeriesCollection.NewSeries"),
+        );
+        let formula = "=SERIES('[Other.xlsx]Data 2026'!$C$1,'[Other.xlsx]Data 2026'!$A$1:$A$3,'[Other.xlsx]Data 2026'!$B$1:$B$3,1)";
+        runtime
+            .dispatch_set(
+                series,
+                "Formula",
+                OmValue::Text(formula.to_string()),
+                &[],
+            )
+            .expect("set external Series.Formula");
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(series, "Formula", &[])
+                    .expect("Series.Formula after external setter")
+            ),
+            formula
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(series, "Values", &[])
+                .expect("Series.Values after external Formula"),
+            OmValue::Text("='[Other.xlsx]Data 2026'!$B$1:$B$3".to_string())
+        );
+        {
+            let state = runtime.workbook_state(workbook).expect("workbook state");
+            let chart = state.charts.values().next().expect("chart model");
+            let values = chart.series[0].values.as_ref().expect("series values");
+            let Some(ReferenceTarget::External(external)) = values.resolved.as_ref() else {
+                panic!("external formula values should resolve to an external reference");
+            };
+            assert_eq!(external.text, "'[Other.xlsx]Data 2026'!$B$1:$B$3");
+        }
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after external Series.Formula");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = String::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(saved_chart_xml.contains(
+            "<c:f>'[Other.xlsx]Data 2026'!$B$1:$B$3</c:f>"
+        ));
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after external Series.Formula");
+        let reopened_state = reopened_runtime
+            .workbook_state(reopened_workbook)
+            .expect("reopened workbook state");
+        let reopened_chart = reopened_state.charts.values().next().expect("reopened chart");
+        let reopened_values = reopened_chart.series[0]
+            .values
+            .as_ref()
+            .expect("reopened values");
+        let Some(ReferenceTarget::External(reopened_external)) =
+            reopened_values.resolved.as_ref()
+        else {
+            panic!("reopened external formula values should resolve to an external reference");
+        };
+        assert_eq!(
+            reopened_external.text,
+            "'[Other.xlsx]Data 2026'!$B$1:$B$3"
+        );
+    }
+
+    #[test]
     fn chart_series_formula_setter_resolves_unqualified_sources_against_host_sheet() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
