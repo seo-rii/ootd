@@ -137634,7 +137634,10 @@ mod tests {
             .dispatch_set(
                 series,
                 "Formula",
-                OmValue::Text(r#"=SERIES("Formula Name",{"East","West"},{30,40},1)"#.to_string()),
+                OmValue::Text(
+                    r#"=SERIES("Formula Name",{"East","West"},{30,#N/A,#PYTHON!,#UNKNOWN!,40},1)"#
+                        .to_string(),
+                ),
                 &[],
             )
             .expect("set Series.Formula with literal sources");
@@ -137644,7 +137647,7 @@ mod tests {
                     .dispatch_get(series, "Formula", &[])
                     .expect("Series.Formula after literal setter")
             ),
-            r#"=SERIES("Formula Name",{"East","West"},{30,40},1)"#
+            r#"=SERIES("Formula Name",{"East","West"},{30,#N/A,#PYTHON!,#UNKNOWN!,40},1)"#
         );
 
         let saved = runtime
@@ -137671,7 +137674,7 @@ mod tests {
             r#"<c:cat><c:strLit><c:ptCount val="2"/><c:pt idx="0"><c:v>East</c:v></c:pt><c:pt idx="1"><c:v>West</c:v></c:pt></c:strLit></c:cat>"#
         ));
         assert!(saved_chart_xml.contains(
-            r#"<c:val><c:numLit><c:ptCount val="2"/><c:pt idx="0"><c:v>30</c:v></c:pt><c:pt idx="1"><c:v>40</c:v></c:pt></c:numLit></c:val>"#
+            r#"<c:val><c:numLit><c:ptCount val="5"/><c:pt idx="0"><c:v>30</c:v></c:pt><c:pt idx="1"><c:v>#N/A</c:v></c:pt><c:pt idx="2"><c:v>#PYTHON!</c:v></c:pt><c:pt idx="3"><c:v>#UNKNOWN!</c:v></c:pt><c:pt idx="4"><c:v>40</c:v></c:pt></c:numLit></c:val>"#
         ));
 
         let mut reopened_runtime = ExcelRuntime::new();
@@ -137724,7 +137727,7 @@ mod tests {
                     .dispatch_get(reopened_series, "Formula", &[])
                     .expect("reopened Series.Formula")
             ),
-            r#"=SERIES("Formula Name",{"East","West"},{30,40},1)"#
+            r#"=SERIES("Formula Name",{"East","West"},{30,#N/A,#PYTHON!,#UNKNOWN!,40},1)"#
         );
     }
 
