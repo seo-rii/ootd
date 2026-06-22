@@ -972,7 +972,7 @@ fn resolve_chart_source_defined_name(
     current_sheet: Option<SheetId>,
 ) -> Option<ReferenceTarget> {
     let reference = reference.trim();
-    let mut reference = reference.strip_prefix('=').unwrap_or(reference).trim();
+    let reference = reference.strip_prefix('=').unwrap_or(reference).trim();
     if reference.is_empty() || reference.contains(',') || reference.contains(':') {
         return None;
     }
@@ -1021,9 +1021,10 @@ fn resolve_chart_source_defined_name(
             {
                 return None;
             }
-            reference = unqualified_name;
+            defined_names.lookup_in_scope(NameScope::Workbook, unqualified_name)?
+        } else {
+            defined_names.lookup(current_sheet, reference)?
         }
-        defined_names.lookup(current_sheet, reference)?
     };
 
     if let Some(target) = resolve_chart_source_reference(
@@ -1233,6 +1234,17 @@ mod tests {
                 NameValidationMode::StrictExcel,
             )
             .expect("add workbook name");
+        defined_names
+            .add(
+                NameScope::Worksheet(SheetId(2)),
+                "SeriesValues",
+                FormulaSource {
+                    text: "Data!$C$1".to_string(),
+                    is_r1c1: false,
+                },
+                NameValidationMode::StrictExcel,
+            )
+            .expect("add sheet-local shadow name");
 
         let target = resolve_chart_source_reference_with_names(
             "[Workbook]SeriesValues",
@@ -1257,6 +1269,21 @@ mod tests {
                 col_last: 2,
             }
         );
+        let target = resolve_chart_source_reference_with_names(
+            "[Workbook]SeriesValues",
+            workbook_id,
+            Some("Workbook"),
+            &worksheets,
+            &defined_names,
+            Some(SheetId(2)),
+        )
+        .expect("workbook-qualified name target");
+        let ReferenceTarget::Range(range) = target else {
+            panic!("expected workbook-qualified range target");
+        };
+        assert_eq!(range.areas()[0].rect.col_first, 2);
+        assert_eq!(range.areas()[0].rect.col_last, 2);
+
         let Some(ReferenceTarget::External(external)) = resolve_chart_source_reference_with_names(
             "[Other]SeriesValues",
             workbook_id,
