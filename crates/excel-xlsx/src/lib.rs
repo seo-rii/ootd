@@ -25377,7 +25377,7 @@ mod tests {
     }
 
     #[test]
-    fn load_resolves_chart_source_defined_names_into_overlay_ranges() {
+    fn load_resolves_chart_source_defined_names_into_overlays() {
         let codec = XlsxCodec;
         let mut package = OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("package");
         let workbook_xml = String::from_utf8(
@@ -25390,7 +25390,7 @@ mod tests {
         .expect("workbook xml utf8")
         .replace(
             "</sheets>",
-            r#"</sheets><definedNames><definedName name="SeriesValues">Sheet1!$B$1:$B$3</definedName><definedName name="SeriesValues" localSheetId="0">Sheet1!$C$1:$C$3</definedName></definedNames>"#,
+            r#"</sheets><definedNames><definedName name="SeriesValues">Sheet1!$B$1:$B$3</definedName><definedName name="SeriesValues" localSheetId="0">Sheet1!$C$1:$C$3</definedName><definedName name="ExternalSeries">[Other.xlsx]Data!$D$1:$D$3</definedName></definedNames>"#,
         );
         package
             .replace_part_bytes("xl/workbook.xml", workbook_xml.into_bytes())
@@ -25465,6 +25465,10 @@ mod tests {
           <c:idx val="0"/><c:order val="0"/>
           <c:val><c:numRef><c:f>[Workbook]SeriesValues</c:f></c:numRef></c:val>
         </c:ser>
+        <c:ser>
+          <c:idx val="1"/><c:order val="1"/>
+          <c:val><c:numRef><c:f>[Workbook]ExternalSeries</c:f></c:numRef></c:val>
+        </c:ser>
       </c:barChart>
     </c:plotArea>
   </c:chart>
@@ -25497,6 +25501,15 @@ mod tests {
                 col_last: 2,
             }
         );
+        let external_values = chart.series[1]
+            .values
+            .as_ref()
+            .expect("external chart values source");
+        assert_eq!(external_values.raw.text, "[Workbook]ExternalSeries");
+        let Some(ReferenceTarget::External(external)) = external_values.resolved.as_ref() else {
+            panic!("expected chart defined name source to resolve to external reference");
+        };
+        assert_eq!(external.text, "[Other.xlsx]Data!$D$1:$D$3");
     }
 
     #[test]
