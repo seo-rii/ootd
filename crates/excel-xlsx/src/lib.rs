@@ -3799,7 +3799,10 @@ fn chart_series_from_summary(
     let source_from_literal = |literal: &ChartSourceLiteralSummary,
                                cache: Option<&ChartCacheSummary>,
                                scalar_source: bool| {
-        if scalar_source && let Some(point) = literal.points.first() {
+        let mut points = literal.points.iter().collect::<Vec<_>>();
+        points.sort_by_key(|point| point.index);
+
+        if scalar_source && let Some(point) = points.first() {
             let (raw_text, value) = match literal.kind {
                 ChartCacheKindSummary::Number => {
                     if let Ok(number) = point.value.trim().parse::<f64>()
@@ -3837,9 +3840,9 @@ fn chart_series_from_summary(
             });
         }
 
-        let mut values = Vec::with_capacity(literal.points.len());
-        let mut raw_values = Vec::with_capacity(literal.points.len());
-        for point in &literal.points {
+        let mut values = Vec::with_capacity(points.len());
+        let mut raw_values = Vec::with_capacity(points.len());
+        for point in points {
             match literal.kind {
                 ChartCacheKindSummary::Number => {
                     if let Ok(number) = point.value.trim().parse::<f64>()
@@ -17126,6 +17129,28 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
         }
         Ok(None)
     };
+    let parse_u32_idx_attr = |element: &BytesStart<'_>,
+                              reader: &Reader<Cursor<&[u8]>>,
+                              context: &str|
+     -> OmResult<Option<u32>> {
+        for attr in element.attributes() {
+            let attr = attr.map_err(xml_error)?;
+            if xml_local_name(attr.key.as_ref()) != b"idx" {
+                continue;
+            }
+            let value = attr
+                .decode_and_unescape_value(reader.decoder())
+                .map_err(xml_error)?
+                .into_owned();
+            return value.trim().parse::<u32>().map(Some).map_err(|error| {
+                OmError::new(
+                    OmErrorCode::Parse,
+                    format!("chart {context} value must be an unsigned integer: {value}: {error}"),
+                )
+            });
+        }
+        Ok(None)
+    };
 
     let parse_string_val_attr =
         |element: &BytesStart<'_>, reader: &Reader<Cursor<&[u8]>>| -> OmResult<Option<String>> {
@@ -18217,7 +18242,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 }
                 if active_literal.is_some() && local_name == b"pt" {
                     active_literal_point_index =
-                        parse_u32_val_attr(&element, &reader, "chart literal point index")?
+                        parse_u32_idx_attr(&element, &reader, "chart literal point index")?
                             .or_else(|| {
                                 active_literal
                                     .as_ref()
@@ -24986,8 +25011,8 @@ mod tests {
         <c:ser>
           <c:idx val="0"/><c:order val="0"/>
           <c:tx><c:v>Inline &quot;A&amp;B &lt;Q&gt;&quot;</c:v></c:tx>
-          <c:cat><c:strLit><c:ptCount val="2"/><c:pt idx="0"><c:v>North &amp; East</c:v></c:pt><c:pt idx="1"><c:v>South &lt;West&gt;</c:v></c:pt></c:strLit></c:cat>
-          <c:val><c:numLit><c:ptCount val="5"/><c:pt idx="0"><c:v>10</c:v></c:pt><c:pt idx="1"><c:v>#N/A</c:v></c:pt><c:pt idx="2"><c:v>#PYTHON!</c:v></c:pt><c:pt idx="3"><c:v>#UNKNOWN!</c:v></c:pt><c:pt idx="4"><c:v>20</c:v></c:pt></c:numLit></c:val>
+          <c:cat><c:strLit><c:ptCount val="2"/><c:pt idx="1"><c:v>South &lt;West&gt;</c:v></c:pt><c:pt idx="0"><c:v>North &amp; East</c:v></c:pt></c:strLit></c:cat>
+          <c:val><c:numLit><c:ptCount val="5"/><c:pt idx="4"><c:v>20</c:v></c:pt><c:pt idx="2"><c:v>#PYTHON!</c:v></c:pt><c:pt idx="0"><c:v>10</c:v></c:pt><c:pt idx="3"><c:v>#UNKNOWN!</c:v></c:pt><c:pt idx="1"><c:v>#N/A</c:v></c:pt></c:numLit></c:val>
         </c:ser>
       </c:barChart>
     </c:plotArea>
@@ -25018,12 +25043,12 @@ mod tests {
                 kind: ChartCacheKindSummary::String,
                 points: vec![
                     ChartSourceLiteralPointSummary {
-                        index: 0,
-                        value: "North & East".to_string(),
-                    },
-                    ChartSourceLiteralPointSummary {
                         index: 1,
                         value: "South <West>".to_string(),
+                    },
+                    ChartSourceLiteralPointSummary {
+                        index: 0,
+                        value: "North & East".to_string(),
                     },
                 ],
             })
@@ -25041,24 +25066,24 @@ mod tests {
                 kind: ChartCacheKindSummary::Number,
                 points: vec![
                     ChartSourceLiteralPointSummary {
-                        index: 0,
-                        value: "10".to_string(),
-                    },
-                    ChartSourceLiteralPointSummary {
-                        index: 1,
-                        value: "#N/A".to_string(),
+                        index: 4,
+                        value: "20".to_string(),
                     },
                     ChartSourceLiteralPointSummary {
                         index: 2,
                         value: "#PYTHON!".to_string(),
                     },
                     ChartSourceLiteralPointSummary {
+                        index: 0,
+                        value: "10".to_string(),
+                    },
+                    ChartSourceLiteralPointSummary {
                         index: 3,
                         value: "#UNKNOWN!".to_string(),
                     },
                     ChartSourceLiteralPointSummary {
-                        index: 4,
-                        value: "20".to_string(),
+                        index: 1,
+                        value: "#N/A".to_string(),
                     },
                 ],
             })
