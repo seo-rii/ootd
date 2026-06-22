@@ -726,24 +726,29 @@ pub fn resolve_chart_source_reference_with_names(
             )
         })
         .or_else(|| {
-            chart_source_external_workbook_name(reference)
-                .filter(|source_workbook_name| {
-                    !workbook_display_name.is_some_and(|name| {
-                        source_workbook_name
-                            .iter()
-                            .all(|source_name| name.eq_ignore_ascii_case(source_name))
-                    })
-                })
-                .map(|_| {
-                    let text = reference
-                        .trim()
-                        .strip_prefix('=')
-                        .unwrap_or(reference.trim())
-                        .trim()
-                        .to_string();
-                    ReferenceTarget::External(ExternalReference { text })
-                })
+            chart_source_has_external_workbook(reference, workbook_display_name).then(|| {
+                let text = reference
+                    .trim()
+                    .strip_prefix('=')
+                    .unwrap_or(reference.trim())
+                    .trim()
+                    .to_string();
+                ReferenceTarget::External(ExternalReference { text })
+            })
         })
+}
+
+fn chart_source_has_external_workbook(
+    reference: &str,
+    workbook_display_name: Option<&str>,
+) -> bool {
+    chart_source_external_workbook_name(reference).is_some_and(|source_workbook_name| {
+        !workbook_display_name.is_some_and(|name| {
+            source_workbook_name
+                .iter()
+                .all(|source_name| name.eq_ignore_ascii_case(source_name))
+        })
+    })
 }
 
 fn resolve_chart_source_current_sheet_reference(
@@ -1231,13 +1236,7 @@ fn resolve_chart_source_defined_name(
     if let Some(target) = resolve_chart_source_literal(refers_to) {
         return Some(target);
     }
-    if chart_source_external_workbook_name(refers_to).is_some_and(|source_workbook_name| {
-        !workbook_display_name.is_some_and(|name| {
-            source_workbook_name
-                .iter()
-                .all(|source_name| name.eq_ignore_ascii_case(source_name))
-        })
-    }) {
+    if chart_source_has_external_workbook(refers_to, workbook_display_name) {
         return Some(ReferenceTarget::External(ExternalReference {
             text: defined_name.refers_to.text.clone(),
         }));
@@ -1902,6 +1901,17 @@ mod tests {
                 NameValidationMode::StrictExcel,
             )
             .expect("add external name");
+        defined_names
+            .add(
+                NameScope::Workbook,
+                "MixedExternalSeries",
+                FormulaSource {
+                    text: "[Workbook.xlsx]Data!$A$1,[Other.xlsx]Data!$B$1".to_string(),
+                    is_r1c1: false,
+                },
+                NameValidationMode::StrictExcel,
+            )
+            .expect("add mixed external name");
 
         let target = resolve_chart_source_reference_with_names(
             "SeriesArray",
@@ -1947,6 +1957,21 @@ mod tests {
             panic!("expected external target");
         };
         assert_eq!(external.text, "[Other.xlsx]Data!$A$1");
+
+        let Some(ReferenceTarget::External(external)) = resolve_chart_source_reference_with_names(
+            "MixedExternalSeries",
+            workbook_id,
+            Some("Workbook.xlsx"),
+            &worksheets,
+            &defined_names,
+            None,
+        ) else {
+            panic!("expected mixed external defined name target");
+        };
+        assert_eq!(
+            external.text,
+            "[Workbook.xlsx]Data!$A$1,[Other.xlsx]Data!$B$1"
+        );
 
         let Some(ReferenceTarget::External(external)) = resolve_chart_source_reference_with_names(
             "[Other.xlsx]Data!$B$1:$B$3",
