@@ -152,6 +152,10 @@ pub enum CellError {
     Calc,
     Field,
     Blocked,
+    Busy,
+    Connect,
+    Python,
+    Timeout,
     Unknown,
 }
 

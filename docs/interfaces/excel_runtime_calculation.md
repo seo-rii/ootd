@@ -591,8 +591,8 @@ Database notes:
 
 Error notes:
 
-- Formula references preserve stored extended Excel error values including `#NULL!`, `#GETTING_DATA`, `#SPILL!`, `#CALC!`, `#FIELD!`, `#BLOCKED!`, and `#UNKNOWN!` instead of collapsing them to `#VALUE!`.
-- `ERROR.TYPE` reports codes for the supported stored error values, including modern dynamic-array and linked-data errors.
+- Formula references preserve stored extended Excel error values including `#NULL!`, `#GETTING_DATA`, `#SPILL!`, `#CALC!`, `#FIELD!`, `#BLOCKED!`, Python/cloud values (`#BUSY!`, `#CONNECT!`, `#PYTHON!`, `#TIMEOUT!`), and `#UNKNOWN!` instead of collapsing them to `#VALUE!`.
+- `ERROR.TYPE` reports codes for the supported stored error values, including modern dynamic-array and linked-data errors; Python/cloud values without stable documented codes return `#N/A`.
 
 Information notes:
 

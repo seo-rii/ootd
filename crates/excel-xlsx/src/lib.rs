@@ -22420,6 +22420,10 @@ fn parse_cell_error(value: &str) -> CellError {
         "#CALC!" => CellError::Calc,
         "#FIELD!" => CellError::Field,
         "#BLOCKED!" => CellError::Blocked,
+        "#BUSY!" => CellError::Busy,
+        "#CONNECT!" => CellError::Connect,
+        "#PYTHON!" => CellError::Python,
+        "#TIMEOUT!" => CellError::Timeout,
         _ => CellError::Unknown,
     }
 }
@@ -22438,6 +22442,10 @@ fn format_cell_error(value: CellError) -> &'static str {
         CellError::Calc => "#CALC!",
         CellError::Field => "#FIELD!",
         CellError::Blocked => "#BLOCKED!",
+        CellError::Busy => "#BUSY!",
+        CellError::Connect => "#CONNECT!",
+        CellError::Python => "#PYTHON!",
+        CellError::Timeout => "#TIMEOUT!",
         CellError::Unknown => "#UNKNOWN!",
     }
 }
@@ -23336,6 +23344,10 @@ mod tests {
             CellError::GettingData
         );
         assert_eq!(super::parse_cell_error("#BLOCKED!"), CellError::Blocked);
+        assert_eq!(super::parse_cell_error("#BUSY!"), CellError::Busy);
+        assert_eq!(super::parse_cell_error("#CONNECT!"), CellError::Connect);
+        assert_eq!(super::parse_cell_error("#PYTHON!"), CellError::Python);
+        assert_eq!(super::parse_cell_error("#TIMEOUT!"), CellError::Timeout);
         assert_eq!(
             super::parse_cell_error("#NOT-A-REAL-ERROR!"),
             CellError::Unknown
@@ -23357,6 +23369,10 @@ mod tests {
             (CellError::Calc, "#CALC!"),
             (CellError::Field, "#FIELD!"),
             (CellError::Blocked, "#BLOCKED!"),
+            (CellError::Busy, "#BUSY!"),
+            (CellError::Connect, "#CONNECT!"),
+            (CellError::Python, "#PYTHON!"),
+            (CellError::Timeout, "#TIMEOUT!"),
             (CellError::Unknown, "#UNKNOWN!"),
         ];
 

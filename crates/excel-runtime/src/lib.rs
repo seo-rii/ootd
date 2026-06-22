@@ -10473,7 +10473,11 @@ impl ExcelRuntime {
                                     CellError::Calc => 9,
                                     CellError::Field => 10,
                                     CellError::Blocked => 11,
-                                    CellError::Unknown => 12,
+                                    CellError::Busy => 12,
+                                    CellError::Connect => 13,
+                                    CellError::Python => 14,
+                                    CellError::Timeout => 15,
+                                    CellError::Unknown => 16,
                                 }
                             };
                             let numeric_sort_value = |value: &CellValue| -> Option<f64> {
@@ -44292,6 +44296,10 @@ enum FormulaEvalError {
     Calc,
     Field,
     Blocked,
+    Busy,
+    Connect,
+    Python,
+    Timeout,
     Unknown,
 }
 
@@ -44311,6 +44319,10 @@ impl FormulaEvalError {
             FormulaEvalError::Calc => Some(CellValue::Error(CellError::Calc)),
             FormulaEvalError::Field => Some(CellValue::Error(CellError::Field)),
             FormulaEvalError::Blocked => Some(CellValue::Error(CellError::Blocked)),
+            FormulaEvalError::Busy => Some(CellValue::Error(CellError::Busy)),
+            FormulaEvalError::Connect => Some(CellValue::Error(CellError::Connect)),
+            FormulaEvalError::Python => Some(CellValue::Error(CellError::Python)),
+            FormulaEvalError::Timeout => Some(CellValue::Error(CellError::Timeout)),
             FormulaEvalError::Unknown => Some(CellValue::Error(CellError::Unknown)),
         }
     }
@@ -44329,6 +44341,10 @@ fn formula_eval_error_from_cell_error(error: CellError) -> FormulaEvalError {
         CellError::Calc => FormulaEvalError::Calc,
         CellError::Field => FormulaEvalError::Field,
         CellError::Blocked => FormulaEvalError::Blocked,
+        CellError::Busy => FormulaEvalError::Busy,
+        CellError::Connect => FormulaEvalError::Connect,
+        CellError::Python => FormulaEvalError::Python,
+        CellError::Timeout => FormulaEvalError::Timeout,
         CellError::Unknown => FormulaEvalError::Unknown,
         CellError::Value => FormulaEvalError::Value,
     }
@@ -49773,6 +49789,10 @@ fn formula_cell_error_text(error: CellError) -> &'static str {
         CellError::Calc => "#CALC!",
         CellError::Field => "#FIELD!",
         CellError::Blocked => "#BLOCKED!",
+        CellError::Busy => "#BUSY!",
+        CellError::Connect => "#CONNECT!",
+        CellError::Python => "#PYTHON!",
+        CellError::Timeout => "#TIMEOUT!",
         CellError::Unknown => "#UNKNOWN!",
     }
 }
@@ -49819,6 +49839,10 @@ fn formula_eval_error_text(error: FormulaEvalError) -> &'static str {
         FormulaEvalError::Calc => "#CALC!",
         FormulaEvalError::Field => "#FIELD!",
         FormulaEvalError::Blocked => "#BLOCKED!",
+        FormulaEvalError::Busy => "#BUSY!",
+        FormulaEvalError::Connect => "#CONNECT!",
+        FormulaEvalError::Python => "#PYTHON!",
+        FormulaEvalError::Timeout => "#TIMEOUT!",
         FormulaEvalError::Unknown => "#UNKNOWN!",
     }
 }
@@ -60883,6 +60907,10 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             FormulaEvalError::Blocked => Ok(11.0),
             FormulaEvalError::Unknown => Ok(12.0),
             FormulaEvalError::Calc => Ok(14.0),
+            FormulaEvalError::Busy
+            | FormulaEvalError::Connect
+            | FormulaEvalError::Python
+            | FormulaEvalError::Timeout => Err(FormulaEvalError::NA),
             FormulaEvalError::Unsupported => Err(FormulaEvalError::NA),
         }
     }
@@ -72070,18 +72098,18 @@ mod tests {
                 .dispatch_invoke(
                     active_sheet,
                     "Range",
-                    &[OmValue::Text("A1:A28".to_string())],
+                    &[OmValue::Text("A1:A39".to_string())],
                 )
-                .expect("Range(A1:A28)"),
+                .expect("Range(A1:A39)"),
         );
         let stored_errors = expect_object_handle(
             runtime
                 .dispatch_invoke(
                     active_sheet,
                     "Range",
-                    &[OmValue::Text("B1:B7".to_string())],
+                    &[OmValue::Text("B1:B11".to_string())],
                 )
-                .expect("Range(B1:B7)"),
+                .expect("Range(B1:B11)"),
         );
         runtime
             .dispatch_set(
@@ -72089,7 +72117,7 @@ mod tests {
                 "Value2",
                 OmValue::Array(
                     OmArray::new(
-                        7,
+                        11,
                         1,
                         vec![
                             OmValue::Error(CellError::Null),
@@ -72099,6 +72127,10 @@ mod tests {
                             OmValue::Error(CellError::Field),
                             OmValue::Error(CellError::Blocked),
                             OmValue::Error(CellError::Unknown),
+                            OmValue::Error(CellError::Busy),
+                            OmValue::Error(CellError::Connect),
+                            OmValue::Error(CellError::Python),
+                            OmValue::Error(CellError::Timeout),
                         ],
                     )
                     .expect("stored extended errors"),
@@ -72113,7 +72145,7 @@ mod tests {
                 "Formula",
                 OmValue::Array(
                     OmArray::new(
-                        28,
+                        39,
                         1,
                         vec![
                             OmValue::Text("=NA()".to_string()),
@@ -72134,9 +72166,16 @@ mod tests {
                             OmValue::Text("=B5".to_string()),
                             OmValue::Text("=B6".to_string()),
                             OmValue::Text("=B7".to_string()),
+                            OmValue::Text("=B8".to_string()),
+                            OmValue::Text("=B9".to_string()),
+                            OmValue::Text("=B10".to_string()),
+                            OmValue::Text("=B11".to_string()),
                             OmValue::Text("=IFERROR(B3, 99)".to_string()),
                             OmValue::Text("=ISERROR(B6)".to_string()),
                             OmValue::Text("=ISERR(B5)".to_string()),
+                            OmValue::Text("=IFERROR(B10, 123)".to_string()),
+                            OmValue::Text("=ISERROR(B9)".to_string()),
+                            OmValue::Text("=ISERR(B8)".to_string()),
                             OmValue::Text("=ERROR.TYPE(B1)".to_string()),
                             OmValue::Text("=ERROR.TYPE(B2)".to_string()),
                             OmValue::Text("=ERROR.TYPE(B3)".to_string()),
@@ -72144,6 +72183,10 @@ mod tests {
                             OmValue::Text("=ERROR.TYPE(B5)".to_string()),
                             OmValue::Text("=ERROR.TYPE(B6)".to_string()),
                             OmValue::Text("=ERROR.TYPE(B7)".to_string()),
+                            OmValue::Text("=ERROR.TYPE(B8)".to_string()),
+                            OmValue::Text("=ERROR.TYPE(B9)".to_string()),
+                            OmValue::Text("=ERROR.TYPE(B10)".to_string()),
+                            OmValue::Text("=ERROR.TYPE(B11)".to_string()),
                         ],
                     )
                     .expect("error helper formulas"),
@@ -72183,7 +72226,14 @@ mod tests {
                 OmValue::Error(CellError::Field),
                 OmValue::Error(CellError::Blocked),
                 OmValue::Error(CellError::Unknown),
+                OmValue::Error(CellError::Busy),
+                OmValue::Error(CellError::Connect),
+                OmValue::Error(CellError::Python),
+                OmValue::Error(CellError::Timeout),
                 OmValue::Number(99.0),
+                OmValue::Number(1.0),
+                OmValue::Number(1.0),
+                OmValue::Number(123.0),
                 OmValue::Number(1.0),
                 OmValue::Number(1.0),
                 OmValue::Number(1.0),
@@ -72193,6 +72243,10 @@ mod tests {
                 OmValue::Number(10.0),
                 OmValue::Number(11.0),
                 OmValue::Number(12.0),
+                OmValue::Error(CellError::NA),
+                OmValue::Error(CellError::NA),
+                OmValue::Error(CellError::NA),
+                OmValue::Error(CellError::NA),
             ]
         );
     }
