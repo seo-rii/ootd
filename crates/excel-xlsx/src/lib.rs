@@ -3774,6 +3774,28 @@ fn chart_series_from_summary(
         cache: cache.map(cache_snapshot_from_summary),
         dirty: false,
     };
+    let chart_number_literal_error = |text: &str| -> Option<CellError> {
+        match text.trim().to_ascii_uppercase().as_str() {
+            "#NULL!" => Some(CellError::Null),
+            "#DIV/0!" => Some(CellError::Div0),
+            "#VALUE!" => Some(CellError::Value),
+            "#REF!" => Some(CellError::Ref),
+            "#NAME?" => Some(CellError::Name),
+            "#NUM!" => Some(CellError::Num),
+            "#N/A" => Some(CellError::NA),
+            "#GETTING_DATA" => Some(CellError::GettingData),
+            "#SPILL!" => Some(CellError::Spill),
+            "#CALC!" => Some(CellError::Calc),
+            "#FIELD!" => Some(CellError::Field),
+            "#BLOCKED!" => Some(CellError::Blocked),
+            "#BUSY!" => Some(CellError::Busy),
+            "#CONNECT!" => Some(CellError::Connect),
+            "#PYTHON!" => Some(CellError::Python),
+            "#TIMEOUT!" => Some(CellError::Timeout),
+            "#UNKNOWN!" => Some(CellError::Unknown),
+            _ => None,
+        }
+    };
     let source_from_literal = |literal: &ChartSourceLiteralSummary,
                                cache: Option<&ChartCacheSummary>,
                                scalar_source: bool| {
@@ -3784,6 +3806,11 @@ fn chart_series_from_summary(
                         && number.is_finite()
                     {
                         (point.value.clone(), CellValue::Number(number))
+                    } else if let Some(error) = chart_number_literal_error(&point.value) {
+                        (
+                            format_cell_error(error).to_string(),
+                            CellValue::Error(error),
+                        )
                     } else {
                         (
                             format!("\"{}\"", point.value.replace('"', "\"\"")),
@@ -3820,6 +3847,11 @@ fn chart_series_from_summary(
                     {
                         values.push(OmValue::Number(number));
                         raw_values.push(point.value.clone());
+                        continue;
+                    }
+                    if let Some(error) = chart_number_literal_error(&point.value) {
+                        values.push(OmValue::Error(error));
+                        raw_values.push(format_cell_error(error).to_string());
                         continue;
                     }
                     values.push(OmValue::Text(point.value.clone()));
@@ -24955,7 +24987,7 @@ mod tests {
           <c:idx val="0"/><c:order val="0"/>
           <c:tx><c:v>Inline &quot;A&amp;B &lt;Q&gt;&quot;</c:v></c:tx>
           <c:cat><c:strLit><c:ptCount val="2"/><c:pt idx="0"><c:v>North &amp; East</c:v></c:pt><c:pt idx="1"><c:v>South &lt;West&gt;</c:v></c:pt></c:strLit></c:cat>
-          <c:val><c:numLit><c:ptCount val="2"/><c:pt idx="0"><c:v>10</c:v></c:pt><c:pt idx="1"><c:v>20</c:v></c:pt></c:numLit></c:val>
+          <c:val><c:numLit><c:ptCount val="5"/><c:pt idx="0"><c:v>10</c:v></c:pt><c:pt idx="1"><c:v>#N/A</c:v></c:pt><c:pt idx="2"><c:v>#PYTHON!</c:v></c:pt><c:pt idx="3"><c:v>#UNKNOWN!</c:v></c:pt><c:pt idx="4"><c:v>20</c:v></c:pt></c:numLit></c:val>
         </c:ser>
       </c:barChart>
     </c:plotArea>
@@ -25000,7 +25032,7 @@ mod tests {
             series.values_cache,
             Some(ChartCacheSummary {
                 kind: ChartCacheKindSummary::Literal,
-                point_count: Some(2),
+                point_count: Some(5),
             })
         );
         assert_eq!(
@@ -25014,6 +25046,18 @@ mod tests {
                     },
                     ChartSourceLiteralPointSummary {
                         index: 1,
+                        value: "#N/A".to_string(),
+                    },
+                    ChartSourceLiteralPointSummary {
+                        index: 2,
+                        value: "#PYTHON!".to_string(),
+                    },
+                    ChartSourceLiteralPointSummary {
+                        index: 3,
+                        value: "#UNKNOWN!".to_string(),
+                    },
+                    ChartSourceLiteralPointSummary {
+                        index: 4,
                         value: "20".to_string(),
                     },
                 ],
@@ -25056,14 +25100,17 @@ mod tests {
         assert_eq!(array.values[1], OmValue::Text("South <West>".to_string()));
 
         let values = model_series.values.as_ref().expect("literal values");
-        assert_eq!(values.raw.text, "{10,20}");
+        assert_eq!(values.raw.text, "{10,#N/A,#PYTHON!,#UNKNOWN!,20}");
         let Some(ReferenceTarget::Array(array)) = values.resolved.as_ref() else {
             panic!("expected literal value source to resolve to array");
         };
         assert_eq!(array.rows, 1);
-        assert_eq!(array.cols, 2);
+        assert_eq!(array.cols, 5);
         assert_eq!(array.values[0], OmValue::Number(10.0));
-        assert_eq!(array.values[1], OmValue::Number(20.0));
+        assert_eq!(array.values[1], OmValue::Error(CellError::NA));
+        assert_eq!(array.values[2], OmValue::Error(CellError::Python));
+        assert_eq!(array.values[3], OmValue::Error(CellError::Unknown));
+        assert_eq!(array.values[4], OmValue::Number(20.0));
     }
 
     #[test]
