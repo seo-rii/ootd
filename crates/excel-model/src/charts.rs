@@ -885,6 +885,7 @@ fn resolve_chart_source_literal(reference: &str) -> Option<ReferenceTarget> {
             "#CONNECT!" => Some(CellError::Connect),
             "#PYTHON!" => Some(CellError::Python),
             "#TIMEOUT!" => Some(CellError::Timeout),
+            "#UNKNOWN!" => Some(CellError::Unknown),
             _ => None,
         };
         if let Some(error) = error {
@@ -1346,6 +1347,7 @@ mod tests {
             ("SeriesBool", "TRUE"),
             ("SeriesError", "#N/A"),
             ("SeriesPythonError", "#PYTHON!"),
+            ("SeriesUnknownError", "#UNKNOWN!"),
         ] {
             defined_names
                 .add(
@@ -1417,6 +1419,17 @@ mod tests {
             ),
             Some(ReferenceTarget::Value(CellValue::Error(CellError::Python)))
         );
+        assert_eq!(
+            resolve_chart_source_reference_with_names(
+                "SeriesUnknownError",
+                workbook_id,
+                None,
+                &worksheets,
+                &defined_names,
+                None,
+            ),
+            Some(ReferenceTarget::Value(CellValue::Error(CellError::Unknown)))
+        );
     }
 
     #[test]
@@ -1487,6 +1500,18 @@ mod tests {
         assert_eq!(array.values[1], OmValue::Error(CellError::Connect));
         assert_eq!(array.values[2], OmValue::Error(CellError::Python));
         assert_eq!(array.values[3], OmValue::Error(CellError::Timeout));
+
+        assert_eq!(
+            resolve_chart_source_reference_with_names(
+                "=#UNKNOWN!",
+                workbook_id,
+                None,
+                &worksheets,
+                &defined_names,
+                None,
+            ),
+            Some(ReferenceTarget::Value(CellValue::Error(CellError::Unknown)))
+        );
     }
 
     #[test]
