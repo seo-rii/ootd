@@ -956,8 +956,10 @@ impl XlsxCodec {
             })
             .collect();
         let support_parts = collect_workbook_support_parts(&relationship_entries, &package)?;
+        let workbook_display_name = "Workbook";
         let (charts, drawings, chart_sheets) = build_chart_model_overlay(
             WorkbookId(0),
+            workbook_display_name,
             &worksheets,
             &defined_names,
             &sheet_drawing_support_parts,
@@ -965,7 +967,7 @@ impl XlsxCodec {
         let state = WorkbookState {
             model: WorkbookModel {
                 id: WorkbookId(0),
-                display_name: "Workbook".to_string(),
+                display_name: workbook_display_name.to_string(),
                 format: detected_format,
                 date1904,
                 is_addin,
@@ -3259,6 +3261,7 @@ fn collect_sheet_drawing_support_parts(
 
 fn build_chart_model_overlay(
     workbook_id: WorkbookId,
+    workbook_display_name: &str,
     worksheets: &[WorksheetModel],
     defined_names: &DefinedNameTable,
     sheet_drawing_support_parts: &BTreeMap<SheetId, SheetDrawingSupportParts>,
@@ -3294,6 +3297,7 @@ fn build_chart_model_overlay(
                     series: chart_series_from_summary(
                         summary,
                         workbook_id,
+                        Some(workbook_display_name),
                         worksheets,
                         defined_names,
                         Some(*sheet_id),
@@ -3740,6 +3744,7 @@ fn chart_type_from_summary(summary: Option<&ChartPartSummary>) -> ChartType {
 fn chart_series_from_summary(
     summary: Option<&ChartPartSummary>,
     workbook_id: WorkbookId,
+    workbook_display_name: Option<&str>,
     worksheets: &[WorksheetModel],
     defined_names: &DefinedNameTable,
     current_sheet: Option<SheetId>,
@@ -3766,7 +3771,7 @@ fn chart_series_from_summary(
         resolved: resolve_chart_source_reference_with_names(
             reference,
             workbook_id,
-            None,
+            workbook_display_name,
             worksheets,
             defined_names,
             current_sheet,
@@ -25156,6 +25161,7 @@ mod tests {
         let model_series = super::chart_series_from_summary(
             Some(&summary),
             WorkbookId(1),
+            None,
             &worksheets,
             &DefinedNameTable::default(),
             Some(SheetId(1)),
@@ -25256,6 +25262,7 @@ mod tests {
         let model_series = super::chart_series_from_summary(
             Some(&summary),
             WorkbookId(1),
+            None,
             &worksheets,
             &DefinedNameTable::default(),
             Some(SheetId(1)),
@@ -25296,6 +25303,7 @@ mod tests {
         let model_series = super::chart_series_from_summary(
             Some(&summary),
             WorkbookId(1),
+            None,
             &worksheets,
             &DefinedNameTable::default(),
             Some(SheetId(1)),
@@ -25382,7 +25390,7 @@ mod tests {
         .expect("workbook xml utf8")
         .replace(
             "</sheets>",
-            r#"</sheets><definedNames><definedName name="SeriesValues">Sheet1!$B$1:$B$3</definedName></definedNames>"#,
+            r#"</sheets><definedNames><definedName name="SeriesValues">Sheet1!$B$1:$B$3</definedName><definedName name="SeriesValues" localSheetId="0">Sheet1!$C$1:$C$3</definedName></definedNames>"#,
         );
         package
             .replace_part_bytes("xl/workbook.xml", workbook_xml.into_bytes())
@@ -25455,7 +25463,7 @@ mod tests {
       <c:barChart>
         <c:ser>
           <c:idx val="0"/><c:order val="0"/>
-          <c:val><c:numRef><c:f>SeriesValues</c:f></c:numRef></c:val>
+          <c:val><c:numRef><c:f>[Workbook]SeriesValues</c:f></c:numRef></c:val>
         </c:ser>
       </c:barChart>
     </c:plotArea>
@@ -25475,7 +25483,7 @@ mod tests {
             .values
             .as_ref()
             .expect("chart values source");
-        assert_eq!(values.raw.text, "SeriesValues");
+        assert_eq!(values.raw.text, "[Workbook]SeriesValues");
         let Some(ReferenceTarget::Range(range)) = values.resolved.as_ref() else {
             panic!("expected chart defined name source to resolve to range");
         };
