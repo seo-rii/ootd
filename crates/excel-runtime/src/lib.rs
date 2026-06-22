@@ -137652,6 +137652,142 @@ mod tests {
     }
 
     #[test]
+    fn chart_series_formula_setter_resolves_unqualified_sources_against_host_sheet() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("Worksheets.Item(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    chart_objects,
+                    "Add",
+                    &[
+                        OmValue::Number(12.0),
+                        OmValue::Number(18.0),
+                        OmValue::Number(240.0),
+                        OmValue::Number(160.0),
+                    ],
+                )
+                .expect("ChartObjects.Add"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection"),
+        );
+        let series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "NewSeries", &[])
+                .expect("SeriesCollection.NewSeries"),
+        );
+        let formula = "=SERIES($C$1,$A$1:$A$3,$B$1:$B$3,1)";
+        runtime
+            .dispatch_set(
+                series,
+                "Formula",
+                OmValue::Text(formula.to_string()),
+                &[],
+            )
+            .expect("set unqualified Series.Formula");
+
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(series, "Formula", &[])
+                    .expect("Series.Formula after unqualified setter")
+            ),
+            formula
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(series, "Values", &[])
+                .expect("Series.Values after unqualified Formula"),
+            OmValue::Text("=$B$1:$B$3".to_string())
+        );
+
+        let state = runtime.workbook_state(workbook).expect("workbook state");
+        let sheet_id = state.worksheets[0].id;
+        let chart = state.charts.values().next().expect("chart model");
+        let values = chart.series[0].values.as_ref().expect("series values");
+        let Some(ReferenceTarget::Range(range)) = values.resolved.as_ref() else {
+            panic!("unqualified formula values should resolve to a range");
+        };
+        assert_eq!(range.areas()[0].scope, SheetScope::Single(sheet_id));
+        assert_eq!(
+            range.areas()[0].rect,
+            Rect {
+                row_first: 1,
+                row_last: 3,
+                col_first: 2,
+                col_last: 2,
+            }
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after unqualified Series.Formula");
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after unqualified Series.Formula");
+        let reopened_state = reopened_runtime
+            .workbook_state(reopened_workbook)
+            .expect("reopened workbook state");
+        let reopened_sheet_id = reopened_state.worksheets[0].id;
+        let reopened_chart = reopened_state.charts.values().next().expect("reopened chart");
+        let reopened_values = reopened_chart.series[0]
+            .values
+            .as_ref()
+            .expect("reopened values");
+        let Some(ReferenceTarget::Range(reopened_range)) = reopened_values.resolved.as_ref() else {
+            panic!("reopened unqualified formula values should resolve to a range");
+        };
+        assert_eq!(
+            reopened_range.areas()[0].scope,
+            SheetScope::Single(reopened_sheet_id)
+        );
+        assert_eq!(reopened_range.areas()[0].rect, range.areas()[0].rect);
+    }
+
+    #[test]
     fn chart_series_formula_setter_accepts_commas_in_quoted_sheet_names() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
