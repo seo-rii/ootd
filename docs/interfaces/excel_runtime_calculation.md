@@ -589,6 +589,11 @@ Database notes:
 - `ISTEXT`
 - `FORMULATEXT`
 
+Error notes:
+
+- Formula references preserve stored extended Excel error values including `#NULL!`, `#GETTING_DATA`, `#SPILL!`, `#CALC!`, `#FIELD!`, `#BLOCKED!`, and `#UNKNOWN!` instead of collapsing them to `#VALUE!`.
+- `ERROR.TYPE` reports codes for the supported stored error values, including modern dynamic-array and linked-data errors.
+
 Information notes:
 
 - `INFO` supports focused workbook/runtime metadata types including `directory`, `numfile`, `origin`, `osversion`, `recalc`, `release`, and `system`.

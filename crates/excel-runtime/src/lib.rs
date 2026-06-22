@@ -44280,42 +44280,57 @@ fn coerce_evaluate_expression_arg<'a>(args: &'a [OmValue], context: &str) -> OmR
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FormulaEvalError {
     Unsupported,
+    Null,
     Div0,
     Value,
     Ref,
     Name,
     NA,
     Num,
+    GettingData,
+    Spill,
     Calc,
     Field,
+    Blocked,
+    Unknown,
 }
 
 impl FormulaEvalError {
     fn into_cell_value(self) -> Option<CellValue> {
         match self {
             FormulaEvalError::Unsupported => None,
+            FormulaEvalError::Null => Some(CellValue::Error(CellError::Null)),
             FormulaEvalError::Div0 => Some(CellValue::Error(CellError::Div0)),
             FormulaEvalError::Value => Some(CellValue::Error(CellError::Value)),
             FormulaEvalError::Ref => Some(CellValue::Error(CellError::Ref)),
             FormulaEvalError::Name => Some(CellValue::Error(CellError::Name)),
             FormulaEvalError::NA => Some(CellValue::Error(CellError::NA)),
             FormulaEvalError::Num => Some(CellValue::Error(CellError::Num)),
+            FormulaEvalError::GettingData => Some(CellValue::Error(CellError::GettingData)),
+            FormulaEvalError::Spill => Some(CellValue::Error(CellError::Spill)),
             FormulaEvalError::Calc => Some(CellValue::Error(CellError::Calc)),
             FormulaEvalError::Field => Some(CellValue::Error(CellError::Field)),
+            FormulaEvalError::Blocked => Some(CellValue::Error(CellError::Blocked)),
+            FormulaEvalError::Unknown => Some(CellValue::Error(CellError::Unknown)),
         }
     }
 }
 
 fn formula_eval_error_from_cell_error(error: CellError) -> FormulaEvalError {
     match error {
+        CellError::Null => FormulaEvalError::Null,
         CellError::Div0 => FormulaEvalError::Div0,
         CellError::Ref => FormulaEvalError::Ref,
         CellError::Name => FormulaEvalError::Name,
         CellError::NA => FormulaEvalError::NA,
         CellError::Num => FormulaEvalError::Num,
+        CellError::GettingData => FormulaEvalError::GettingData,
+        CellError::Spill => FormulaEvalError::Spill,
         CellError::Calc => FormulaEvalError::Calc,
         CellError::Field => FormulaEvalError::Field,
-        _ => FormulaEvalError::Value,
+        CellError::Blocked => FormulaEvalError::Blocked,
+        CellError::Unknown => FormulaEvalError::Unknown,
+        CellError::Value => FormulaEvalError::Value,
     }
 }
 
@@ -49792,14 +49807,19 @@ fn worksheet_function_formula_name(member: &str) -> OmResult<String> {
 fn formula_eval_error_text(error: FormulaEvalError) -> &'static str {
     match error {
         FormulaEvalError::Unsupported => "#VALUE!",
+        FormulaEvalError::Null => "#NULL!",
         FormulaEvalError::Div0 => "#DIV/0!",
         FormulaEvalError::Value => "#VALUE!",
         FormulaEvalError::Ref => "#REF!",
         FormulaEvalError::Name => "#NAME?",
         FormulaEvalError::NA => "#N/A",
         FormulaEvalError::Num => "#NUM!",
+        FormulaEvalError::GettingData => "#GETTING_DATA",
+        FormulaEvalError::Spill => "#SPILL!",
         FormulaEvalError::Calc => "#CALC!",
         FormulaEvalError::Field => "#FIELD!",
+        FormulaEvalError::Blocked => "#BLOCKED!",
+        FormulaEvalError::Unknown => "#UNKNOWN!",
     }
 }
 
@@ -60842,13 +60862,18 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             return Err(FormulaEvalError::NA);
         };
         match error {
+            FormulaEvalError::Null => Ok(1.0),
             FormulaEvalError::Div0 => Ok(2.0),
             FormulaEvalError::Value => Ok(3.0),
             FormulaEvalError::Ref => Ok(4.0),
             FormulaEvalError::Name => Ok(5.0),
             FormulaEvalError::Num => Ok(6.0),
             FormulaEvalError::NA => Ok(7.0),
+            FormulaEvalError::GettingData => Ok(8.0),
+            FormulaEvalError::Spill => Ok(9.0),
             FormulaEvalError::Field => Ok(10.0),
+            FormulaEvalError::Blocked => Ok(11.0),
+            FormulaEvalError::Unknown => Ok(12.0),
             FormulaEvalError::Calc => Ok(14.0),
             FormulaEvalError::Unsupported => Err(FormulaEvalError::NA),
         }
@@ -72037,10 +72062,42 @@ mod tests {
                 .dispatch_invoke(
                     active_sheet,
                     "Range",
-                    &[OmValue::Text("A1:A11".to_string())],
+                    &[OmValue::Text("A1:A28".to_string())],
                 )
-                .expect("Range(A1:A11)"),
+                .expect("Range(A1:A28)"),
         );
+        let stored_errors = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("B1:B7".to_string())],
+                )
+                .expect("Range(B1:B7)"),
+        );
+        runtime
+            .dispatch_set(
+                stored_errors,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        7,
+                        1,
+                        vec![
+                            OmValue::Error(CellError::Null),
+                            OmValue::Error(CellError::GettingData),
+                            OmValue::Error(CellError::Spill),
+                            OmValue::Error(CellError::Calc),
+                            OmValue::Error(CellError::Field),
+                            OmValue::Error(CellError::Blocked),
+                            OmValue::Error(CellError::Unknown),
+                        ],
+                    )
+                    .expect("stored extended errors"),
+                ),
+                &[],
+            )
+            .expect("set stored extended errors");
 
         runtime
             .dispatch_set(
@@ -72048,7 +72105,7 @@ mod tests {
                 "Formula",
                 OmValue::Array(
                     OmArray::new(
-                        11,
+                        28,
                         1,
                         vec![
                             OmValue::Text("=NA()".to_string()),
@@ -72062,6 +72119,23 @@ mod tests {
                             OmValue::Text("=ISNA(NA())".to_string()),
                             OmValue::Text("=ISERR(NA())".to_string()),
                             OmValue::Text("=ISERROR(5)".to_string()),
+                            OmValue::Text("=B1".to_string()),
+                            OmValue::Text("=B2".to_string()),
+                            OmValue::Text("=B3".to_string()),
+                            OmValue::Text("=B4".to_string()),
+                            OmValue::Text("=B5".to_string()),
+                            OmValue::Text("=B6".to_string()),
+                            OmValue::Text("=B7".to_string()),
+                            OmValue::Text("=IFERROR(B3, 99)".to_string()),
+                            OmValue::Text("=ISERROR(B6)".to_string()),
+                            OmValue::Text("=ISERR(B5)".to_string()),
+                            OmValue::Text("=ERROR.TYPE(B1)".to_string()),
+                            OmValue::Text("=ERROR.TYPE(B2)".to_string()),
+                            OmValue::Text("=ERROR.TYPE(B3)".to_string()),
+                            OmValue::Text("=ERROR.TYPE(B4)".to_string()),
+                            OmValue::Text("=ERROR.TYPE(B5)".to_string()),
+                            OmValue::Text("=ERROR.TYPE(B6)".to_string()),
+                            OmValue::Text("=ERROR.TYPE(B7)".to_string()),
                         ],
                     )
                     .expect("error helper formulas"),
@@ -72094,6 +72168,23 @@ mod tests {
                 OmValue::Number(1.0),
                 OmValue::Number(0.0),
                 OmValue::Number(0.0),
+                OmValue::Error(CellError::Null),
+                OmValue::Error(CellError::GettingData),
+                OmValue::Error(CellError::Spill),
+                OmValue::Error(CellError::Calc),
+                OmValue::Error(CellError::Field),
+                OmValue::Error(CellError::Blocked),
+                OmValue::Error(CellError::Unknown),
+                OmValue::Number(99.0),
+                OmValue::Number(1.0),
+                OmValue::Number(1.0),
+                OmValue::Number(1.0),
+                OmValue::Number(8.0),
+                OmValue::Number(9.0),
+                OmValue::Number(14.0),
+                OmValue::Number(10.0),
+                OmValue::Number(11.0),
+                OmValue::Number(12.0),
             ]
         );
     }
