@@ -448,6 +448,7 @@ Aggregate notes:
 - `COLUMN`
 - `ROWS`
 - `COLUMNS`
+- `COLS`
 - `AREAS`
 - `BYCOL`
 - `BYROW`

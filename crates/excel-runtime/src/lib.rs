@@ -54520,7 +54520,7 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if name.eq_ignore_ascii_case("COLUMN") {
             return self.parse_column_function();
         }
-        if name.eq_ignore_ascii_case("COLUMNS") {
+        if name.eq_ignore_ascii_case("COLUMNS") || name.eq_ignore_ascii_case("COLS") {
             return self.parse_columns_function();
         }
         if name.eq_ignore_ascii_case("COUNTIF") {
@@ -81794,9 +81794,9 @@ mod tests {
                 .dispatch_invoke(
                     active_sheet,
                     "Range",
-                    &[OmValue::Text("E3:E11".to_string())],
+                    &[OmValue::Text("E3:E12".to_string())],
                 )
-                .expect("Range(E3:E11)"),
+                .expect("Range(E3:E12)"),
         );
 
         runtime
@@ -81805,7 +81805,7 @@ mod tests {
                 "Formula",
                 OmValue::Array(
                     OmArray::new(
-                        9,
+                        10,
                         1,
                         vec![
                             OmValue::Text("=ROW()".to_string()),
@@ -81814,6 +81814,7 @@ mod tests {
                             OmValue::Text("=COLUMN(C7:D9)".to_string()),
                             OmValue::Text("=ROWS(B7:D9)".to_string()),
                             OmValue::Text("=COLUMNS(B7:D9)".to_string()),
+                            OmValue::Text("=COLS(B7:D9)".to_string()),
                             OmValue::Text("=CHOOSE(2, 10, 20, 30)".to_string()),
                             OmValue::Text("=CHOOSE(1+2, 10, 20, 30)".to_string()),
                             OmValue::Text("=CHOOSE(4, 10, 20, 30)".to_string()),
@@ -81841,6 +81842,7 @@ mod tests {
                 OmValue::Number(3.0),
                 OmValue::Number(5.0),
                 OmValue::Number(7.0),
+                OmValue::Number(3.0),
                 OmValue::Number(3.0),
                 OmValue::Number(3.0),
                 OmValue::Number(3.0),
