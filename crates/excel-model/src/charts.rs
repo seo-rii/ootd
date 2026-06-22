@@ -700,6 +700,17 @@ pub fn resolve_chart_source_reference_with_names(
     current_sheet: Option<SheetId>,
 ) -> Option<ReferenceTarget> {
     resolve_chart_source_reference(reference, workbook_id, workbook_display_name, worksheets)
+        .or_else(|| {
+            current_sheet.and_then(|sheet_id| {
+                resolve_chart_source_current_sheet_reference(
+                    reference,
+                    workbook_id,
+                    workbook_display_name,
+                    worksheets,
+                    sheet_id,
+                )
+            })
+        })
         .or_else(|| resolve_chart_source_literal(reference))
         .or_else(|| {
             resolve_chart_source_defined_name(
@@ -727,6 +738,41 @@ pub fn resolve_chart_source_reference_with_names(
                     ReferenceTarget::External(ExternalReference { text })
                 })
         })
+}
+
+fn resolve_chart_source_current_sheet_reference(
+    reference: &str,
+    workbook_id: WorkbookId,
+    workbook_display_name: Option<&str>,
+    worksheets: &[WorksheetModel],
+    sheet_id: SheetId,
+) -> Option<ReferenceTarget> {
+    let reference = reference.trim();
+    let reference = reference.strip_prefix('=').unwrap_or(reference).trim();
+    if reference.is_empty() || reference.contains('!') {
+        return None;
+    }
+
+    let worksheet_name = worksheets
+        .iter()
+        .find(|worksheet| worksheet.id == sheet_id)
+        .map(|worksheet| worksheet.name.as_str())?;
+    let sheet_qualifier = format!("'{}'!", worksheet_name.replace('\'', "''"));
+    let mut qualified_parts = Vec::new();
+    for part in reference.split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            return None;
+        }
+        qualified_parts.push(format!("{sheet_qualifier}{part}"));
+    }
+
+    resolve_chart_source_reference(
+        &qualified_parts.join(","),
+        workbook_id,
+        workbook_display_name,
+        worksheets,
+    )
 }
 
 fn parse_chart_source_sheet_name(
@@ -1075,25 +1121,12 @@ fn resolve_chart_source_defined_name(
     let NameScope::Worksheet(sheet_id) = defined_name.scope else {
         return Some(ReferenceTarget::Formula(defined_name.refers_to.clone()));
     };
-    let worksheet_name = worksheets
-        .iter()
-        .find(|worksheet| worksheet.id == sheet_id)
-        .map(|worksheet| worksheet.name.as_str())?;
-    let sheet_qualifier = format!("'{}'!", worksheet_name.replace('\'', "''"));
-    let mut qualified_parts = Vec::new();
-    for part in refers_to.split(',') {
-        let part = part.trim();
-        if part.is_empty() {
-            return Some(ReferenceTarget::Formula(defined_name.refers_to.clone()));
-        }
-        qualified_parts.push(format!("{sheet_qualifier}{part}"));
-    }
-    let qualified_reference = qualified_parts.join(",");
-    if let Some(target) = resolve_chart_source_reference(
-        &qualified_reference,
+    if let Some(target) = resolve_chart_source_current_sheet_reference(
+        refers_to,
         workbook_id,
         workbook_display_name,
         worksheets,
+        sheet_id,
     ) {
         return Some(target);
     }
@@ -1327,6 +1360,7 @@ mod tests {
         let worksheets = vec![
             worksheet(4, workbook_id, "Data 2026"),
             worksheet(5, workbook_id, "Data, 2026"),
+            worksheet(6, workbook_id, "Bob's Data"),
         ];
         let mut defined_names = DefinedNameTable::default();
         defined_names
@@ -1458,6 +1492,44 @@ mod tests {
                 col_first: 3,
                 col_last: 3,
             }
+        );
+
+        let target = resolve_chart_source_reference_with_names(
+            "=$A$1:$A$2,$C$1",
+            workbook_id,
+            None,
+            &worksheets,
+            &defined_names,
+            Some(SheetId(6)),
+        )
+        .expect("current sheet direct source target");
+        let ReferenceTarget::Range(range) = target else {
+            panic!("expected range target");
+        };
+        assert_eq!(range.areas().len(), 2);
+        assert_eq!(range.areas()[0].scope, SheetScope::Single(SheetId(6)));
+        assert_eq!(
+            range.areas()[0].rect,
+            Rect {
+                row_first: 1,
+                row_last: 2,
+                col_first: 1,
+                col_last: 1,
+            }
+        );
+        assert_eq!(range.areas()[1].scope, SheetScope::Single(SheetId(6)));
+        assert_eq!(range.areas()[1].rect, Rect::single_cell(1, 3));
+
+        assert!(
+            resolve_chart_source_reference_with_names(
+                "=$A$1",
+                workbook_id,
+                None,
+                &worksheets,
+                &defined_names,
+                None,
+            )
+            .is_none()
         );
     }
 
