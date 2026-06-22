@@ -136004,8 +136004,18 @@ mod tests {
             ],
         )
         .expect("x values array");
-        let values = OmArray::new(1, 2, vec![OmValue::Number(10.0), OmValue::Number(20.0)])
-            .expect("values array");
+        let values = OmArray::new(
+            1,
+            5,
+            vec![
+                OmValue::Number(10.0),
+                OmValue::Error(CellError::NA),
+                OmValue::Error(CellError::Python),
+                OmValue::Error(CellError::Unknown),
+                OmValue::Number(20.0),
+            ],
+        )
+        .expect("values array");
         runtime
             .dispatch_set(series, "XValues", OmValue::Array(x_values.clone()), &[])
             .expect("set Series.XValues from array");
@@ -136022,7 +136032,7 @@ mod tests {
             runtime
                 .dispatch_get(series, "Values", &[])
                 .expect("Series.Values after array setter"),
-            OmValue::Text("={10,20}".to_string())
+            OmValue::Text("={10,#N/A,#PYTHON!,#UNKNOWN!,20}".to_string())
         );
         {
             let state = runtime
@@ -136070,9 +136080,9 @@ mod tests {
             r#"<c:cat><c:strLit><c:ptCount val="2"/><c:pt idx="0"><c:v>North</c:v></c:pt><c:pt idx="1"><c:v>South</c:v></c:pt></c:strLit></c:cat>"#
         ));
         assert!(saved_chart_xml.contains(
-            r#"<c:val><c:numLit><c:ptCount val="2"/><c:pt idx="0"><c:v>10</c:v></c:pt><c:pt idx="1"><c:v>20</c:v></c:pt></c:numLit></c:val>"#
+            r#"<c:val><c:numLit><c:ptCount val="5"/><c:pt idx="0"><c:v>10</c:v></c:pt><c:pt idx="1"><c:v>#N/A</c:v></c:pt><c:pt idx="2"><c:v>#PYTHON!</c:v></c:pt><c:pt idx="3"><c:v>#UNKNOWN!</c:v></c:pt><c:pt idx="4"><c:v>20</c:v></c:pt></c:numLit></c:val>"#
         ));
-        assert!(!saved_chart_xml.contains("<c:f>{10,20}</c:f>"));
+        assert!(!saved_chart_xml.contains("<c:f>{10,#N/A,#PYTHON!,#UNKNOWN!,20}</c:f>"));
         assert!(!saved_chart_xml.contains("<c:f>Sheet1!$C$1</c:f>"));
         assert!(!saved_chart_xml.contains("<c:f>Sheet1!$A$1:$B$1</c:f>"));
         assert!(!saved_chart_xml.contains("<c:f>Sheet1!$A$1:$C$1</c:f>"));
@@ -136132,7 +136142,7 @@ mod tests {
             reopened_runtime
                 .dispatch_get(reopened_series, "Values", &[])
                 .expect("reopened Series.Values"),
-            OmValue::Text("={10,20}".to_string())
+            OmValue::Text("={10,#N/A,#PYTHON!,#UNKNOWN!,20}".to_string())
         );
     }
 
