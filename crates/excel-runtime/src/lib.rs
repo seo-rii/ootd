@@ -44287,6 +44287,7 @@ enum FormulaEvalError {
     NA,
     Num,
     Calc,
+    Field,
 }
 
 impl FormulaEvalError {
@@ -44300,6 +44301,7 @@ impl FormulaEvalError {
             FormulaEvalError::NA => Some(CellValue::Error(CellError::NA)),
             FormulaEvalError::Num => Some(CellValue::Error(CellError::Num)),
             FormulaEvalError::Calc => Some(CellValue::Error(CellError::Calc)),
+            FormulaEvalError::Field => Some(CellValue::Error(CellError::Field)),
         }
     }
 }
@@ -44312,6 +44314,7 @@ fn formula_eval_error_from_cell_error(error: CellError) -> FormulaEvalError {
         CellError::NA => FormulaEvalError::NA,
         CellError::Num => FormulaEvalError::Num,
         CellError::Calc => FormulaEvalError::Calc,
+        CellError::Field => FormulaEvalError::Field,
         _ => FormulaEvalError::Value,
     }
 }
@@ -49796,6 +49799,7 @@ fn formula_eval_error_text(error: FormulaEvalError) -> &'static str {
         FormulaEvalError::NA => "#N/A",
         FormulaEvalError::Num => "#NUM!",
         FormulaEvalError::Calc => "#CALC!",
+        FormulaEvalError::Field => "#FIELD!",
     }
 }
 
@@ -55583,6 +55587,9 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         {
             return self.parse_external_data_unavailable_function();
         }
+        if name.eq_ignore_ascii_case("FIELDVALUE") {
+            return self.parse_external_field_unavailable_function();
+        }
         if name.eq_ignore_ascii_case("CALL") || name.eq_ignore_ascii_case("REGISTER.ID") {
             return self.parse_external_platform_unavailable_function();
         }
@@ -60363,6 +60370,11 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         Err(FormulaEvalError::Value)
     }
 
+    fn parse_external_field_unavailable_function(&mut self) -> Result<f64, FormulaEvalError> {
+        self.consume_all_value_arguments()?;
+        Err(FormulaEvalError::Field)
+    }
+
     fn parse_cube_caption_text_function(&mut self, name: &str) -> Result<String, FormulaEvalError> {
         self.parse_text_value_argument()?;
         self.skip_whitespace();
@@ -60836,6 +60848,7 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             FormulaEvalError::Name => Ok(5.0),
             FormulaEvalError::Num => Ok(6.0),
             FormulaEvalError::NA => Ok(7.0),
+            FormulaEvalError::Field => Ok(10.0),
             FormulaEvalError::Calc => Ok(14.0),
             FormulaEvalError::Unsupported => Err(FormulaEvalError::NA),
         }
@@ -81208,9 +81221,9 @@ mod tests {
                 .dispatch_invoke(
                     active_sheet,
                     "Range",
-                    &[OmValue::Text("D1:D13".to_string())],
+                    &[OmValue::Text("D1:D14".to_string())],
                 )
-                .expect("Range(D1:D13)"),
+                .expect("Range(D1:D14)"),
         );
         runtime
             .dispatch_set(
@@ -81218,7 +81231,7 @@ mod tests {
                 "Formula",
                 OmValue::Array(
                     OmArray::new(
-                        13,
+                        14,
                         1,
                         vec![
                             OmValue::Text(
@@ -81253,6 +81266,7 @@ mod tests {
                                 r#"=CUBEVALUE("ThisWorkbookDataModel","[Measures].[Sales]")"#
                                     .to_string(),
                             ),
+                            OmValue::Text(r#"=FIELDVALUE(A1,"Price")"#.to_string()),
                             OmValue::Text(r#"=STOCKHISTORY("MSFT",DATE(2024,1,1))"#.to_string()),
                             OmValue::Text(r#"=RTD("prog.id",,"topic")"#.to_string()),
                             OmValue::Text(r#"=CALL("lib","proc","J")"#.to_string()),
@@ -81287,6 +81301,7 @@ mod tests {
                 OmValue::Number(1.0),
                 OmValue::Error(CellError::NA),
                 OmValue::Error(CellError::NA),
+                OmValue::Error(CellError::Field),
                 OmValue::Error(CellError::NA),
                 OmValue::Error(CellError::NA),
                 OmValue::Error(CellError::Value),
