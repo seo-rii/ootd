@@ -3840,32 +3840,62 @@ fn chart_series_from_summary(
             });
         }
 
-        let mut values = Vec::with_capacity(points.len());
-        let mut raw_values = Vec::with_capacity(points.len());
-        for point in points {
+        let explicit_point_count = points.len();
+        let indexed_point_count = points
+            .iter()
+            .filter_map(|point| usize::try_from(point.index).ok())
+            .max()
+            .map(|index| index + 1)
+            .unwrap_or(0);
+        let cache_point_count = cache
+            .and_then(|cache| cache.point_count)
+            .and_then(|point_count| usize::try_from(point_count).ok())
+            .unwrap_or(0);
+        let point_count = explicit_point_count
+            .max(indexed_point_count)
+            .max(cache_point_count);
+        let mut values = Vec::with_capacity(point_count);
+        let mut raw_values = Vec::with_capacity(point_count);
+        let mut explicit_point_index = 0usize;
+        for index in 0..point_count {
+            while let Some(point) = points.get(explicit_point_index)
+                && usize::try_from(point.index)
+                    .ok()
+                    .is_some_and(|point_index| point_index < index)
+            {
+                explicit_point_index += 1;
+            }
+            let point_value = if let Some(point) = points.get(explicit_point_index)
+                && usize::try_from(point.index).ok() == Some(index)
+            {
+                explicit_point_index += 1;
+                point.value.as_str()
+            } else {
+                ""
+            };
             match literal.kind {
                 ChartCacheKindSummary::Number => {
-                    if let Ok(number) = point.value.trim().parse::<f64>()
+                    if let Ok(number) = point_value.trim().parse::<f64>()
                         && number.is_finite()
                     {
                         values.push(OmValue::Number(number));
-                        raw_values.push(point.value.clone());
+                        raw_values.push(point_value.to_string());
                         continue;
                     }
-                    if let Some(error) = chart_number_literal_error(&point.value) {
+                    if let Some(error) = chart_number_literal_error(point_value) {
                         values.push(OmValue::Error(error));
                         raw_values.push(format_cell_error(error).to_string());
                         continue;
                     }
-                    values.push(OmValue::Text(point.value.clone()));
-                    raw_values.push(format!("\"{}\"", point.value.replace('"', "\"\"")));
+                    values.push(OmValue::Text(point_value.to_string()));
+                    raw_values.push(format!("\"{}\"", point_value.replace('"', "\"\"")));
                 }
                 ChartCacheKindSummary::String
                 | ChartCacheKindSummary::MultiLevelString
                 | ChartCacheKindSummary::Literal
                 | ChartCacheKindSummary::Unknown => {
-                    values.push(OmValue::Text(point.value.clone()));
-                    raw_values.push(format!("\"{}\"", point.value.replace('"', "\"\"")));
+                    values.push(OmValue::Text(point_value.to_string()));
+                    raw_values.push(format!("\"{}\"", point_value.replace('"', "\"\"")));
                 }
             }
         }
@@ -25235,6 +25265,65 @@ mod tests {
         assert_eq!(x_values.raw.text, r#"{"","Filled"}"#);
         let values = model_series.values.as_ref().expect("literal values");
         assert_eq!(values.raw.text, r#"{"",7}"#);
+    }
+
+    #[test]
+    fn chart_literal_overlay_preserves_sparse_point_indexes() {
+        let chart_xml = br#"<?xml version="1.0" encoding="UTF-8"?>
+<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart">
+  <c:chart>
+    <c:plotArea>
+      <c:barChart>
+        <c:ser>
+          <c:idx val="0"/><c:order val="0"/>
+          <c:cat><c:strLit><c:ptCount val="3"/><c:pt idx="2"><c:v>Tail</c:v></c:pt></c:strLit></c:cat>
+          <c:val><c:numLit><c:ptCount val="4"/><c:pt idx="0"><c:v>5</c:v></c:pt><c:pt idx="3"><c:v>9</c:v></c:pt></c:numLit></c:val>
+        </c:ser>
+      </c:barChart>
+    </c:plotArea>
+  </c:chart>
+</c:chartSpace>"#;
+        let summary = super::parse_chart_part_summary(chart_xml).expect("chart summary");
+        let worksheets = vec![WorksheetModel {
+            id: SheetId(1),
+            workbook_id: WorkbookId(1),
+            name: "Sheet1".to_string(),
+            kind: SheetKind::Worksheet,
+            visibility: SheetVisibility::Visible,
+            relationship_id: None,
+            part_uri: None,
+        }];
+        let model_series = super::chart_series_from_summary(
+            Some(&summary),
+            WorkbookId(1),
+            &worksheets,
+            &DefinedNameTable::default(),
+            Some(SheetId(1)),
+        );
+        let model_series = model_series.first().expect("model series");
+
+        let x_values = model_series.x_values.as_ref().expect("literal x values");
+        assert_eq!(x_values.raw.text, r#"{"","","Tail"}"#);
+        let Some(ReferenceTarget::Array(array)) = x_values.resolved.as_ref() else {
+            panic!("expected sparse category source to resolve to array");
+        };
+        assert_eq!(array.rows, 1);
+        assert_eq!(array.cols, 3);
+        assert_eq!(array.values[0], OmValue::Text(String::new()));
+        assert_eq!(array.values[1], OmValue::Text(String::new()));
+        assert_eq!(array.values[2], OmValue::Text("Tail".to_string()));
+
+        let values = model_series.values.as_ref().expect("literal values");
+        assert_eq!(values.raw.text, r#"{5,"","",9}"#);
+        let Some(ReferenceTarget::Array(array)) = values.resolved.as_ref() else {
+            panic!("expected sparse value source to resolve to array");
+        };
+        assert_eq!(array.rows, 1);
+        assert_eq!(array.cols, 4);
+        assert_eq!(array.values[0], OmValue::Number(5.0));
+        assert_eq!(array.values[1], OmValue::Text(String::new()));
+        assert_eq!(array.values[2], OmValue::Text(String::new()));
+        assert_eq!(array.values[3], OmValue::Number(9.0));
     }
 
     #[test]
