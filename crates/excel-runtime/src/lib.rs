@@ -136245,6 +136245,64 @@ mod tests {
         assert!(saved_chart_xml.contains("<c:yVal><c:numRef><c:f>Sheet1!$B$1:$B$3</c:f>"));
         assert!(!saved_chart_xml.contains("<c:cat>"));
         assert!(!saved_chart_xml.contains("<c:val>"));
+
+        let x_values = OmArray::new(
+            1,
+            3,
+            vec![
+                OmValue::Number(1.0),
+                OmValue::Number(2.0),
+                OmValue::Number(3.0),
+            ],
+        )
+        .expect("scatter x values array");
+        let y_values = OmArray::new(
+            1,
+            3,
+            vec![
+                OmValue::Number(10.0),
+                OmValue::Error(CellError::NA),
+                OmValue::Number(30.0),
+            ],
+        )
+        .expect("scatter y values array");
+        runtime
+            .dispatch_set(series, "XValues", OmValue::Array(x_values), &[])
+            .expect("set scatter Series.XValues from array");
+        runtime
+            .dispatch_set(series, "Values", OmValue::Array(y_values), &[])
+            .expect("set scatter Series.Values from array");
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after scatter array series setters");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved chart package");
+        let saved_chart_xml = std::str::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(saved_chart_xml.contains("<c:scatterChart>"));
+        assert!(saved_chart_xml.contains(
+            r#"<c:xVal><c:numLit><c:ptCount val="3"/><c:pt idx="0"><c:v>1</c:v></c:pt><c:pt idx="1"><c:v>2</c:v></c:pt><c:pt idx="2"><c:v>3</c:v></c:pt></c:numLit></c:xVal>"#
+        ));
+        assert!(saved_chart_xml.contains(
+            r#"<c:yVal><c:numLit><c:ptCount val="3"/><c:pt idx="0"><c:v>10</c:v></c:pt><c:pt idx="1"><c:v>#N/A</c:v></c:pt><c:pt idx="2"><c:v>30</c:v></c:pt></c:numLit></c:yVal>"#
+        ));
+        assert!(!saved_chart_xml.contains("<c:xVal><c:numRef>"));
+        assert!(!saved_chart_xml.contains("<c:yVal><c:numRef>"));
+        assert!(!saved_chart_xml.contains("<c:cat>"));
+        assert!(!saved_chart_xml.contains("<c:val>"));
     }
 
     #[test]
