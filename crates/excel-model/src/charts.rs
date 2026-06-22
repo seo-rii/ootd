@@ -610,6 +610,9 @@ pub fn resolve_chart_source_reference(
 
     let reference = reference.trim();
     let reference = reference.strip_prefix('=').unwrap_or(reference).trim();
+    let reference = strip_chart_source_outer_grouping(reference)
+        .unwrap_or(reference)
+        .trim();
     if reference.is_empty() {
         return None;
     }
@@ -749,6 +752,9 @@ fn resolve_chart_source_current_sheet_reference(
 ) -> Option<ReferenceTarget> {
     let reference = reference.trim();
     let reference = reference.strip_prefix('=').unwrap_or(reference).trim();
+    let reference = strip_chart_source_outer_grouping(reference)
+        .unwrap_or(reference)
+        .trim();
     if reference.is_empty() || reference.contains('!') {
         return None;
     }
@@ -833,9 +839,59 @@ fn parse_chart_source_sheet_name(
     Some(sheet_name)
 }
 
+fn strip_chart_source_outer_grouping(reference: &str) -> Option<&str> {
+    let reference = reference.trim();
+    let inner = reference.strip_prefix('(')?.strip_suffix(')')?;
+    if inner.trim().is_empty() {
+        return None;
+    }
+
+    let mut depth = 0usize;
+    let mut in_string = false;
+    let mut in_reference_quote = false;
+    let mut chars = reference.char_indices().peekable();
+    while let Some((index, ch)) = chars.next() {
+        if ch == '"' && !in_reference_quote {
+            if in_string && chars.peek().is_some_and(|(_, next)| *next == '"') {
+                chars.next();
+            } else {
+                in_string = !in_string;
+            }
+            continue;
+        }
+        if ch == '\'' && !in_string {
+            if in_reference_quote && chars.peek().is_some_and(|(_, next)| *next == '\'') {
+                chars.next();
+            } else {
+                in_reference_quote = !in_reference_quote;
+            }
+            continue;
+        }
+        if in_string || in_reference_quote {
+            continue;
+        }
+
+        match ch {
+            '(' => depth = depth.checked_add(1)?,
+            ')' => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 && index + ch.len_utf8() != reference.len() {
+                    return None;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    (depth == 0 && !in_string && !in_reference_quote).then_some(inner)
+}
+
 fn chart_source_external_workbook_name(reference: &str) -> Option<&str> {
     let reference = reference.trim();
     let reference = reference.strip_prefix('=').unwrap_or(reference).trim();
+    let reference = strip_chart_source_outer_grouping(reference)
+        .unwrap_or(reference)
+        .trim();
     if let Some(qualified) = reference.strip_prefix('[') {
         let close_index = qualified.find(']')?;
         let workbook_name = &qualified[..close_index];
@@ -1183,6 +1239,31 @@ mod tests {
                 col_last: 1,
             }
         );
+
+        let target = resolve_chart_source_reference(
+            "('Data 2026'!$D$1,'Data 2026'!$B$1:$B$3)",
+            workbook_id,
+            None,
+            &worksheets,
+        )
+        .expect("parenthesized chart source target");
+
+        let ReferenceTarget::Range(range) = target else {
+            panic!("expected range target");
+        };
+        assert_eq!(range.areas().len(), 2);
+        assert_eq!(range.areas()[0].scope, SheetScope::Single(SheetId(7)));
+        assert_eq!(range.areas()[0].rect, Rect::single_cell(1, 4));
+        assert_eq!(range.areas()[1].scope, SheetScope::Single(SheetId(7)));
+        assert_eq!(
+            range.areas()[1].rect,
+            Rect {
+                row_first: 1,
+                row_last: 3,
+                col_first: 2,
+                col_last: 2,
+            }
+        );
     }
 
     #[test]
@@ -1495,7 +1576,7 @@ mod tests {
         );
 
         let target = resolve_chart_source_reference_with_names(
-            "=$A$1:$A$2,$C$1",
+            "=($A$1:$A$2,$C$1)",
             workbook_id,
             None,
             &worksheets,
@@ -1832,6 +1913,21 @@ mod tests {
         assert_eq!(
             external.text,
             "'C:\\Reports\\[Other.xlsx]Data 2026'!$D$1:$D$3"
+        );
+
+        let Some(ReferenceTarget::External(external)) = resolve_chart_source_reference_with_names(
+            "=('[Other.xlsx]Data 2026'!$E$1,'[Other.xlsx]Data 2026'!$F$1)",
+            workbook_id,
+            Some("Workbook.xlsx"),
+            &worksheets,
+            &defined_names,
+            None,
+        ) else {
+            panic!("expected parenthesized external range target");
+        };
+        assert_eq!(
+            external.text,
+            "('[Other.xlsx]Data 2026'!$E$1,'[Other.xlsx]Data 2026'!$F$1)"
         );
 
         let target = resolve_chart_source_reference_with_names(
