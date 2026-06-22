@@ -1058,7 +1058,7 @@ fn resolve_chart_source_defined_name(
             text: defined_name.refers_to.text.clone(),
         }));
     }
-    if refers_to.is_empty() || refers_to.contains('!') || refers_to.contains(',') {
+    if refers_to.is_empty() || refers_to.contains('!') {
         return Some(ReferenceTarget::Formula(defined_name.refers_to.clone()));
     }
 
@@ -1069,7 +1069,16 @@ fn resolve_chart_source_defined_name(
         .iter()
         .find(|worksheet| worksheet.id == sheet_id)
         .map(|worksheet| worksheet.name.as_str())?;
-    let qualified_reference = format!("'{}'!{}", worksheet_name.replace('\'', "''"), refers_to);
+    let sheet_qualifier = format!("'{}'!", worksheet_name.replace('\'', "''"));
+    let mut qualified_parts = Vec::new();
+    for part in refers_to.split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            return Some(ReferenceTarget::Formula(defined_name.refers_to.clone()));
+        }
+        qualified_parts.push(format!("{sheet_qualifier}{part}"));
+    }
+    let qualified_reference = qualified_parts.join(",");
     if let Some(target) = resolve_chart_source_reference(
         &qualified_reference,
         workbook_id,
@@ -1343,6 +1352,17 @@ mod tests {
                 NameValidationMode::StrictExcel,
             )
             .expect("add comma sheet name");
+        defined_names
+            .add(
+                NameScope::Worksheet(SheetId(4)),
+                "MultiSeriesValues",
+                FormulaSource {
+                    text: "$A$1:$A$2,$C$1:$C$2".to_string(),
+                    is_r1c1: false,
+                },
+                NameValidationMode::StrictExcel,
+            )
+            .expect("add sheet-local multi-area name");
 
         let target = resolve_chart_source_reference_with_names(
             "SeriesValues",
@@ -1395,6 +1415,40 @@ mod tests {
         };
         assert_eq!(range.areas()[0].scope, SheetScope::Single(SheetId(5)));
         assert_eq!(range.areas()[0].rect.col_first, 4);
+
+        let target = resolve_chart_source_reference_with_names(
+            "'Data 2026'!MultiSeriesValues",
+            workbook_id,
+            None,
+            &worksheets,
+            &defined_names,
+            None,
+        )
+        .expect("sheet-local multi-area name source target");
+        let ReferenceTarget::Range(range) = target else {
+            panic!("expected range target");
+        };
+        assert_eq!(range.areas().len(), 2);
+        assert_eq!(range.areas()[0].scope, SheetScope::Single(SheetId(4)));
+        assert_eq!(
+            range.areas()[0].rect,
+            Rect {
+                row_first: 1,
+                row_last: 2,
+                col_first: 1,
+                col_last: 1,
+            }
+        );
+        assert_eq!(range.areas()[1].scope, SheetScope::Single(SheetId(4)));
+        assert_eq!(
+            range.areas()[1].rect,
+            Rect {
+                row_first: 1,
+                row_last: 2,
+                col_first: 3,
+                col_last: 3,
+            }
+        );
     }
 
     #[test]
