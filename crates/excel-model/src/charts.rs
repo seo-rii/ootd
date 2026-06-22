@@ -881,6 +881,10 @@ fn resolve_chart_source_literal(reference: &str) -> Option<ReferenceTarget> {
             "#CALC!" => Some(CellError::Calc),
             "#FIELD!" => Some(CellError::Field),
             "#BLOCKED!" => Some(CellError::Blocked),
+            "#BUSY!" => Some(CellError::Busy),
+            "#CONNECT!" => Some(CellError::Connect),
+            "#PYTHON!" => Some(CellError::Python),
+            "#TIMEOUT!" => Some(CellError::Timeout),
             _ => None,
         };
         if let Some(error) = error {
@@ -1341,6 +1345,7 @@ mod tests {
             ("SeriesText", "\"Revenue \"\"FY26\"\"\""),
             ("SeriesBool", "TRUE"),
             ("SeriesError", "#N/A"),
+            ("SeriesPythonError", "#PYTHON!"),
         ] {
             defined_names
                 .add(
@@ -1401,6 +1406,17 @@ mod tests {
             ),
             Some(ReferenceTarget::Value(CellValue::Error(CellError::NA)))
         );
+        assert_eq!(
+            resolve_chart_source_reference_with_names(
+                "SeriesPythonError",
+                workbook_id,
+                None,
+                &worksheets,
+                &defined_names,
+                None,
+            ),
+            Some(ReferenceTarget::Value(CellValue::Error(CellError::Python)))
+        );
     }
 
     #[test]
@@ -1452,6 +1468,25 @@ mod tests {
         assert_eq!(array.values[1], OmValue::Number(2.0));
         assert_eq!(array.values[2], OmValue::Text("Q\"3\"".to_string()));
         assert_eq!(array.values[3], OmValue::Error(CellError::NA));
+
+        let target = resolve_chart_source_reference_with_names(
+            "={#BUSY!,#CONNECT!;#PYTHON!,#TIMEOUT!}",
+            workbook_id,
+            None,
+            &worksheets,
+            &defined_names,
+            None,
+        )
+        .expect("error array target");
+        let ReferenceTarget::Array(array) = target else {
+            panic!("expected error array target");
+        };
+        assert_eq!(array.rows, 2);
+        assert_eq!(array.cols, 2);
+        assert_eq!(array.values[0], OmValue::Error(CellError::Busy));
+        assert_eq!(array.values[1], OmValue::Error(CellError::Connect));
+        assert_eq!(array.values[2], OmValue::Error(CellError::Python));
+        assert_eq!(array.values[3], OmValue::Error(CellError::Timeout));
     }
 
     #[test]
