@@ -728,8 +728,11 @@ pub fn resolve_chart_source_reference_with_names(
         .or_else(|| {
             chart_source_external_workbook_name(reference)
                 .filter(|source_workbook_name| {
-                    !workbook_display_name
-                        .is_some_and(|name| name.eq_ignore_ascii_case(source_workbook_name))
+                    !workbook_display_name.is_some_and(|name| {
+                        source_workbook_name
+                            .iter()
+                            .all(|source_name| name.eq_ignore_ascii_case(source_name))
+                    })
                 })
                 .map(|_| {
                     let text = reference
@@ -886,12 +889,77 @@ fn strip_chart_source_outer_grouping(reference: &str) -> Option<&str> {
     (depth == 0 && !in_string && !in_reference_quote).then_some(inner)
 }
 
-fn chart_source_external_workbook_name(reference: &str) -> Option<&str> {
+fn split_chart_source_top_level(reference: &str, separator: char) -> Option<Vec<&str>> {
+    let mut parts = Vec::new();
+    let mut start = 0usize;
+    let mut depth = 0usize;
+    let mut in_string = false;
+    let mut in_reference_quote = false;
+    let mut chars = reference.char_indices().peekable();
+    while let Some((index, ch)) = chars.next() {
+        if ch == '"' && !in_reference_quote {
+            if in_string && chars.peek().is_some_and(|(_, next)| *next == '"') {
+                chars.next();
+            } else {
+                in_string = !in_string;
+            }
+            continue;
+        }
+        if ch == '\'' && !in_string {
+            if in_reference_quote && chars.peek().is_some_and(|(_, next)| *next == '\'') {
+                chars.next();
+            } else {
+                in_reference_quote = !in_reference_quote;
+            }
+            continue;
+        }
+        if in_string || in_reference_quote {
+            continue;
+        }
+
+        match ch {
+            '(' | '{' => depth = depth.checked_add(1)?,
+            ')' | '}' => depth = depth.checked_sub(1)?,
+            ch if ch == separator && depth == 0 => {
+                let part = reference[start..index].trim();
+                if part.is_empty() {
+                    return None;
+                }
+                parts.push(part);
+                start = index + ch.len_utf8();
+            }
+            _ => {}
+        }
+    }
+    if depth != 0 || in_string || in_reference_quote {
+        return None;
+    }
+
+    let part = reference[start..].trim();
+    if part.is_empty() {
+        return None;
+    }
+    parts.push(part);
+    Some(parts)
+}
+
+fn chart_source_external_workbook_name(reference: &str) -> Option<Vec<&str>> {
     let reference = reference.trim();
     let reference = reference.strip_prefix('=').unwrap_or(reference).trim();
     let reference = strip_chart_source_outer_grouping(reference)
         .unwrap_or(reference)
         .trim();
+    let mut workbook_names = Vec::new();
+    for part in split_chart_source_top_level(reference, ',')? {
+        if let Some(workbook_name) = chart_source_part_external_workbook_name(part) {
+            workbook_names.push(workbook_name);
+        }
+    }
+    (!workbook_names.is_empty()).then_some(workbook_names)
+}
+
+fn chart_source_part_external_workbook_name(reference: &str) -> Option<&str> {
+    let reference = reference.trim();
     if let Some(qualified) = reference.strip_prefix('[') {
         let close_index = qualified.find(']')?;
         let workbook_name = &qualified[..close_index];
@@ -1164,7 +1232,11 @@ fn resolve_chart_source_defined_name(
         return Some(target);
     }
     if chart_source_external_workbook_name(refers_to).is_some_and(|source_workbook_name| {
-        !workbook_display_name.is_some_and(|name| name.eq_ignore_ascii_case(source_workbook_name))
+        !workbook_display_name.is_some_and(|name| {
+            source_workbook_name
+                .iter()
+                .all(|source_name| name.eq_ignore_ascii_case(source_name))
+        })
     }) {
         return Some(ReferenceTarget::External(ExternalReference {
             text: defined_name.refers_to.text.clone(),
@@ -1930,6 +2002,36 @@ mod tests {
             "('[Other.xlsx]Data 2026'!$E$1,'[Other.xlsx]Data 2026'!$F$1)"
         );
 
+        let Some(ReferenceTarget::External(external)) = resolve_chart_source_reference_with_names(
+            "=('[Workbook.xlsx]Data'!$A$1,'[Other.xlsx]Data 2026'!$F$1)",
+            workbook_id,
+            Some("Workbook.xlsx"),
+            &worksheets,
+            &defined_names,
+            None,
+        ) else {
+            panic!("expected mixed current and external workbook range target");
+        };
+        assert_eq!(
+            external.text,
+            "('[Workbook.xlsx]Data'!$A$1,'[Other.xlsx]Data 2026'!$F$1)"
+        );
+
+        let Some(ReferenceTarget::External(external)) = resolve_chart_source_reference_with_names(
+            "[Workbook.xlsx]Data!$A$1,[Other.xlsx]Data!$B$1",
+            workbook_id,
+            Some("Workbook.xlsx"),
+            &worksheets,
+            &defined_names,
+            None,
+        ) else {
+            panic!("expected bare mixed current and external workbook range target");
+        };
+        assert_eq!(
+            external.text,
+            "[Workbook.xlsx]Data!$A$1,[Other.xlsx]Data!$B$1"
+        );
+
         let target = resolve_chart_source_reference_with_names(
             "='[Workbook.xlsx]Data'!$A$1",
             workbook_id,
@@ -1944,6 +2046,24 @@ mod tests {
         };
         assert_eq!(range.areas()[0].scope, SheetScope::Single(SheetId(3)));
         assert_eq!(range.areas()[0].rect, Rect::single_cell(1, 1));
+
+        let target = resolve_chart_source_reference_with_names(
+            "=('[Workbook.xlsx]Data'!$A$1,'[Workbook.xlsx]Data'!$B$1)",
+            workbook_id,
+            Some("Workbook.xlsx"),
+            &worksheets,
+            &defined_names,
+            None,
+        )
+        .expect("same workbook parenthesized range target");
+        let ReferenceTarget::Range(range) = target else {
+            panic!("expected same workbook parenthesized target to stay internal");
+        };
+        assert_eq!(range.areas().len(), 2);
+        assert_eq!(range.areas()[0].scope, SheetScope::Single(SheetId(3)));
+        assert_eq!(range.areas()[0].rect, Rect::single_cell(1, 1));
+        assert_eq!(range.areas()[1].scope, SheetScope::Single(SheetId(3)));
+        assert_eq!(range.areas()[1].rect, Rect::single_cell(1, 2));
 
         assert!(
             resolve_chart_source_reference_with_names(
