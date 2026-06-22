@@ -698,6 +698,7 @@ Web notes:
 - `CUBESETCOUNT`
 - `CUBEVALUE`
 - `FIELDVALUE`
+- `PY`
 - `REGISTER.ID`
 - `RTD`
 - `STOCKHISTORY`
@@ -707,6 +708,7 @@ External data notes:
 - Cube member and set helpers preserve scalar captions or expressions locally so dependent formulas can continue to parse without a cube server.
 - Cube value/property lookups, RTD, stock history, and Copilot return deterministic `#N/A` when no external provider is configured.
 - `FIELDVALUE` parses linked data type field lookups and returns deterministic `#FIELD!` until a linked data provider is available.
+- `PY` parses Python-in-Excel formulas and returns deterministic `#BLOCKED!` because this runtime does not execute Microsoft Cloud Python code.
 - Legacy native add-in entry points `CALL` and `REGISTER.ID` parse their arguments but return `#VALUE!`; the runtime does not execute host-native code.
 
 ## Current Boundaries

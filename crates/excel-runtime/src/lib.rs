@@ -55610,6 +55610,9 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if name.eq_ignore_ascii_case("FIELDVALUE") {
             return self.parse_external_field_unavailable_function();
         }
+        if name.eq_ignore_ascii_case("PY") {
+            return self.parse_external_python_unavailable_function();
+        }
         if name.eq_ignore_ascii_case("CALL") || name.eq_ignore_ascii_case("REGISTER.ID") {
             return self.parse_external_platform_unavailable_function();
         }
@@ -60393,6 +60396,11 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
     fn parse_external_field_unavailable_function(&mut self) -> Result<f64, FormulaEvalError> {
         self.consume_all_value_arguments()?;
         Err(FormulaEvalError::Field)
+    }
+
+    fn parse_external_python_unavailable_function(&mut self) -> Result<f64, FormulaEvalError> {
+        self.consume_all_value_arguments()?;
+        Err(FormulaEvalError::Blocked)
     }
 
     fn parse_cube_caption_text_function(&mut self, name: &str) -> Result<String, FormulaEvalError> {
@@ -81312,9 +81320,9 @@ mod tests {
                 .dispatch_invoke(
                     active_sheet,
                     "Range",
-                    &[OmValue::Text("D1:D14".to_string())],
+                    &[OmValue::Text("D1:D15".to_string())],
                 )
-                .expect("Range(D1:D14)"),
+                .expect("Range(D1:D15)"),
         );
         runtime
             .dispatch_set(
@@ -81322,7 +81330,7 @@ mod tests {
                 "Formula",
                 OmValue::Array(
                     OmArray::new(
-                        14,
+                        15,
                         1,
                         vec![
                             OmValue::Text(
@@ -81362,6 +81370,7 @@ mod tests {
                             OmValue::Text(r#"=RTD("prog.id",,"topic")"#.to_string()),
                             OmValue::Text(r#"=CALL("lib","proc","J")"#.to_string()),
                             OmValue::Text(r#"=REGISTER.ID("lib","proc","J")"#.to_string()),
+                            OmValue::Text(r#"=PY("1+1")"#.to_string()),
                             OmValue::Text(r#"=COPILOT("summarize",A1)"#.to_string()),
                         ],
                     )
@@ -81397,6 +81406,7 @@ mod tests {
                 OmValue::Error(CellError::NA),
                 OmValue::Error(CellError::Value),
                 OmValue::Error(CellError::Value),
+                OmValue::Error(CellError::Blocked),
                 OmValue::Error(CellError::NA),
             ]
         );
