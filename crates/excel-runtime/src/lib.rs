@@ -137800,6 +137800,22 @@ mod tests {
             };
             assert_eq!(external.text, "'[Other.xlsx]Data 2026'!$B$1:$B$3");
         }
+        runtime
+            .dispatch_set(
+                worksheet,
+                "Name",
+                OmValue::Text("Local Data".to_string()),
+                &[],
+            )
+            .expect("rename local sheet after external Series.Formula");
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(series, "Formula", &[])
+                    .expect("Series.Formula after local sheet rename")
+            ),
+            formula
+        );
 
         let saved = runtime
             .save_workbook(
@@ -137823,6 +137839,7 @@ mod tests {
         assert!(saved_chart_xml.contains(
             "<c:f>'[Other.xlsx]Data 2026'!$B$1:$B$3</c:f>"
         ));
+        assert!(!saved_chart_xml.contains("Local Data"));
 
         let mut reopened_runtime = ExcelRuntime::new();
         let reopened_workbook = reopened_runtime
