@@ -68524,6 +68524,11 @@ mod tests {
                 .dispatch_invoke(series_collection, "NewSeries", &[])
                 .expect("SeriesCollection.NewSeries"),
         );
+        let r1c1_series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "NewSeries", &[])
+                .expect("SeriesCollection.NewSeries R1C1 path-qualified target"),
+        );
         let names = expect_object_handle(
             runtime
                 .dispatch_get(workbook.0, "Names", &[])
@@ -68543,6 +68548,28 @@ mod tests {
                 )
                 .expect("Workbook.Names.Add SeriesValues"),
         );
+        let r1c1_name = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    names,
+                    "Add",
+                    &[
+                        OmValue::Text("R1C1SeriesValues".to_string()),
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Text(format!(
+                            "='C:\\Reports\\[{workbook_display_name}]Sheet1'!R1C4:R3C4"
+                        )),
+                    ],
+                )
+                .expect("Workbook.Names.Add R1C1SeriesValues"),
+        );
         runtime
             .dispatch_set(
                 series,
@@ -68551,6 +68578,14 @@ mod tests {
                 &[],
             )
             .expect("set Series.Values from path-qualified defined name");
+        runtime
+            .dispatch_set(
+                r1c1_series,
+                "Values",
+                OmValue::Text("=R1C1SeriesValues".to_string()),
+                &[],
+            )
+            .expect("set Series.Values from R1C1 path-qualified defined name");
         {
             let state = runtime
                 .workbook_state(workbook)
@@ -68562,6 +68597,12 @@ mod tests {
             };
             assert_eq!(range.areas()[0].rect.col_first, 2);
             assert_eq!(range.areas()[0].rect.col_last, 2);
+            let r1c1_values = chart.series[1].values.as_ref().expect("R1C1 series values");
+            let Some(ReferenceTarget::Range(r1c1_range)) = r1c1_values.resolved.as_ref() else {
+                panic!("R1C1 path-qualified defined-name target should resolve to a range");
+            };
+            assert_eq!(r1c1_range.areas()[0].rect.col_first, 4);
+            assert_eq!(r1c1_range.areas()[0].rect.col_last, 4);
         }
 
         runtime
@@ -68581,10 +68622,24 @@ mod tests {
             "='Data 2026'!$B$1:$B$3"
         );
         assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(r1c1_name, "RefersToR1C1", &[])
+                    .expect("Name.RefersToR1C1 after worksheet rename")
+            ),
+            "='Data 2026'!R1C4:R3C4"
+        );
+        assert_eq!(
             runtime
                 .dispatch_get(series, "Values", &[])
                 .expect("Series.Values after worksheet rename"),
             OmValue::Text("=SeriesValues".to_string())
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(r1c1_series, "Values", &[])
+                .expect("R1C1 Series.Values after worksheet rename"),
+            OmValue::Text("=R1C1SeriesValues".to_string())
         );
         {
             let state = runtime
@@ -68598,6 +68653,13 @@ mod tests {
             };
             assert_eq!(range.areas()[0].rect.col_first, 2);
             assert_eq!(range.areas()[0].rect.col_last, 2);
+            let r1c1_values = chart.series[1].values.as_ref().expect("R1C1 series values");
+            assert_eq!(r1c1_values.raw.text, "R1C1SeriesValues");
+            let Some(ReferenceTarget::Range(r1c1_range)) = r1c1_values.resolved.as_ref() else {
+                panic!("R1C1 chart source should refresh after path-qualified target rewrite");
+            };
+            assert_eq!(r1c1_range.areas()[0].rect.col_first, 4);
+            assert_eq!(r1c1_range.areas()[0].rect.col_last, 4);
         }
 
         let saved = runtime
@@ -68632,8 +68694,13 @@ mod tests {
                 r#"<definedName name="SeriesValues">'Data 2026'!$B$1:$B$3</definedName>"#
             )
         );
+        assert!(saved_workbook_xml.contains(
+            r#"<definedName name="R1C1SeriesValues">'Data 2026'!R1C4:R3C4</definedName>"#
+        ));
         assert!(saved_chart_xml.contains("<c:f>SeriesValues</c:f>"));
+        assert!(saved_chart_xml.contains("<c:f>R1C1SeriesValues</c:f>"));
         assert!(!saved_chart_xml.contains("<c:f>'Data 2026'!$B$1:$B$3</c:f>"));
+        assert!(!saved_chart_xml.contains("<c:f>'Data 2026'!R1C4:R3C4</c:f>"));
     }
 
     #[test]
