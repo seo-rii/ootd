@@ -101434,6 +101434,112 @@ mod tests {
     }
 
     #[test]
+    fn sheets_add_chart_type_returns_chart_handle() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let application = runtime.root_application();
+        let sheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Sheets", &[])
+                .expect("Workbook.Sheets"),
+        );
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let charts = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Charts", &[])
+                .expect("Workbook.Charts"),
+        );
+
+        let added_chart = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    sheets,
+                    "Add",
+                    &[
+                        OmValue::Missing,
+                        OmValue::Number(1.0),
+                        OmValue::Missing,
+                        OmValue::Number(f64::from(super::XL_SHEET_TYPE_CHART)),
+                    ],
+                )
+                .expect("Sheets.Add Type:=xlChart"),
+        );
+
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(added_chart, "Name", &[])
+                    .expect("added chart sheet name")
+            ),
+            "Chart1"
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(added_chart, "ChartType", &[])
+                    .expect("added chart sheet ChartType")
+            ),
+            f64::from(super::XL_BAR_CLUSTERED)
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(worksheets, "Count", &[])
+                    .expect("Worksheets.Count after Sheets.Add Type:=xlChart")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(sheets, "Count", &[])
+                    .expect("Sheets.Count after Sheets.Add Type:=xlChart")
+            ),
+            2.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(charts, "Count", &[])
+                    .expect("Charts.Count after Sheets.Add Type:=xlChart")
+            ),
+            1.0
+        );
+        let active_chart = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveChart", &[])
+                .expect("ActiveChart after Sheets.Add Type:=xlChart"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(active_chart, "Name", &[])
+                    .expect("ActiveChart.Name after Sheets.Add Type:=xlChart")
+            ),
+            "Chart1"
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(active_chart, "ChartType", &[])
+                    .expect("ActiveChart.ChartType after Sheets.Add Type:=xlChart")
+            ),
+            f64::from(super::XL_BAR_CLUSTERED)
+        );
+    }
+
+    #[test]
     fn worksheets_add_supports_numeric_chart_type_and_macro_sheet_shells() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
