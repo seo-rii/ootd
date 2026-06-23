@@ -3497,6 +3497,53 @@ impl ExcelRuntime {
                                         return (is_current_workbook && name_exists)
                                             .then(|| reference.to_string());
                                     }
+                                    let whole_quoted_reference =
+                                        reference.strip_prefix('\'').and_then(|quoted| {
+                                            let mut chars = quoted.char_indices().peekable();
+                                            while let Some((index, ch)) = chars.next() {
+                                                if ch != '\'' {
+                                                    continue;
+                                                }
+                                                let escaped_quote = chars
+                                                    .peek()
+                                                    .is_some_and(|(_, next)| *next == '\'');
+                                                if escaped_quote {
+                                                    chars.next();
+                                                } else if quoted[index + ch.len_utf8()..]
+                                                    .trim()
+                                                    .is_empty()
+                                                {
+                                                    return Some(&quoted[..index]);
+                                                } else {
+                                                    return None;
+                                                }
+                                            }
+                                            None
+                                        });
+                                    if let Some(quoted_reference) = whole_quoted_reference {
+                                        let open_index = quoted_reference.rfind('[')?;
+                                        let close_index = quoted_reference[open_index + 1..]
+                                            .find(']')
+                                            .map(|index| open_index + 1 + index)?;
+                                        let source_workbook_name =
+                                            &quoted_reference[open_index + 1..close_index];
+                                        let unqualified_name =
+                                            quoted_reference[close_index + 1..].trim();
+                                        let is_current_workbook = !source_workbook_name.is_empty()
+                                            && workbook_display_name
+                                                .eq_ignore_ascii_case(source_workbook_name);
+                                        let name_exists = !unqualified_name.is_empty()
+                                            && !unqualified_name
+                                                .contains(['[', ']', '!', ',', ':'])
+                                            && defined_names_for_chart_sources
+                                                .lookup_in_scope(
+                                                    NameScope::Workbook,
+                                                    unqualified_name,
+                                                )
+                                                .is_some();
+                                        return (is_current_workbook && name_exists)
+                                            .then(|| reference.to_string());
+                                    }
 
                                     let mut in_quote = false;
                                     let mut separator = None;
@@ -4000,12 +4047,31 @@ impl ExcelRuntime {
                                     .strip_prefix('=')
                                     .unwrap_or(source.raw.text.trim())
                                     .trim();
-                                if reference.is_empty()
-                                    || reference.contains(',')
-                                    || reference.contains(':')
-                                {
+                                if reference.is_empty() || reference.contains(',') {
                                     return false;
                                 }
+                                let whole_quoted_reference =
+                                    reference.strip_prefix('\'').and_then(|quoted| {
+                                        let mut chars = quoted.char_indices().peekable();
+                                        while let Some((index, ch)) = chars.next() {
+                                            if ch != '\'' {
+                                                continue;
+                                            }
+                                            let escaped_quote =
+                                                chars.peek().is_some_and(|(_, next)| *next == '\'');
+                                            if escaped_quote {
+                                                chars.next();
+                                            } else if quoted[index + ch.len_utf8()..]
+                                                .trim()
+                                                .is_empty()
+                                            {
+                                                return Some(&quoted[..index]);
+                                            } else {
+                                                return None;
+                                            }
+                                        }
+                                        None
+                                    });
 
                                 let mut in_quote = false;
                                 let mut separator = None;
@@ -4048,6 +4114,35 @@ impl ExcelRuntime {
                                         return false;
                                     }
                                     format!("[{}]{}", source_workbook_name, new_name)
+                                } else if let Some(quoted_reference) = whole_quoted_reference {
+                                    let Some(open_index) = quoted_reference.rfind('[') else {
+                                        return false;
+                                    };
+                                    let Some(close_index) = quoted_reference[open_index + 1..]
+                                        .find(']')
+                                        .map(|index| open_index + 1 + index)
+                                    else {
+                                        return false;
+                                    };
+                                    let source_workbook_name =
+                                        &quoted_reference[open_index + 1..close_index];
+                                    let unqualified_name =
+                                        quoted_reference[close_index + 1..].trim();
+                                    if old_defined_name.scope != NameScope::Workbook
+                                        || source_workbook_name.is_empty()
+                                        || unqualified_name.is_empty()
+                                        || unqualified_name.contains(['[', ']', '!', ',', ':'])
+                                        || !workbook_display_name
+                                            .eq_ignore_ascii_case(source_workbook_name)
+                                        || !unqualified_name
+                                            .eq_ignore_ascii_case(&old_defined_name.display_name)
+                                        || !old_defined_names
+                                            .lookup_in_scope(NameScope::Workbook, unqualified_name)
+                                            .is_some_and(|defined_name| defined_name.id == name_id)
+                                    {
+                                        return false;
+                                    }
+                                    format!("'{}{}'", &quoted_reference[..=close_index], new_name)
                                 } else if let Some(separator) = separator {
                                     let sheet = reference[..separator].trim();
                                     let source_name = reference[separator + 1..].trim();
@@ -67800,6 +67895,15 @@ mod tests {
                 read_only: false,
             })
             .expect("open workbook");
+        let workbook_display_name = runtime
+            .workbook_state(workbook)
+            .expect("workbook state")
+            .model
+            .display_name
+            .clone();
+        let quoted_values = format!("='C:\\Reports\\[{workbook_display_name}]SeriesValues'");
+        let renamed_quoted_values =
+            format!("='C:\\Reports\\[{workbook_display_name}]RenamedSeriesValues'");
         let worksheets = expect_object_handle(
             runtime
                 .dispatch_get(workbook.0, "Worksheets", &[])
@@ -67848,6 +67952,11 @@ mod tests {
             runtime
                 .dispatch_invoke(series_collection, "NewSeries", &[])
                 .expect("SeriesCollection.NewSeries sheet"),
+        );
+        let quoted_workbook_series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "NewSeries", &[])
+                .expect("SeriesCollection.NewSeries quoted workbook"),
         );
         let workbook_names = expect_object_handle(
             runtime
@@ -67899,6 +68008,14 @@ mod tests {
                 &[],
             )
             .expect("set sheet Series.Values from defined name");
+        runtime
+            .dispatch_set(
+                quoted_workbook_series,
+                "Values",
+                OmValue::Text(quoted_values),
+                &[],
+            )
+            .expect("set quoted workbook Series.Values from defined name");
 
         runtime
             .dispatch_set(
@@ -67945,6 +68062,23 @@ mod tests {
             ),
             "=SERIES(,,Sheet1!RenamedLocalSeries,2)"
         );
+        assert_eq!(
+            runtime
+                .dispatch_get(quoted_workbook_series, "Values", &[])
+                .expect("quoted workbook Series.Values after Name.Name"),
+            OmValue::Text(renamed_quoted_values.clone())
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(quoted_workbook_series, "Formula", &[])
+                    .expect("quoted workbook Series.Formula after Name.Name")
+            ),
+            format!(
+                "=SERIES(,,{},3)",
+                renamed_quoted_values.trim_start_matches('=')
+            )
+        );
 
         let saved = runtime
             .save_workbook(
@@ -67965,8 +68099,15 @@ mod tests {
                 .clone(),
         )
         .expect("saved chart xml utf8");
+        assert!(saved_chart_xml.contains(&format!(
+            "<c:f>{}</c:f>",
+            renamed_quoted_values.trim_start_matches('=')
+        )));
         assert!(saved_chart_xml.contains("<c:f>RenamedSeriesValues</c:f>"));
         assert!(saved_chart_xml.contains("<c:f>Sheet1!RenamedLocalSeries</c:f>"));
+        assert!(!saved_chart_xml.contains(&format!(
+            "<c:f>'C:\\Reports\\[{workbook_display_name}]SeriesValues'</c:f>"
+        )));
         assert!(!saved_chart_xml.contains("<c:f>SeriesValues</c:f>"));
         assert!(!saved_chart_xml.contains("<c:f>Sheet1!LocalSeries</c:f>"));
     }
@@ -139487,6 +139628,13 @@ mod tests {
                 read_only: false,
             })
             .expect("open workbook");
+        let workbook_display_name = runtime
+            .workbook_state(workbook)
+            .expect("workbook state")
+            .model
+            .display_name
+            .clone();
+        let quoted_values = format!("='C:\\Reports\\[{workbook_display_name}]SeriesValues'");
         let worksheets = expect_object_handle(
             runtime
                 .dispatch_get(workbook.0, "Worksheets", &[])
@@ -139535,6 +139683,11 @@ mod tests {
             runtime
                 .dispatch_invoke(series_collection, "NewSeries", &[])
                 .expect("SeriesCollection.NewSeries R1C1"),
+        );
+        let quoted_series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "NewSeries", &[])
+                .expect("SeriesCollection.NewSeries quoted workbook"),
         );
         let names = expect_object_handle(
             runtime
@@ -139585,6 +139738,14 @@ mod tests {
                 &[],
             )
             .expect("set Series.Values from R1C1 defined name");
+        runtime
+            .dispatch_set(
+                quoted_series,
+                "Values",
+                OmValue::Text(quoted_values.clone()),
+                &[],
+            )
+            .expect("set Series.Values from quoted workbook defined name");
 
         runtime
             .dispatch_set(
@@ -139621,6 +139782,20 @@ mod tests {
                     .expect("R1C1 Series.Formula after worksheet rename")
             ),
             "=SERIES(,,R1C1SeriesValues,2)"
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(quoted_series, "Values", &[])
+                .expect("quoted Series.Values after worksheet rename"),
+            OmValue::Text(quoted_values.clone())
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(quoted_series, "Formula", &[])
+                    .expect("quoted Series.Formula after worksheet rename")
+            ),
+            format!("=SERIES(,,{},3)", quoted_values.trim_start_matches('='))
         );
         let name = expect_object_handle(
             runtime
@@ -139690,6 +139865,10 @@ mod tests {
         ));
         assert!(saved_chart_xml.contains("<c:f>SeriesValues</c:f>"));
         assert!(saved_chart_xml.contains("<c:f>R1C1SeriesValues</c:f>"));
+        assert!(saved_chart_xml.contains(&format!(
+            "<c:f>{}</c:f>",
+            quoted_values.trim_start_matches('=')
+        )));
         assert!(!saved_chart_xml.contains("<c:f>'Data 2026'!$B$1:$B$3</c:f>"));
         assert!(!saved_workbook_xml.contains("Sheet1!R1C2:R3C2"));
 
