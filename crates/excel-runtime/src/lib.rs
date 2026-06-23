@@ -139238,6 +139238,242 @@ mod tests {
     }
 
     #[test]
+    fn chart_series_formula_setter_resolves_defined_name_sources() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("Worksheets.Item(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    chart_objects,
+                    "Add",
+                    &[
+                        OmValue::Number(12.0),
+                        OmValue::Number(18.0),
+                        OmValue::Number(240.0),
+                        OmValue::Number(160.0),
+                    ],
+                )
+                .expect("ChartObjects.Add"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection"),
+        );
+        let series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "NewSeries", &[])
+                .expect("SeriesCollection.NewSeries"),
+        );
+        let r1c1_series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "NewSeries", &[])
+                .expect("SeriesCollection.NewSeries R1C1"),
+        );
+        let names = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Names", &[])
+                .expect("Workbook.Names"),
+        );
+        let name = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    names,
+                    "Add",
+                    &[
+                        OmValue::Text("SeriesValues".to_string()),
+                        OmValue::Text("=Sheet1!$B$1:$B$3".to_string()),
+                    ],
+                )
+                .expect("Names.Add SeriesValues"),
+        );
+        runtime
+            .dispatch_invoke(
+                names,
+                "Add",
+                &[
+                    OmValue::Text("R1C1SeriesValues".to_string()),
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Text("=Sheet1!R1C4:R3C4".to_string()),
+                ],
+            )
+            .expect("Names.Add R1C1SeriesValues");
+
+        runtime
+            .dispatch_set(
+                series,
+                "Formula",
+                OmValue::Text("=SERIES(,,SeriesValues,1)".to_string()),
+                &[],
+            )
+            .expect("set Series.Formula from defined name");
+        runtime
+            .dispatch_set(
+                r1c1_series,
+                "Formula",
+                OmValue::Text("=SERIES(,,R1C1SeriesValues,2)".to_string()),
+                &[],
+            )
+            .expect("set Series.Formula from R1C1 defined name");
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(series, "Formula", &[])
+                    .expect("Series.Formula after defined-name setter")
+            ),
+            "=SERIES(,,SeriesValues,1)"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(r1c1_series, "Formula", &[])
+                    .expect("R1C1 Series.Formula after defined-name setter")
+            ),
+            "=SERIES(,,R1C1SeriesValues,2)"
+        );
+        {
+            let state = runtime
+                .workbook_state(workbook)
+                .expect("workbook state after formula setter");
+            let chart = state.charts.values().next().expect("chart model");
+            let values = chart.series[0].values.as_ref().expect("series values");
+            assert_eq!(values.raw.text, "SeriesValues");
+            let Some(ReferenceTarget::Range(range)) = values.resolved.as_ref() else {
+                panic!("Series.Formula defined-name values should resolve to a range");
+            };
+            assert_eq!(range.areas()[0].rect.col_first, 2);
+            assert_eq!(range.areas()[0].rect.col_last, 2);
+
+            let r1c1_values = chart.series[1].values.as_ref().expect("R1C1 series values");
+            assert_eq!(r1c1_values.raw.text, "R1C1SeriesValues");
+            let Some(ReferenceTarget::Range(r1c1_range)) = r1c1_values.resolved.as_ref() else {
+                panic!("Series.Formula R1C1 defined-name values should resolve to a range");
+            };
+            assert_eq!(r1c1_range.areas()[0].rect.col_first, 4);
+            assert_eq!(r1c1_range.areas()[0].rect.col_last, 4);
+        }
+
+        runtime
+            .dispatch_set(
+                name,
+                "RefersTo",
+                OmValue::Text("=Sheet1!$C$1:$C$3".to_string()),
+                &[],
+            )
+            .expect("set Name.RefersTo");
+        {
+            let state = runtime
+                .workbook_state(workbook)
+                .expect("workbook state after RefersTo update");
+            let chart = state.charts.values().next().expect("chart model");
+            let values = chart.series[0].values.as_ref().expect("series values");
+            assert_eq!(values.raw.text, "SeriesValues");
+            let Some(ReferenceTarget::Range(range)) = values.resolved.as_ref() else {
+                panic!("Series.Formula defined-name values should refresh after RefersTo");
+            };
+            assert_eq!(range.areas()[0].rect.col_first, 3);
+            assert_eq!(range.areas()[0].rect.col_last, 3);
+        }
+
+        runtime
+            .dispatch_set(
+                worksheet,
+                "Name",
+                OmValue::Text("Data 2026".to_string()),
+                &[],
+            )
+            .expect("rename worksheet with Series.Formula defined names");
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(series, "Formula", &[])
+                    .expect("Series.Formula after worksheet rename")
+            ),
+            "=SERIES(,,SeriesValues,1)"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(r1c1_series, "Formula", &[])
+                    .expect("R1C1 Series.Formula after worksheet rename")
+            ),
+            "=SERIES(,,R1C1SeriesValues,2)"
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after Series.Formula defined names");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_workbook_xml = String::from_utf8(
+            saved_package
+                .part("xl/workbook.xml")
+                .expect("saved workbook part")
+                .bytes
+                .clone(),
+        )
+        .expect("saved workbook xml utf8");
+        let saved_chart_xml = String::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(saved_workbook_xml.contains(
+            r#"<definedName name="SeriesValues">'Data 2026'!$C$1:$C$3</definedName>"#
+        ));
+        assert!(saved_workbook_xml.contains(
+            r#"<definedName name="R1C1SeriesValues">'Data 2026'!R1C4:R3C4</definedName>"#
+        ));
+        assert!(saved_chart_xml.contains("<c:f>SeriesValues</c:f>"));
+        assert!(saved_chart_xml.contains("<c:f>R1C1SeriesValues</c:f>"));
+        assert!(!saved_chart_xml.contains("<c:f>'Data 2026'!$C$1:$C$3</c:f>"));
+        assert!(!saved_chart_xml.contains("<c:f>'Data 2026'!R1C4:R3C4</c:f>"));
+    }
+
+    #[test]
     fn worksheet_rename_preserves_chart_defined_name_sources() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
