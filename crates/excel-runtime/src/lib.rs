@@ -3942,11 +3942,249 @@ impl ExcelRuntime {
                                 "cannot modify a read-only workbook",
                             ));
                         }
+                        let old_defined_name = runtime
+                            .loaded
+                            .state
+                            .defined_names
+                            .get(name_id)
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::NotFound,
+                                    format!("defined name id {} was not found", name_id.0),
+                                )
+                            })?
+                            .clone();
+                        let old_defined_names = runtime.loaded.state.defined_names.clone();
+                        let worksheets = runtime.loaded.state.worksheets.clone();
+                        let workbook_display_name =
+                            runtime.loaded.state.model.display_name.clone();
+                        let mut chart_source_current_sheets = BTreeMap::new();
+                        for (chart_sheet_id, binding) in &runtime.loaded.state.chart_sheets {
+                            chart_source_current_sheets.insert(binding.chart_id, *chart_sheet_id);
+                        }
+                        for drawing in runtime.loaded.state.drawings.values() {
+                            for object in &drawing.objects {
+                                let DrawingObjectModel::ChartFrame(chart_object) = object else {
+                                    continue;
+                                };
+                                chart_source_current_sheets
+                                    .insert(chart_object.chart_id, drawing.host_sheet_id);
+                            }
+                        }
+                        let new_name = name.clone();
                         if runtime.loaded.state.defined_names.rename_by_id(
                             name_id,
                             name,
                             NameValidationMode::StrictExcel,
                         )? {
+                            let rewrite_chart_source =
+                                |source: &mut Option<ChartSourceExpr>,
+                                 current_sheet: Option<SheetId>|
+                                 -> bool {
+                                    let Some(source) = source.as_mut() else {
+                                        return false;
+                                    };
+                                    let reference = source
+                                        .raw
+                                        .text
+                                        .trim()
+                                        .strip_prefix('=')
+                                        .unwrap_or(source.raw.text.trim())
+                                        .trim();
+                                    if reference.is_empty()
+                                        || reference.contains(',')
+                                        || reference.contains(':')
+                                    {
+                                        return false;
+                                    }
+
+                                    let mut in_quote = false;
+                                    let mut separator = None;
+                                    let mut chars = reference.char_indices().peekable();
+                                    while let Some((index, ch)) = chars.next() {
+                                        match ch {
+                                            '\'' => {
+                                                let escaped_quote = chars
+                                                    .peek()
+                                                    .is_some_and(|(_, next)| *next == '\'');
+                                                if in_quote && escaped_quote {
+                                                    chars.next();
+                                                } else {
+                                                    in_quote = !in_quote;
+                                                }
+                                            }
+                                            '!' if !in_quote => separator = Some(index),
+                                            _ => {}
+                                        }
+                                    }
+                                    if in_quote {
+                                        return false;
+                                    }
+
+                                    let rewritten = if let Some(qualified) =
+                                        reference.strip_prefix('[')
+                                    {
+                                        let Some(close_index) = qualified.find(']') else {
+                                            return false;
+                                        };
+                                        let source_workbook_name = &qualified[..close_index];
+                                        let unqualified_name =
+                                            qualified[close_index + 1..].trim();
+                                        if old_defined_name.scope != NameScope::Workbook
+                                            || !workbook_display_name
+                                                .eq_ignore_ascii_case(source_workbook_name)
+                                            || !unqualified_name.eq_ignore_ascii_case(
+                                                &old_defined_name.display_name,
+                                            )
+                                            || !old_defined_names
+                                                .lookup_in_scope(
+                                                    NameScope::Workbook,
+                                                    unqualified_name,
+                                                )
+                                                .is_some_and(|defined_name| {
+                                                    defined_name.id == name_id
+                                                })
+                                        {
+                                            return false;
+                                        }
+                                        format!("[{}]{}", source_workbook_name, new_name)
+                                    } else if let Some(separator) = separator {
+                                        let sheet = reference[..separator].trim();
+                                        let source_name = reference[separator + 1..].trim();
+                                        if source_name.is_empty()
+                                            || !source_name.eq_ignore_ascii_case(
+                                                &old_defined_name.display_name,
+                                            )
+                                        {
+                                            return false;
+                                        }
+                                        let mut sheet_name = if sheet.starts_with('\'') {
+                                            let mut output = String::new();
+                                            let mut chars = sheet.char_indices().peekable();
+                                            let Some((_, first)) = chars.next() else {
+                                                return false;
+                                            };
+                                            if first != '\'' {
+                                                return false;
+                                            }
+                                            let mut parsed = None;
+                                            while let Some((index, ch)) = chars.next() {
+                                                if ch == '\'' {
+                                                    let escaped_quote = chars
+                                                        .peek()
+                                                        .is_some_and(|(_, next)| *next == '\'');
+                                                    if escaped_quote {
+                                                        chars.next();
+                                                        output.push('\'');
+                                                    } else if sheet[index + ch.len_utf8()..]
+                                                        .trim()
+                                                        .is_empty()
+                                                    {
+                                                        parsed = Some(output);
+                                                        break;
+                                                    } else {
+                                                        return false;
+                                                    }
+                                                } else {
+                                                    output.push(ch);
+                                                }
+                                            }
+                                            let Some(parsed) = parsed else {
+                                                return false;
+                                            };
+                                            parsed
+                                        } else {
+                                            if sheet.contains('\'') {
+                                                return false;
+                                            }
+                                            sheet.to_string()
+                                        };
+                                        if let Some(qualified) = sheet_name.strip_prefix('[') {
+                                            let Some(close_index) = qualified.find(']') else {
+                                                return false;
+                                            };
+                                            let source_workbook_name = &qualified[..close_index];
+                                            if source_workbook_name.is_empty()
+                                                || !workbook_display_name
+                                                    .eq_ignore_ascii_case(source_workbook_name)
+                                            {
+                                                return false;
+                                            }
+                                            sheet_name =
+                                                qualified[close_index + 1..].to_string();
+                                        }
+                                        let Some(qualified_sheet_id) = worksheets
+                                            .iter()
+                                            .find(|worksheet| {
+                                                worksheet
+                                                    .name
+                                                    .eq_ignore_ascii_case(&sheet_name)
+                                            })
+                                            .map(|worksheet| worksheet.id)
+                                        else {
+                                            return false;
+                                        };
+                                        if old_defined_name.scope
+                                            != NameScope::Worksheet(qualified_sheet_id)
+                                            || !old_defined_names
+                                                .lookup_in_scope(
+                                                    NameScope::Worksheet(qualified_sheet_id),
+                                                    source_name,
+                                                )
+                                                .is_some_and(|defined_name| {
+                                                    defined_name.id == name_id
+                                                })
+                                        {
+                                            return false;
+                                        }
+                                        format!("{}{}", &reference[..=separator], new_name)
+                                    } else {
+                                        if !reference
+                                            .eq_ignore_ascii_case(&old_defined_name.display_name)
+                                            || !old_defined_names
+                                                .lookup(current_sheet, reference)
+                                                .is_some_and(|defined_name| {
+                                                    defined_name.id == name_id
+                                                })
+                                        {
+                                            return false;
+                                        }
+                                        new_name.clone()
+                                    };
+
+                                    if source.raw.text == rewritten {
+                                        return false;
+                                    }
+                                    source.raw.text = rewritten;
+                                    source.dirty = true;
+                                    true
+                                };
+                            for chart in runtime.loaded.state.charts.values_mut() {
+                                let chart_current_sheet =
+                                    chart_source_current_sheets.get(&chart.id).copied();
+                                let mut chart_changed = false;
+                                for series in &mut chart.series {
+                                    chart_changed |= rewrite_chart_source(
+                                        &mut series.name,
+                                        chart_current_sheet,
+                                    );
+                                    chart_changed |= rewrite_chart_source(
+                                        &mut series.x_values,
+                                        chart_current_sheet,
+                                    );
+                                    chart_changed |= rewrite_chart_source(
+                                        &mut series.values,
+                                        chart_current_sheet,
+                                    );
+                                    chart_changed |= rewrite_chart_source(
+                                        &mut series.bubble_size,
+                                        chart_current_sheet,
+                                    );
+                                }
+                                if chart_changed {
+                                    chart.dirty = true;
+                                }
+                            }
                             runtime.dirty = true;
                         }
                         Ok(())
@@ -67466,6 +67704,188 @@ mod tests {
                 .code,
             OmErrorCode::InvalidArgument
         );
+    }
+
+    #[test]
+    fn name_name_setter_rewrites_chart_defined_name_sources() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("Worksheets.Item(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    chart_objects,
+                    "Add",
+                    &[
+                        OmValue::Number(12.0),
+                        OmValue::Number(18.0),
+                        OmValue::Number(240.0),
+                        OmValue::Number(160.0),
+                    ],
+                )
+                .expect("ChartObjects.Add"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection"),
+        );
+        let workbook_series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "NewSeries", &[])
+                .expect("SeriesCollection.NewSeries workbook"),
+        );
+        let sheet_series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "NewSeries", &[])
+                .expect("SeriesCollection.NewSeries sheet"),
+        );
+        let workbook_names = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Names", &[])
+                .expect("Workbook.Names"),
+        );
+        let workbook_name = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    workbook_names,
+                    "Add",
+                    &[
+                        OmValue::Text("SeriesValues".to_string()),
+                        OmValue::Text("=Sheet1!$B$1:$B$3".to_string()),
+                    ],
+                )
+                .expect("Workbook.Names.Add SeriesValues"),
+        );
+        let worksheet_names = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "Names", &[])
+                .expect("Worksheet.Names"),
+        );
+        let worksheet_name = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    worksheet_names,
+                    "Add",
+                    &[
+                        OmValue::Text("LocalSeries".to_string()),
+                        OmValue::Text("=$C$1:$C$3".to_string()),
+                    ],
+                )
+                .expect("Worksheet.Names.Add LocalSeries"),
+        );
+        runtime
+            .dispatch_set(
+                workbook_series,
+                "Values",
+                OmValue::Text("=SeriesValues".to_string()),
+                &[],
+            )
+            .expect("set workbook Series.Values from defined name");
+        runtime
+            .dispatch_set(
+                sheet_series,
+                "Values",
+                OmValue::Text("=Sheet1!LocalSeries".to_string()),
+                &[],
+            )
+            .expect("set sheet Series.Values from defined name");
+
+        runtime
+            .dispatch_set(
+                workbook_name,
+                "Name",
+                OmValue::Text("RenamedSeriesValues".to_string()),
+                &[],
+            )
+            .expect("rename workbook defined name");
+        runtime
+            .dispatch_set(
+                worksheet_name,
+                "Name",
+                OmValue::Text("RenamedLocalSeries".to_string()),
+                &[],
+            )
+            .expect("rename worksheet defined name");
+
+        assert_eq!(
+            runtime
+                .dispatch_get(workbook_series, "Values", &[])
+                .expect("workbook Series.Values after Name.Name"),
+            OmValue::Text("=RenamedSeriesValues".to_string())
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(workbook_series, "Formula", &[])
+                    .expect("workbook Series.Formula after Name.Name")
+            ),
+            "=SERIES(,,RenamedSeriesValues,1)"
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(sheet_series, "Values", &[])
+                .expect("sheet Series.Values after Name.Name"),
+            OmValue::Text("=Sheet1!RenamedLocalSeries".to_string())
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(sheet_series, "Formula", &[])
+                    .expect("sheet Series.Formula after Name.Name")
+            ),
+            "=SERIES(,,Sheet1!RenamedLocalSeries,2)"
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after defined-name chart source rename");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = String::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(saved_chart_xml.contains("<c:f>RenamedSeriesValues</c:f>"));
+        assert!(saved_chart_xml.contains("<c:f>Sheet1!RenamedLocalSeries</c:f>"));
+        assert!(!saved_chart_xml.contains("<c:f>SeriesValues</c:f>"));
+        assert!(!saved_chart_xml.contains("<c:f>Sheet1!LocalSeries</c:f>"));
     }
 
     #[test]
