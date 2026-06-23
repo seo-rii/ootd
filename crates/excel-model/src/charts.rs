@@ -793,7 +793,8 @@ fn parse_chart_source_sheet_name(
     sheet: &str,
     workbook_display_name: Option<&str>,
 ) -> Option<String> {
-    let mut sheet_name = if sheet.starts_with('\'') {
+    let quoted = sheet.starts_with('\'');
+    let mut sheet_name = if quoted {
         let mut output = String::new();
         let mut chars = sheet.char_indices().peekable();
         let (_, first) = chars.next()?;
@@ -824,10 +825,20 @@ fn parse_chart_source_sheet_name(
         }
         sheet.to_string()
     };
-    if let Some(qualified) = sheet_name.strip_prefix('[') {
-        let close_index = qualified.find(']')?;
-        let source_workbook_name = &qualified[..close_index];
-        let unqualified_sheet_name = &qualified[close_index + 1..];
+    let workbook_qualifier = if sheet_name.starts_with('[') {
+        Some((0, sheet_name.find(']')?))
+    } else if quoted {
+        sheet_name.rfind('[').and_then(|open_index| {
+            sheet_name[open_index + 1..]
+                .find(']')
+                .map(|index| (open_index, open_index + 1 + index))
+        })
+    } else {
+        None
+    };
+    if let Some((open_index, close_index)) = workbook_qualifier {
+        let source_workbook_name = &sheet_name[open_index + 1..close_index];
+        let unqualified_sheet_name = &sheet_name[close_index + 1..];
         if source_workbook_name.is_empty()
             || unqualified_sheet_name.is_empty()
             || !workbook_display_name
@@ -2420,6 +2431,40 @@ mod tests {
             panic!("expected quoted direct external range target");
         };
         assert_eq!(external.text, "'[Other.xlsx]Data 2026'!$C$1");
+
+        let target = resolve_chart_source_reference_with_names(
+            "='C:\\Reports\\[Workbook.xlsx]Data'!$B$1:$B$3",
+            workbook_id,
+            Some("Workbook.xlsx"),
+            &worksheets,
+            &defined_names,
+            None,
+        )
+        .expect("path-prefixed same-workbook direct range target");
+        let ReferenceTarget::Range(range) = target else {
+            panic!("expected path-prefixed same-workbook direct range target");
+        };
+        assert_eq!(range.areas()[0].scope, SheetScope::Single(SheetId(3)));
+        assert_eq!(
+            range.areas()[0].rect,
+            Rect {
+                row_first: 1,
+                row_last: 3,
+                col_first: 2,
+                col_last: 2,
+            }
+        );
+        assert_eq!(
+            resolve_chart_source_reference_with_names(
+                "='C:\\Reports\\[Workbook.xlsx]Missing Data'!$B$1:$B$3",
+                workbook_id,
+                Some("Workbook.xlsx"),
+                &worksheets,
+                &defined_names,
+                None,
+            ),
+            None
+        );
 
         let Some(ReferenceTarget::External(external)) = resolve_chart_source_reference_with_names(
             "='C:\\Reports\\[Other.xlsx]Data 2026'!$D$1:$D$3",

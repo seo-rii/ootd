@@ -140754,6 +140754,127 @@ mod tests {
     }
 
     #[test]
+    fn chart_series_formula_setter_resolves_path_qualified_same_workbook_sheet_sources() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let workbook_display_name = runtime
+            .workbook_state(workbook)
+            .expect("workbook state")
+            .model
+            .display_name
+            .clone();
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("Worksheets.Item(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    chart_objects,
+                    "Add",
+                    &[
+                        OmValue::Number(12.0),
+                        OmValue::Number(18.0),
+                        OmValue::Number(240.0),
+                        OmValue::Number(160.0),
+                    ],
+                )
+                .expect("ChartObjects.Add"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection"),
+        );
+        let series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "NewSeries", &[])
+                .expect("SeriesCollection.NewSeries"),
+        );
+        let source_prefix = format!("'C:\\Reports\\[{workbook_display_name}]Sheet1'!");
+        let formula = format!(
+            "=SERIES({source_prefix}$C$1,{source_prefix}$A$1:$A$3,{source_prefix}$B$1:$B$3,1)"
+        );
+        runtime
+            .dispatch_set(series, "Formula", OmValue::Text(formula.clone()), &[])
+            .expect("set path-qualified same-workbook Series.Formula");
+
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(series, "Formula", &[])
+                    .expect("Series.Formula after path-qualified setter")
+            ),
+            formula
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(series, "Values", &[])
+                .expect("Series.Values after path-qualified Formula"),
+            OmValue::Text(format!("={source_prefix}$B$1:$B$3"))
+        );
+        {
+            let state = runtime
+                .workbook_state(workbook)
+                .expect("workbook state after path-qualified Formula");
+            let sheet_id = state.worksheets[0].id;
+            let chart = state.charts.values().next().expect("chart model");
+            let values = chart.series[0].values.as_ref().expect("series values");
+            let Some(ReferenceTarget::Range(range)) = values.resolved.as_ref() else {
+                panic!("path-qualified same-workbook values should resolve to a range");
+            };
+            assert_eq!(range.areas()[0].scope, SheetScope::Single(sheet_id));
+            assert_eq!(
+                range.areas()[0].rect,
+                Rect {
+                    row_first: 1,
+                    row_last: 3,
+                    col_first: 2,
+                    col_last: 2,
+                }
+            );
+        }
+
+        runtime
+            .dispatch_set(
+                worksheet,
+                "Name",
+                OmValue::Text("Data 2026".to_string()),
+                &[],
+            )
+            .expect("rename worksheet after path-qualified Series.Formula");
+        assert_eq!(
+            runtime
+                .dispatch_get(series, "Values", &[])
+                .expect("Series.Values after path-qualified source sheet rename"),
+            OmValue::Text("='Data 2026'!$B$1:$B$3".to_string())
+        );
+    }
+
+    #[test]
     fn chart_series_formula_setter_roundtrips_literal_sources() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
