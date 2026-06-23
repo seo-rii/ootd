@@ -1009,12 +1009,11 @@ fn chart_source_part_external_workbook_name(reference: &str) -> Option<&str> {
         1
     };
     let workbook_name = &reference[workbook_name_start..close_bracket_index];
+    let trailing = reference[close_quote_index + 1..].trim_start();
     if workbook_name.is_empty()
         || open_bracket_index >= close_bracket_index
         || close_bracket_index > close_quote_index
-        || !reference[close_quote_index + 1..]
-            .trim_start()
-            .starts_with('!')
+        || !(trailing.is_empty() || trailing.starts_with('!'))
     {
         return None;
     }
@@ -1195,7 +1194,41 @@ fn resolve_chart_source_defined_name(
             .map(|worksheet| worksheet.id)?;
         defined_names.lookup_in_scope(NameScope::Worksheet(sheet_id), name)?
     } else {
-        if let Some(qualified) = reference.strip_prefix('[') {
+        if let Some(quoted) = reference.strip_prefix('\'') {
+            let mut output = String::new();
+            let mut parsed = None;
+            let mut chars = quoted.char_indices().peekable();
+            while let Some((index, ch)) = chars.next() {
+                if ch == '\'' {
+                    if chars.peek().is_some_and(|(_, next)| *next == '\'') {
+                        chars.next();
+                        output.push('\'');
+                    } else if quoted[index + ch.len_utf8()..].trim().is_empty() {
+                        parsed = Some(output);
+                        break;
+                    } else {
+                        return None;
+                    }
+                } else {
+                    output.push(ch);
+                }
+            }
+            let qualified = parsed?;
+            let open_index = qualified.find('[')?;
+            let close_index = qualified[open_index + 1..].find(']')? + open_index + 1;
+            let source_workbook_name = &qualified[open_index + 1..close_index];
+            let unqualified_name = qualified[close_index + 1..].trim();
+            if source_workbook_name.is_empty()
+                || unqualified_name.is_empty()
+                || unqualified_name.contains(',')
+                || unqualified_name.contains(':')
+                || !workbook_display_name
+                    .is_some_and(|name| name.eq_ignore_ascii_case(source_workbook_name))
+            {
+                return None;
+            }
+            defined_names.lookup_in_scope(NameScope::Workbook, unqualified_name)?
+        } else if let Some(qualified) = reference.strip_prefix('[') {
             let close_index = qualified.find(']')?;
             let source_workbook_name = &qualified[..close_index];
             let unqualified_name = qualified[close_index + 1..].trim();
@@ -2298,6 +2331,23 @@ mod tests {
         assert_eq!(array.values[2], OmValue::Number(1.0));
         assert_eq!(array.values[3], OmValue::Number(2.0));
 
+        let target = resolve_chart_source_reference_with_names(
+            "='C:\\Reports\\[Workbook.xlsx]SeriesArray'",
+            workbook_id,
+            Some("Workbook.xlsx"),
+            &worksheets,
+            &defined_names,
+            None,
+        )
+        .expect("path-prefixed same-workbook name target");
+        let ReferenceTarget::Array(array) = target else {
+            panic!("expected quoted same-workbook name target to resolve as an array");
+        };
+        assert_eq!(array.rows, 2);
+        assert_eq!(array.cols, 2);
+        assert_eq!(array.values[0], OmValue::Text("Q1".to_string()));
+        assert_eq!(array.values[3], OmValue::Number(2.0));
+
         assert_eq!(
             resolve_chart_source_reference_with_names(
                 "SeriesFormula",
@@ -2377,6 +2427,18 @@ mod tests {
             external.text,
             "'C:\\Reports\\[Other.xlsx]Data 2026'!$D$1:$D$3"
         );
+
+        let Some(ReferenceTarget::External(external)) = resolve_chart_source_reference_with_names(
+            "='C:\\Reports\\[Other.xlsx]SeriesValues'",
+            workbook_id,
+            Some("Workbook.xlsx"),
+            &worksheets,
+            &defined_names,
+            None,
+        ) else {
+            panic!("expected path-prefixed quoted external defined name target");
+        };
+        assert_eq!(external.text, "'C:\\Reports\\[Other.xlsx]SeriesValues'");
 
         let Some(ReferenceTarget::External(external)) = resolve_chart_source_reference_with_names(
             "=('[Other.xlsx]Data 2026'!$E$1,'[Other.xlsx]Data 2026'!$F$1)",
