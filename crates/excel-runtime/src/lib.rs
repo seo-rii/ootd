@@ -133461,6 +133461,33 @@ mod tests {
                 }
             );
         }
+        runtime
+            .dispatch_set(
+                series,
+                "Values",
+                OmValue::Text("=[Other.xlsx]SeriesValues".to_string()),
+                &[],
+            )
+            .expect("set Series.Values from external workbook-qualified name");
+        assert_eq!(
+            runtime
+                .dispatch_get(series, "Values", &[])
+                .expect("Series.Values after external workbook-qualified name set"),
+            OmValue::Text("=[Other.xlsx]SeriesValues".to_string())
+        );
+        {
+            let state = runtime
+                .workbook_state(workbook)
+                .expect("workbook state after external workbook-qualified name setter");
+            let chart = state.charts.values().next().expect("chart model");
+            let values = chart.series[0].values.as_ref().expect("series values");
+            let Some(ReferenceTarget::External(external)) = values.resolved.as_ref() else {
+                panic!(
+                    "external workbook-qualified Series.Values should resolve to an external reference"
+                );
+            };
+            assert_eq!(external.text, "[Other.xlsx]SeriesValues");
+        }
         let names = expect_object_handle(
             runtime
                 .dispatch_get(workbook.0, "Names", &[])
