@@ -3577,7 +3577,8 @@ impl ExcelRuntime {
                                         {
                                             return None;
                                         }
-                                        let mut sheet_name = if sheet.starts_with('\'') {
+                                        let sheet_was_quoted = sheet.starts_with('\'');
+                                        let mut sheet_name = if sheet_was_quoted {
                                             let mut output = String::new();
                                             let mut chars = sheet.char_indices().peekable();
                                             let (_, first) = chars.next()?;
@@ -3623,6 +3624,21 @@ impl ExcelRuntime {
                                                 return None;
                                             }
                                             sheet_name = qualified[close_index + 1..].to_string();
+                                        } else if sheet_was_quoted
+                                            && let Some(open_index) = sheet_name.rfind('[')
+                                        {
+                                            let close_index = sheet_name[open_index + 1..]
+                                                .find(']')
+                                                .map(|index| open_index + 1 + index)?;
+                                            let source_workbook_name =
+                                                &sheet_name[open_index + 1..close_index];
+                                            if source_workbook_name.is_empty()
+                                                || !workbook_display_name
+                                                    .eq_ignore_ascii_case(source_workbook_name)
+                                            {
+                                                return None;
+                                            }
+                                            sheet_name = sheet_name[close_index + 1..].to_string();
                                         }
                                         if sheet_name.is_empty()
                                             || sheet_name.contains('[')
@@ -4152,7 +4168,8 @@ impl ExcelRuntime {
                                     {
                                         return false;
                                     }
-                                    let mut sheet_name = if sheet.starts_with('\'') {
+                                    let sheet_was_quoted = sheet.starts_with('\'');
+                                    let mut sheet_name = if sheet_was_quoted {
                                         let mut output = String::new();
                                         let mut chars = sheet.char_indices().peekable();
                                         let Some((_, first)) = chars.next() else {
@@ -4205,6 +4222,24 @@ impl ExcelRuntime {
                                             return false;
                                         }
                                         sheet_name = qualified[close_index + 1..].to_string();
+                                    } else if sheet_was_quoted
+                                        && let Some(open_index) = sheet_name.rfind('[')
+                                    {
+                                        let Some(close_index) = sheet_name[open_index + 1..]
+                                            .find(']')
+                                            .map(|index| open_index + 1 + index)
+                                        else {
+                                            return false;
+                                        };
+                                        let source_workbook_name =
+                                            &sheet_name[open_index + 1..close_index];
+                                        if source_workbook_name.is_empty()
+                                            || !workbook_display_name
+                                                .eq_ignore_ascii_case(source_workbook_name)
+                                        {
+                                            return false;
+                                        }
+                                        sheet_name = sheet_name[close_index + 1..].to_string();
                                     }
                                     let Some(qualified_sheet_id) = worksheets
                                         .iter()
@@ -68110,6 +68145,165 @@ mod tests {
         )));
         assert!(!saved_chart_xml.contains("<c:f>SeriesValues</c:f>"));
         assert!(!saved_chart_xml.contains("<c:f>Sheet1!LocalSeries</c:f>"));
+    }
+
+    #[test]
+    fn chart_sheet_scoped_name_renames_preserve_path_qualified_sheet_source() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let workbook_display_name = runtime
+            .workbook_state(workbook)
+            .expect("workbook state")
+            .model
+            .display_name
+            .clone();
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("Worksheets.Item(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    chart_objects,
+                    "Add",
+                    &[
+                        OmValue::Number(12.0),
+                        OmValue::Number(18.0),
+                        OmValue::Number(240.0),
+                        OmValue::Number(160.0),
+                    ],
+                )
+                .expect("ChartObjects.Add"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection"),
+        );
+        let series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "NewSeries", &[])
+                .expect("SeriesCollection.NewSeries"),
+        );
+        let worksheet_names = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "Names", &[])
+                .expect("Worksheet.Names"),
+        );
+        let worksheet_name = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    worksheet_names,
+                    "Add",
+                    &[
+                        OmValue::Text("LocalSeries".to_string()),
+                        OmValue::Text("=$C$1:$C$3".to_string()),
+                    ],
+                )
+                .expect("Worksheet.Names.Add LocalSeries"),
+        );
+        let path_qualified_values =
+            format!("='C:\\Reports\\[{workbook_display_name}]Sheet1'!LocalSeries");
+        runtime
+            .dispatch_set(series, "Values", OmValue::Text(path_qualified_values), &[])
+            .expect("set path-qualified sheet-scoped Series.Values");
+        {
+            let state = runtime
+                .workbook_state(workbook)
+                .expect("workbook state after path-qualified sheet-scoped source");
+            let chart = state.charts.values().next().expect("chart model");
+            let values = chart.series[0].values.as_ref().expect("series values");
+            let Some(ReferenceTarget::Range(range)) = values.resolved.as_ref() else {
+                panic!("path-qualified sheet-scoped name should resolve to a range");
+            };
+            assert_eq!(range.areas()[0].rect.col_first, 3);
+            assert_eq!(range.areas()[0].rect.col_last, 3);
+        }
+
+        runtime
+            .dispatch_set(
+                worksheet_name,
+                "Name",
+                OmValue::Text("RenamedLocalSeries".to_string()),
+                &[],
+            )
+            .expect("rename sheet-scoped defined name");
+        let renamed_path_qualified_values =
+            format!("='C:\\Reports\\[{workbook_display_name}]Sheet1'!RenamedLocalSeries");
+        assert_eq!(
+            runtime
+                .dispatch_get(series, "Values", &[])
+                .expect("Series.Values after sheet-scoped Name.Name"),
+            OmValue::Text(renamed_path_qualified_values)
+        );
+
+        runtime
+            .dispatch_set(
+                worksheet,
+                "Name",
+                OmValue::Text("Data 2026".to_string()),
+                &[],
+            )
+            .expect("rename worksheet with path-qualified sheet-scoped source");
+        assert_eq!(
+            runtime
+                .dispatch_get(series, "Values", &[])
+                .expect("Series.Values after worksheet rename"),
+            OmValue::Text("='Data 2026'!RenamedLocalSeries".to_string())
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(series, "Formula", &[])
+                    .expect("Series.Formula after worksheet rename")
+            ),
+            "=SERIES(,,'Data 2026'!RenamedLocalSeries,1)"
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after path-qualified sheet-scoped source rename");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = String::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(saved_chart_xml.contains("<c:f>'Data 2026'!RenamedLocalSeries</c:f>"));
+        assert!(!saved_chart_xml.contains("<c:f>'Data 2026'!$C$1:$C$3</c:f>"));
     }
 
     #[test]
