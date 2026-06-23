@@ -33,6 +33,8 @@ const CHARTSHEET_RELATIONSHIP_TYPE: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chartsheet";
 const DIALOGSHEET_RELATIONSHIP_TYPE: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/dialogsheet";
+const MACROSHEET_RELATIONSHIP_TYPE: &str =
+    "http://schemas.microsoft.com/office/2006/relationships/xlMacrosheet";
 const DRAWING_RELATIONSHIP_TYPE: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing";
 const CHART_RELATIONSHIP_TYPE: &str =
@@ -2141,6 +2143,7 @@ fn workbook_sheet_kind(relationship_type: &str) -> SheetKind {
         WORKSHEET_RELATIONSHIP_TYPE => SheetKind::Worksheet,
         CHARTSHEET_RELATIONSHIP_TYPE => SheetKind::ChartSheet,
         DIALOGSHEET_RELATIONSHIP_TYPE => SheetKind::DialogSheet,
+        MACROSHEET_RELATIONSHIP_TYPE => SheetKind::MacroSheet,
         _ => SheetKind::Worksheet,
     }
 }
@@ -23874,6 +23877,64 @@ mod tests {
                 .worksheet_data
                 .get(&loaded.state.worksheets[0].id)
                 .expect("dialogsheet data placeholder")
+                .source_xml
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn load_classifies_macrosheet_relationship_as_macro_sheet_kind() {
+        let codec = XlsxCodec;
+        let mut package = OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("package");
+        let workbook_rels_xml = std::str::from_utf8(
+            package
+                .part(WORKBOOK_RELS_PART_NAME)
+                .expect("workbook rels")
+                .bytes
+                .as_slice(),
+        )
+        .expect("workbook rels utf8")
+        .replace(
+            r#"Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml""#,
+            r#"Type="http://schemas.microsoft.com/office/2006/relationships/xlMacrosheet" Target="macrosheets/sheet1.xml""#,
+        );
+        package
+            .replace_part_bytes(WORKBOOK_RELS_PART_NAME, workbook_rels_xml.into_bytes())
+            .expect("replace workbook rels");
+        package
+            .add_part(OpcPart {
+                name: "xl/macrosheets/sheet1.xml".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<?xml version="1.0" encoding="UTF-8"?><xm:macrosheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main"/>"#.to_vec(),
+            })
+            .expect("add macrosheet part");
+        let bytes = package.to_bytes().expect("package bytes");
+
+        let loaded = codec
+            .load(bytes.as_slice(), CommonLoadOptions::default())
+            .expect("load workbook with macrosheet");
+
+        assert_eq!(loaded.state.worksheets[0].kind, SheetKind::MacroSheet);
+        assert_eq!(
+            loaded.state.worksheets[0].part_uri.as_deref(),
+            Some("xl/macrosheets/sheet1.xml")
+        );
+        assert!(
+            loaded
+                .state
+                .worksheet_data
+                .get(&loaded.state.worksheets[0].id)
+                .expect("macrosheet data placeholder")
+                .cells
+                .is_empty()
+        );
+        assert!(
+            !loaded
+                .state
+                .worksheet_data
+                .get(&loaded.state.worksheets[0].id)
+                .expect("macrosheet data placeholder")
                 .source_xml
                 .is_empty()
         );

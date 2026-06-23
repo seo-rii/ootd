@@ -488,6 +488,7 @@ const CHARTSHEET_PART_CONTENT_TYPE: &str =
     "application/vnd.openxmlformats-officedocument.spreadsheetml.chartsheet+xml";
 const DIALOGSHEET_PART_CONTENT_TYPE: &str =
     "application/vnd.openxmlformats-officedocument.spreadsheetml.dialogsheet+xml";
+const MACROSHEET_PART_CONTENT_TYPE: &str = "application/vnd.ms-excel.macrosheet+xml";
 const DRAWING_PART_CONTENT_TYPE: &str = "application/vnd.openxmlformats-officedocument.drawing+xml";
 const CHART_PART_CONTENT_TYPE: &str =
     "application/vnd.openxmlformats-officedocument.drawingml.chart+xml";
@@ -497,6 +498,8 @@ const CHARTSHEET_RELATIONSHIP_TYPE: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chartsheet";
 const DIALOGSHEET_RELATIONSHIP_TYPE: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/dialogsheet";
+const MACROSHEET_RELATIONSHIP_TYPE: &str =
+    "http://schemas.microsoft.com/office/2006/relationships/xlMacrosheet";
 const DRAWING_RELATIONSHIP_TYPE: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing";
 const CHART_RELATIONSHIP_TYPE: &str =
@@ -1171,7 +1174,7 @@ impl ExcelRuntime {
         template: RuntimeSheetTemplate,
     ) -> OmResult<WorkbookHandle> {
         let workbook = self.create_workbook()?;
-        if template == RuntimeSheetTemplate::Chart {
+        if template != RuntimeSheetTemplate::Worksheet {
             let original_sheet_id = self
                 .runtime_workbook(workbook)?
                 .loaded
@@ -1182,28 +1185,27 @@ impl ExcelRuntime {
                 .ok_or_else(|| {
                     OmError::new(OmErrorCode::InvalidState, "workbook has no worksheets")
                 })?;
+            let sheet_type = match template {
+                RuntimeSheetTemplate::Chart => XL_SHEET_TYPE_CHART,
+                RuntimeSheetTemplate::Excel4MacroSheet => XL_SHEET_TYPE_EXCEL4_MACRO_SHEET,
+                RuntimeSheetTemplate::Excel4IntlMacroSheet => XL_SHEET_TYPE_EXCEL4_INTL_MACRO_SHEET,
+                RuntimeSheetTemplate::DialogSheet | RuntimeSheetTemplate::Worksheet => {
+                    unreachable!(
+                        "workbook templates do not create dialog sheets or worksheets here"
+                    )
+                }
+            };
             self.add_worksheet(
                 workbook,
                 &[
                     OmValue::Missing,
                     OmValue::Number(1.0),
                     OmValue::Missing,
-                    OmValue::Number(f64::from(XL_SHEET_TYPE_CHART)),
+                    OmValue::Number(f64::from(sheet_type)),
                 ],
             )?;
             self.delete_worksheet(workbook, original_sheet_id, false)?;
             self.runtime_workbook_mut(workbook)?.dirty = false;
-        } else if template != RuntimeSheetTemplate::Worksheet {
-            let runtime = self.runtime_workbook_mut(workbook)?;
-            let sheet_name = unique_worksheet_name_with_prefix(
-                &runtime.loaded.state.worksheets,
-                template.worksheet_name_prefix(),
-            );
-            let worksheet = runtime.loaded.state.worksheets.first_mut().ok_or_else(|| {
-                OmError::new(OmErrorCode::InvalidState, "workbook has no worksheets")
-            })?;
-            worksheet.name = sheet_name;
-            worksheet.kind = template.sheet_kind();
         }
         Ok(workbook)
     }
@@ -27702,6 +27704,16 @@ impl ExcelRuntime {
                             DIALOGSHEET_PART_CONTENT_TYPE,
                             DIALOGSHEET_RELATIONSHIP_TYPE,
                         ),
+                        RuntimeSheetTemplate::Excel4MacroSheet
+                        | RuntimeSheetTemplate::Excel4IntlMacroSheet => (
+                            next_available_sequential_part_uri(
+                                &mut used_part_names,
+                                "xl/macrosheets/sheet",
+                                ".xml",
+                            ),
+                            MACROSHEET_PART_CONTENT_TYPE,
+                            MACROSHEET_RELATIONSHIP_TYPE,
+                        ),
                         _ => (
                             next_available_sequential_part_uri(
                                 &mut used_part_names,
@@ -27947,6 +27959,14 @@ impl ExcelRuntime {
                     .into_bytes()
                 } else if sheet_template == RuntimeSheetTemplate::DialogSheet {
                     blank_dialogsheet_xml_bytes()
+                } else if matches!(
+                    sheet_template,
+                    RuntimeSheetTemplate::Excel4MacroSheet
+                        | RuntimeSheetTemplate::Excel4IntlMacroSheet
+                ) {
+                    br#"<?xml version="1.0" encoding="UTF-8"?>
+<xm:macrosheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"/>"#
+                        .to_vec()
                 } else {
                     blank_worksheet_xml_bytes()
                 };
@@ -28032,7 +28052,7 @@ impl ExcelRuntime {
                         ..WorksheetData::default()
                     },
                 );
-                if matches!(sheet_kind, SheetKind::Worksheet | SheetKind::MacroSheet) {
+                if sheet_kind == SheetKind::Worksheet {
                     runtime.loaded.worksheet_support_parts.insert(
                         sheet_id,
                         WorksheetSupportParts {
@@ -92972,7 +92992,7 @@ mod tests {
     }
 
     #[test]
-    fn workbooks_add_supports_numeric_chart_template_and_macro_sheet_shells() {
+    fn workbooks_add_supports_numeric_chart_and_macro_sheet_templates() {
         let mut runtime = ExcelRuntime::new();
         let application = runtime.root_application();
         let workbooks = expect_object_handle(
@@ -93120,6 +93140,33 @@ mod tests {
                         .dispatch_get(application, "ActiveChart", &[])
                         .expect("ActiveChart after macro template workbook"),
                     OmValue::Empty
+                );
+                let saved = runtime
+                    .save_workbook(
+                        office_common::WorkbookHandle(workbook),
+                        SaveWorkbookSpec {
+                            format: FileFormat::Xlsx,
+                            profile: ExcelProfile::Excel365,
+                            lossless: true,
+                        },
+                    )
+                    .expect("save macro template workbook");
+                let saved_package =
+                    OpcPackage::from_bytes(&saved).expect("saved macro template package");
+                let reopened = ExcelRuntime::new()
+                    .codec
+                    .load(&saved, LoadOptions::default())
+                    .expect("reopen macro template workbook");
+                assert!(saved_package.contains("xl/macrosheets/sheet1.xml"));
+                assert!(!saved_package.contains("xl/worksheets/sheet1.xml"));
+                assert_eq!(reopened.state.worksheets.len(), 1);
+                assert_eq!(
+                    reopened.state.worksheets[0].kind,
+                    office_common::SheetKind::MacroSheet
+                );
+                assert_eq!(
+                    reopened.state.worksheets[0].part_uri.as_deref(),
+                    Some("xl/macrosheets/sheet1.xml")
                 );
             }
             assert!(expect_bool(
@@ -101566,7 +101613,7 @@ mod tests {
     }
 
     #[test]
-    fn worksheets_add_supports_numeric_chart_type_and_macro_sheet_shells() {
+    fn worksheets_add_supports_numeric_chart_type_and_macro_sheets() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
             .open_workbook(OpenWorkbookSpec {
@@ -101789,6 +101836,36 @@ mod tests {
         assert!(saved_package.contains("xl/drawings/drawing1.xml"));
         assert!(saved_package.contains("xl/drawings/_rels/drawing1.xml.rels"));
         assert!(saved_package.contains("xl/charts/chart1.xml"));
+        assert!(saved_package.contains("xl/macrosheets/sheet1.xml"));
+        assert!(saved_package.contains("xl/macrosheets/sheet2.xml"));
+        let saved_content_types = std::str::from_utf8(
+            saved_package
+                .part(super::CONTENT_TYPES_PART_NAME)
+                .expect("saved content types")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved content types utf8");
+        assert!(saved_content_types.contains(
+            r#"PartName="/xl/macrosheets/sheet1.xml" ContentType="application/vnd.ms-excel.macrosheet+xml""#
+        ));
+        assert!(saved_content_types.contains(
+            r#"PartName="/xl/macrosheets/sheet2.xml" ContentType="application/vnd.ms-excel.macrosheet+xml""#
+        ));
+        let saved_workbook_rels = std::str::from_utf8(
+            saved_package
+                .part(super::WORKBOOK_RELS_PART_NAME)
+                .expect("saved workbook relationships")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved workbook rels utf8");
+        assert!(saved_workbook_rels.contains(
+            r#"Type="http://schemas.microsoft.com/office/2006/relationships/xlMacrosheet" Target="macrosheets/sheet1.xml""#
+        ));
+        assert!(saved_workbook_rels.contains(
+            r#"Type="http://schemas.microsoft.com/office/2006/relationships/xlMacrosheet" Target="macrosheets/sheet2.xml""#
+        ));
         assert_eq!(
             reopened
                 .state
@@ -101832,6 +101909,22 @@ mod tests {
             .drawing_id
             .expect("reopened chart sheet drawing binding");
         assert!(reopened.state.drawings.contains_key(&drawing_id));
+        for (name, part_uri) in [
+            ("Macro1", "xl/macrosheets/sheet1.xml"),
+            ("IntlMacro1", "xl/macrosheets/sheet2.xml"),
+        ] {
+            let reopened_macro_sheet = reopened
+                .state
+                .worksheets
+                .iter()
+                .find(|worksheet| worksheet.name == name)
+                .expect("reopened macro sheet");
+            assert_eq!(
+                reopened_macro_sheet.kind,
+                office_common::SheetKind::MacroSheet
+            );
+            assert_eq!(reopened_macro_sheet.part_uri.as_deref(), Some(part_uri));
+        }
     }
 
     #[test]
