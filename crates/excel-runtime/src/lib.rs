@@ -26740,7 +26740,18 @@ impl ExcelRuntime {
         let collection_name = collection_kind.member_name();
         match member {
             "Add" if collection_kind != RuntimeSheetCollectionKind::Charts => {
-                Ok(OmValue::Object(self.add_worksheet(workbook, args)?.0))
+                let added_sheet = self.add_worksheet(workbook, args)?;
+                let RuntimeObjectKind::Worksheet { sheet_id, .. } =
+                    self.runtime_object(added_sheet.0)?
+                else {
+                    return Err(OmError::new(
+                        OmErrorCode::InvalidState,
+                        format!("{collection_name}.Add did not create a sheet"),
+                    ));
+                };
+                Ok(OmValue::Object(
+                    self.register_sheet_object_handle(workbook, sheet_id)?,
+                ))
             }
             "Add" => {
                 if args.len() > 3 {
@@ -101523,7 +101534,7 @@ mod tests {
             expect_text(
                 runtime
                     .dispatch_get(chart_sheet, "Name", &[])
-                    .expect("chart shell name")
+                    .expect("chart sheet name")
             ),
             "Chart1"
         );
@@ -101589,7 +101600,7 @@ mod tests {
             expect_text(
                 runtime
                     .dispatch_get(chart_sheet, "Name", &[])
-                    .expect("chart shell name through original handle")
+                    .expect("chart sheet name through original handle")
             ),
             expect_text(
                 runtime
@@ -101600,10 +101611,10 @@ mod tests {
         assert_eq!(
             expect_number(
                 runtime
-                    .dispatch_get(chart_sheet, "Type", &[])
-                    .expect("chart shell type")
+                    .dispatch_get(chart_sheet, "ChartType", &[])
+                    .expect("chart sheet ChartType")
             ),
-            f64::from(super::XL_SHEET_TYPE_CHART)
+            f64::from(super::XL_BAR_CLUSTERED)
         );
         let active_sheet = expect_object_handle(
             runtime
@@ -101745,10 +101756,10 @@ mod tests {
         assert_eq!(
             expect_number(
                 runtime
-                    .dispatch_get(added_chart, "Type", &[])
-                    .expect("returned chart sheet type")
+                    .dispatch_get(added_chart, "ChartType", &[])
+                    .expect("returned chart sheet ChartType")
             ),
-            f64::from(super::XL_SHEET_TYPE_CHART)
+            f64::from(super::XL_BAR_CLUSTERED)
         );
         assert_eq!(
             expect_number(
