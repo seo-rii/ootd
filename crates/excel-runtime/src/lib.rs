@@ -4232,6 +4232,54 @@ impl ExcelRuntime {
                                 is_r1c1: matches!(member, "RefersToR1C1" | "RefersToR1C1Local"),
                             },
                         )? {
+                            let workbook_id = runtime.loaded.state.model.id;
+                            let workbook_display_name =
+                                runtime.loaded.state.model.display_name.clone();
+                            let worksheets = runtime.loaded.state.worksheets.clone();
+                            let defined_names = runtime.loaded.state.defined_names.clone();
+                            let mut chart_source_current_sheets = BTreeMap::new();
+                            for (chart_sheet_id, binding) in &runtime.loaded.state.chart_sheets {
+                                chart_source_current_sheets
+                                    .insert(binding.chart_id, *chart_sheet_id);
+                            }
+                            for drawing in runtime.loaded.state.drawings.values() {
+                                for object in &drawing.objects {
+                                    let DrawingObjectModel::ChartFrame(chart_object) = object
+                                    else {
+                                        continue;
+                                    };
+                                    chart_source_current_sheets
+                                        .insert(chart_object.chart_id, drawing.host_sheet_id);
+                                }
+                            }
+                            let refresh_chart_source =
+                                |source: &mut Option<ChartSourceExpr>,
+                                 current_sheet: Option<SheetId>| {
+                                    let Some(source) = source.as_mut() else {
+                                        return;
+                                    };
+                                    source.resolved = resolve_chart_source_reference_with_names(
+                                        source.raw.text.as_str(),
+                                        workbook_id,
+                                        Some(&workbook_display_name),
+                                        &worksheets,
+                                        &defined_names,
+                                        current_sheet,
+                                    );
+                                };
+                            for chart in runtime.loaded.state.charts.values_mut() {
+                                let chart_current_sheet =
+                                    chart_source_current_sheets.get(&chart.id).copied();
+                                for series in &mut chart.series {
+                                    refresh_chart_source(&mut series.name, chart_current_sheet);
+                                    refresh_chart_source(&mut series.x_values, chart_current_sheet);
+                                    refresh_chart_source(&mut series.values, chart_current_sheet);
+                                    refresh_chart_source(
+                                        &mut series.bubble_size,
+                                        chart_current_sheet,
+                                    );
+                                }
+                            }
                             runtime.dirty = true;
                         }
                         Ok(())
@@ -67886,6 +67934,163 @@ mod tests {
         assert!(saved_chart_xml.contains("<c:f>Sheet1!RenamedLocalSeries</c:f>"));
         assert!(!saved_chart_xml.contains("<c:f>SeriesValues</c:f>"));
         assert!(!saved_chart_xml.contains("<c:f>Sheet1!LocalSeries</c:f>"));
+    }
+
+    #[test]
+    fn name_refers_to_setter_refreshes_chart_defined_name_sources() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("Worksheets.Item(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    chart_objects,
+                    "Add",
+                    &[
+                        OmValue::Number(12.0),
+                        OmValue::Number(18.0),
+                        OmValue::Number(240.0),
+                        OmValue::Number(160.0),
+                    ],
+                )
+                .expect("ChartObjects.Add"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection"),
+        );
+        let series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "NewSeries", &[])
+                .expect("SeriesCollection.NewSeries"),
+        );
+        let names = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Names", &[])
+                .expect("Workbook.Names"),
+        );
+        let name = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    names,
+                    "Add",
+                    &[
+                        OmValue::Text("SeriesValues".to_string()),
+                        OmValue::Text("=Sheet1!$B$1:$B$3".to_string()),
+                    ],
+                )
+                .expect("Workbook.Names.Add SeriesValues"),
+        );
+        runtime
+            .dispatch_set(
+                series,
+                "Values",
+                OmValue::Text("=SeriesValues".to_string()),
+                &[],
+            )
+            .expect("set Series.Values from defined name");
+        {
+            let state = runtime
+                .workbook_state(workbook)
+                .expect("workbook state before RefersTo change");
+            let chart = state.charts.values().next().expect("chart model");
+            let values = chart.series[0].values.as_ref().expect("series values");
+            let Some(ReferenceTarget::Range(range)) = values.resolved.as_ref() else {
+                panic!("defined-name Series.Values should resolve to a range");
+            };
+            assert_eq!(range.areas()[0].rect.col_first, 2);
+            assert_eq!(range.areas()[0].rect.col_last, 2);
+        }
+
+        runtime
+            .dispatch_set(
+                name,
+                "RefersTo",
+                OmValue::Text("=Sheet1!$C$1:$C$3".to_string()),
+                &[],
+            )
+            .expect("set Name.RefersTo");
+
+        assert_eq!(
+            runtime
+                .dispatch_get(series, "Values", &[])
+                .expect("Series.Values after Name.RefersTo"),
+            OmValue::Text("=SeriesValues".to_string())
+        );
+        {
+            let state = runtime
+                .workbook_state(workbook)
+                .expect("workbook state after RefersTo change");
+            let chart = state.charts.values().next().expect("chart model");
+            let values = chart.series[0].values.as_ref().expect("series values");
+            assert_eq!(values.raw.text, "SeriesValues");
+            let Some(ReferenceTarget::Range(range)) = values.resolved.as_ref() else {
+                panic!("defined-name Series.Values should resolve to updated range");
+            };
+            assert_eq!(range.areas()[0].rect.col_first, 3);
+            assert_eq!(range.areas()[0].rect.col_last, 3);
+        }
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after defined-name RefersTo change");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_workbook_xml = String::from_utf8(
+            saved_package
+                .part("xl/workbook.xml")
+                .expect("saved workbook part")
+                .bytes
+                .clone(),
+        )
+        .expect("saved workbook xml utf8");
+        let saved_chart_xml = String::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(
+            saved_workbook_xml
+                .contains(r#"<definedName name="SeriesValues">Sheet1!$C$1:$C$3</definedName>"#)
+        );
+        assert!(saved_chart_xml.contains("<c:f>SeriesValues</c:f>"));
+        assert!(!saved_chart_xml.contains("<c:f>Sheet1!$C$1:$C$3</c:f>"));
     }
 
     #[test]
