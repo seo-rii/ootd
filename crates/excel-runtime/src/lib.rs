@@ -79,6 +79,8 @@ const XL_BUBBLE: i32 = 15;
 const XL_BUBBLE_3D_EFFECT: i32 = 87;
 const XL_STOCK_HLC: i32 = 88;
 const XL_STOCK_OHLC: i32 = 89;
+const XL_STOCK_VHLC: i32 = 90;
+const XL_STOCK_VOHLC: i32 = 91;
 const XL_AREA_STACKED: i32 = 76;
 const XL_AREA_STACKED_100: i32 = 77;
 const XL_COLUMN_CLUSTERED: i32 = 51;
@@ -7279,6 +7281,11 @@ impl ExcelRuntime {
                             XL_RADAR_FILLED => ChartType::RadarFilled,
                             XL_STOCK_HLC => ChartType::StockHLC,
                             XL_STOCK_OHLC => ChartType::StockOHLC,
+                            XL_STOCK_VHLC | XL_STOCK_VOHLC => {
+                                return Err(OmError::unsupported(
+                                    "volume stock chart types require combo chart support",
+                                ));
+                            }
                             XL_SURFACE => ChartType::Surface,
                             XL_SURFACE_WIREFRAME => ChartType::SurfaceWireframe,
                             XL_SURFACE_TOP_VIEW => ChartType::SurfaceTopView,
@@ -127874,6 +127881,66 @@ mod tests {
                 f64::from(chart_type_value)
             );
         }
+    }
+
+    #[test]
+    fn chart_type_setter_rejects_volume_stock_combo_chart_types() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with embedded chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+
+        for chart_type_value in [super::XL_STOCK_VHLC, super::XL_STOCK_VOHLC] {
+            let error = runtime
+                .dispatch_set(
+                    chart,
+                    "ChartType",
+                    OmValue::Number(f64::from(chart_type_value)),
+                    &[],
+                )
+                .expect_err("volume stock ChartType should require combo chart support");
+            assert_eq!(error.code, OmErrorCode::Unsupported);
+            assert!(error.message.contains("combo chart"));
+        }
+
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart, "ChartType", &[])
+                    .expect("Chart.ChartType after rejected volume stock types")
+            ),
+            f64::from(super::XL_BAR_CLUSTERED)
+        );
+        assert!(expect_bool(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved after rejected volume stock types")
+        ));
     }
 
     #[test]
