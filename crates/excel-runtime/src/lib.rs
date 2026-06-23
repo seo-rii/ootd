@@ -134845,6 +134845,60 @@ mod tests {
                 names,
                 "Add",
                 &[
+                    OmValue::Text("R1C1SeriesValues".to_string()),
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Text("=Sheet1!R1C2:R3C2".to_string()),
+                ],
+            )
+            .expect("add R1C1 defined name for chart source");
+        runtime
+            .dispatch_set(
+                series,
+                "Values",
+                OmValue::Text("=R1C1SeriesValues".to_string()),
+                &[],
+            )
+            .expect("set Series.Values from R1C1 defined name");
+        assert_eq!(
+            runtime
+                .dispatch_get(series, "Values", &[])
+                .expect("Series.Values after R1C1 defined-name set"),
+            OmValue::Text("=R1C1SeriesValues".to_string())
+        );
+        {
+            let state = runtime
+                .workbook_state(workbook)
+                .expect("workbook state after R1C1 defined-name source setter");
+            let sheet_id = state.worksheets[0].id;
+            let chart = state.charts.values().next().expect("chart model");
+            let values = chart.series[0].values.as_ref().expect("series values");
+            let Some(ReferenceTarget::Range(range)) = values.resolved.as_ref() else {
+                panic!("R1C1 defined-name Series.Values should resolve to a range");
+            };
+            assert_eq!(range.workbook_id(), state.model.id);
+            assert_eq!(range.areas()[0].scope, SheetScope::Single(sheet_id));
+            assert_eq!(
+                range.areas()[0].rect,
+                Rect {
+                    row_first: 1,
+                    row_last: 3,
+                    col_first: 2,
+                    col_last: 2,
+                }
+            );
+        }
+        runtime
+            .dispatch_invoke(
+                names,
+                "Add",
+                &[
                     OmValue::Text("ExternalSeriesValues".to_string()),
                     OmValue::Text("=[Other.xlsx]Data!$D$1:$D$3".to_string()),
                 ],

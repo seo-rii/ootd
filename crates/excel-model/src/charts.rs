@@ -1217,7 +1217,229 @@ fn resolve_chart_source_defined_name(
         }
     };
 
-    if let Some(target) = resolve_chart_source_reference(
+    let refers_to = defined_name
+        .refers_to
+        .text
+        .trim()
+        .strip_prefix('=')
+        .unwrap_or(defined_name.refers_to.text.trim())
+        .trim();
+
+    if defined_name.refers_to.is_r1c1 {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        enum ChartR1C1Endpoint {
+            Cell(u32, u32),
+            Row(u32),
+            Column(u32),
+        }
+
+        let parse_r1c1_endpoint = |input: &str| -> Option<ChartR1C1Endpoint> {
+            let input = input.trim();
+            let bytes = input.as_bytes();
+            let mut index = 0usize;
+            match bytes.get(index) {
+                Some(b'R' | b'r') => {
+                    index += 1;
+                    let row_start = index;
+                    while matches!(bytes.get(index), Some(b'0'..=b'9')) {
+                        index += 1;
+                    }
+                    if row_start == index {
+                        return None;
+                    }
+                    let row = input[row_start..index].parse::<u32>().ok()?;
+                    if row == 0 || row > EXCEL_MAX_ROW_INDEX {
+                        return None;
+                    }
+                    if index == bytes.len() {
+                        return Some(ChartR1C1Endpoint::Row(row));
+                    }
+                    if !matches!(bytes.get(index), Some(b'C' | b'c')) {
+                        return None;
+                    }
+                    index += 1;
+                    let col_start = index;
+                    while matches!(bytes.get(index), Some(b'0'..=b'9')) {
+                        index += 1;
+                    }
+                    if col_start == index || index != bytes.len() {
+                        return None;
+                    }
+                    let col = input[col_start..index].parse::<u32>().ok()?;
+                    if col == 0 || col > EXCEL_MAX_COLUMN_INDEX {
+                        return None;
+                    }
+                    Some(ChartR1C1Endpoint::Cell(row, col))
+                }
+                Some(b'C' | b'c') => {
+                    index += 1;
+                    let col_start = index;
+                    while matches!(bytes.get(index), Some(b'0'..=b'9')) {
+                        index += 1;
+                    }
+                    if col_start == index || index != bytes.len() {
+                        return None;
+                    }
+                    let col = input[col_start..index].parse::<u32>().ok()?;
+                    if col == 0 || col > EXCEL_MAX_COLUMN_INDEX {
+                        return None;
+                    }
+                    Some(ChartR1C1Endpoint::Column(col))
+                }
+                _ => None,
+            }
+        };
+
+        let parse_r1c1_rect = |input: &str| -> Option<Rect> {
+            let mut parts = input.trim().split(':');
+            let first = parse_r1c1_endpoint(parts.next()?)?;
+            let second = parts.next();
+            if parts.next().is_some() {
+                return None;
+            }
+            let Some(second) = second else {
+                return match first {
+                    ChartR1C1Endpoint::Cell(row, col) => Some(Rect::single_cell(row, col)),
+                    ChartR1C1Endpoint::Row(_) | ChartR1C1Endpoint::Column(_) => None,
+                };
+            };
+            let second = parse_r1c1_endpoint(second)?;
+            match (first, second) {
+                (
+                    ChartR1C1Endpoint::Cell(first_row, first_col),
+                    ChartR1C1Endpoint::Cell(second_row, second_col),
+                ) => Some(Rect {
+                    row_first: first_row.min(second_row),
+                    row_last: first_row.max(second_row),
+                    col_first: first_col.min(second_col),
+                    col_last: first_col.max(second_col),
+                }),
+                (ChartR1C1Endpoint::Row(first_row), ChartR1C1Endpoint::Row(second_row)) => {
+                    Some(Rect {
+                        row_first: first_row.min(second_row),
+                        row_last: first_row.max(second_row),
+                        col_first: 1,
+                        col_last: EXCEL_MAX_COLUMN_INDEX,
+                    })
+                }
+                (ChartR1C1Endpoint::Column(first_col), ChartR1C1Endpoint::Column(second_col)) => {
+                    Some(Rect {
+                        row_first: 1,
+                        row_last: EXCEL_MAX_ROW_INDEX,
+                        col_first: first_col.min(second_col),
+                        col_last: first_col.max(second_col),
+                    })
+                }
+                _ => None,
+            }
+        };
+
+        let reference = strip_chart_source_outer_grouping(refers_to)
+            .unwrap_or(refers_to)
+            .trim();
+        if !reference.is_empty() {
+            let default_sheet_id = match defined_name.scope {
+                NameScope::Worksheet(sheet_id) => Some(sheet_id),
+                NameScope::Workbook => current_sheet,
+            };
+            let mut parts = Vec::new();
+            let mut start = 0usize;
+            let mut in_quote = false;
+            let mut chars = reference.char_indices().peekable();
+            while let Some((index, ch)) = chars.next() {
+                match ch {
+                    '\'' => {
+                        if in_quote && chars.peek().is_some_and(|(_, next)| *next == '\'') {
+                            chars.next();
+                        } else {
+                            in_quote = !in_quote;
+                        }
+                    }
+                    ',' if !in_quote => {
+                        let part = reference[start..index].trim();
+                        if part.is_empty() {
+                            return Some(ReferenceTarget::Formula(defined_name.refers_to.clone()));
+                        }
+                        parts.push(part);
+                        start = index + ch.len_utf8();
+                    }
+                    _ => {}
+                }
+            }
+            if in_quote {
+                return Some(ReferenceTarget::Formula(defined_name.refers_to.clone()));
+            }
+            let part = reference[start..].trim();
+            if !part.is_empty() {
+                parts.push(part);
+            }
+
+            let mut areas = Vec::new();
+            for &part in &parts {
+                let mut in_quote = false;
+                let mut separator = None;
+                let mut chars = part.char_indices().peekable();
+                while let Some((index, ch)) = chars.next() {
+                    match ch {
+                        '\'' => {
+                            if in_quote && chars.peek().is_some_and(|(_, next)| *next == '\'') {
+                                chars.next();
+                            } else {
+                                in_quote = !in_quote;
+                            }
+                        }
+                        '!' if !in_quote => separator = Some(index),
+                        _ => {}
+                    }
+                }
+                if in_quote {
+                    return Some(ReferenceTarget::Formula(defined_name.refers_to.clone()));
+                }
+
+                let (sheet_id, area_reference) = if let Some(separator) = separator {
+                    let sheet = part[..separator].trim();
+                    let area_reference = part[separator + 1..].trim();
+                    if sheet.is_empty() || area_reference.is_empty() {
+                        return Some(ReferenceTarget::Formula(defined_name.refers_to.clone()));
+                    }
+                    let Some(sheet_name) =
+                        parse_chart_source_sheet_name(sheet, workbook_display_name)
+                    else {
+                        break;
+                    };
+                    let Some(sheet_id) = worksheets
+                        .iter()
+                        .find(|worksheet| worksheet.name.eq_ignore_ascii_case(&sheet_name))
+                        .map(|worksheet| worksheet.id)
+                    else {
+                        break;
+                    };
+                    (sheet_id, area_reference)
+                } else {
+                    let Some(sheet_id) = default_sheet_id else {
+                        break;
+                    };
+                    (sheet_id, part)
+                };
+
+                let Some(rect) = parse_r1c1_rect(area_reference) else {
+                    areas.clear();
+                    break;
+                };
+                let Ok(area) = RangeArea::new(SheetScope::Single(sheet_id), rect) else {
+                    areas.clear();
+                    break;
+                };
+                areas.push(area);
+            }
+
+            if !areas.is_empty() && areas.len() == parts.len() {
+                if let Ok(range) = RangeSet::new(workbook_id, areas) {
+                    return Some(ReferenceTarget::Range(range));
+                }
+            }
+        }
+    } else if let Some(target) = resolve_chart_source_reference(
         &defined_name.refers_to.text,
         workbook_id,
         workbook_display_name,
@@ -1226,13 +1448,6 @@ fn resolve_chart_source_defined_name(
         return Some(target);
     }
 
-    let refers_to = defined_name
-        .refers_to
-        .text
-        .trim()
-        .strip_prefix('=')
-        .unwrap_or(defined_name.refers_to.text.trim())
-        .trim();
     if let Some(target) = resolve_chart_source_literal(refers_to) {
         return Some(target);
     }
@@ -1242,6 +1457,9 @@ fn resolve_chart_source_defined_name(
         }));
     }
     if refers_to.is_empty() || refers_to.contains('!') {
+        return Some(ReferenceTarget::Formula(defined_name.refers_to.clone()));
+    }
+    if defined_name.refers_to.is_r1c1 {
         return Some(ReferenceTarget::Formula(defined_name.refers_to.clone()));
     }
 
@@ -1504,6 +1722,81 @@ mod tests {
             panic!("expected workbook-qualified external name target");
         };
         assert_eq!(external.text, "[Other]SeriesValues");
+    }
+
+    #[test]
+    fn resolve_chart_source_reference_with_names_resolves_r1c1_name_targets() {
+        let workbook_id = WorkbookId(27);
+        let worksheets = vec![worksheet(2, workbook_id, "Data")];
+        let mut defined_names = DefinedNameTable::default();
+        defined_names
+            .add(
+                NameScope::Workbook,
+                "WorkbookSeries",
+                FormulaSource {
+                    text: "Data!R1C2:R3C2".to_string(),
+                    is_r1c1: true,
+                },
+                NameValidationMode::StrictExcel,
+            )
+            .expect("add workbook R1C1 name");
+        defined_names
+            .add(
+                NameScope::Worksheet(SheetId(2)),
+                "LocalSeries",
+                FormulaSource {
+                    text: "R1C3:R3C3".to_string(),
+                    is_r1c1: true,
+                },
+                NameValidationMode::StrictExcel,
+            )
+            .expect("add sheet-local R1C1 name");
+
+        let target = resolve_chart_source_reference_with_names(
+            "WorkbookSeries",
+            workbook_id,
+            None,
+            &worksheets,
+            &defined_names,
+            Some(SheetId(2)),
+        )
+        .expect("workbook R1C1 name target");
+        let ReferenceTarget::Range(range) = target else {
+            panic!("expected workbook R1C1 range target");
+        };
+        assert_eq!(range.areas()[0].scope, SheetScope::Single(SheetId(2)));
+        assert_eq!(
+            range.areas()[0].rect,
+            Rect {
+                row_first: 1,
+                row_last: 3,
+                col_first: 2,
+                col_last: 2,
+            }
+        );
+
+        let target = resolve_chart_source_reference_with_names(
+            "LocalSeries",
+            workbook_id,
+            None,
+            &worksheets,
+            &defined_names,
+            Some(SheetId(2)),
+        )
+        .expect("sheet-local R1C1 name target");
+        let ReferenceTarget::Range(range) = target else {
+            panic!("expected sheet-local R1C1 range target");
+        };
+        assert_eq!(range.areas()[0].scope, SheetScope::Single(SheetId(2)));
+        assert_eq!(
+            range.areas()[0].rect,
+            Rect {
+                row_first: 1,
+                row_last: 3,
+                col_first: 3,
+                col_last: 3,
+            }
+        );
     }
 
     #[test]
