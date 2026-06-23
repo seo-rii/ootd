@@ -1446,6 +1446,22 @@ fn resolve_chart_source_defined_name(
         worksheets,
     ) {
         return Some(target);
+    } else {
+        let default_sheet_id = match defined_name.scope {
+            NameScope::Worksheet(sheet_id) => Some(sheet_id),
+            NameScope::Workbook => current_sheet,
+        };
+        if let Some(sheet_id) = default_sheet_id
+            && let Some(target) = resolve_chart_source_current_sheet_reference(
+                refers_to,
+                workbook_id,
+                workbook_display_name,
+                worksheets,
+                sheet_id,
+            )
+        {
+            return Some(target);
+        }
     }
 
     if let Some(target) = resolve_chart_source_literal(refers_to) {
@@ -1722,6 +1738,63 @@ mod tests {
             panic!("expected workbook-qualified external name target");
         };
         assert_eq!(external.text, "[Other]SeriesValues");
+    }
+
+    #[test]
+    fn resolve_chart_source_reference_with_names_resolves_workbook_name_unqualified_a1_target() {
+        let workbook_id = WorkbookId(28);
+        let worksheets = vec![
+            worksheet(2, workbook_id, "Data"),
+            worksheet(3, workbook_id, "Chart Host"),
+        ];
+        let mut defined_names = DefinedNameTable::default();
+        defined_names
+            .add(
+                NameScope::Workbook,
+                "HostSeries",
+                FormulaSource {
+                    text: "$A$1:$B$2".to_string(),
+                    is_r1c1: false,
+                },
+                NameValidationMode::StrictExcel,
+            )
+            .expect("add workbook A1 name");
+
+        let target = resolve_chart_source_reference_with_names(
+            "HostSeries",
+            workbook_id,
+            None,
+            &worksheets,
+            &defined_names,
+            Some(SheetId(3)),
+        )
+        .expect("workbook A1 name target");
+        let ReferenceTarget::Range(range) = target else {
+            panic!("expected workbook A1 range target");
+        };
+        assert_eq!(range.areas().len(), 1);
+        assert_eq!(range.areas()[0].scope, SheetScope::Single(SheetId(3)));
+        assert_eq!(
+            range.areas()[0].rect,
+            Rect {
+                row_first: 1,
+                row_last: 2,
+                col_first: 1,
+                col_last: 2,
+            }
+        );
+
+        assert!(matches!(
+            resolve_chart_source_reference_with_names(
+                "HostSeries",
+                workbook_id,
+                None,
+                &worksheets,
+                &defined_names,
+                None,
+            ),
+            Some(ReferenceTarget::Formula(_))
+        ));
     }
 
     #[test]
