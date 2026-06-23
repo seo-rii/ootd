@@ -28537,6 +28537,144 @@ impl ExcelRuntime {
             })();
             return result;
         }
+        let source_sheet_kind = self.worksheet_model(workbook, sheet_id)?.kind;
+        if matches!(
+            source_sheet_kind,
+            SheetKind::MacroSheet | SheetKind::DialogSheet
+        ) {
+            let (source_name, source_visibility, source_sheet_data) = {
+                let runtime = self.runtime_workbook(workbook)?;
+                let worksheet = runtime
+                    .loaded
+                    .state
+                    .worksheets
+                    .iter()
+                    .find(|worksheet| worksheet.id == sheet_id)
+                    .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "unknown worksheet"))?;
+                (
+                    worksheet.name.clone(),
+                    worksheet.visibility,
+                    runtime
+                        .loaded
+                        .state
+                        .worksheet_data_for_sheet(sheet_id)?
+                        .clone(),
+                )
+            };
+            let sheet_type = match source_sheet_kind {
+                SheetKind::MacroSheet => XL_SHEET_TYPE_EXCEL4_MACRO_SHEET,
+                SheetKind::DialogSheet => XL_SHEET_TYPE_DIALOG_SHEET,
+                SheetKind::Worksheet | SheetKind::ChartSheet => unreachable!(),
+            };
+            let placement_args = {
+                let worksheets = &self
+                    .runtime_workbook(target_workbook)?
+                    .loaded
+                    .state
+                    .worksheets;
+                if insertion_index >= worksheets.len() {
+                    let last_sheet_id = worksheets
+                        .last()
+                        .map(|worksheet| worksheet.id)
+                        .ok_or_else(|| {
+                            OmError::new(OmErrorCode::InvalidState, "workbook has no worksheets")
+                        })?;
+                    vec![
+                        OmValue::Missing,
+                        OmValue::Object(
+                            self.register_worksheet_handle(target_workbook, last_sheet_id)
+                                .0,
+                        ),
+                        OmValue::Missing,
+                        OmValue::Number(f64::from(sheet_type)),
+                    ]
+                } else {
+                    let before_sheet_id = worksheets[insertion_index].id;
+                    vec![
+                        OmValue::Object(
+                            self.register_worksheet_handle(target_workbook, before_sheet_id)
+                                .0,
+                        ),
+                        OmValue::Missing,
+                        OmValue::Missing,
+                        OmValue::Number(f64::from(sheet_type)),
+                    ]
+                }
+            };
+            let added_sheet = self.add_worksheet(target_workbook, &placement_args)?;
+            let added_sheet_id = match self.runtime_object(added_sheet.0)? {
+                RuntimeObjectKind::Worksheet { sheet_id, .. } => sheet_id,
+                _ => unreachable!("worksheet handle should resolve to a worksheet object"),
+            };
+            let target_part_uri = self
+                .worksheet_model(target_workbook, added_sheet_id)?
+                .part_uri
+                .clone()
+                .ok_or_else(|| {
+                    OmError::new(
+                        OmErrorCode::InvalidState,
+                        "target worksheet is missing a part uri",
+                    )
+                })?;
+
+            {
+                let runtime = self.runtime_workbook_mut(target_workbook)?;
+                runtime.loaded.package.replace_part_bytes(
+                    target_part_uri.as_str(),
+                    source_sheet_data.source_xml.clone(),
+                )?;
+                runtime.loaded.state.worksheet_data.insert(
+                    added_sheet_id,
+                    WorksheetData {
+                        cells: BTreeMap::new(),
+                        source_xml: source_sheet_data.source_xml,
+                        dirty: false,
+                        dirty_cells: BTreeSet::new(),
+                    },
+                );
+                if let Some(worksheet) = runtime
+                    .loaded
+                    .state
+                    .worksheets
+                    .iter_mut()
+                    .find(|worksheet| worksheet.id == added_sheet_id)
+                {
+                    worksheet.visibility = source_visibility;
+                }
+                runtime.dirty = true;
+            }
+
+            let copied_name = {
+                let worksheets = &self
+                    .runtime_workbook(target_workbook)?
+                    .loaded
+                    .state
+                    .worksheets;
+                if !worksheets.iter().any(|worksheet| {
+                    worksheet.id != added_sheet_id
+                        && worksheet.name.eq_ignore_ascii_case(source_name.as_str())
+                }) {
+                    source_name.clone()
+                } else {
+                    let mut suffix = 2usize;
+                    loop {
+                        let suffix_text = format!(" ({suffix})");
+                        let base_len = 31usize.saturating_sub(suffix_text.chars().count());
+                        let base = source_name.chars().take(base_len).collect::<String>();
+                        let candidate = format!("{base}{suffix_text}");
+                        if !worksheets.iter().any(|worksheet| {
+                            worksheet.id != added_sheet_id
+                                && worksheet.name.eq_ignore_ascii_case(candidate.as_str())
+                        }) {
+                            break candidate;
+                        }
+                        suffix += 1;
+                    }
+                }
+            };
+            self.dispatch_set(added_sheet.0, "Name", OmValue::Text(copied_name), &[])?;
+            return Ok(added_sheet);
+        }
         let snapshot = self.spawn_single_sheet_workbook_from_source(
             workbook,
             sheet_id,
@@ -144963,6 +145101,309 @@ mod tests {
                 .cell(reopened.state.worksheets[2].id, 3, 3)
                 .map(|cell| cell.value.clone()),
             Some(CellValue::Text("copied".to_string()))
+        );
+    }
+
+    #[test]
+    fn worksheet_copy_preserves_native_macro_and_dialog_sheet_kinds_for_placement_copy() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let sheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Sheets", &[])
+                .expect("Workbook.Sheets"),
+        );
+        let macro_sheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    worksheets,
+                    "Add",
+                    &[
+                        OmValue::Missing,
+                        OmValue::Number(1.0),
+                        OmValue::Missing,
+                        OmValue::Number(f64::from(super::XL_SHEET_TYPE_EXCEL4_MACRO_SHEET)),
+                    ],
+                )
+                .expect("Worksheets.Add Type:=xlExcel4MacroSheet"),
+        );
+        let dialog_sheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    worksheets,
+                    "Add",
+                    &[
+                        OmValue::Missing,
+                        OmValue::Number(2.0),
+                        OmValue::Missing,
+                        OmValue::Number(f64::from(super::XL_SHEET_TYPE_DIALOG_SHEET)),
+                    ],
+                )
+                .expect("Worksheets.Add Type:=xlDialogSheet"),
+        );
+
+        assert!(matches!(
+            runtime
+                .dispatch_invoke(
+                    macro_sheet,
+                    "Copy",
+                    &[OmValue::Missing, OmValue::Object(dialog_sheet)]
+                )
+                .expect("copy macro sheet after dialog sheet"),
+            OmValue::Empty
+        ));
+        let copied_macro_sheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(sheets, "Item", &[OmValue::Text("Macro1 (2)".to_string())])
+                .expect("Sheets.Item(Macro1 (2))"),
+        );
+        assert!(matches!(
+            runtime
+                .dispatch_invoke(
+                    dialog_sheet,
+                    "Copy",
+                    &[OmValue::Missing, OmValue::Object(copied_macro_sheet)]
+                )
+                .expect("copy dialog sheet after copied macro sheet"),
+            OmValue::Empty
+        ));
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        assert!(saved_package.contains("xl/macrosheets/sheet1.xml"));
+        assert!(saved_package.contains("xl/macrosheets/sheet2.xml"));
+        assert!(saved_package.contains("xl/dialogsheets/sheet1.xml"));
+        assert!(saved_package.contains("xl/dialogsheets/sheet2.xml"));
+        let saved_content_types = std::str::from_utf8(
+            saved_package
+                .part(super::CONTENT_TYPES_PART_NAME)
+                .expect("saved content types")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved content types utf8");
+        assert!(saved_content_types.contains(
+            r#"PartName="/xl/macrosheets/sheet2.xml" ContentType="application/vnd.ms-excel.macrosheet+xml""#
+        ));
+        assert!(saved_content_types.contains(
+            r#"PartName="/xl/dialogsheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.dialogsheet+xml""#
+        ));
+        let saved_workbook_rels = std::str::from_utf8(
+            saved_package
+                .part(super::WORKBOOK_RELS_PART_NAME)
+                .expect("saved workbook relationships")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved workbook rels utf8");
+        assert!(saved_workbook_rels.contains(
+            r#"Type="http://schemas.microsoft.com/office/2006/relationships/xlMacrosheet" Target="macrosheets/sheet2.xml""#
+        ));
+        assert!(saved_workbook_rels.contains(
+            r#"Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/dialogsheet" Target="dialogsheets/sheet2.xml""#
+        ));
+
+        let reopened = ExcelRuntime::new()
+            .codec
+            .load(&saved, LoadOptions::default())
+            .expect("reopen workbook");
+        assert_eq!(
+            reopened
+                .state
+                .worksheets
+                .iter()
+                .map(|worksheet| worksheet.name.clone())
+                .collect::<Vec<_>>(),
+            vec![
+                "Sheet1".to_string(),
+                "Macro1".to_string(),
+                "Dialog1".to_string(),
+                "Macro1 (2)".to_string(),
+                "Dialog1 (2)".to_string()
+            ]
+        );
+        for (name, kind, part_uri) in [
+            (
+                "Macro1",
+                office_common::SheetKind::MacroSheet,
+                "xl/macrosheets/sheet1.xml",
+            ),
+            (
+                "Dialog1",
+                office_common::SheetKind::DialogSheet,
+                "xl/dialogsheets/sheet1.xml",
+            ),
+            (
+                "Macro1 (2)",
+                office_common::SheetKind::MacroSheet,
+                "xl/macrosheets/sheet2.xml",
+            ),
+            (
+                "Dialog1 (2)",
+                office_common::SheetKind::DialogSheet,
+                "xl/dialogsheets/sheet2.xml",
+            ),
+        ] {
+            let sheet = reopened
+                .state
+                .worksheets
+                .iter()
+                .find(|worksheet| worksheet.name == name)
+                .expect("reopened copied native sheet");
+            assert_eq!(sheet.kind, kind);
+            assert_eq!(sheet.part_uri.as_deref(), Some(part_uri));
+        }
+    }
+
+    #[test]
+    fn worksheet_move_preserves_dialog_sheet_kind_for_cross_workbook_target() {
+        let mut runtime = ExcelRuntime::new();
+        let source_workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open source workbook");
+        let target_workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open target workbook");
+        let source_worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(source_workbook.0, "Worksheets", &[])
+                .expect("source Workbook.Worksheets"),
+        );
+        let source_sheets = expect_object_handle(
+            runtime
+                .dispatch_get(source_workbook.0, "Sheets", &[])
+                .expect("source Workbook.Sheets"),
+        );
+        let target_sheets = expect_object_handle(
+            runtime
+                .dispatch_get(target_workbook.0, "Sheets", &[])
+                .expect("target Workbook.Sheets"),
+        );
+        let dialog_sheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    source_worksheets,
+                    "Add",
+                    &[
+                        OmValue::Missing,
+                        OmValue::Number(1.0),
+                        OmValue::Missing,
+                        OmValue::Number(f64::from(super::XL_SHEET_TYPE_DIALOG_SHEET)),
+                    ],
+                )
+                .expect("Worksheets.Add Type:=xlDialogSheet"),
+        );
+        let target_sheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(target_sheets, "Item", &[OmValue::Number(1.0)])
+                .expect("target Sheets.Item(1)"),
+        );
+
+        assert!(matches!(
+            runtime
+                .dispatch_invoke(
+                    dialog_sheet,
+                    "Move",
+                    &[OmValue::Missing, OmValue::Object(target_sheet)]
+                )
+                .expect("move dialog sheet after target sheet"),
+            OmValue::Empty
+        ));
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(source_sheets, "Count", &[])
+                    .expect("source Sheets.Count after move")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(target_sheets, "Count", &[])
+                    .expect("target Sheets.Count after move")
+            ),
+            2.0
+        );
+
+        let saved = runtime
+            .save_workbook(
+                target_workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save target workbook");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved target package");
+        assert!(saved_package.contains("xl/dialogsheets/sheet1.xml"));
+        let saved_workbook_rels = std::str::from_utf8(
+            saved_package
+                .part(super::WORKBOOK_RELS_PART_NAME)
+                .expect("saved target workbook relationships")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved target workbook rels utf8");
+        assert!(saved_workbook_rels.contains(
+            r#"Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/dialogsheet" Target="dialogsheets/sheet1.xml""#
+        ));
+
+        let reopened = ExcelRuntime::new()
+            .codec
+            .load(&saved, LoadOptions::default())
+            .expect("reopen target workbook");
+        assert_eq!(
+            reopened
+                .state
+                .worksheets
+                .iter()
+                .map(|worksheet| worksheet.name.clone())
+                .collect::<Vec<_>>(),
+            vec!["Sheet1".to_string(), "Dialog1".to_string()]
+        );
+        let dialog = reopened
+            .state
+            .worksheets
+            .iter()
+            .find(|worksheet| worksheet.name == "Dialog1")
+            .expect("reopened moved dialog sheet");
+        assert_eq!(dialog.kind, office_common::SheetKind::DialogSheet);
+        assert_eq!(
+            dialog.part_uri.as_deref(),
+            Some("xl/dialogsheets/sheet1.xml")
         );
     }
 
