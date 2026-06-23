@@ -1003,11 +1003,7 @@ fn chart_source_part_external_workbook_name(reference: &str) -> Option<&str> {
     let open_bracket_index = open_bracket_index?;
     let close_bracket_index = close_bracket_index?;
     let close_quote_index = close_quote_index?;
-    let workbook_name_start = if open_bracket_index == 1 {
-        open_bracket_index + 1
-    } else {
-        1
-    };
+    let workbook_name_start = open_bracket_index + 1;
     let workbook_name = &reference[workbook_name_start..close_bracket_index];
     let trailing = reference[close_quote_index + 1..].trim_start();
     if workbook_name.is_empty()
@@ -2347,6 +2343,18 @@ mod tests {
         assert_eq!(array.cols, 2);
         assert_eq!(array.values[0], OmValue::Text("Q1".to_string()));
         assert_eq!(array.values[3], OmValue::Number(2.0));
+
+        assert_eq!(
+            resolve_chart_source_reference_with_names(
+                "='C:\\Reports\\[Workbook.xlsx]MissingSeriesArray'",
+                workbook_id,
+                Some("Workbook.xlsx"),
+                &worksheets,
+                &defined_names,
+                None,
+            ),
+            None
+        );
 
         assert_eq!(
             resolve_chart_source_reference_with_names(

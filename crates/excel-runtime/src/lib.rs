@@ -68280,6 +68280,13 @@ mod tests {
                 read_only: false,
             })
             .expect("open workbook");
+        let workbook_display_name = runtime
+            .workbook_state(workbook)
+            .expect("workbook state")
+            .model
+            .display_name
+            .clone();
+        let quoted_values = format!("='C:\\Reports\\[{workbook_display_name}]SeriesValues'");
         let worksheets = expect_object_handle(
             runtime
                 .dispatch_get(workbook.0, "Worksheets", &[])
@@ -68324,6 +68331,11 @@ mod tests {
                 .dispatch_invoke(series_collection, "NewSeries", &[])
                 .expect("SeriesCollection.NewSeries"),
         );
+        let quoted_series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "NewSeries", &[])
+                .expect("SeriesCollection.NewSeries quoted workbook"),
+        );
         let names = expect_object_handle(
             runtime
                 .dispatch_get(workbook.0, "Names", &[])
@@ -68349,6 +68361,14 @@ mod tests {
                 &[],
             )
             .expect("set Series.Values from defined name");
+        runtime
+            .dispatch_set(
+                quoted_series,
+                "Values",
+                OmValue::Text(quoted_values.clone()),
+                &[],
+            )
+            .expect("set quoted Series.Values from defined name");
         {
             let state = runtime
                 .workbook_state(workbook)
@@ -68360,6 +68380,15 @@ mod tests {
             };
             assert_eq!(range.areas()[0].rect.col_first, 2);
             assert_eq!(range.areas()[0].rect.col_last, 2);
+            let quoted_values = chart.series[1]
+                .values
+                .as_ref()
+                .expect("quoted series values");
+            let Some(ReferenceTarget::Range(quoted_range)) = quoted_values.resolved.as_ref() else {
+                panic!("quoted defined-name Series.Values should resolve to a range");
+            };
+            assert_eq!(quoted_range.areas()[0].rect.col_first, 2);
+            assert_eq!(quoted_range.areas()[0].rect.col_last, 2);
         }
 
         runtime
@@ -68372,6 +68401,12 @@ mod tests {
                 .expect("Series.Values after Name.Delete"),
             OmValue::Text("=SeriesValues".to_string())
         );
+        assert_eq!(
+            runtime
+                .dispatch_get(quoted_series, "Values", &[])
+                .expect("quoted Series.Values after Name.Delete"),
+            OmValue::Text(quoted_values.clone())
+        );
         {
             let state = runtime
                 .workbook_state(workbook)
@@ -68380,6 +68415,15 @@ mod tests {
             let values = chart.series[0].values.as_ref().expect("series values");
             assert_eq!(values.raw.text, "SeriesValues");
             assert_eq!(values.resolved, None);
+            let quoted_values = chart.series[1]
+                .values
+                .as_ref()
+                .expect("quoted series values");
+            assert_eq!(
+                quoted_values.raw.text,
+                format!("'C:\\Reports\\[{workbook_display_name}]SeriesValues'")
+            );
+            assert_eq!(quoted_values.resolved, None);
         }
 
         let saved = runtime
@@ -68411,6 +68455,10 @@ mod tests {
         .expect("saved chart xml utf8");
         assert!(!saved_workbook_xml.contains("SeriesValues"));
         assert!(saved_chart_xml.contains("<c:f>SeriesValues</c:f>"));
+        assert!(saved_chart_xml.contains(&format!(
+            "<c:f>{}</c:f>",
+            quoted_values.trim_start_matches('=')
+        )));
         assert!(!saved_chart_xml.contains("<c:f>Sheet1!$B$1:$B$3</c:f>"));
     }
 
@@ -68425,6 +68473,13 @@ mod tests {
                 read_only: false,
             })
             .expect("open workbook");
+        let workbook_display_name = runtime
+            .workbook_state(workbook)
+            .expect("workbook state")
+            .model
+            .display_name
+            .clone();
+        let quoted_values = format!("='C:\\Reports\\[{workbook_display_name}]SeriesValues'");
         let worksheets = expect_object_handle(
             runtime
                 .dispatch_get(workbook.0, "Worksheets", &[])
@@ -68474,6 +68529,11 @@ mod tests {
                 .dispatch_invoke(series_collection, "NewSeries", &[])
                 .expect("SeriesCollection.NewSeries sheet"),
         );
+        let quoted_workbook_series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "NewSeries", &[])
+                .expect("SeriesCollection.NewSeries quoted workbook"),
+        );
         runtime
             .dispatch_set(
                 workbook_series,
@@ -68490,6 +68550,14 @@ mod tests {
                 &[],
             )
             .expect("set unresolved sheet Series.Values");
+        runtime
+            .dispatch_set(
+                quoted_workbook_series,
+                "Values",
+                OmValue::Text(quoted_values.clone()),
+                &[],
+            )
+            .expect("set unresolved quoted workbook Series.Values");
         {
             let state = runtime
                 .workbook_state(workbook)
@@ -68508,6 +68576,14 @@ mod tests {
                     .values
                     .as_ref()
                     .expect("sheet values")
+                    .resolved,
+                None
+            );
+            assert_eq!(
+                chart.series[2]
+                    .values
+                    .as_ref()
+                    .expect("quoted workbook values")
                     .resolved,
                 None
             );
@@ -68556,6 +68632,12 @@ mod tests {
                 .expect("sheet Series.Values after Names.Add"),
             OmValue::Text("=Sheet1!LocalSeries".to_string())
         );
+        assert_eq!(
+            runtime
+                .dispatch_get(quoted_workbook_series, "Values", &[])
+                .expect("quoted workbook Series.Values after Names.Add"),
+            OmValue::Text(quoted_values.clone())
+        );
         {
             let state = runtime
                 .workbook_state(workbook)
@@ -68577,6 +68659,20 @@ mod tests {
             assert_eq!(sheet_values.raw.text, "Sheet1!LocalSeries");
             assert_eq!(sheet_range.areas()[0].rect.col_first, 3);
             assert_eq!(sheet_range.areas()[0].rect.col_last, 3);
+
+            let quoted_values = chart.series[2]
+                .values
+                .as_ref()
+                .expect("quoted workbook values");
+            let Some(ReferenceTarget::Range(quoted_range)) = quoted_values.resolved.as_ref() else {
+                panic!("quoted workbook chart source should resolve after Names.Add");
+            };
+            assert_eq!(
+                quoted_values.raw.text,
+                format!("'C:\\Reports\\[{workbook_display_name}]SeriesValues'")
+            );
+            assert_eq!(quoted_range.areas()[0].rect.col_first, 2);
+            assert_eq!(quoted_range.areas()[0].rect.col_last, 2);
         }
 
         let saved = runtime
@@ -68600,6 +68696,10 @@ mod tests {
         .expect("saved chart xml utf8");
         assert!(saved_chart_xml.contains("<c:f>SeriesValues</c:f>"));
         assert!(saved_chart_xml.contains("<c:f>Sheet1!LocalSeries</c:f>"));
+        assert!(saved_chart_xml.contains(&format!(
+            "<c:f>{}</c:f>",
+            quoted_values.trim_start_matches('=')
+        )));
         assert!(!saved_chart_xml.contains("<c:f>Sheet1!$B$1:$B$3</c:f>"));
         assert!(!saved_chart_xml.contains("<c:f>Sheet1!$C$1:$C$3</c:f>"));
     }
