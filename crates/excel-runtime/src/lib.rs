@@ -49,6 +49,7 @@ const XL_SHEET_HIDDEN: i32 = 0;
 const XL_SHEET_VERY_HIDDEN: i32 = 2;
 const XL_SHEET_TYPE_WORKSHEET: i32 = -4167;
 const XL_SHEET_TYPE_CHART: i32 = -4109;
+const XL_SHEET_TYPE_DIALOG_SHEET: i32 = -4116;
 const XL_SHEET_TYPE_EXCEL4_MACRO_SHEET: i32 = 3;
 const XL_SHEET_TYPE_EXCEL4_INTL_MACRO_SHEET: i32 = 4;
 const XL_LOCATION_AS_NEW_SHEET: i32 = 1;
@@ -485,6 +486,8 @@ const WORKSHEET_PART_CONTENT_TYPE: &str =
     "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml";
 const CHARTSHEET_PART_CONTENT_TYPE: &str =
     "application/vnd.openxmlformats-officedocument.spreadsheetml.chartsheet+xml";
+const DIALOGSHEET_PART_CONTENT_TYPE: &str =
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.dialogsheet+xml";
 const DRAWING_PART_CONTENT_TYPE: &str = "application/vnd.openxmlformats-officedocument.drawing+xml";
 const CHART_PART_CONTENT_TYPE: &str =
     "application/vnd.openxmlformats-officedocument.drawingml.chart+xml";
@@ -492,6 +495,8 @@ const WORKSHEET_RELATIONSHIP_TYPE: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet";
 const CHARTSHEET_RELATIONSHIP_TYPE: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chartsheet";
+const DIALOGSHEET_RELATIONSHIP_TYPE: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/dialogsheet";
 const DRAWING_RELATIONSHIP_TYPE: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing";
 const CHART_RELATIONSHIP_TYPE: &str =
@@ -507,6 +512,7 @@ const VBA_PROJECT_RELATIONSHIP_TYPE: &str =
 enum RuntimeSheetTemplate {
     Worksheet,
     Chart,
+    DialogSheet,
     Excel4MacroSheet,
     Excel4IntlMacroSheet,
 }
@@ -531,6 +537,8 @@ impl RuntimeSheetTemplate {
             Some(Self::Worksheet)
         } else if value == f64::from(XL_SHEET_TYPE_CHART) {
             Some(Self::Chart)
+        } else if value == f64::from(XL_SHEET_TYPE_DIALOG_SHEET) {
+            Some(Self::DialogSheet)
         } else if value == f64::from(XL_SHEET_TYPE_EXCEL4_MACRO_SHEET) {
             Some(Self::Excel4MacroSheet)
         } else if value == f64::from(XL_SHEET_TYPE_EXCEL4_INTL_MACRO_SHEET) {
@@ -544,6 +552,7 @@ impl RuntimeSheetTemplate {
         match self {
             Self::Worksheet => "Sheet",
             Self::Chart => "Chart",
+            Self::DialogSheet => "Dialog",
             Self::Excel4MacroSheet => "Macro",
             Self::Excel4IntlMacroSheet => "IntlMacro",
         }
@@ -553,6 +562,7 @@ impl RuntimeSheetTemplate {
         match self {
             Self::Worksheet => SheetKind::Worksheet,
             Self::Chart => SheetKind::ChartSheet,
+            Self::DialogSheet => SheetKind::DialogSheet,
             Self::Excel4MacroSheet | Self::Excel4IntlMacroSheet => SheetKind::MacroSheet,
         }
     }
@@ -18534,7 +18544,7 @@ impl ExcelRuntime {
                     SheetKind::Worksheet => XL_SHEET_TYPE_WORKSHEET,
                     SheetKind::ChartSheet => XL_SHEET_TYPE_CHART,
                     SheetKind::MacroSheet => XL_SHEET_TYPE_EXCEL4_MACRO_SHEET,
-                    SheetKind::DialogSheet => XL_SHEET_TYPE_WORKSHEET,
+                    SheetKind::DialogSheet => XL_SHEET_TYPE_DIALOG_SHEET,
                 };
                 Ok(OmValue::Number(f64::from(sheet_type)))
             }
@@ -27482,7 +27492,7 @@ impl ExcelRuntime {
                 let sheet_template = RuntimeSheetTemplate::from_xl_sheet_type(*sheet_type)
                     .ok_or_else(|| {
                         OmError::unsupported(
-                            "Worksheets.Add supports numeric XlSheetType values xlWorksheet, xlChart, xlExcel4MacroSheet, and xlExcel4IntlMacroSheet",
+                            "Worksheets.Add supports numeric XlSheetType values xlWorksheet, xlChart, xlDialogSheet, xlExcel4MacroSheet, and xlExcel4IntlMacroSheet",
                         )
                     })?;
                 (None, sheet_template)
@@ -27673,8 +27683,8 @@ impl ExcelRuntime {
                     .map(|part| part.name.clone())
                     .collect::<BTreeSet<_>>();
                 let (part_uri, sheet_part_content_type, workbook_relationship_type) =
-                    if sheet_template == RuntimeSheetTemplate::Chart {
-                        (
+                    match sheet_template {
+                        RuntimeSheetTemplate::Chart => (
                             next_available_sequential_part_uri(
                                 &mut used_part_names,
                                 "xl/chartsheets/sheet",
@@ -27682,9 +27692,17 @@ impl ExcelRuntime {
                             ),
                             CHARTSHEET_PART_CONTENT_TYPE,
                             CHARTSHEET_RELATIONSHIP_TYPE,
-                        )
-                    } else {
-                        (
+                        ),
+                        RuntimeSheetTemplate::DialogSheet => (
+                            next_available_sequential_part_uri(
+                                &mut used_part_names,
+                                "xl/dialogsheets/sheet",
+                                ".xml",
+                            ),
+                            DIALOGSHEET_PART_CONTENT_TYPE,
+                            DIALOGSHEET_RELATIONSHIP_TYPE,
+                        ),
+                        _ => (
                             next_available_sequential_part_uri(
                                 &mut used_part_names,
                                 "xl/worksheets/sheet",
@@ -27692,7 +27710,7 @@ impl ExcelRuntime {
                             ),
                             WORKSHEET_PART_CONTENT_TYPE,
                             WORKSHEET_RELATIONSHIP_TYPE,
-                        )
+                        ),
                     };
                 let relationship_target = part_uri
                     .strip_prefix("xl/")
@@ -27927,6 +27945,8 @@ impl ExcelRuntime {
 </chartsheet>"#
                     )
                     .into_bytes()
+                } else if sheet_template == RuntimeSheetTemplate::DialogSheet {
+                    blank_dialogsheet_xml_bytes()
                 } else {
                     blank_worksheet_xml_bytes()
                 };
@@ -28012,7 +28032,7 @@ impl ExcelRuntime {
                         ..WorksheetData::default()
                     },
                 );
-                if sheet_kind != SheetKind::ChartSheet {
+                if matches!(sheet_kind, SheetKind::Worksheet | SheetKind::MacroSheet) {
                     runtime.loaded.worksheet_support_parts.insert(
                         sheet_id,
                         WorksheetSupportParts {
@@ -35960,6 +35980,12 @@ fn blank_worksheet_xml_bytes() -> Vec<u8> {
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
   <sheetData/>
 </worksheet>"#
+        .to_vec()
+}
+
+fn blank_dialogsheet_xml_bytes() -> Vec<u8> {
+    br#"<?xml version="1.0" encoding="UTF-8"?>
+<dialogsheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"/>"#
         .to_vec()
 }
 
@@ -101806,6 +101832,174 @@ mod tests {
             .drawing_id
             .expect("reopened chart sheet drawing binding");
         assert!(reopened.state.drawings.contains_key(&drawing_id));
+    }
+
+    #[test]
+    fn worksheets_add_supports_dialog_sheet_type() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let application = runtime.root_application();
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let sheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Sheets", &[])
+                .expect("Workbook.Sheets"),
+        );
+        let charts = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Charts", &[])
+                .expect("Workbook.Charts"),
+        );
+
+        let dialog_sheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    worksheets,
+                    "Add",
+                    &[
+                        OmValue::Missing,
+                        OmValue::Number(1.0),
+                        OmValue::Missing,
+                        OmValue::Number(f64::from(super::XL_SHEET_TYPE_DIALOG_SHEET)),
+                    ],
+                )
+                .expect("Worksheets.Add Type:=xlDialogSheet"),
+        );
+
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(dialog_sheet, "Name", &[])
+                    .expect("dialog sheet name")
+            ),
+            "Dialog1"
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(dialog_sheet, "Type", &[])
+                    .expect("dialog sheet Type")
+            ),
+            f64::from(super::XL_SHEET_TYPE_DIALOG_SHEET)
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(worksheets, "Count", &[])
+                    .expect("Worksheets.Count after dialog add")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(sheets, "Count", &[])
+                    .expect("Sheets.Count after dialog add")
+            ),
+            2.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(charts, "Count", &[])
+                    .expect("Charts.Count after dialog add")
+            ),
+            0.0
+        );
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveSheet", &[])
+                .expect("ActiveSheet after dialog add"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(active_sheet, "Name", &[])
+                    .expect("active sheet name after dialog add")
+            ),
+            "Dialog1"
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(dialog_sheet, "Range", &[OmValue::Text("A1".to_string())])
+                .expect_err("dialog sheet Range should be unsupported")
+                .code,
+            OmErrorCode::Unsupported
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved workbook package");
+        assert!(saved_package.contains("xl/dialogsheets/sheet1.xml"));
+        let saved_content_types = std::str::from_utf8(
+            saved_package
+                .part(super::CONTENT_TYPES_PART_NAME)
+                .expect("saved content types")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved content types utf8");
+        assert!(saved_content_types.contains(
+            r#"PartName="/xl/dialogsheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.dialogsheet+xml""#
+        ));
+        let saved_workbook_rels = std::str::from_utf8(
+            saved_package
+                .part(super::WORKBOOK_RELS_PART_NAME)
+                .expect("saved workbook relationships")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved workbook rels utf8");
+        assert!(saved_workbook_rels.contains(
+            r#"Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/dialogsheet" Target="dialogsheets/sheet1.xml""#
+        ));
+
+        let reopened = ExcelRuntime::new()
+            .codec
+            .load(&saved, LoadOptions::default())
+            .expect("reopen saved workbook");
+        assert_eq!(
+            reopened
+                .state
+                .worksheets
+                .iter()
+                .map(|worksheet| worksheet.name.clone())
+                .collect::<Vec<_>>(),
+            vec!["Sheet1".to_string(), "Dialog1".to_string()]
+        );
+        let reopened_dialog_sheet = reopened
+            .state
+            .worksheets
+            .iter()
+            .find(|worksheet| worksheet.name == "Dialog1")
+            .expect("reopened dialog sheet");
+        assert_eq!(
+            reopened_dialog_sheet.kind,
+            office_common::SheetKind::DialogSheet
+        );
+        assert_eq!(
+            reopened_dialog_sheet.part_uri.as_deref(),
+            Some("xl/dialogsheets/sheet1.xml")
+        );
     }
 
     #[test]
