@@ -139974,6 +139974,255 @@ mod tests {
     }
 
     #[test]
+    fn chart_series_formula_setter_preserves_qualified_sheet_scoped_names() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    chart_objects,
+                    "Add",
+                    &[
+                        OmValue::Number(12.0),
+                        OmValue::Number(18.0),
+                        OmValue::Number(240.0),
+                        OmValue::Number(160.0),
+                    ],
+                )
+                .expect("ChartObjects.Add"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection"),
+        );
+        let series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "NewSeries", &[])
+                .expect("SeriesCollection.NewSeries"),
+        );
+        let worksheet_names = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "Names", &[])
+                .expect("Worksheet.Names"),
+        );
+        for (name, refers_to) in [
+            ("SeriesCaption", "=$A$1"),
+            ("SeriesCategories", "=$A$2:$A$3"),
+            ("SeriesValues", "=$B$2:$B$3"),
+        ] {
+            runtime
+                .dispatch_invoke(
+                    worksheet_names,
+                    "Add",
+                    &[
+                        OmValue::Text(name.to_string()),
+                        OmValue::Text(refers_to.to_string()),
+                    ],
+                )
+                .unwrap_or_else(|error| panic!("Worksheet.Names.Add {name}: {error:?}"));
+        }
+
+        runtime
+            .dispatch_set(
+                series,
+                "Formula",
+                OmValue::Text(
+                    "=SERIES(Sheet1!SeriesCaption,Sheet1!SeriesCategories,Sheet1!SeriesValues,1)"
+                        .to_string(),
+                ),
+                &[],
+            )
+            .expect("set Series.Formula from qualified sheet-scoped names");
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(series, "Formula", &[])
+                    .expect("Series.Formula after qualified sheet-scoped names")
+            ),
+            "=SERIES(Sheet1!SeriesCaption,Sheet1!SeriesCategories,Sheet1!SeriesValues,1)"
+        );
+        {
+            let state = runtime
+                .workbook_state(workbook)
+                .expect("workbook state after qualified Series.Formula");
+            let sheet_id = state.worksheets[0].id;
+            let chart = state.charts.values().next().expect("chart model");
+            let series_model = chart.series.first().expect("series model");
+            for (source, expected_text, expected_rect) in [
+                (
+                    series_model.name.as_ref().expect("series name source"),
+                    "Sheet1!SeriesCaption",
+                    Rect::single_cell(1, 1),
+                ),
+                (
+                    series_model.x_values.as_ref().expect("series x values"),
+                    "Sheet1!SeriesCategories",
+                    Rect {
+                        row_first: 2,
+                        row_last: 3,
+                        col_first: 1,
+                        col_last: 1,
+                    },
+                ),
+                (
+                    series_model.values.as_ref().expect("series values"),
+                    "Sheet1!SeriesValues",
+                    Rect {
+                        row_first: 2,
+                        row_last: 3,
+                        col_first: 2,
+                        col_last: 2,
+                    },
+                ),
+            ] {
+                assert_eq!(source.raw.text, expected_text);
+                let Some(ReferenceTarget::Range(range)) = source.resolved.as_ref() else {
+                    panic!("{expected_text} should resolve to a range");
+                };
+                assert_eq!(range.areas()[0].scope, SheetScope::Single(sheet_id));
+                assert_eq!(range.areas()[0].rect, expected_rect);
+            }
+        }
+
+        runtime
+            .dispatch_set(
+                worksheet,
+                "Name",
+                OmValue::Text("Data 2026".to_string()),
+                &[],
+            )
+            .expect("rename worksheet with qualified sheet-scoped Series.Formula");
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(series, "Formula", &[])
+                    .expect("Series.Formula after qualified sheet rename")
+            ),
+            "=SERIES('Data 2026'!SeriesCaption,'Data 2026'!SeriesCategories,'Data 2026'!SeriesValues,1)"
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after qualified sheet-scoped Series.Formula");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_workbook_xml = String::from_utf8(
+            saved_package
+                .part("xl/workbook.xml")
+                .expect("saved workbook part")
+                .bytes
+                .clone(),
+        )
+        .expect("saved workbook xml utf8");
+        let saved_chart_xml = String::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(saved_workbook_xml.contains(
+            r#"<definedName name="SeriesCaption" localSheetId="0">'Data 2026'!$A$1</definedName>"#
+        ));
+        assert!(saved_workbook_xml.contains(
+            r#"<definedName name="SeriesCategories" localSheetId="0">'Data 2026'!$A$2:$A$3</definedName>"#
+        ));
+        assert!(saved_workbook_xml.contains(
+            r#"<definedName name="SeriesValues" localSheetId="0">'Data 2026'!$B$2:$B$3</definedName>"#
+        ));
+        assert!(saved_chart_xml.contains("<c:f>'Data 2026'!SeriesCaption</c:f>"));
+        assert!(saved_chart_xml.contains("<c:f>'Data 2026'!SeriesCategories</c:f>"));
+        assert!(saved_chart_xml.contains("<c:f>'Data 2026'!SeriesValues</c:f>"));
+        assert!(!saved_chart_xml.contains("<c:f>'Data 2026'!$B$2:$B$3</c:f>"));
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after qualified sheet-scoped Series.Formula");
+        let reopened_state = reopened_runtime
+            .workbook_state(reopened_workbook)
+            .expect("reopened workbook state");
+        let reopened_sheet_id = reopened_state.worksheets[0].id;
+        let reopened_chart = reopened_state.charts.values().next().expect("reopened chart");
+        let reopened_series = reopened_chart.series.first().expect("reopened series");
+        for (source, expected_text, expected_rect) in [
+            (
+                reopened_series.name.as_ref().expect("reopened series name"),
+                "'Data 2026'!SeriesCaption",
+                Rect::single_cell(1, 1),
+            ),
+            (
+                reopened_series
+                    .x_values
+                    .as_ref()
+                    .expect("reopened series x values"),
+                "'Data 2026'!SeriesCategories",
+                Rect {
+                    row_first: 2,
+                    row_last: 3,
+                    col_first: 1,
+                    col_last: 1,
+                },
+            ),
+            (
+                reopened_series
+                    .values
+                    .as_ref()
+                    .expect("reopened series values"),
+                "'Data 2026'!SeriesValues",
+                Rect {
+                    row_first: 2,
+                    row_last: 3,
+                    col_first: 2,
+                    col_last: 2,
+                },
+            ),
+        ] {
+            assert_eq!(source.raw.text, expected_text);
+            let Some(ReferenceTarget::Range(range)) = source.resolved.as_ref() else {
+                panic!("reopened {expected_text} should resolve to a range");
+            };
+            assert_eq!(range.areas()[0].scope, SheetScope::Single(reopened_sheet_id));
+            assert_eq!(range.areas()[0].rect, expected_rect);
+        }
+    }
+
+    #[test]
     fn chart_series_formula_setter_resolves_unqualified_sources_against_host_sheet() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
