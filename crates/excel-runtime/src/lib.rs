@@ -139549,6 +139549,11 @@ mod tests {
                 .dispatch_invoke(series_collection, "NewSeries", &[])
                 .expect("SeriesCollection.NewSeries qualified"),
         );
+        let r1c1_qualified_series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "NewSeries", &[])
+                .expect("SeriesCollection.NewSeries R1C1 qualified"),
+        );
         let worksheet_names = expect_object_handle(
             runtime
                 .dispatch_get(worksheet, "Names", &[])
@@ -139565,6 +139570,24 @@ mod tests {
             )
             .expect("Worksheet.Names.Add SeriesValues");
         runtime
+            .dispatch_invoke(
+                worksheet_names,
+                "Add",
+                &[
+                    OmValue::Text("R1C1SeriesValues".to_string()),
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Text("=Sheet1!R1C4:R3C4".to_string()),
+                ],
+            )
+            .expect("Worksheet.Names.Add R1C1SeriesValues");
+        runtime
             .dispatch_set(
                 series,
                 "Values",
@@ -139580,6 +139603,14 @@ mod tests {
                 &[],
             )
             .expect("set Series.Values from qualified sheet-scoped defined name");
+        runtime
+            .dispatch_set(
+                r1c1_qualified_series,
+                "Values",
+                OmValue::Text("=Sheet1!R1C1SeriesValues".to_string()),
+                &[],
+            )
+            .expect("set Series.Values from qualified R1C1 sheet-scoped defined name");
 
         runtime
             .dispatch_set(
@@ -139617,6 +139648,20 @@ mod tests {
             ),
             "=SERIES(,,'Data 2026'!SeriesValues,2)"
         );
+        assert_eq!(
+            runtime
+                .dispatch_get(r1c1_qualified_series, "Values", &[])
+                .expect("qualified R1C1 Series.Values after worksheet rename"),
+            OmValue::Text("='Data 2026'!R1C1SeriesValues".to_string())
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(r1c1_qualified_series, "Formula", &[])
+                    .expect("qualified R1C1 Series.Formula after worksheet rename")
+            ),
+            "=SERIES(,,'Data 2026'!R1C1SeriesValues,3)"
+        );
         let name = expect_object_handle(
             runtime
                 .dispatch_invoke(
@@ -139633,6 +139678,23 @@ mod tests {
                     .expect("Name.RefersTo after worksheet rename")
             ),
             "='Data 2026'!$B$1:$B$3"
+        );
+        let r1c1_name = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    worksheet_names,
+                    "Item",
+                    &[OmValue::Text("R1C1SeriesValues".to_string())],
+                )
+                .expect("Worksheet.Names.Item R1C1SeriesValues"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(r1c1_name, "RefersToR1C1", &[])
+                    .expect("R1C1 Name.RefersToR1C1 after worksheet rename")
+            ),
+            "='Data 2026'!R1C4:R3C4"
         );
 
         let saved = runtime
@@ -139665,9 +139727,14 @@ mod tests {
         assert!(saved_workbook_xml.contains(
             r#"<definedName name="SeriesValues" localSheetId="0">'Data 2026'!$B$1:$B$3</definedName>"#
         ));
+        assert!(saved_workbook_xml.contains(
+            r#"<definedName name="R1C1SeriesValues" localSheetId="0">'Data 2026'!R1C4:R3C4</definedName>"#
+        ));
         assert!(saved_chart_xml.contains("<c:f>SeriesValues</c:f>"));
         assert!(saved_chart_xml.contains("<c:f>'Data 2026'!SeriesValues</c:f>"));
+        assert!(saved_chart_xml.contains("<c:f>'Data 2026'!R1C1SeriesValues</c:f>"));
         assert!(!saved_chart_xml.contains("<c:f>'Data 2026'!$B$1:$B$3</c:f>"));
+        assert!(!saved_workbook_xml.contains("Sheet1!R1C4:R3C4"));
     }
 
     #[test]
