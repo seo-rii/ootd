@@ -133517,6 +133517,41 @@ mod tests {
                 names,
                 "Add",
                 &[
+                    OmValue::Text("ExternalSeriesValues".to_string()),
+                    OmValue::Text("=[Other.xlsx]Data!$D$1:$D$3".to_string()),
+                ],
+            )
+            .expect("add external defined name for chart source");
+        runtime
+            .dispatch_set(
+                series,
+                "Values",
+                OmValue::Text("=ExternalSeriesValues".to_string()),
+                &[],
+            )
+            .expect("set Series.Values from external defined name");
+        assert_eq!(
+            runtime
+                .dispatch_get(series, "Values", &[])
+                .expect("Series.Values after external defined-name set"),
+            OmValue::Text("=ExternalSeriesValues".to_string())
+        );
+        {
+            let state = runtime
+                .workbook_state(workbook)
+                .expect("workbook state after external defined-name source setter");
+            let chart = state.charts.values().next().expect("chart model");
+            let values = chart.series[0].values.as_ref().expect("series values");
+            let Some(ReferenceTarget::External(external)) = values.resolved.as_ref() else {
+                panic!("external defined-name Series.Values should resolve to an external reference");
+            };
+            assert_eq!(external.text, "[Other.xlsx]Data!$D$1:$D$3");
+        }
+        runtime
+            .dispatch_invoke(
+                names,
+                "Add",
+                &[
                     OmValue::Text("SeriesConstant".to_string()),
                     OmValue::Text("=42".to_string()),
                 ],
