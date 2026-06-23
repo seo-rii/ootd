@@ -3372,16 +3372,22 @@ impl ExcelRuntime {
                             let empty_defined_names = DefinedNameTable::default();
                             let mut defined_name_updates = Vec::new();
                             for defined_name in runtime.loaded.state.defined_names.iter() {
-                                if defined_name.refers_to.is_r1c1 {
-                                    continue;
-                                }
                                 let current_sheet = match defined_name.scope {
                                     NameScope::Workbook => None,
                                     NameScope::Worksheet(sheet_id) => Some(sheet_id),
                                 };
+                                let refers_to_text = if defined_name.refers_to.is_r1c1 {
+                                    convert_formula_r1c1_to_a1(
+                                        defined_name.refers_to.text.as_str(),
+                                        1,
+                                        1,
+                                    )
+                                } else {
+                                    defined_name.refers_to.text.clone()
+                                };
                                 let Some(ReferenceTarget::Range(range)) =
                                     resolve_chart_source_reference_with_names(
-                                        defined_name.refers_to.text.as_str(),
+                                        refers_to_text.as_str(),
                                         workbook_id,
                                         Some(workbook_display_name.as_str()),
                                         &old_worksheets,
@@ -3411,10 +3417,17 @@ impl ExcelRuntime {
                                                 "defined name references an unknown sheet",
                                             )
                                         })?;
+                                    let area_address = if defined_name.refers_to.is_r1c1 {
+                                        format_rect_r1c1_address_with_flags(
+                                            area.rect, true, true, 1, 1,
+                                        )
+                                    } else {
+                                        format_rect_address_with_flags(area.rect, true, true)
+                                    };
                                     parts.push(format!(
                                         "{}{}",
                                         formula_sheet_address_qualifier(sheet_name),
-                                        format_rect_address_with_flags(area.rect, true, true)
+                                        area_address
                                     ));
                                 }
                                 if !references_renamed_sheet || parts.is_empty() {
@@ -3426,7 +3439,7 @@ impl ExcelRuntime {
                                         defined_name.id,
                                         FormulaSource {
                                             text: rewritten,
-                                            is_r1c1: false,
+                                            is_r1c1: defined_name.refers_to.is_r1c1,
                                         },
                                     ));
                                 }
@@ -139279,6 +139292,11 @@ mod tests {
                 .dispatch_invoke(series_collection, "NewSeries", &[])
                 .expect("SeriesCollection.NewSeries"),
         );
+        let r1c1_series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "NewSeries", &[])
+                .expect("SeriesCollection.NewSeries R1C1"),
+        );
         let names = expect_object_handle(
             runtime
                 .dispatch_get(workbook.0, "Names", &[])
@@ -139295,6 +139313,24 @@ mod tests {
             )
             .expect("Names.Add SeriesValues");
         runtime
+            .dispatch_invoke(
+                names,
+                "Add",
+                &[
+                    OmValue::Text("R1C1SeriesValues".to_string()),
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Text("=Sheet1!R1C2:R3C2".to_string()),
+                ],
+            )
+            .expect("Names.Add R1C1SeriesValues");
+        runtime
             .dispatch_set(
                 series,
                 "Values",
@@ -139302,6 +139338,14 @@ mod tests {
                 &[],
             )
             .expect("set Series.Values from defined name");
+        runtime
+            .dispatch_set(
+                r1c1_series,
+                "Values",
+                OmValue::Text("=R1C1SeriesValues".to_string()),
+                &[],
+            )
+            .expect("set Series.Values from R1C1 defined name");
 
         runtime
             .dispatch_set(
@@ -139325,6 +139369,20 @@ mod tests {
             ),
             "=SERIES(,,SeriesValues,1)"
         );
+        assert_eq!(
+            runtime
+                .dispatch_get(r1c1_series, "Values", &[])
+                .expect("R1C1 Series.Values after worksheet rename"),
+            OmValue::Text("=R1C1SeriesValues".to_string())
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(r1c1_series, "Formula", &[])
+                    .expect("R1C1 Series.Formula after worksheet rename")
+            ),
+            "=SERIES(,,R1C1SeriesValues,2)"
+        );
         let name = expect_object_handle(
             runtime
                 .dispatch_invoke(names, "Item", &[OmValue::Text("SeriesValues".to_string())])
@@ -139337,6 +139395,23 @@ mod tests {
                     .expect("Name.RefersTo after worksheet rename")
             ),
             "='Data 2026'!$B$1:$B$3"
+        );
+        let r1c1_name = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    names,
+                    "Item",
+                    &[OmValue::Text("R1C1SeriesValues".to_string())],
+                )
+                .expect("Names.Item R1C1SeriesValues"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(r1c1_name, "RefersToR1C1", &[])
+                    .expect("Name.RefersToR1C1 after worksheet rename")
+            ),
+            "='Data 2026'!R1C2:R3C2"
         );
 
         let saved = runtime
@@ -139369,8 +139444,13 @@ mod tests {
         assert!(saved_workbook_xml.contains(
             r#"<definedName name="SeriesValues">'Data 2026'!$B$1:$B$3</definedName>"#
         ));
+        assert!(saved_workbook_xml.contains(
+            r#"<definedName name="R1C1SeriesValues">'Data 2026'!R1C2:R3C2</definedName>"#
+        ));
         assert!(saved_chart_xml.contains("<c:f>SeriesValues</c:f>"));
+        assert!(saved_chart_xml.contains("<c:f>R1C1SeriesValues</c:f>"));
         assert!(!saved_chart_xml.contains("<c:f>'Data 2026'!$B$1:$B$3</c:f>"));
+        assert!(!saved_workbook_xml.contains("Sheet1!R1C2:R3C2"));
 
         let mut reopened_runtime = ExcelRuntime::new();
         let reopened_workbook = reopened_runtime
