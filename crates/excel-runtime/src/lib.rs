@@ -106621,6 +106621,80 @@ mod tests {
             ),
             "Chart1"
         );
+        let saved = runtime
+            .save_workbook(
+                super::WorkbookHandle(copied_workbook),
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save copied chart sheet workbook");
+        let saved_package =
+            OpcPackage::from_bytes(&saved).expect("saved copied chart sheet package");
+        assert!(saved_package.contains("xl/chartsheets/sheet1.xml"));
+        assert!(saved_package.contains("xl/chartsheets/_rels/sheet1.xml.rels"));
+        assert!(saved_package.contains("xl/drawings/drawing1.xml"));
+        assert!(saved_package.contains("xl/drawings/_rels/drawing1.xml.rels"));
+        assert!(saved_package.contains("xl/charts/chart1.xml"));
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen copied chart sheet workbook");
+        let reopened_sheets = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Sheets", &[])
+                .expect("reopened Workbook.Sheets"),
+        );
+        let reopened_charts = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Charts", &[])
+                .expect("reopened Workbook.Charts"),
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_sheets, "Count", &[])
+                    .expect("reopened Sheets.Count")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_charts, "Count", &[])
+                    .expect("reopened Charts.Count")
+            ),
+            1.0
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_charts, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened Charts.Item(1)"),
+        );
+        assert_eq!(
+            expect_text(
+                reopened_runtime
+                    .dispatch_get(reopened_chart, "Name", &[])
+                    .expect("reopened copied Chart.Name")
+            ),
+            "Chart1"
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_chart, "ChartType", &[])
+                    .expect("reopened copied Chart.ChartType")
+            ),
+            f64::from(super::XL_BAR_CLUSTERED)
+        );
     }
 
     #[test]
