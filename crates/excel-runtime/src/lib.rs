@@ -149083,6 +149083,192 @@ mod tests {
     }
 
     #[test]
+    fn sheets_collection_move_preserves_native_mixed_sheet_block_on_save() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let application = runtime.root_application();
+        let workbooks = expect_object_handle(
+            runtime
+                .dispatch_get(application, "Workbooks", &[])
+                .expect("Application.Workbooks"),
+        );
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let charts = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Charts", &[])
+                .expect("Workbook.Charts"),
+        );
+        runtime
+            .dispatch_invoke(charts, "Add", &[])
+            .expect("Charts.Add");
+        runtime
+            .dispatch_invoke(
+                worksheets,
+                "Add",
+                &[
+                    OmValue::Missing,
+                    OmValue::Number(2.0),
+                    OmValue::Missing,
+                    OmValue::Number(f64::from(super::XL_SHEET_TYPE_EXCEL4_MACRO_SHEET)),
+                ],
+            )
+            .expect("Worksheets.Add Type:=xlExcel4MacroSheet");
+        runtime
+            .dispatch_invoke(
+                worksheets,
+                "Add",
+                &[
+                    OmValue::Missing,
+                    OmValue::Number(3.0),
+                    OmValue::Missing,
+                    OmValue::Number(f64::from(super::XL_SHEET_TYPE_DIALOG_SHEET)),
+                ],
+            )
+            .expect("Worksheets.Add Type:=xlDialogSheet");
+        let source_sheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Sheets", &[])
+                .expect("Workbook.Sheets"),
+        );
+        let source_sheet_order = runtime
+            .runtime_workbook(workbook)
+            .expect("source runtime workbook")
+            .loaded
+            .state
+            .worksheets
+            .iter()
+            .map(|worksheet| (worksheet.name.clone(), worksheet.kind))
+            .collect::<Vec<_>>();
+
+        runtime
+            .dispatch_invoke(source_sheets, "Move", &[])
+            .expect("Sheets.Move without placement");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(workbooks, "Count", &[])
+                    .expect("Workbooks.Count after Sheets.Move")
+            ),
+            1.0
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(workbook.0, "Name", &[])
+                .expect_err("source workbook should be closed after moving all sheets")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        let moved_workbook = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveWorkbook", &[])
+                .expect("ActiveWorkbook after Sheets.Move"),
+        );
+        let moved_sheets = expect_object_handle(
+            runtime
+                .dispatch_get(moved_workbook, "Sheets", &[])
+                .expect("moved Workbook.Sheets"),
+        );
+        let moved_worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(moved_workbook, "Worksheets", &[])
+                .expect("moved Workbook.Worksheets"),
+        );
+        let moved_charts = expect_object_handle(
+            runtime
+                .dispatch_get(moved_workbook, "Charts", &[])
+                .expect("moved Workbook.Charts"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(moved_sheets, "Count", &[])
+                    .expect("moved Sheets.Count")
+            ),
+            4.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(moved_worksheets, "Count", &[])
+                    .expect("moved Worksheets.Count")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(moved_charts, "Count", &[])
+                    .expect("moved Charts.Count")
+            ),
+            1.0
+        );
+
+        let saved = runtime
+            .save_workbook(
+                super::WorkbookHandle(moved_workbook),
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save moved mixed sheet workbook");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved moved mixed package");
+        let saved_workbook_rels = std::str::from_utf8(
+            saved_package
+                .part(super::WORKBOOK_RELS_PART_NAME)
+                .expect("saved workbook relationships")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved workbook rels utf8");
+        let reopened = ExcelRuntime::new()
+            .codec
+            .load(&saved, LoadOptions::default())
+            .expect("reopen moved mixed sheet workbook");
+
+        assert!(saved_package.contains(super::SHARED_STRINGS_PART_NAME));
+        assert!(saved_workbook_rels.contains(super::CHARTSHEET_RELATIONSHIP_TYPE));
+        assert!(saved_workbook_rels.contains(super::MACROSHEET_RELATIONSHIP_TYPE));
+        assert!(saved_workbook_rels.contains(super::DIALOGSHEET_RELATIONSHIP_TYPE));
+        assert_eq!(
+            reopened
+                .state
+                .worksheets
+                .iter()
+                .map(|worksheet| (worksheet.name.clone(), worksheet.kind))
+                .collect::<Vec<_>>(),
+            source_sheet_order
+        );
+        for kind in [
+            office_common::SheetKind::Worksheet,
+            office_common::SheetKind::ChartSheet,
+            office_common::SheetKind::MacroSheet,
+            office_common::SheetKind::DialogSheet,
+        ] {
+            let part_uri = reopened
+                .state
+                .worksheets
+                .iter()
+                .find(|worksheet| worksheet.kind == kind)
+                .and_then(|worksheet| worksheet.part_uri.as_deref())
+                .expect("moved sheet should have a package part uri");
+            assert!(saved_package.contains(part_uri));
+        }
+    }
+
+    #[test]
     fn workbooks_close_dispatch_closes_all_open_workbooks() {
         let mut runtime = ExcelRuntime::new();
         let first = runtime
