@@ -145595,6 +145595,111 @@ mod tests {
     }
 
     #[test]
+    fn worksheet_copy_preserves_shared_string_values_with_existing_target_table() {
+        let mut runtime = ExcelRuntime::new();
+        let source_workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open source workbook");
+        let mut target_package =
+            OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("target package");
+        target_package
+            .replace_part_bytes(
+                super::SHARED_STRINGS_PART_NAME,
+                br#"<?xml version="1.0" encoding="UTF-8"?>
+<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <si><t>target-only</t></si>
+</sst>"#
+                    .to_vec(),
+            )
+            .expect("replace target shared strings");
+        let target_workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: target_package.to_bytes().expect("target workbook bytes"),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open target workbook");
+        let source_worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(source_workbook.0, "Worksheets", &[])
+                .expect("source Workbook.Worksheets"),
+        );
+        let target_worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(target_workbook.0, "Worksheets", &[])
+                .expect("target Workbook.Worksheets"),
+        );
+        let source_sheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(source_worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("source Worksheets.Item(1)"),
+        );
+        let target_sheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(target_worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("target Worksheets.Item(1)"),
+        );
+
+        assert!(matches!(
+            runtime
+                .dispatch_invoke(
+                    source_sheet,
+                    "Copy",
+                    &[OmValue::Missing, OmValue::Object(target_sheet)]
+                )
+                .expect("source Worksheet.Copy After:=target sheet"),
+            OmValue::Empty
+        ));
+        let saved = runtime
+            .save_workbook(
+                target_workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save target workbook after Worksheet.Copy");
+        let reopened = ExcelRuntime::new()
+            .codec
+            .load(&saved, LoadOptions::default())
+            .expect("reopen target workbook after Worksheet.Copy");
+        let original_sheet = reopened
+            .state
+            .worksheets
+            .iter()
+            .find(|worksheet| worksheet.name == "Sheet1")
+            .expect("original target Sheet1");
+        let copied_sheet = reopened
+            .state
+            .worksheets
+            .iter()
+            .find(|worksheet| worksheet.name == "Sheet1 (2)")
+            .expect("copied source Sheet1");
+
+        assert_eq!(
+            reopened
+                .state
+                .cell(original_sheet.id, 1, 3)
+                .map(|cell| cell.value.clone()),
+            Some(CellValue::Text("target-only".to_string()))
+        );
+        assert_eq!(
+            reopened
+                .state
+                .cell(copied_sheet.id, 1, 3)
+                .map(|cell| cell.value.clone()),
+            Some(CellValue::Text("shared".to_string()))
+        );
+    }
+
+    #[test]
     fn worksheet_copy_preserves_native_macro_and_dialog_sheet_kinds_for_placement_copy() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
