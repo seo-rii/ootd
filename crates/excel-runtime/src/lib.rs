@@ -144377,6 +144377,153 @@ mod tests {
     }
 
     #[test]
+    fn worksheet_delete_removes_native_macro_and_dialog_sheet_package_parts() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let application = runtime.root_application();
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let sheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Sheets", &[])
+                .expect("Workbook.Sheets"),
+        );
+        let macro_sheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    worksheets,
+                    "Add",
+                    &[
+                        OmValue::Missing,
+                        OmValue::Number(1.0),
+                        OmValue::Missing,
+                        OmValue::Number(f64::from(super::XL_SHEET_TYPE_EXCEL4_MACRO_SHEET)),
+                    ],
+                )
+                .expect("Worksheets.Add Type:=xlExcel4MacroSheet"),
+        );
+        let dialog_sheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    worksheets,
+                    "Add",
+                    &[
+                        OmValue::Missing,
+                        OmValue::Number(2.0),
+                        OmValue::Missing,
+                        OmValue::Number(f64::from(super::XL_SHEET_TYPE_DIALOG_SHEET)),
+                    ],
+                )
+                .expect("Worksheets.Add Type:=xlDialogSheet"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(sheets, "Count", &[])
+                    .expect("Sheets.Count before delete")
+            ),
+            3.0
+        );
+        runtime
+            .dispatch_set(application, "DisplayAlerts", OmValue::Bool(false), &[])
+            .expect("Application.DisplayAlerts = false");
+
+        assert!(expect_bool(
+            runtime
+                .dispatch_invoke(dialog_sheet, "Delete", &[])
+                .expect("delete dialog sheet")
+        ));
+        assert!(expect_bool(
+            runtime
+                .dispatch_invoke(macro_sheet, "Delete", &[])
+                .expect("delete macro sheet")
+        ));
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(sheets, "Count", &[])
+                    .expect("Sheets.Count after delete")
+            ),
+            1.0
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(dialog_sheet, "Name", &[])
+                .expect_err("deleted dialog sheet handle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(macro_sheet, "Name", &[])
+                .expect_err("deleted macro sheet handle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after native sheet deletes");
+        let saved_package =
+            OpcPackage::from_bytes(&saved).expect("saved native sheet delete package");
+        let saved_content_types = std::str::from_utf8(
+            saved_package
+                .part(super::CONTENT_TYPES_PART_NAME)
+                .expect("saved content types")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved content types utf8");
+        let saved_workbook_rels = std::str::from_utf8(
+            saved_package
+                .part(super::WORKBOOK_RELS_PART_NAME)
+                .expect("saved workbook relationships")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved workbook rels utf8");
+        let reopened = ExcelRuntime::new()
+            .codec
+            .load(&saved, LoadOptions::default())
+            .expect("reopen saved workbook");
+
+        assert!(!saved_package.contains("xl/macrosheets/sheet1.xml"));
+        assert!(!saved_package.contains("xl/macrosheets/_rels/sheet1.xml.rels"));
+        assert!(!saved_package.contains("xl/dialogsheets/sheet1.xml"));
+        assert!(!saved_package.contains("xl/dialogsheets/_rels/sheet1.xml.rels"));
+        assert!(!saved_content_types.contains("/xl/macrosheets/sheet1.xml"));
+        assert!(!saved_content_types.contains("/xl/dialogsheets/sheet1.xml"));
+        assert!(!saved_workbook_rels.contains("xlMacrosheet"));
+        assert!(!saved_workbook_rels.contains("relationships/dialogsheet"));
+        assert_eq!(
+            reopened
+                .state
+                .worksheets
+                .iter()
+                .map(|worksheet| (worksheet.name.clone(), worksheet.kind))
+                .collect::<Vec<_>>(),
+            vec![("Sheet1".to_string(), office_common::SheetKind::Worksheet)]
+        );
+    }
+
+    #[test]
     fn worksheet_delete_rejects_last_sheet_read_only_and_extra_arguments() {
         let mut runtime = ExcelRuntime::new();
         let _workbook = runtime
