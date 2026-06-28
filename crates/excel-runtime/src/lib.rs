@@ -28932,9 +28932,10 @@ impl ExcelRuntime {
 
             {
                 let runtime = self.runtime_workbook_mut(target_workbook)?;
+                let mut copied_sheet_data = source_sheet_data;
                 runtime.loaded.package.replace_part_bytes(
                     target_part_uri.as_str(),
-                    source_sheet_data.source_xml.clone(),
+                    copied_sheet_data.source_xml.clone(),
                 )?;
                 let target_relationships_part_uri =
                     worksheet_relationships_part_uri_for(target_part_uri.as_str());
@@ -29022,22 +29023,32 @@ impl ExcelRuntime {
                 }
                 if let Some((bytes, content_type, compression)) =
                     source_shared_strings_part.as_ref()
-                    && !runtime.loaded.package.contains(SHARED_STRINGS_PART_NAME)
                 {
-                    let content_type = content_type
-                        .as_deref()
-                        .unwrap_or(SHARED_STRINGS_PART_CONTENT_TYPE);
-                    runtime.loaded.package.add_part(OpcPart {
-                        name: SHARED_STRINGS_PART_NAME.to_string(),
-                        content_type: Some(content_type.to_string()),
-                        compression: *compression,
-                        bytes: bytes.clone(),
-                    })?;
-                    content_types_xml = append_content_type_override_if_missing(
-                        content_types_xml.as_slice(),
-                        SHARED_STRINGS_PART_NAME,
-                        content_type,
-                    )?;
+                    if let Some(target_shared_strings_part) =
+                        runtime.loaded.package.part(SHARED_STRINGS_PART_NAME)
+                    {
+                        if target_shared_strings_part.bytes.as_slice() != bytes.as_slice() {
+                            copied_sheet_data.dirty = true;
+                            copied_sheet_data
+                                .dirty_cells
+                                .extend(copied_sheet_data.cells.keys().copied());
+                        }
+                    } else {
+                        let content_type = content_type
+                            .as_deref()
+                            .unwrap_or(SHARED_STRINGS_PART_CONTENT_TYPE);
+                        runtime.loaded.package.add_part(OpcPart {
+                            name: SHARED_STRINGS_PART_NAME.to_string(),
+                            content_type: Some(content_type.to_string()),
+                            compression: *compression,
+                            bytes: bytes.clone(),
+                        })?;
+                        content_types_xml = append_content_type_override_if_missing(
+                            content_types_xml.as_slice(),
+                            SHARED_STRINGS_PART_NAME,
+                            content_type,
+                        )?;
+                    }
                 }
                 runtime
                     .loaded
@@ -29112,7 +29123,7 @@ impl ExcelRuntime {
                     .loaded
                     .state
                     .worksheet_data
-                    .insert(added_sheet_id, source_sheet_data);
+                    .insert(added_sheet_id, copied_sheet_data);
                 if let Some(worksheet) = runtime
                     .loaded
                     .state
@@ -149274,6 +149285,103 @@ mod tests {
                         .is_some_and(|part_uri| saved_package.contains(part_uri)))
             );
         }
+    }
+
+    #[test]
+    fn sheets_collection_copy_preserves_shared_string_values_with_existing_target_table() {
+        let mut runtime = ExcelRuntime::new();
+        let source_workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open source workbook");
+        let mut target_package =
+            OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("target package");
+        target_package
+            .replace_part_bytes(
+                super::SHARED_STRINGS_PART_NAME,
+                br#"<?xml version="1.0" encoding="UTF-8"?>
+<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <si><t>target-only</t></si>
+</sst>"#
+                    .to_vec(),
+            )
+            .expect("replace target shared strings");
+        let target_workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: target_package.to_bytes().expect("target workbook bytes"),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open target workbook");
+        let source_sheets = expect_object_handle(
+            runtime
+                .dispatch_get(source_workbook.0, "Sheets", &[])
+                .expect("source Workbook.Sheets"),
+        );
+        let target_sheets = expect_object_handle(
+            runtime
+                .dispatch_get(target_workbook.0, "Sheets", &[])
+                .expect("target Workbook.Sheets"),
+        );
+        let target_anchor = expect_object_handle(
+            runtime
+                .dispatch_invoke(target_sheets, "Item", &[OmValue::Number(1.0)])
+                .expect("target Sheets.Item(1)"),
+        );
+
+        runtime
+            .dispatch_invoke(
+                source_sheets,
+                "Copy",
+                &[OmValue::Missing, OmValue::Object(target_anchor)],
+            )
+            .expect("source Sheets.Copy After:=target sheet");
+        let saved = runtime
+            .save_workbook(
+                target_workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save target workbook after shared string collision copy");
+        let reopened = ExcelRuntime::new()
+            .codec
+            .load(&saved, LoadOptions::default())
+            .expect("reopen target workbook after shared string collision copy");
+        let original_sheet = reopened
+            .state
+            .worksheets
+            .iter()
+            .find(|worksheet| worksheet.name == "Sheet1")
+            .expect("original target Sheet1");
+        let copied_sheet = reopened
+            .state
+            .worksheets
+            .iter()
+            .find(|worksheet| worksheet.name == "Sheet1 (2)")
+            .expect("copied source Sheet1");
+
+        assert_eq!(
+            reopened
+                .state
+                .cell(original_sheet.id, 1, 3)
+                .map(|cell| cell.value.clone()),
+            Some(CellValue::Text("target-only".to_string()))
+        );
+        assert_eq!(
+            reopened
+                .state
+                .cell(copied_sheet.id, 1, 3)
+                .map(|cell| cell.value.clone()),
+            Some(CellValue::Text("shared".to_string()))
+        );
     }
 
     #[test]
