@@ -144718,6 +144718,160 @@ mod tests {
     }
 
     #[test]
+    fn worksheet_move_without_targets_preserves_dialog_sheet_kind() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let application = runtime.root_application();
+        let workbooks = expect_object_handle(
+            runtime
+                .dispatch_get(application, "Workbooks", &[])
+                .expect("Application.Workbooks"),
+        );
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let source_sheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Sheets", &[])
+                .expect("source Workbook.Sheets"),
+        );
+        let dialog_sheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    worksheets,
+                    "Add",
+                    &[
+                        OmValue::Missing,
+                        OmValue::Number(1.0),
+                        OmValue::Missing,
+                        OmValue::Number(f64::from(super::XL_SHEET_TYPE_DIALOG_SHEET)),
+                    ],
+                )
+                .expect("Worksheets.Add Type:=xlDialogSheet"),
+        );
+
+        assert!(matches!(
+            runtime
+                .dispatch_invoke(dialog_sheet, "Move", &[])
+                .expect("Worksheet.Move dialog sheet without placement args"),
+            OmValue::Empty
+        ));
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(workbooks, "Count", &[])
+                    .expect("Workbooks.Count after dialog move")
+            ),
+            2.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(source_sheets, "Count", &[])
+                    .expect("source Sheets.Count after dialog move")
+            ),
+            1.0
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    source_sheets,
+                    "Item",
+                    &[OmValue::Text("Dialog1".to_string())]
+                )
+                .expect_err("moved dialog sheet should be removed from source workbook")
+                .code,
+            OmErrorCode::NotFound
+        );
+        let moved_workbook = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveWorkbook", &[])
+                .expect("ActiveWorkbook after dialog move"),
+        );
+        let moved_sheets = expect_object_handle(
+            runtime
+                .dispatch_get(moved_workbook, "Sheets", &[])
+                .expect("moved Workbook.Sheets"),
+        );
+        let moved_worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(moved_workbook, "Worksheets", &[])
+                .expect("moved Workbook.Worksheets"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(moved_sheets, "Count", &[])
+                    .expect("moved Sheets.Count")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(moved_worksheets, "Count", &[])
+                    .expect("moved Worksheets.Count")
+            ),
+            0.0
+        );
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveSheet", &[])
+                .expect("ActiveSheet after dialog move"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(active_sheet, "Name", &[])
+                    .expect("active sheet name after dialog move")
+            ),
+            "Dialog1"
+        );
+
+        let saved = runtime
+            .save_workbook(
+                super::WorkbookHandle(moved_workbook),
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save moved dialog workbook");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved moved dialog package");
+        assert!(saved_package.contains("xl/dialogsheets/sheet1.xml"));
+        assert!(!saved_package.contains("xl/worksheets/sheet1.xml"));
+        let reopened = ExcelRuntime::new()
+            .codec
+            .load(&saved, LoadOptions::default())
+            .expect("reopen moved dialog workbook");
+        assert_eq!(
+            reopened
+                .state
+                .worksheets
+                .iter()
+                .map(|worksheet| worksheet.name.clone())
+                .collect::<Vec<_>>(),
+            vec!["Dialog1".to_string()]
+        );
+        let dialog = &reopened.state.worksheets[0];
+        assert_eq!(dialog.kind, office_common::SheetKind::DialogSheet);
+        assert_eq!(
+            dialog.part_uri.as_deref(),
+            Some("xl/dialogsheets/sheet1.xml")
+        );
+    }
+
+    #[test]
     fn worksheet_move_without_targets_closes_single_sheet_source_workbook() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
@@ -144977,6 +145131,149 @@ mod tests {
                 .cell(reopened.state.worksheets[0].id, 3, 3)
                 .map(|cell| cell.value.clone()),
             Some(CellValue::Text("copied".to_string()))
+        );
+    }
+
+    #[test]
+    fn worksheet_copy_without_targets_preserves_macro_sheet_kind() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let application = runtime.root_application();
+        let workbooks = expect_object_handle(
+            runtime
+                .dispatch_get(application, "Workbooks", &[])
+                .expect("Application.Workbooks"),
+        );
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let source_sheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Sheets", &[])
+                .expect("source Workbook.Sheets"),
+        );
+        let macro_sheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    worksheets,
+                    "Add",
+                    &[
+                        OmValue::Missing,
+                        OmValue::Number(1.0),
+                        OmValue::Missing,
+                        OmValue::Number(f64::from(super::XL_SHEET_TYPE_EXCEL4_MACRO_SHEET)),
+                    ],
+                )
+                .expect("Worksheets.Add Type:=xlExcel4MacroSheet"),
+        );
+
+        assert!(matches!(
+            runtime
+                .dispatch_invoke(macro_sheet, "Copy", &[])
+                .expect("Worksheet.Copy macro sheet without placement args"),
+            OmValue::Empty
+        ));
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(workbooks, "Count", &[])
+                    .expect("Workbooks.Count after macro copy")
+            ),
+            2.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(source_sheets, "Count", &[])
+                    .expect("source Sheets.Count after macro copy")
+            ),
+            2.0
+        );
+        let copied_workbook = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveWorkbook", &[])
+                .expect("ActiveWorkbook after macro copy"),
+        );
+        let copied_sheets = expect_object_handle(
+            runtime
+                .dispatch_get(copied_workbook, "Sheets", &[])
+                .expect("copied Workbook.Sheets"),
+        );
+        let copied_worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(copied_workbook, "Worksheets", &[])
+                .expect("copied Workbook.Worksheets"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(copied_sheets, "Count", &[])
+                    .expect("copied Sheets.Count")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(copied_worksheets, "Count", &[])
+                    .expect("copied Worksheets.Count")
+            ),
+            0.0
+        );
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveSheet", &[])
+                .expect("ActiveSheet after macro copy"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(active_sheet, "Name", &[])
+                    .expect("active sheet name after macro copy")
+            ),
+            "Macro1"
+        );
+
+        let saved = runtime
+            .save_workbook(
+                super::WorkbookHandle(copied_workbook),
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save copied macro workbook");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved copied macro package");
+        assert!(saved_package.contains("xl/macrosheets/sheet1.xml"));
+        assert!(!saved_package.contains("xl/worksheets/sheet1.xml"));
+        let reopened = ExcelRuntime::new()
+            .codec
+            .load(&saved, LoadOptions::default())
+            .expect("reopen copied macro workbook");
+        assert_eq!(
+            reopened
+                .state
+                .worksheets
+                .iter()
+                .map(|worksheet| worksheet.name.clone())
+                .collect::<Vec<_>>(),
+            vec!["Macro1".to_string()]
+        );
+        let macro_sheet = &reopened.state.worksheets[0];
+        assert_eq!(macro_sheet.kind, office_common::SheetKind::MacroSheet);
+        assert_eq!(
+            macro_sheet.part_uri.as_deref(),
+            Some("xl/macrosheets/sheet1.xml")
         );
     }
 
