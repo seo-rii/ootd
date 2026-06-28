@@ -103858,6 +103858,88 @@ mod tests {
             ),
             f64::from(super::XL_PIE)
         );
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after placement Charts.Copy");
+        let saved_package =
+            OpcPackage::from_bytes(&saved).expect("saved placement Charts.Copy package");
+        assert!(saved_package.contains("xl/worksheets/sheet1.xml"));
+        assert!(saved_package.contains("xl/chartsheets/sheet1.xml"));
+        assert!(saved_package.contains("xl/chartsheets/sheet2.xml"));
+        assert!(saved_package.contains("xl/chartsheets/sheet3.xml"));
+        assert!(saved_package.contains("xl/chartsheets/sheet4.xml"));
+        assert!(saved_package.contains("xl/charts/chart1.xml"));
+        assert!(saved_package.contains("xl/charts/chart2.xml"));
+        assert!(saved_package.contains("xl/charts/chart3.xml"));
+        assert!(saved_package.contains("xl/charts/chart4.xml"));
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after placement Charts.Copy");
+        let reopened_sheets = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Sheets", &[])
+                .expect("reopened placement Charts.Copy Workbook.Sheets"),
+        );
+        let reopened_charts = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Charts", &[])
+                .expect("reopened placement Charts.Copy Workbook.Charts"),
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_sheets, "Count", &[])
+                    .expect("reopened placement Charts.Copy Sheets.Count")
+            ),
+            5.0
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_charts, "Count", &[])
+                    .expect("reopened placement Charts.Copy Charts.Count")
+            ),
+            4.0
+        );
+        let reopened_copied_first = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_charts, "Item", &[OmValue::Number(3.0)])
+                .expect("reopened placement Charts.Copy Charts.Item(3)"),
+        );
+        let reopened_copied_second = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_charts, "Item", &[OmValue::Number(4.0)])
+                .expect("reopened placement Charts.Copy Charts.Item(4)"),
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_copied_first, "ChartType", &[])
+                    .expect("reopened placement Charts.Copy copied first ChartType")
+            ),
+            f64::from(super::XL_LINE)
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_copied_second, "ChartType", &[])
+                    .expect("reopened placement Charts.Copy copied second ChartType")
+            ),
+            f64::from(super::XL_PIE)
+        );
         assert_eq!(
             runtime
                 .dispatch_invoke(
@@ -104244,6 +104326,84 @@ mod tests {
                     .expect("Sheets.Item(1).Name after second Charts.Move")
             ),
             "Chart1"
+        );
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after placement Charts.Move");
+        let saved_package =
+            OpcPackage::from_bytes(&saved).expect("saved placement Charts.Move package");
+        assert!(saved_package.contains("xl/worksheets/sheet1.xml"));
+        assert!(saved_package.contains("xl/chartsheets/sheet1.xml"));
+        assert!(saved_package.contains("xl/chartsheets/sheet2.xml"));
+        assert!(saved_package.contains("xl/charts/chart1.xml"));
+        assert!(saved_package.contains("xl/charts/chart2.xml"));
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after placement Charts.Move");
+        let reopened_sheets = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Sheets", &[])
+                .expect("reopened placement Charts.Move Workbook.Sheets"),
+        );
+        let reopened_charts = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Charts", &[])
+                .expect("reopened placement Charts.Move Workbook.Charts"),
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_sheets, "Count", &[])
+                    .expect("reopened placement Charts.Move Sheets.Count")
+            ),
+            3.0
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_charts, "Count", &[])
+                    .expect("reopened placement Charts.Move Charts.Count")
+            ),
+            2.0
+        );
+        let reopened_first = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_charts, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened placement Charts.Move Charts.Item(1)"),
+        );
+        let reopened_second = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_charts, "Item", &[OmValue::Number(2.0)])
+                .expect("reopened placement Charts.Move Charts.Item(2)"),
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_first, "ChartType", &[])
+                    .expect("reopened placement Charts.Move first ChartType")
+            ),
+            f64::from(super::XL_LINE)
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_second, "ChartType", &[])
+                    .expect("reopened placement Charts.Move second ChartType")
+            ),
+            f64::from(super::XL_PIE)
         );
         assert_eq!(
             runtime
