@@ -149611,6 +149611,119 @@ mod tests {
     }
 
     #[test]
+    fn sheets_collection_move_preserves_shared_string_values_with_existing_target_table() {
+        let mut runtime = ExcelRuntime::new();
+        let source_workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open source workbook");
+        let mut target_package =
+            OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("target package");
+        target_package
+            .replace_part_bytes(
+                super::SHARED_STRINGS_PART_NAME,
+                br#"<?xml version="1.0" encoding="UTF-8"?>
+<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <si><t>target-only</t></si>
+</sst>"#
+                    .to_vec(),
+            )
+            .expect("replace target shared strings");
+        let target_workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: target_package.to_bytes().expect("target workbook bytes"),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open target workbook");
+        let source_sheets = expect_object_handle(
+            runtime
+                .dispatch_get(source_workbook.0, "Sheets", &[])
+                .expect("source Workbook.Sheets"),
+        );
+        let target_sheets = expect_object_handle(
+            runtime
+                .dispatch_get(target_workbook.0, "Sheets", &[])
+                .expect("target Workbook.Sheets"),
+        );
+        let target_anchor = expect_object_handle(
+            runtime
+                .dispatch_invoke(target_sheets, "Item", &[OmValue::Number(1.0)])
+                .expect("target Sheets.Item(1)"),
+        );
+
+        runtime
+            .dispatch_invoke(
+                source_sheets,
+                "Move",
+                &[OmValue::Missing, OmValue::Object(target_anchor)],
+            )
+            .expect("source Sheets.Move After:=target sheet");
+        assert_eq!(
+            runtime
+                .dispatch_get(source_workbook.0, "Name", &[])
+                .expect_err("source workbook should become stale after moving all sheets")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(target_sheets, "Count", &[])
+                    .expect("target Sheets.Count after shared string collision move")
+            ),
+            2.0
+        );
+
+        let saved = runtime
+            .save_workbook(
+                target_workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save target workbook after shared string collision move");
+        let reopened = ExcelRuntime::new()
+            .codec
+            .load(&saved, LoadOptions::default())
+            .expect("reopen target workbook after shared string collision move");
+        let original_sheet = reopened
+            .state
+            .worksheets
+            .iter()
+            .find(|worksheet| worksheet.name == "Sheet1")
+            .expect("original target Sheet1");
+        let moved_sheet = reopened
+            .state
+            .worksheets
+            .iter()
+            .find(|worksheet| worksheet.name == "Sheet1 (2)")
+            .expect("moved source Sheet1");
+
+        assert_eq!(
+            reopened
+                .state
+                .cell(original_sheet.id, 1, 3)
+                .map(|cell| cell.value.clone()),
+            Some(CellValue::Text("target-only".to_string()))
+        );
+        assert_eq!(
+            reopened
+                .state
+                .cell(moved_sheet.id, 1, 3)
+                .map(|cell| cell.value.clone()),
+            Some(CellValue::Text("shared".to_string()))
+        );
+    }
+
+    #[test]
     fn sheets_collection_move_preserves_native_mixed_sheet_block_on_save() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
