@@ -476,6 +476,7 @@ const XL_TIME_LEADING_ZERO: i32 = 45;
 const CONTENT_TYPES_PART_NAME: &str = "[Content_Types].xml";
 const WORKBOOK_PART_NAME: &str = "xl/workbook.xml";
 const WORKBOOK_RELS_PART_NAME: &str = "xl/_rels/workbook.xml.rels";
+const SHARED_STRINGS_PART_NAME: &str = "xl/sharedStrings.xml";
 const WORKBOOK_XLSX_CONTENT_TYPE: &str =
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml";
 const WORKBOOK_XLSM_CONTENT_TYPE: &str = "application/vnd.ms-excel.sheet.macroEnabled.main+xml";
@@ -484,6 +485,8 @@ const WORKBOOK_XLTX_CONTENT_TYPE: &str =
 const WORKBOOK_XLTM_CONTENT_TYPE: &str = "application/vnd.ms-excel.template.macroEnabled.main+xml";
 const WORKSHEET_PART_CONTENT_TYPE: &str =
     "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml";
+const SHARED_STRINGS_PART_CONTENT_TYPE: &str =
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml";
 const CHARTSHEET_PART_CONTENT_TYPE: &str =
     "application/vnd.openxmlformats-officedocument.spreadsheetml.chartsheet+xml";
 const DIALOGSHEET_PART_CONTENT_TYPE: &str =
@@ -28689,6 +28692,7 @@ impl ExcelRuntime {
                 source_relationships_part,
                 source_comment_parts,
                 source_vml_parts,
+                source_shared_strings_part,
                 source_drawings,
                 source_charts,
                 source_chart_raw_part_uris,
@@ -28811,6 +28815,17 @@ impl ExcelRuntime {
                         ))
                     })
                     .collect::<OmResult<BTreeMap<_, _>>>()?;
+                let source_shared_strings_part = runtime
+                    .loaded
+                    .package
+                    .part(SHARED_STRINGS_PART_NAME)
+                    .map(|part| {
+                        (
+                            part.bytes.clone(),
+                            part.content_type.clone(),
+                            part.compression,
+                        )
+                    });
                 let source_drawings = runtime
                     .loaded
                     .state
@@ -28850,6 +28865,7 @@ impl ExcelRuntime {
                     relationships_part,
                     comment_parts,
                     vml_parts,
+                    source_shared_strings_part,
                     source_drawings,
                     source_charts,
                     source_chart_raw_part_uris,
@@ -29002,6 +29018,25 @@ impl ExcelRuntime {
                         content_types_xml.as_slice(),
                         "vml",
                         VML_DRAWING_CONTENT_TYPE,
+                    )?;
+                }
+                if let Some((bytes, content_type, compression)) =
+                    source_shared_strings_part.as_ref()
+                    && !runtime.loaded.package.contains(SHARED_STRINGS_PART_NAME)
+                {
+                    let content_type = content_type
+                        .as_deref()
+                        .unwrap_or(SHARED_STRINGS_PART_CONTENT_TYPE);
+                    runtime.loaded.package.add_part(OpcPart {
+                        name: SHARED_STRINGS_PART_NAME.to_string(),
+                        content_type: Some(content_type.to_string()),
+                        compression: *compression,
+                        bytes: bytes.clone(),
+                    })?;
+                    content_types_xml = append_content_type_override_if_missing(
+                        content_types_xml.as_slice(),
+                        SHARED_STRINGS_PART_NAME,
+                        content_type,
                     )?;
                 }
                 runtime
@@ -148823,6 +148858,228 @@ mod tests {
                 .code,
             OmErrorCode::InvalidState
         );
+    }
+
+    #[test]
+    fn sheets_collection_copy_preserves_native_mixed_sheet_block_on_save() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let application = runtime.root_application();
+        let workbooks = expect_object_handle(
+            runtime
+                .dispatch_get(application, "Workbooks", &[])
+                .expect("Application.Workbooks"),
+        );
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let charts = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Charts", &[])
+                .expect("Workbook.Charts"),
+        );
+        runtime
+            .dispatch_invoke(charts, "Add", &[])
+            .expect("Charts.Add");
+        runtime
+            .dispatch_invoke(
+                worksheets,
+                "Add",
+                &[
+                    OmValue::Missing,
+                    OmValue::Number(2.0),
+                    OmValue::Missing,
+                    OmValue::Number(f64::from(super::XL_SHEET_TYPE_EXCEL4_MACRO_SHEET)),
+                ],
+            )
+            .expect("Worksheets.Add Type:=xlExcel4MacroSheet");
+        runtime
+            .dispatch_invoke(
+                worksheets,
+                "Add",
+                &[
+                    OmValue::Missing,
+                    OmValue::Number(3.0),
+                    OmValue::Missing,
+                    OmValue::Number(f64::from(super::XL_SHEET_TYPE_DIALOG_SHEET)),
+                ],
+            )
+            .expect("Worksheets.Add Type:=xlDialogSheet");
+        let source_sheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Sheets", &[])
+                .expect("Workbook.Sheets"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(source_sheets, "Count", &[])
+                    .expect("source Sheets.Count")
+            ),
+            4.0
+        );
+        let source_sheet_order = runtime
+            .runtime_workbook(workbook)
+            .expect("source runtime workbook")
+            .loaded
+            .state
+            .worksheets
+            .iter()
+            .map(|worksheet| (worksheet.name.clone(), worksheet.kind))
+            .collect::<Vec<_>>();
+
+        runtime
+            .dispatch_invoke(source_sheets, "Copy", &[])
+            .expect("Sheets.Copy without placement");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(workbooks, "Count", &[])
+                    .expect("Workbooks.Count after Sheets.Copy")
+            ),
+            2.0
+        );
+        let copied_workbook = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveWorkbook", &[])
+                .expect("ActiveWorkbook after Sheets.Copy"),
+        );
+        let copied_sheets = expect_object_handle(
+            runtime
+                .dispatch_get(copied_workbook, "Sheets", &[])
+                .expect("copied Workbook.Sheets"),
+        );
+        let copied_worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(copied_workbook, "Worksheets", &[])
+                .expect("copied Workbook.Worksheets"),
+        );
+        let copied_charts = expect_object_handle(
+            runtime
+                .dispatch_get(copied_workbook, "Charts", &[])
+                .expect("copied Workbook.Charts"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(copied_sheets, "Count", &[])
+                    .expect("copied Sheets.Count")
+            ),
+            4.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(copied_worksheets, "Count", &[])
+                    .expect("copied Worksheets.Count")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(copied_charts, "Count", &[])
+                    .expect("copied Charts.Count")
+            ),
+            1.0
+        );
+
+        let saved = runtime
+            .save_workbook(
+                super::WorkbookHandle(copied_workbook),
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save copied mixed sheet workbook");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved copied mixed package");
+        let saved_content_types = std::str::from_utf8(
+            saved_package
+                .part(super::CONTENT_TYPES_PART_NAME)
+                .expect("saved content types")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved content types utf8");
+        let saved_workbook_rels = std::str::from_utf8(
+            saved_package
+                .part(super::WORKBOOK_RELS_PART_NAME)
+                .expect("saved workbook relationships")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved workbook rels utf8");
+        let reopened = ExcelRuntime::new()
+            .codec
+            .load(&saved, LoadOptions::default())
+            .expect("reopen copied mixed sheet workbook");
+
+        assert!(saved_package.contains(super::SHARED_STRINGS_PART_NAME));
+        assert!(saved_package.contains("xl/chartsheets/sheet1.xml"));
+        assert!(saved_package.contains("xl/chartsheets/_rels/sheet1.xml.rels"));
+        assert!(saved_package.contains("xl/charts/chart1.xml"));
+        assert!(saved_package.contains("xl/macrosheets/sheet1.xml"));
+        assert!(saved_package.contains("xl/dialogsheets/sheet1.xml"));
+        assert!(saved_content_types.contains(
+            r#"PartName="/xl/chartsheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.chartsheet+xml""#
+        ));
+        assert!(saved_content_types.contains(
+            r#"PartName="/xl/macrosheets/sheet1.xml" ContentType="application/vnd.ms-excel.macrosheet+xml""#
+        ));
+        assert!(saved_content_types.contains(
+            r#"PartName="/xl/dialogsheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.dialogsheet+xml""#
+        ));
+        assert!(saved_workbook_rels.contains(
+            r#"Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chartsheet" Target="chartsheets/sheet1.xml""#
+        ));
+        assert!(saved_workbook_rels.contains(
+            r#"Type="http://schemas.microsoft.com/office/2006/relationships/xlMacrosheet" Target="macrosheets/sheet1.xml""#
+        ));
+        assert!(saved_workbook_rels.contains(
+            r#"Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/dialogsheet" Target="dialogsheets/sheet1.xml""#
+        ));
+        assert_eq!(
+            reopened
+                .state
+                .worksheets
+                .iter()
+                .map(|worksheet| (worksheet.name.clone(), worksheet.kind))
+                .collect::<Vec<_>>(),
+            source_sheet_order
+        );
+        for kind in [
+            office_common::SheetKind::Worksheet,
+            office_common::SheetKind::ChartSheet,
+            office_common::SheetKind::MacroSheet,
+            office_common::SheetKind::DialogSheet,
+        ] {
+            let part_uri = reopened
+                .state
+                .worksheets
+                .iter()
+                .find(|worksheet| worksheet.kind == kind)
+                .and_then(|worksheet| worksheet.part_uri.as_deref())
+                .expect("copied sheet should have a package part uri");
+            assert!(saved_package.contains(part_uri));
+        }
+        let chart_sheet = reopened
+            .state
+            .worksheets
+            .iter()
+            .find(|worksheet| worksheet.kind == office_common::SheetKind::ChartSheet)
+            .expect("reopened chart sheet");
+        assert!(reopened.state.chart_sheets.contains_key(&chart_sheet.id));
     }
 
     #[test]
