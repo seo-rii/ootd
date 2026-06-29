@@ -13941,9 +13941,17 @@ impl ExcelRuntime {
                                 "cannot modify a read-only workbook",
                             ));
                         }
-                        runtime.loaded.state.charts.get(&chart_id).ok_or_else(|| {
-                            OmError::new(OmErrorCode::NotFound, "chart not found")
-                        })?;
+                        let chart =
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get_mut(&chart_id)
+                                .ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "chart not found")
+                                })?;
+                        chart.dirty = true;
+                        runtime.dirty = true;
                     }
                     if let Some(chart_type) = args.get(1)
                         && !om_value_is_omitted(chart_type)
@@ -128204,6 +128212,7 @@ mod tests {
                 "ApplyChartTemplate",
                 vec![OmValue::Text("standard.crtx".to_string())],
             ),
+            ("ApplyLayout", vec![OmValue::Number(1.0)]),
             (
                 "SetBackgroundPicture",
                 vec![OmValue::Text("background.png".to_string())],
