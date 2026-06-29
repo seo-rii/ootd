@@ -139041,6 +139041,88 @@ mod tests {
     }
 
     #[test]
+    fn chartobjects_add_validates_geometry_without_partial_mutation() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+
+        let invalid_cases = [
+            (
+                vec![
+                    OmValue::Number(1.0),
+                    OmValue::Number(2.0),
+                    OmValue::Number(3.0),
+                ],
+                OmErrorCode::InvalidArgument,
+                "missing height",
+            ),
+            (
+                vec![
+                    OmValue::Text("left".to_string()),
+                    OmValue::Number(2.0),
+                    OmValue::Number(3.0),
+                    OmValue::Number(4.0),
+                ],
+                OmErrorCode::TypeMismatch,
+                "non-numeric left",
+            ),
+            (
+                vec![
+                    OmValue::Number(1.0),
+                    OmValue::Number(2.0),
+                    OmValue::Number(-3.0),
+                    OmValue::Number(4.0),
+                ],
+                OmErrorCode::InvalidArgument,
+                "negative width",
+            ),
+            (
+                vec![
+                    OmValue::Number(1.0),
+                    OmValue::Number(2.0),
+                    OmValue::Number(3.0),
+                    OmValue::Number(f64::INFINITY),
+                ],
+                OmErrorCode::InvalidArgument,
+                "infinite height",
+            ),
+        ];
+
+        for (args, expected_code, label) in invalid_cases {
+            let error = match runtime.dispatch_invoke(chart_objects, "Add", &args) {
+                Ok(_) => panic!("ChartObjects.Add should reject {label}"),
+                Err(error) => error,
+            };
+            assert_eq!(error.code, expected_code, "{label}: {error:?}");
+            assert_eq!(
+                expect_number(
+                    runtime
+                        .dispatch_get(chart_objects, "Count", &[])
+                        .expect("ChartObjects.Count after rejected Add")
+                ),
+                1.0,
+                "ChartObjects.Add {label} should not create a chart object"
+            );
+        }
+    }
+
+    #[test]
     fn chartobjects_add_appends_after_existing_z_order() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
