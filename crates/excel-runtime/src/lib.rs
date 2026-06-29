@@ -9964,6 +9964,11 @@ impl ExcelRuntime {
                                 ));
                             };
                             let index = coerce_u32_arg(index, "Range.Item index")?;
+                            if index == 0 {
+                                return Err(OmError::invalid_argument(
+                                    "Range.Item index is out of bounds",
+                                ));
+                            }
                             match projection {
                                 RangeProjection::Rows | RangeProjection::Columns => {
                                     let (sheet_id, rect) = Self::range_set_first_area(&range)?;
@@ -10415,6 +10420,11 @@ impl ExcelRuntime {
                         let item_rect = match args {
                             [index] => {
                                 let index = coerce_u32_arg(index, "Range.Item index")?;
+                                if index == 0 {
+                                    return Err(OmError::invalid_argument(
+                                        "Range.Item index is out of bounds",
+                                    ));
+                                }
                                 match projection {
                                     RangeProjection::Rows => {
                                         if index > rect.height() {
@@ -10466,6 +10476,16 @@ impl ExcelRuntime {
                                 let row_index = coerce_u32_arg(row_index, "Range.Item row index")?;
                                 let column_index =
                                     coerce_u32_arg(column_index, "Range.Item column index")?;
+                                if row_index == 0 {
+                                    return Err(OmError::invalid_argument(
+                                        "Range.Item row index is out of bounds",
+                                    ));
+                                }
+                                if column_index == 0 {
+                                    return Err(OmError::invalid_argument(
+                                        "Range.Item column index is out of bounds",
+                                    ));
+                                }
                                 if row_index > rect.height() {
                                     return Err(OmError::invalid_argument(
                                         "Range.Item row index is out of bounds",
@@ -89073,8 +89093,43 @@ mod tests {
         );
         assert_eq!(
             runtime
+                .dispatch_invoke(range, "Item", &[OmValue::Number(0.0)])
+                .expect_err("Range.Item(0) should be out of bounds")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(range, "Item", &[OmValue::Number(0.0), OmValue::Number(1.0)])
+                .expect_err("Range.Item(0, 1) should be out of bounds")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(range, "Item", &[OmValue::Number(1.0), OmValue::Number(0.0)])
+                .expect_err("Range.Item(1, 0) should be out of bounds")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
                 .dispatch_invoke(rows, "Item", &[OmValue::Number(3.0)])
                 .expect_err("Rows.Item(3) should be out of bounds")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(rows, "Item", &[OmValue::Number(0.0)])
+                .expect_err("Rows.Item(0) should be out of bounds")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(columns, "Item", &[OmValue::Number(0.0)])
+                .expect_err("Columns.Item(0) should be out of bounds")
                 .code,
             OmErrorCode::InvalidArgument
         );
@@ -89161,8 +89216,22 @@ mod tests {
         );
         assert_eq!(
             runtime
+                .dispatch_invoke(rows, "Item", &[OmValue::Number(0.0)])
+                .expect_err("multi-area Rows.Item(0) should be out of bounds")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
                 .dispatch_invoke(columns, "Item", &[OmValue::Number(3.0)])
                 .expect_err("multi-area Columns.Item(3) should be out of bounds")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(columns, "Item", &[OmValue::Number(0.0)])
+                .expect_err("multi-area Columns.Item(0) should be out of bounds")
                 .code,
             OmErrorCode::InvalidArgument
         );
