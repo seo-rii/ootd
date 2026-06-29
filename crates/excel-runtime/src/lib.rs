@@ -122987,6 +122987,120 @@ mod tests {
     }
 
     #[test]
+    fn chart_group_setters_reject_read_only_workbook() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: true,
+            })
+            .expect("open read-only workbook with chart group properties");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let chart_group = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartGroups", &[OmValue::Number(1.0)])
+                .expect("Chart.ChartGroups(1)"),
+        );
+
+        for (member, value) in [
+            ("AxisGroup", OmValue::Number(f64::from(super::XL_PRIMARY))),
+            ("VaryByCategories", OmValue::Bool(false)),
+            ("HasSeriesLines", OmValue::Bool(false)),
+            ("HasDropLines", OmValue::Bool(false)),
+            ("HasHiLoLines", OmValue::Bool(false)),
+            ("HasUpDownBars", OmValue::Bool(false)),
+            ("ShowNegativeBubbles", OmValue::Bool(false)),
+            ("Has3DShading", OmValue::Bool(false)),
+            ("GapWidth", OmValue::Number(200.0)),
+            ("Overlap", OmValue::Number(25.0)),
+            ("FirstSliceAngle", OmValue::Number(45.0)),
+            ("BubbleScale", OmValue::Number(150.0)),
+            ("DoughnutHoleSize", OmValue::Number(50.0)),
+            ("SecondPlotSize", OmValue::Number(90.0)),
+            (
+                "SizeRepresents",
+                OmValue::Number(f64::from(super::XL_SIZE_IS_AREA)),
+            ),
+            (
+                "SplitType",
+                OmValue::Number(f64::from(super::XL_SPLIT_BY_POSITION)),
+            ),
+            ("SplitValue", OmValue::Number(20.0)),
+        ] {
+            let error = match runtime.dispatch_set(chart_group, member, value, &[]) {
+                Ok(()) => panic!("ChartGroup.{member} should reject read-only workbooks"),
+                Err(error) => error,
+            };
+            assert_eq!(
+                error.code,
+                OmErrorCode::InvalidState,
+                "ChartGroup.{member}: {error:?}"
+            );
+            assert!(
+                error.message.contains("read-only"),
+                "ChartGroup.{member}: {error:?}"
+            );
+        }
+
+        for (member, expected) in [
+            ("AxisGroup", OmValue::Number(f64::from(super::XL_PRIMARY))),
+            ("VaryByCategories", OmValue::Bool(true)),
+            ("HasSeriesLines", OmValue::Bool(true)),
+            ("HasDropLines", OmValue::Bool(true)),
+            ("HasHiLoLines", OmValue::Bool(true)),
+            ("HasUpDownBars", OmValue::Bool(true)),
+            ("ShowNegativeBubbles", OmValue::Bool(true)),
+            ("Has3DShading", OmValue::Bool(true)),
+            ("GapWidth", OmValue::Number(150.0)),
+            ("Overlap", OmValue::Number(0.0)),
+            ("FirstSliceAngle", OmValue::Number(25.0)),
+            ("BubbleScale", OmValue::Number(125.0)),
+            ("DoughnutHoleSize", OmValue::Number(65.0)),
+            ("SecondPlotSize", OmValue::Number(80.0)),
+            (
+                "SizeRepresents",
+                OmValue::Number(f64::from(super::XL_SIZE_IS_WIDTH)),
+            ),
+            (
+                "SplitType",
+                OmValue::Number(f64::from(super::XL_SPLIT_BY_VALUE)),
+            ),
+            ("SplitValue", OmValue::Number(10.0)),
+        ] {
+            assert_eq!(
+                runtime
+                    .dispatch_get(chart_group, member, &[])
+                    .unwrap_or_else(|error| {
+                        panic!("ChartGroup.{member} after rejected setter: {error:?}")
+                    }),
+                expected,
+                "ChartGroup.{member} should be unchanged"
+            );
+        }
+    }
+
+    #[test]
     fn chart_source_and_style_mutators_reject_read_only_workbook() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
