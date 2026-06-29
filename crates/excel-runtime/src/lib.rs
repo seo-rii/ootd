@@ -13905,6 +13905,18 @@ impl ExcelRuntime {
                             "Chart.ApplyLayout Layout expects a value from 1 to 10",
                         ));
                     }
+                    if args.get(1).is_none_or(om_value_is_omitted) {
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        runtime.loaded.state.charts.get(&chart_id).ok_or_else(|| {
+                            OmError::new(OmErrorCode::NotFound, "chart not found")
+                        })?;
+                    }
                     if let Some(chart_type) = args.get(1)
                         && !om_value_is_omitted(chart_type)
                     {
@@ -15013,7 +15025,16 @@ impl ExcelRuntime {
                             | MSO_ELEMENT_CHART_FLOOR_SHOW
                     );
                     if valid_unimplemented_element {
-                        self.chart_model(workbook, chart_id)?;
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        runtime.loaded.state.charts.get(&chart_id).ok_or_else(|| {
+                            OmError::new(OmErrorCode::NotFound, "chart not found")
+                        })?;
                         return Ok(OmValue::Empty);
                     }
                     let changed_title_or_legend = matches!(
@@ -124719,6 +124740,59 @@ mod tests {
                 "Chart.{member}: {error:?}"
             );
         }
+    }
+
+    #[test]
+    fn chart_layout_and_preserve_only_element_mutators_reject_read_only_workbook() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: true,
+            })
+            .expect("open read-only workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+
+        let layout_error = runtime
+            .dispatch_invoke(chart, "ApplyLayout", &[OmValue::Number(1.0)])
+            .expect_err("Chart.ApplyLayout should reject read-only workbooks");
+        assert_eq!(layout_error.code, OmErrorCode::InvalidState);
+        assert!(layout_error.message.contains("read-only"));
+
+        let set_element_error = runtime
+            .dispatch_invoke(
+                chart,
+                "SetElement",
+                &[OmValue::Number(f64::from(
+                    super::MSO_ELEMENT_TRENDLINE_ADD_LINEAR,
+                ))],
+            )
+            .expect_err(
+                "Chart.SetElement preserve-only elements should reject read-only workbooks",
+            );
+        assert_eq!(set_element_error.code, OmErrorCode::InvalidState);
+        assert!(set_element_error.message.contains("read-only"));
     }
 
     #[test]
