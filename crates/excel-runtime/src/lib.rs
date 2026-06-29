@@ -127658,6 +127658,84 @@ mod tests {
     }
 
     #[test]
+    fn chart_export_methods_allow_read_only_workbooks() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: true,
+            })
+            .expect("open read-only workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved before read-only chart export"),
+            OmValue::Bool(true)
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    chart,
+                    "Export",
+                    &[
+                        OmValue::Text("readonly-chart.png".to_string()),
+                        OmValue::Text("PNG".to_string()),
+                        OmValue::Bool(false),
+                    ],
+                )
+                .expect("read-only Chart.Export"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    chart,
+                    "ExportAsFixedFormat",
+                    &[
+                        OmValue::Number(f64::from(super::XL_TYPE_PDF)),
+                        OmValue::Text("readonly-chart.pdf".to_string()),
+                    ],
+                )
+                .expect("read-only Chart.ExportAsFixedFormat"),
+            OmValue::Empty
+        );
+        assert!(
+            runtime
+                .is_read_only(workbook)
+                .expect("workbook is read-only")
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved after read-only chart export"),
+            OmValue::Bool(true)
+        );
+    }
+
+    #[test]
     fn chart_wizard_updates_basic_chart_surface_and_validates_arguments() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
