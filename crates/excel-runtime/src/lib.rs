@@ -124023,6 +124023,11 @@ mod tests {
                 .dispatch_get(chart, "SeriesCollection", &[])
                 .expect("Chart.SeriesCollection"),
         );
+        let source = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3)"),
+        );
         let series = expect_object_handle(
             runtime
                 .dispatch_invoke(series_collection, "Item", &[OmValue::Number(1.0)])
@@ -124062,6 +124067,11 @@ mod tests {
         let error = runtime
             .dispatch_invoke(series_collection, "NewSeries", &[])
             .expect_err("SeriesCollection.NewSeries should reject read-only workbooks");
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("read-only"), "{error:?}");
+        let error = runtime
+            .dispatch_invoke(series_collection, "Add", &[OmValue::Object(source)])
+            .expect_err("SeriesCollection.Add should reject read-only workbooks");
         assert_eq!(error.code, OmErrorCode::InvalidState);
         assert!(error.message.contains("read-only"), "{error:?}");
 
