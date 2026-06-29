@@ -15284,6 +15284,12 @@ impl ExcelRuntime {
                             "Chart.Delete does not accept arguments",
                         ));
                     }
+                    if self.runtime_workbook(workbook)?.read_only {
+                        return Err(OmError::new(
+                            OmErrorCode::InvalidState,
+                            "cannot modify a read-only workbook",
+                        ));
+                    }
                     let Some(sheet_id) = self.chart_sheet_id_for_chart(workbook, chart_id)? else {
                         let chart_object_id = self
                             .runtime_workbook(workbook)?
@@ -122548,6 +122554,53 @@ mod tests {
             assert_eq!(error.code, OmErrorCode::InvalidState, "{label}: {error:?}");
             assert!(error.message.contains("read-only"), "{label}: {error:?}");
         }
+    }
+
+    #[test]
+    fn chart_delete_rejects_read_only_workbook() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: true,
+            })
+            .expect("open read-only workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+
+        let error = runtime
+            .dispatch_invoke(chart, "Delete", &[])
+            .expect_err("Chart.Delete should reject read-only workbooks");
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("read-only"), "{error:?}");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_objects, "Count", &[])
+                    .expect("ChartObjects.Count after rejected Chart.Delete")
+            ),
+            1.0
+        );
     }
 
     #[test]
