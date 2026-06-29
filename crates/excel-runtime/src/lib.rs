@@ -123101,6 +123101,70 @@ mod tests {
     }
 
     #[test]
+    fn chart_group_line_deletes_reject_read_only_workbook() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: true,
+            })
+            .expect("open read-only workbook with chart group lines");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let chart_group = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartGroups", &[OmValue::Number(1.0)])
+                .expect("Chart.ChartGroups(1)"),
+        );
+
+        for (member, owner, flag) in [
+            ("SeriesLines", "SeriesLines", "HasSeriesLines"),
+            ("DropLines", "DropLines", "HasDropLines"),
+            ("HiLoLines", "HiLoLines", "HasHiLoLines"),
+            ("UpBars", "UpBars", "HasUpDownBars"),
+        ] {
+            let lines = expect_object_handle(
+                runtime
+                    .dispatch_get(chart_group, member, &[])
+                    .unwrap_or_else(|error| panic!("ChartGroup.{member}: {error:?}")),
+            );
+            let error = match runtime.dispatch_invoke(lines, "Delete", &[]) {
+                Ok(_) => panic!("{owner}.Delete should reject read-only workbooks"),
+                Err(error) => error,
+            };
+            assert_eq!(error.code, OmErrorCode::InvalidState, "{owner}: {error:?}");
+            assert!(error.message.contains("read-only"), "{owner}: {error:?}");
+            assert_eq!(
+                runtime
+                    .dispatch_get(chart_group, flag, &[])
+                    .unwrap_or_else(|error| panic!("ChartGroup.{flag}: {error:?}")),
+                OmValue::Bool(true),
+                "ChartGroup.{flag} should remain enabled"
+            );
+        }
+    }
+
+    #[test]
     fn chart_source_and_style_mutators_reject_read_only_workbook() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
