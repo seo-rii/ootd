@@ -31978,6 +31978,12 @@ impl ExcelRuntime {
                 "chart object not found",
             ));
         }
+        if self.runtime_workbook(workbook)?.read_only {
+            return Err(OmError::new(
+                OmErrorCode::InvalidState,
+                "cannot modify a read-only workbook",
+            ));
+        }
         if ordered_chart_object_ids.len() <= 1
             || ordered_chart_object_ids
                 .iter()
@@ -122725,6 +122731,77 @@ mod tests {
                 runtime
                     .dispatch_get(chart_objects, "Count", &[])
                     .expect("ChartObjects.Count after rejected setters")
+            ),
+            1.0
+        );
+    }
+
+    #[test]
+    fn chart_object_mutating_methods_reject_read_only_workbook() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: true,
+            })
+            .expect("open read-only workbook with chart object");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+
+        for (handle, owner, member, args) in [
+            (chart_object, "ChartObject", "Duplicate", Vec::new()),
+            (chart_object, "ChartObject", "BringToFront", Vec::new()),
+            (chart_object, "ChartObject", "SendToBack", Vec::new()),
+            (chart_objects, "ChartObjects", "Duplicate", Vec::new()),
+            (chart_objects, "ChartObjects", "BringToFront", Vec::new()),
+            (chart_objects, "ChartObjects", "SendToBack", Vec::new()),
+            (
+                chart_objects,
+                "ChartObjects",
+                "Add",
+                vec![
+                    OmValue::Number(10.0),
+                    OmValue::Number(10.0),
+                    OmValue::Number(100.0),
+                    OmValue::Number(80.0),
+                ],
+            ),
+        ] {
+            let error = match runtime.dispatch_invoke(handle, member, &args) {
+                Ok(_) => panic!("{owner}.{member} should reject read-only workbooks"),
+                Err(error) => error,
+            };
+            assert_eq!(
+                error.code,
+                OmErrorCode::InvalidState,
+                "{owner}.{member}: {error:?}"
+            );
+            assert!(
+                error.message.contains("read-only"),
+                "{owner}.{member}: {error:?}"
+            );
+        }
+
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_objects, "Count", &[])
+                    .expect("ChartObjects.Count after rejected mutating methods")
             ),
             1.0
         );
