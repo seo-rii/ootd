@@ -137445,6 +137445,51 @@ mod tests {
             ),
             "Z Ten Chart"
         );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after selected ChartObjects.SendToBack");
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after selected ChartObjects.SendToBack");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        for (index, expected_name) in [(1.0, "Z Ten Chart"), (2.0, "Z One Chart")] {
+            let chart_object = expect_object_handle(
+                reopened_runtime
+                    .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(index)])
+                    .expect("reopened ChartObjects.Item"),
+            );
+            assert_eq!(
+                expect_text(
+                    reopened_runtime
+                        .dispatch_get(chart_object, "Name", &[])
+                        .expect("reopened ChartObject.Name")
+                ),
+                expected_name
+            );
+        }
     }
 
     #[test]
