@@ -18770,7 +18770,7 @@ impl ExcelRuntime {
                     }
                     [index] => {
                         let index = coerce_u32_arg(index, "Worksheet.Rows index")?;
-                        if index > EXCEL_MAX_ROW_INDEX {
+                        if index == 0 || index > EXCEL_MAX_ROW_INDEX {
                             return Err(OmError::invalid_argument(
                                 "Worksheet.Rows index is out of bounds",
                             ));
