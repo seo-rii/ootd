@@ -14362,6 +14362,12 @@ impl ExcelRuntime {
                             "Chart.Paste clipboard mode is invalid",
                         ));
                     }
+                    if self.runtime_workbook(workbook)?.read_only {
+                        return Err(OmError::new(
+                            OmErrorCode::InvalidState,
+                            "cannot modify a read-only workbook",
+                        ));
+                    }
                     if matches!(
                         paste_type,
                         XL_PASTE_VALUES | XL_PASTE_VALUES_AND_NUMBER_FORMATS
@@ -124233,6 +124239,53 @@ mod tests {
                 col_last: 3,
             }
         );
+    }
+
+    #[test]
+    fn chart_paste_rejects_read_only_workbook() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: true,
+            })
+            .expect("open read-only workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let source = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3)"),
+        );
+
+        runtime
+            .dispatch_invoke(source, "Copy", &[])
+            .expect("Range.Copy before read-only Chart.Paste");
+        let error = runtime
+            .dispatch_invoke(chart, "Paste", &[])
+            .expect_err("Chart.Paste should reject read-only workbooks");
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("read-only"), "{error:?}");
     }
 
     #[test]
