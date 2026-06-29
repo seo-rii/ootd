@@ -20442,6 +20442,11 @@ impl ExcelRuntime {
                         OmValue::Number(_) => {
                             let index =
                                 coerce_u32_arg(selector, "ChartObjects.Item index")? as usize;
+                            if index == 0 {
+                                return Err(OmError::invalid_argument(
+                                    "ChartObjects.Item index is out of bounds",
+                                ));
+                            }
                             entries
                                 .get(index - 1)
                                 .map(|(chart_object_id, _)| *chart_object_id)
@@ -20929,6 +20934,11 @@ impl ExcelRuntime {
                 let chart_object_id = match index {
                     OmValue::Number(_) => {
                         let index = coerce_u32_arg(index, "ShapeRange.Item index")? as usize;
+                        if index == 0 {
+                            return Err(OmError::invalid_argument(
+                                "ShapeRange.Item index is out of bounds",
+                            ));
+                        }
                         entries
                             .get(index - 1)
                             .map(|(chart_object_id, _)| *chart_object_id)
@@ -140986,6 +140996,20 @@ mod tests {
             .expect_err("ShapeRange.Item rejects a missing shape name");
         assert_eq!(missing_shape.code, OmErrorCode::NotFound);
         assert!(missing_shape.message.contains("Missing Chart"));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(selected_shape_range, "Item", &[OmValue::Number(0.0)])
+                .expect_err("ShapeRange.Item rejects zero index")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(0.0)])
+                .expect_err("ChartObjects.Item rejects zero index")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
 
         runtime
             .dispatch_set(selected_shape_range, "Visible", OmValue::Bool(false), &[])
