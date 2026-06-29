@@ -13813,12 +13813,14 @@ impl ExcelRuntime {
                             "cannot modify a read-only workbook",
                         ));
                     }
-                    runtime
+                    let chart = runtime
                         .loaded
                         .state
                         .charts
-                        .get(&chart_id)
+                        .get_mut(&chart_id)
                         .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart not found"))?;
+                    chart.dirty = true;
+                    runtime.dirty = true;
                     Ok(OmValue::Empty)
                 }
                 "ClearToMatchStyle" => {
@@ -14225,12 +14227,14 @@ impl ExcelRuntime {
                             "cannot modify a read-only workbook",
                         ));
                     }
-                    runtime
+                    let chart = runtime
                         .loaded
                         .state
                         .charts
-                        .get(&chart_id)
+                        .get_mut(&chart_id)
                         .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart not found"))?;
+                    chart.dirty = true;
+                    runtime.dirty = true;
                     Ok(OmValue::Empty)
                 }
                 "SaveChartTemplate" => {
@@ -14315,12 +14319,14 @@ impl ExcelRuntime {
                             "cannot modify a read-only workbook",
                         ));
                     }
-                    runtime
+                    let chart = runtime
                         .loaded
                         .state
                         .charts
-                        .get(&chart_id)
+                        .get_mut(&chart_id)
                         .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart not found"))?;
+                    chart.dirty = true;
+                    runtime.dirty = true;
                     Ok(OmValue::Empty)
                 }
                 "Paste" => {
@@ -128188,6 +128194,72 @@ mod tests {
                 .expect("Workbook.Saved after read-only template no-ops"),
             OmValue::Bool(true)
         );
+    }
+
+    #[test]
+    fn chart_preserve_only_mutators_mark_workbook_dirty() {
+        for (member, args) in [
+            ("ClearToMatchColorStyle", Vec::new()),
+            (
+                "ApplyChartTemplate",
+                vec![OmValue::Text("standard.crtx".to_string())],
+            ),
+            (
+                "SetBackgroundPicture",
+                vec![OmValue::Text("background.png".to_string())],
+            ),
+        ] {
+            let mut runtime = ExcelRuntime::new();
+            let workbook = runtime
+                .open_workbook(OpenWorkbookSpec {
+                    bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                    format_hint: Some(FileFormat::Xlsx),
+                    profile: ExcelProfile::Excel365,
+                    read_only: false,
+                })
+                .expect("open workbook with chart");
+            let worksheet = expect_object_handle(
+                runtime
+                    .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                    .expect("Workbook.Worksheets(1)"),
+            );
+            let chart_objects = expect_object_handle(
+                runtime
+                    .dispatch_get(worksheet, "ChartObjects", &[])
+                    .expect("Worksheet.ChartObjects"),
+            );
+            let chart_object = expect_object_handle(
+                runtime
+                    .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                    .expect("ChartObjects.Item(1)"),
+            );
+            let chart = expect_object_handle(
+                runtime
+                    .dispatch_get(chart_object, "Chart", &[])
+                    .expect("ChartObject.Chart"),
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(workbook.0, "Saved", &[])
+                    .expect("Workbook.Saved before chart mutator"),
+                OmValue::Bool(true),
+                "Workbook.Saved should start clean before Chart.{member}"
+            );
+
+            assert_eq!(
+                runtime
+                    .dispatch_invoke(chart, member, &args)
+                    .unwrap_or_else(|error| panic!("Chart.{member}: {error:?}")),
+                OmValue::Empty
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(workbook.0, "Saved", &[])
+                    .expect("Workbook.Saved after chart mutator"),
+                OmValue::Bool(false),
+                "Chart.{member} should dirty the workbook"
+            );
+        }
     }
 
     #[test]
