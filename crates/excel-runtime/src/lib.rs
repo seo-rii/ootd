@@ -103889,6 +103889,148 @@ mod tests {
     }
 
     #[test]
+    fn charts_copy_without_targets_allows_read_only_source_workbook() {
+        let mut setup_runtime = ExcelRuntime::new();
+        let setup_workbook = setup_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open setup workbook");
+        let setup_charts = expect_object_handle(
+            setup_runtime
+                .dispatch_get(setup_workbook.0, "Charts", &[])
+                .expect("setup Workbook.Charts"),
+        );
+        let first_chart = expect_object_handle(
+            setup_runtime
+                .dispatch_invoke(setup_charts, "Add", &[])
+                .expect("setup first Charts.Add"),
+        );
+        let second_chart = expect_object_handle(
+            setup_runtime
+                .dispatch_invoke(
+                    setup_charts,
+                    "Add",
+                    &[OmValue::Missing, OmValue::Object(first_chart)],
+                )
+                .expect("setup second Charts.Add"),
+        );
+        setup_runtime
+            .dispatch_set(
+                first_chart,
+                "ChartType",
+                OmValue::Number(f64::from(super::XL_LINE)),
+                &[],
+            )
+            .expect("set setup first ChartType");
+        setup_runtime
+            .dispatch_set(
+                second_chart,
+                "ChartType",
+                OmValue::Number(f64::from(super::XL_PIE)),
+                &[],
+            )
+            .expect("set setup second ChartType");
+        let saved = setup_runtime
+            .save_workbook(
+                setup_workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save setup chart sheet workbook");
+
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: true,
+            })
+            .expect("open read-only chart sheet workbook");
+        let application = runtime.root_application();
+        let charts = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Charts", &[])
+                .expect("read-only Workbook.Charts"),
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_invoke(charts, "Copy", &[])
+                .expect("Charts.Copy read-only source"),
+            OmValue::Empty
+        );
+        let copied_workbook = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveWorkbook", &[])
+                .expect("ActiveWorkbook after read-only Charts.Copy"),
+        );
+        assert_ne!(copied_workbook, workbook.0);
+
+        let copied_charts = expect_object_handle(
+            runtime
+                .dispatch_get(copied_workbook, "Charts", &[])
+                .expect("copied Workbook.Charts"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(copied_charts, "Count", &[])
+                    .expect("copied Charts.Count")
+            ),
+            2.0
+        );
+        let copied_first_chart = expect_object_handle(
+            runtime
+                .dispatch_get(copied_charts, "Item", &[OmValue::Number(1.0)])
+                .expect("copied Charts.Item(1)"),
+        );
+        let copied_second_chart = expect_object_handle(
+            runtime
+                .dispatch_get(copied_charts, "Item", &[OmValue::Number(2.0)])
+                .expect("copied Charts.Item(2)"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(copied_first_chart, "ChartType", &[])
+                    .expect("copied first ChartType")
+            ),
+            f64::from(super::XL_LINE)
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(copied_second_chart, "ChartType", &[])
+                    .expect("copied second ChartType")
+            ),
+            f64::from(super::XL_PIE)
+        );
+
+        assert!(runtime.is_read_only(workbook).expect("source is read-only"));
+        let source_charts = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Charts", &[])
+                .expect("source Workbook.Charts after read-only Charts.Copy"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(source_charts, "Count", &[])
+                    .expect("source Charts.Count after read-only Charts.Copy")
+            ),
+            2.0
+        );
+    }
+
+    #[test]
     fn charts_copy_supports_placement_targets_and_validation() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
