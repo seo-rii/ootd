@@ -141474,6 +141474,41 @@ mod tests {
             ),
             f64::from(super::XL_CATEGORY)
         );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(axes, "Item", &[OmValue::Number(0.0)])
+                .expect_err("Axes.Item rejects zero axis type")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    axes,
+                    "Item",
+                    &[
+                        OmValue::Number(f64::from(super::XL_VALUE)),
+                        OmValue::Number(0.0),
+                    ],
+                )
+                .expect_err("Axes.Item rejects zero axis group")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    axes,
+                    "Item",
+                    &[
+                        OmValue::Number(f64::from(super::XL_VALUE)),
+                        OmValue::Number(3.0),
+                    ],
+                )
+                .expect_err("Axes.Item rejects invalid axis group")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
 
         let value_axis = expect_object_handle(
             runtime
