@@ -123015,6 +123015,160 @@ mod tests {
     }
 
     #[test]
+    fn chart_core_setters_reject_read_only_workbook() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: true,
+            })
+            .expect("open read-only workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let original_name = runtime
+            .dispatch_get(chart, "Name", &[])
+            .expect("Chart.Name before rejected setters");
+        let original_visible = runtime
+            .dispatch_get(chart, "Visible", &[])
+            .expect("Chart.Visible before rejected setters");
+        let original_chart_type = runtime
+            .dispatch_get(chart, "ChartType", &[])
+            .expect("Chart.ChartType before rejected setters");
+        let original_chart_style = runtime
+            .dispatch_get(chart, "ChartStyle", &[])
+            .expect("Chart.ChartStyle before rejected setters");
+        let original_display_blanks_as = runtime
+            .dispatch_get(chart, "DisplayBlanksAs", &[])
+            .expect("Chart.DisplayBlanksAs before rejected setters");
+        let original_plot_visible_only = runtime
+            .dispatch_get(chart, "PlotVisibleOnly", &[])
+            .expect("Chart.PlotVisibleOnly before rejected setters");
+        let original_show_data_labels_over_maximum = runtime
+            .dispatch_get(chart, "ShowDataLabelsOverMaximum", &[])
+            .expect("Chart.ShowDataLabelsOverMaximum before rejected setters");
+        let original_has_title = runtime
+            .dispatch_get(chart, "HasTitle", &[])
+            .expect("Chart.HasTitle before rejected setters");
+        let original_has_data_table = runtime
+            .dispatch_get(chart, "HasDataTable", &[])
+            .expect("Chart.HasDataTable before rejected setters");
+        let original_has_legend = runtime
+            .dispatch_get(chart, "HasLegend", &[])
+            .expect("Chart.HasLegend before rejected setters");
+
+        for (member, value) in [
+            ("Name", OmValue::Text("Blocked Chart".to_string())),
+            ("Visible", OmValue::Bool(false)),
+            ("ChartType", OmValue::Number(f64::from(super::XL_LINE))),
+            ("ChartStyle", OmValue::Number(8.0)),
+            (
+                "DisplayBlanksAs",
+                OmValue::Number(f64::from(super::XL_ZERO)),
+            ),
+            ("PlotVisibleOnly", OmValue::Bool(false)),
+            ("ShowDataLabelsOverMaximum", OmValue::Bool(false)),
+            ("HasTitle", OmValue::Bool(false)),
+            ("HasDataTable", OmValue::Bool(false)),
+            ("HasLegend", OmValue::Bool(false)),
+        ] {
+            let error = match runtime.dispatch_set(chart, member, value, &[]) {
+                Ok(()) => panic!("Chart.{member} should reject read-only workbooks"),
+                Err(error) => error,
+            };
+            assert_eq!(
+                error.code,
+                OmErrorCode::InvalidState,
+                "Chart.{member}: {error:?}"
+            );
+            assert!(
+                error.message.contains("read-only"),
+                "Chart.{member}: {error:?}"
+            );
+        }
+
+        assert_eq!(
+            runtime
+                .dispatch_get(chart, "Name", &[])
+                .expect("Chart.Name after rejected setters"),
+            original_name
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart, "Visible", &[])
+                .expect("Chart.Visible after rejected setters"),
+            original_visible
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart, "ChartType", &[])
+                .expect("Chart.ChartType after rejected setters"),
+            original_chart_type
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart, "ChartStyle", &[])
+                .expect("Chart.ChartStyle after rejected setters"),
+            original_chart_style
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart, "DisplayBlanksAs", &[])
+                .expect("Chart.DisplayBlanksAs after rejected setters"),
+            original_display_blanks_as
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart, "PlotVisibleOnly", &[])
+                .expect("Chart.PlotVisibleOnly after rejected setters"),
+            original_plot_visible_only
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart, "ShowDataLabelsOverMaximum", &[])
+                .expect("Chart.ShowDataLabelsOverMaximum after rejected setters"),
+            original_show_data_labels_over_maximum
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart, "HasTitle", &[])
+                .expect("Chart.HasTitle after rejected setters"),
+            original_has_title
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart, "HasDataTable", &[])
+                .expect("Chart.HasDataTable after rejected setters"),
+            original_has_data_table
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart, "HasLegend", &[])
+                .expect("Chart.HasLegend after rejected setters"),
+            original_has_legend
+        );
+    }
+
+    #[test]
     fn chart_location_rejects_read_only_workbook_for_host_changes() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
