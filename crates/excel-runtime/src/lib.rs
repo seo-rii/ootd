@@ -123090,6 +123090,184 @@ mod tests {
     }
 
     #[test]
+    fn chart_data_label_setters_reject_read_only_workbook() {
+        let mut setup_runtime = ExcelRuntime::new();
+        let setup_workbook = setup_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let setup_worksheet = expect_object_handle(
+            setup_runtime
+                .dispatch_get(setup_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("setup Workbook.Worksheets(1)"),
+        );
+        let setup_chart_objects = expect_object_handle(
+            setup_runtime
+                .dispatch_get(setup_worksheet, "ChartObjects", &[])
+                .expect("setup Worksheet.ChartObjects"),
+        );
+        let setup_chart_object = expect_object_handle(
+            setup_runtime
+                .dispatch_invoke(setup_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("setup ChartObjects.Item(1)"),
+        );
+        let setup_chart = expect_object_handle(
+            setup_runtime
+                .dispatch_get(setup_chart_object, "Chart", &[])
+                .expect("setup ChartObject.Chart"),
+        );
+        let setup_series_collection = expect_object_handle(
+            setup_runtime
+                .dispatch_get(setup_chart, "SeriesCollection", &[])
+                .expect("setup Chart.SeriesCollection"),
+        );
+        let setup_series = expect_object_handle(
+            setup_runtime
+                .dispatch_invoke(setup_series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("setup SeriesCollection.Item(1)"),
+        );
+        setup_runtime
+            .dispatch_invoke(
+                setup_series,
+                "ApplyDataLabels",
+                &[OmValue::Number(f64::from(super::XL_DATA_LABELS_SHOW_VALUE))],
+            )
+            .expect("setup Series.ApplyDataLabels");
+        let saved = setup_runtime
+            .save_workbook(
+                setup_workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook with data labels");
+
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: true,
+            })
+            .expect("open read-only workbook with data labels");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection"),
+        );
+        let series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("SeriesCollection.Item(1)"),
+        );
+        let data_labels = expect_object_handle(
+            runtime
+                .dispatch_get(series, "DataLabels", &[])
+                .expect("Series.DataLabels"),
+        );
+        let first_label = expect_object_handle(
+            runtime
+                .dispatch_invoke(data_labels, "Item", &[OmValue::Number(1.0)])
+                .expect("DataLabels.Item(1)"),
+        );
+
+        for (handle, owner, member, value) in [
+            (data_labels, "DataLabels", "ShowValue", OmValue::Bool(false)),
+            (
+                data_labels,
+                "DataLabels",
+                "NumberFormat",
+                OmValue::Text("0.0".to_string()),
+            ),
+            (
+                data_labels,
+                "DataLabels",
+                "Position",
+                OmValue::Number(f64::from(super::XL_LABEL_POSITION_ABOVE)),
+            ),
+            (
+                data_labels,
+                "DataLabels",
+                "Separator",
+                OmValue::Text(" | ".to_string()),
+            ),
+            (first_label, "DataLabel", "ShowValue", OmValue::Bool(false)),
+            (
+                first_label,
+                "DataLabel",
+                "NumberFormat",
+                OmValue::Text("0.0".to_string()),
+            ),
+            (
+                first_label,
+                "DataLabel",
+                "Position",
+                OmValue::Number(f64::from(super::XL_LABEL_POSITION_ABOVE)),
+            ),
+            (
+                first_label,
+                "DataLabel",
+                "Separator",
+                OmValue::Text(" | ".to_string()),
+            ),
+        ] {
+            let error = match runtime.dispatch_set(handle, member, value, &[]) {
+                Ok(()) => panic!("{owner}.{member} should reject read-only workbooks"),
+                Err(error) => error,
+            };
+            assert_eq!(
+                error.code,
+                OmErrorCode::InvalidState,
+                "{owner}.{member}: {error:?}"
+            );
+            assert!(
+                error.message.contains("read-only"),
+                "{owner}.{member}: {error:?}"
+            );
+        }
+
+        assert_eq!(
+            runtime
+                .dispatch_get(data_labels, "ShowValue", &[])
+                .expect("DataLabels.ShowValue after rejected setters"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(first_label, "ShowValue", &[])
+                .expect("DataLabel.ShowValue after rejected setters"),
+            OmValue::Bool(true)
+        );
+    }
+
+    #[test]
     fn chart_display_child_delete_mutators_reject_read_only_workbook() {
         let mut setup_runtime = ExcelRuntime::new();
         let setup_workbook = setup_runtime
