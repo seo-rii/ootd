@@ -14168,6 +14168,19 @@ impl ExcelRuntime {
                             "Chart.ApplyChartTemplate FileName must not be empty",
                         ));
                     }
+                    let runtime = self.runtime_workbook_mut(workbook)?;
+                    if runtime.read_only {
+                        return Err(OmError::new(
+                            OmErrorCode::InvalidState,
+                            "cannot modify a read-only workbook",
+                        ));
+                    }
+                    runtime
+                        .loaded
+                        .state
+                        .charts
+                        .get(&chart_id)
+                        .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart not found"))?;
                     Ok(OmValue::Empty)
                 }
                 "SaveChartTemplate" => {
@@ -14245,6 +14258,19 @@ impl ExcelRuntime {
                             "Chart.SetBackgroundPicture FileName must not be empty",
                         ));
                     }
+                    let runtime = self.runtime_workbook_mut(workbook)?;
+                    if runtime.read_only {
+                        return Err(OmError::new(
+                            OmErrorCode::InvalidState,
+                            "cannot modify a read-only workbook",
+                        ));
+                    }
+                    runtime
+                        .loaded
+                        .state
+                        .charts
+                        .get(&chart_id)
+                        .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart not found"))?;
                     Ok(OmValue::Empty)
                 }
                 "Paste" => {
@@ -124641,6 +124667,58 @@ mod tests {
             .expect_err("Chart.ClearToMatchColorStyle should reject read-only workbooks");
         assert_eq!(error.code, OmErrorCode::InvalidState);
         assert!(error.message.contains("read-only"));
+    }
+
+    #[test]
+    fn chart_template_and_background_mutators_reject_read_only_workbook() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: true,
+            })
+            .expect("open read-only workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+
+        for (member, file_name) in [
+            ("ApplyChartTemplate", "standard.crtx"),
+            ("SetBackgroundPicture", "background.png"),
+        ] {
+            let error = match runtime.dispatch_invoke(
+                chart,
+                member,
+                &[OmValue::Text(file_name.to_string())],
+            ) {
+                Ok(_) => panic!("Chart.{member} should reject read-only workbooks"),
+                Err(error) => error,
+            };
+            assert_eq!(error.code, OmErrorCode::InvalidState);
+            assert!(
+                error.message.contains("read-only"),
+                "Chart.{member}: {error:?}"
+            );
+        }
     }
 
     #[test]
