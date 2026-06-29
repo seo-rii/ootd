@@ -124957,6 +124957,30 @@ mod tests {
                 .expect("Chart.HasDataTable after rejected deletes"),
             OmValue::Bool(true)
         );
+        assert_eq!(
+            runtime
+                .dispatch_get(category_axis, "HasTitle", &[])
+                .expect("Axis.HasTitle after rejected deletes"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(value_axis, "HasMajorGridlines", &[])
+                .expect("Axis.HasMajorGridlines after rejected deletes"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(value_axis, "HasDisplayUnitLabel", &[])
+                .expect("Axis.HasDisplayUnitLabel after rejected deletes"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(display_unit_label, "Text", &[])
+                .expect("DisplayUnitLabel.Text after rejected delete"),
+            OmValue::Text("1".to_string())
+        );
     }
 
     #[test]
