@@ -128010,6 +128010,91 @@ mod tests {
     }
 
     #[test]
+    fn embedded_chart_copy_methods_allow_read_only_workbook() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: true,
+            })
+            .expect("open read-only workbook with embedded chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let chart_area = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartArea", &[])
+                .expect("Chart.ChartArea"),
+        );
+
+        for (handle, member, args) in [
+            (chart_object, "Copy", Vec::new()),
+            (chart_objects, "Copy", Vec::new()),
+            (chart, "Copy", Vec::new()),
+            (chart_area, "Copy", Vec::new()),
+            (
+                chart_object,
+                "CopyPicture",
+                vec![OmValue::Missing, OmValue::Missing],
+            ),
+            (
+                chart_objects,
+                "CopyPicture",
+                vec![OmValue::Missing, OmValue::Missing],
+            ),
+            (
+                chart,
+                "CopyPicture",
+                vec![OmValue::Missing, OmValue::Missing, OmValue::Missing],
+            ),
+        ] {
+            assert_eq!(
+                runtime
+                    .dispatch_invoke(handle, member, &args)
+                    .unwrap_or_else(|error| panic!("{member}: {error:?}")),
+                OmValue::Empty,
+                "{member} should be allowed for read-only workbooks"
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(workbook.0, "Saved", &[])
+                    .expect("Workbook.Saved after read-only copy method"),
+                OmValue::Bool(true),
+                "{member} should not dirty the read-only workbook"
+            );
+        }
+
+        assert!(runtime.is_read_only(workbook).expect("source is read-only"));
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_objects, "Count", &[])
+                    .expect("ChartObjects.Count after read-only copy methods")
+            ),
+            1.0
+        );
+    }
+
+    #[test]
     fn chart_layout_and_preserve_only_element_mutators_reject_read_only_workbook() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
