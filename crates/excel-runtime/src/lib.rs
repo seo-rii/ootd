@@ -122569,6 +122569,168 @@ mod tests {
     }
 
     #[test]
+    fn chart_object_setters_reject_read_only_workbook() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: true,
+            })
+            .expect("open read-only workbook with chart object");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+
+        let original_left = runtime
+            .dispatch_get(chart_object, "Left", &[])
+            .expect("ChartObject.Left before rejected setters");
+        let original_visible = runtime
+            .dispatch_get(chart_object, "Visible", &[])
+            .expect("ChartObject.Visible before rejected setters");
+        let original_placement = runtime
+            .dispatch_get(chart_object, "Placement", &[])
+            .expect("ChartObject.Placement before rejected setters");
+
+        for (handle, owner, member, value) in [
+            (
+                chart_object,
+                "ChartObject",
+                "Placement",
+                OmValue::Number(f64::from(super::XL_MOVE)),
+            ),
+            (chart_object, "ChartObject", "Left", OmValue::Number(25.0)),
+            (chart_object, "ChartObject", "Top", OmValue::Number(25.0)),
+            (chart_object, "ChartObject", "Width", OmValue::Number(100.0)),
+            (chart_object, "ChartObject", "Height", OmValue::Number(50.0)),
+            (chart_object, "ChartObject", "Visible", OmValue::Bool(false)),
+            (
+                chart_object,
+                "ChartObject",
+                "OnAction",
+                OmValue::Text("BlockedMacro".to_string()),
+            ),
+            (
+                chart_object,
+                "ChartObject",
+                "RoundedCorners",
+                OmValue::Bool(true),
+            ),
+            (
+                chart_object,
+                "ChartObject",
+                "PrintObject",
+                OmValue::Bool(true),
+            ),
+            (chart_object, "ChartObject", "Locked", OmValue::Bool(false)),
+            (
+                chart_object,
+                "ChartObject",
+                "ProtectChartObject",
+                OmValue::Bool(false),
+            ),
+            (
+                chart_objects,
+                "ChartObjects",
+                "Placement",
+                OmValue::Number(f64::from(super::XL_MOVE)),
+            ),
+            (chart_objects, "ChartObjects", "Left", OmValue::Number(25.0)),
+            (chart_objects, "ChartObjects", "Top", OmValue::Number(25.0)),
+            (
+                chart_objects,
+                "ChartObjects",
+                "Width",
+                OmValue::Number(100.0),
+            ),
+            (
+                chart_objects,
+                "ChartObjects",
+                "Height",
+                OmValue::Number(50.0),
+            ),
+            (
+                chart_objects,
+                "ChartObjects",
+                "Visible",
+                OmValue::Bool(false),
+            ),
+            (
+                chart_objects,
+                "ChartObjects",
+                "PrintObject",
+                OmValue::Bool(true),
+            ),
+            (
+                chart_objects,
+                "ChartObjects",
+                "Locked",
+                OmValue::Bool(false),
+            ),
+            (
+                chart_objects,
+                "ChartObjects",
+                "ProtectChartObject",
+                OmValue::Bool(false),
+            ),
+        ] {
+            let error = match runtime.dispatch_set(handle, member, value, &[]) {
+                Ok(()) => panic!("{owner}.{member} should reject read-only workbooks"),
+                Err(error) => error,
+            };
+            assert_eq!(
+                error.code,
+                OmErrorCode::InvalidState,
+                "{owner}.{member}: {error:?}"
+            );
+            assert!(
+                error.message.contains("read-only"),
+                "{owner}.{member}: {error:?}"
+            );
+        }
+
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_object, "Left", &[])
+                .expect("ChartObject.Left after rejected setters"),
+            original_left
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_object, "Visible", &[])
+                .expect("ChartObject.Visible after rejected setters"),
+            original_visible
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_object, "Placement", &[])
+                .expect("ChartObject.Placement after rejected setters"),
+            original_placement
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_objects, "Count", &[])
+                    .expect("ChartObjects.Count after rejected setters")
+            ),
+            1.0
+        );
+    }
+
+    #[test]
     fn chart_shape_range_mutators_reject_read_only_workbook() {
         let mut setup_runtime = ExcelRuntime::new();
         let setup_workbook = setup_runtime
