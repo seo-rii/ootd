@@ -124137,6 +124137,147 @@ mod tests {
     }
 
     #[test]
+    fn chart_tick_labels_setters_reject_read_only_workbook() {
+        let mut setup_runtime = ExcelRuntime::new();
+        let setup_workbook = setup_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let setup_worksheet = expect_object_handle(
+            setup_runtime
+                .dispatch_get(setup_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("setup Workbook.Worksheets(1)"),
+        );
+        let setup_chart_objects = expect_object_handle(
+            setup_runtime
+                .dispatch_get(setup_worksheet, "ChartObjects", &[])
+                .expect("setup Worksheet.ChartObjects"),
+        );
+        let setup_chart_object = expect_object_handle(
+            setup_runtime
+                .dispatch_invoke(setup_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("setup ChartObjects.Item(1)"),
+        );
+        let setup_chart = expect_object_handle(
+            setup_runtime
+                .dispatch_get(setup_chart_object, "Chart", &[])
+                .expect("setup ChartObject.Chart"),
+        );
+        let setup_value_axis = expect_object_handle(
+            setup_runtime
+                .dispatch_get(
+                    setup_chart,
+                    "Axes",
+                    &[OmValue::Number(f64::from(super::XL_VALUE))],
+                )
+                .expect("setup Chart.Axes(xlValue)"),
+        );
+        let setup_tick_labels = expect_object_handle(
+            setup_runtime
+                .dispatch_get(setup_value_axis, "TickLabels", &[])
+                .expect("setup Axis.TickLabels"),
+        );
+        setup_runtime
+            .dispatch_set(
+                setup_tick_labels,
+                "NumberFormat",
+                OmValue::Text("0.00".to_string()),
+                &[],
+            )
+            .expect("setup TickLabels.NumberFormat");
+        let saved = setup_runtime
+            .save_workbook(
+                setup_workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook with tick label properties");
+
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: true,
+            })
+            .expect("open read-only workbook with tick label properties");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let value_axis = expect_object_handle(
+            runtime
+                .dispatch_get(
+                    chart,
+                    "Axes",
+                    &[OmValue::Number(f64::from(super::XL_VALUE))],
+                )
+                .expect("Chart.Axes(xlValue)"),
+        );
+        let tick_labels = expect_object_handle(
+            runtime
+                .dispatch_get(value_axis, "TickLabels", &[])
+                .expect("Axis.TickLabels"),
+        );
+
+        for (member, value) in [
+            ("NumberFormat", OmValue::Text("0.0".to_string())),
+            ("NumberFormatLinked", OmValue::Bool(true)),
+        ] {
+            let error = match runtime.dispatch_set(tick_labels, member, value, &[]) {
+                Ok(()) => panic!("TickLabels.{member} should reject read-only workbooks"),
+                Err(error) => error,
+            };
+            assert_eq!(
+                error.code,
+                OmErrorCode::InvalidState,
+                "TickLabels.{member}: {error:?}"
+            );
+            assert!(
+                error.message.contains("read-only"),
+                "TickLabels.{member}: {error:?}"
+            );
+        }
+
+        assert_eq!(
+            runtime
+                .dispatch_get(tick_labels, "NumberFormat", &[])
+                .expect("TickLabels.NumberFormat after rejected setters"),
+            OmValue::Text("0.00".to_string())
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(tick_labels, "NumberFormatLinked", &[])
+                .expect("TickLabels.NumberFormatLinked after rejected setters"),
+            OmValue::Bool(false)
+        );
+    }
+
+    #[test]
     fn chartarea_clear_methods_remove_series_and_preserve_extensions_on_save() {
         for member in ["ClearContents", "Clear"] {
             let marker = format!("urn:chartarea-{}-preserve", member.to_ascii_lowercase());
