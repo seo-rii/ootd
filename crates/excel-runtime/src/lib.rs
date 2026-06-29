@@ -19483,6 +19483,11 @@ impl ExcelRuntime {
                     ));
                 };
                 let index = coerce_u32_arg(index, "Areas.Item index")? as usize;
+                if index == 0 {
+                    return Err(OmError::invalid_argument(
+                        "Areas.Item index is out of bounds",
+                    ));
+                }
                 let Some(area) = range.areas().get(index - 1).copied() else {
                     return Err(OmError::invalid_argument(
                         "Areas.Item index is out of bounds",
@@ -19712,6 +19717,11 @@ impl ExcelRuntime {
                     }
                     OmValue::Number(_) => {
                         let index = coerce_u32_arg(index, "Names.Item index")? as usize;
+                        if index == 0 {
+                            return Err(OmError::invalid_argument(
+                                "Names.Item index is out of bounds",
+                            ));
+                        }
                         *self
                             .names_in_scope(workbook, scope)?
                             .get(index - 1)
@@ -68154,6 +68164,13 @@ mod tests {
                 .dispatch_get(names, "Item", &[OmValue::Text("total".to_string())])
                 .expect("Names.Item(total)"),
         );
+        assert_eq!(
+            runtime
+                .dispatch_get(names, "Item", &[OmValue::Number(0.0)])
+                .expect_err("Names.Item rejects zero index")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
         let refers_to_range = expect_object_handle(
             runtime
                 .dispatch_get(item, "RefersToRange", &[])
@@ -88036,6 +88053,13 @@ mod tests {
             runtime
                 .dispatch_invoke(areas, "Item", &[OmValue::Number(2.0)])
                 .expect("Areas.Item(2)"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(areas, "Item", &[OmValue::Number(0.0)])
+                .expect_err("Areas.Item rejects zero index")
+                .code,
+            OmErrorCode::InvalidArgument
         );
 
         assert_eq!(
