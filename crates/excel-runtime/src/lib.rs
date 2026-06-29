@@ -123769,6 +123769,374 @@ mod tests {
     }
 
     #[test]
+    fn chart_axis_setters_reject_read_only_workbook() {
+        let mut setup_runtime = ExcelRuntime::new();
+        let setup_workbook = setup_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let setup_worksheet = expect_object_handle(
+            setup_runtime
+                .dispatch_get(setup_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("setup Workbook.Worksheets(1)"),
+        );
+        let setup_chart_objects = expect_object_handle(
+            setup_runtime
+                .dispatch_get(setup_worksheet, "ChartObjects", &[])
+                .expect("setup Worksheet.ChartObjects"),
+        );
+        let setup_chart_object = expect_object_handle(
+            setup_runtime
+                .dispatch_invoke(setup_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("setup ChartObjects.Item(1)"),
+        );
+        let setup_chart = expect_object_handle(
+            setup_runtime
+                .dispatch_get(setup_chart_object, "Chart", &[])
+                .expect("setup ChartObject.Chart"),
+        );
+        let setup_category_axis = expect_object_handle(
+            setup_runtime
+                .dispatch_get(
+                    setup_chart,
+                    "Axes",
+                    &[OmValue::Number(f64::from(super::XL_CATEGORY))],
+                )
+                .expect("setup Chart.Axes(xlCategory)"),
+        );
+        setup_runtime
+            .dispatch_set(setup_category_axis, "HasTitle", OmValue::Bool(true), &[])
+            .expect("setup category Axis.HasTitle");
+        setup_runtime
+            .dispatch_set(
+                setup_category_axis,
+                "HasMajorGridlines",
+                OmValue::Bool(true),
+                &[],
+            )
+            .expect("setup category Axis.HasMajorGridlines");
+        setup_runtime
+            .dispatch_set(
+                setup_category_axis,
+                "AxisBetweenCategories",
+                OmValue::Bool(false),
+                &[],
+            )
+            .expect("setup Axis.AxisBetweenCategories");
+        setup_runtime
+            .dispatch_set(
+                setup_category_axis,
+                "CategoryType",
+                OmValue::Number(f64::from(super::XL_CATEGORY_SCALE)),
+                &[],
+            )
+            .expect("setup Axis.CategoryType");
+        setup_runtime
+            .dispatch_set(
+                setup_category_axis,
+                "TickLabelPosition",
+                OmValue::Number(f64::from(super::XL_TICK_LABEL_POSITION_LOW)),
+                &[],
+            )
+            .expect("setup Axis.TickLabelPosition");
+        setup_runtime
+            .dispatch_set(
+                setup_category_axis,
+                "ReversePlotOrder",
+                OmValue::Bool(false),
+                &[],
+            )
+            .expect("setup category Axis.ReversePlotOrder");
+        let setup_value_axis = expect_object_handle(
+            setup_runtime
+                .dispatch_get(
+                    setup_chart,
+                    "Axes",
+                    &[OmValue::Number(f64::from(super::XL_VALUE))],
+                )
+                .expect("setup Chart.Axes(xlValue)"),
+        );
+        setup_runtime
+            .dispatch_set(
+                setup_value_axis,
+                "DisplayUnit",
+                OmValue::Number(f64::from(super::XL_THOUSANDS)),
+                &[],
+            )
+            .expect("setup Axis.DisplayUnit");
+        setup_runtime
+            .dispatch_set(
+                setup_value_axis,
+                "HasDisplayUnitLabel",
+                OmValue::Bool(true),
+                &[],
+            )
+            .expect("setup Axis.HasDisplayUnitLabel");
+        setup_runtime
+            .dispatch_set(setup_value_axis, "MinimumScale", OmValue::Number(0.0), &[])
+            .expect("setup Axis.MinimumScale");
+        setup_runtime
+            .dispatch_set(setup_value_axis, "MaximumScale", OmValue::Number(10.0), &[])
+            .expect("setup Axis.MaximumScale");
+        setup_runtime
+            .dispatch_set(setup_value_axis, "MajorUnit", OmValue::Number(2.0), &[])
+            .expect("setup Axis.MajorUnit");
+        setup_runtime
+            .dispatch_set(setup_value_axis, "MinorUnit", OmValue::Number(1.0), &[])
+            .expect("setup Axis.MinorUnit");
+        setup_runtime
+            .dispatch_set(
+                setup_value_axis,
+                "ScaleType",
+                OmValue::Number(f64::from(super::XL_SCALE_LINEAR)),
+                &[],
+            )
+            .expect("setup Axis.ScaleType");
+        setup_runtime
+            .dispatch_set(setup_value_axis, "CrossesAt", OmValue::Number(0.0), &[])
+            .expect("setup Axis.CrossesAt");
+        let saved = setup_runtime
+            .save_workbook(
+                setup_workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook with axis properties");
+
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: true,
+            })
+            .expect("open read-only workbook with axis properties");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let category_axis = expect_object_handle(
+            runtime
+                .dispatch_get(
+                    chart,
+                    "Axes",
+                    &[OmValue::Number(f64::from(super::XL_CATEGORY))],
+                )
+                .expect("Chart.Axes(xlCategory)"),
+        );
+        let value_axis = expect_object_handle(
+            runtime
+                .dispatch_get(
+                    chart,
+                    "Axes",
+                    &[OmValue::Number(f64::from(super::XL_VALUE))],
+                )
+                .expect("Chart.Axes(xlValue)"),
+        );
+
+        for (handle, owner, member, value) in [
+            (
+                category_axis,
+                "CategoryAxis",
+                "HasTitle",
+                OmValue::Bool(false),
+            ),
+            (
+                category_axis,
+                "CategoryAxis",
+                "HasMajorGridlines",
+                OmValue::Bool(false),
+            ),
+            (
+                category_axis,
+                "CategoryAxis",
+                "AxisBetweenCategories",
+                OmValue::Bool(true),
+            ),
+            (
+                category_axis,
+                "CategoryAxis",
+                "CategoryType",
+                OmValue::Number(f64::from(super::XL_TIME_SCALE)),
+            ),
+            (
+                category_axis,
+                "CategoryAxis",
+                "TickLabelPosition",
+                OmValue::Number(f64::from(super::XL_TICK_LABEL_POSITION_HIGH)),
+            ),
+            (
+                category_axis,
+                "CategoryAxis",
+                "TickLabelSpacing",
+                OmValue::Number(2.0),
+            ),
+            (
+                category_axis,
+                "CategoryAxis",
+                "ReversePlotOrder",
+                OmValue::Bool(true),
+            ),
+            (
+                value_axis,
+                "ValueAxis",
+                "DisplayUnit",
+                OmValue::Number(f64::from(super::XL_MILLIONS)),
+            ),
+            (
+                value_axis,
+                "ValueAxis",
+                "DisplayUnitCustom",
+                OmValue::Number(1_000.0),
+            ),
+            (
+                value_axis,
+                "ValueAxis",
+                "HasDisplayUnitLabel",
+                OmValue::Bool(false),
+            ),
+            (
+                value_axis,
+                "ValueAxis",
+                "MinimumScale",
+                OmValue::Number(1.0),
+            ),
+            (
+                value_axis,
+                "ValueAxis",
+                "MaximumScale",
+                OmValue::Number(20.0),
+            ),
+            (value_axis, "ValueAxis", "MajorUnit", OmValue::Number(5.0)),
+            (value_axis, "ValueAxis", "MinorUnit", OmValue::Number(0.5)),
+            (
+                value_axis,
+                "ValueAxis",
+                "ScaleType",
+                OmValue::Number(f64::from(super::XL_SCALE_LOGARITHMIC)),
+            ),
+            (value_axis, "ValueAxis", "CrossesAt", OmValue::Number(5.0)),
+            (
+                value_axis,
+                "ValueAxis",
+                "MajorTickMark",
+                OmValue::Number(f64::from(super::XL_TICK_MARK_INSIDE)),
+            ),
+        ] {
+            let error = match runtime.dispatch_set(handle, member, value, &[]) {
+                Ok(()) => panic!("{owner}.{member} should reject read-only workbooks"),
+                Err(error) => error,
+            };
+            assert_eq!(
+                error.code,
+                OmErrorCode::InvalidState,
+                "{owner}.{member}: {error:?}"
+            );
+            assert!(
+                error.message.contains("read-only"),
+                "{owner}.{member}: {error:?}"
+            );
+        }
+
+        assert_eq!(
+            runtime
+                .dispatch_get(category_axis, "HasTitle", &[])
+                .expect("Category Axis.HasTitle after rejected setters"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(category_axis, "HasMajorGridlines", &[])
+                .expect("Category Axis.HasMajorGridlines after rejected setters"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(category_axis, "AxisBetweenCategories", &[])
+                .expect("Axis.AxisBetweenCategories after rejected setters"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(category_axis, "CategoryType", &[])
+                .expect("Axis.CategoryType after rejected setters"),
+            OmValue::Number(f64::from(super::XL_CATEGORY_SCALE))
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(category_axis, "TickLabelPosition", &[])
+                .expect("Axis.TickLabelPosition after rejected setters"),
+            OmValue::Number(f64::from(super::XL_TICK_LABEL_POSITION_LOW))
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(category_axis, "ReversePlotOrder", &[])
+                .expect("Category Axis.ReversePlotOrder after rejected setters"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(value_axis, "DisplayUnit", &[])
+                .expect("Axis.DisplayUnit after rejected setters"),
+            OmValue::Number(f64::from(super::XL_THOUSANDS))
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(value_axis, "HasDisplayUnitLabel", &[])
+                .expect("Axis.HasDisplayUnitLabel after rejected setters"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(value_axis, "MinimumScale", &[])
+                .expect("Axis.MinimumScale after rejected setters"),
+            OmValue::Number(0.0)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(value_axis, "MaximumScale", &[])
+                .expect("Axis.MaximumScale after rejected setters"),
+            OmValue::Number(10.0)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(value_axis, "ScaleType", &[])
+                .expect("Axis.ScaleType after rejected setters"),
+            OmValue::Number(f64::from(super::XL_SCALE_LINEAR))
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(value_axis, "CrossesAt", &[])
+                .expect("Axis.CrossesAt after rejected setters"),
+            OmValue::Number(0.0)
+        );
+    }
+
+    #[test]
     fn chartarea_clear_methods_remove_series_and_preserve_extensions_on_save() {
         for member in ["ClearContents", "Clear"] {
             let marker = format!("urn:chartarea-{}-preserve", member.to_ascii_lowercase());
