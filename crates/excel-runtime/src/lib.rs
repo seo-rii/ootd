@@ -123468,6 +123468,307 @@ mod tests {
     }
 
     #[test]
+    fn chart_display_child_setters_reject_read_only_workbook() {
+        let mut setup_runtime = ExcelRuntime::new();
+        let setup_workbook = setup_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let setup_worksheet = expect_object_handle(
+            setup_runtime
+                .dispatch_get(setup_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("setup Workbook.Worksheets(1)"),
+        );
+        let setup_chart_objects = expect_object_handle(
+            setup_runtime
+                .dispatch_get(setup_worksheet, "ChartObjects", &[])
+                .expect("setup Worksheet.ChartObjects"),
+        );
+        let setup_chart_object = expect_object_handle(
+            setup_runtime
+                .dispatch_invoke(setup_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("setup ChartObjects.Item(1)"),
+        );
+        let setup_chart = expect_object_handle(
+            setup_runtime
+                .dispatch_get(setup_chart_object, "Chart", &[])
+                .expect("setup ChartObject.Chart"),
+        );
+        setup_runtime
+            .dispatch_set(setup_chart, "HasDataTable", OmValue::Bool(true), &[])
+            .expect("setup Chart.HasDataTable");
+        let setup_chart_title = expect_object_handle(
+            setup_runtime
+                .dispatch_get(setup_chart, "ChartTitle", &[])
+                .expect("setup Chart.ChartTitle"),
+        );
+        setup_runtime
+            .dispatch_set(
+                setup_chart_title,
+                "Text",
+                OmValue::Text("Original chart".to_string()),
+                &[],
+            )
+            .expect("setup ChartTitle.Text");
+        let setup_legend = expect_object_handle(
+            setup_runtime
+                .dispatch_get(setup_chart, "Legend", &[])
+                .expect("setup Chart.Legend"),
+        );
+        setup_runtime
+            .dispatch_set(
+                setup_legend,
+                "Position",
+                OmValue::Number(f64::from(super::XL_LEGEND_POSITION_RIGHT)),
+                &[],
+            )
+            .expect("setup Legend.Position");
+        setup_runtime
+            .dispatch_set(setup_legend, "IncludeInLayout", OmValue::Bool(true), &[])
+            .expect("setup Legend.IncludeInLayout");
+        let setup_data_table = expect_object_handle(
+            setup_runtime
+                .dispatch_get(setup_chart, "DataTable", &[])
+                .expect("setup Chart.DataTable"),
+        );
+        setup_runtime
+            .dispatch_set(setup_data_table, "ShowLegendKey", OmValue::Bool(true), &[])
+            .expect("setup DataTable.ShowLegendKey");
+        let setup_category_axis = expect_object_handle(
+            setup_runtime
+                .dispatch_get(
+                    setup_chart,
+                    "Axes",
+                    &[OmValue::Number(f64::from(super::XL_CATEGORY))],
+                )
+                .expect("setup Chart.Axes(xlCategory)"),
+        );
+        let setup_axis_title = expect_object_handle(
+            setup_runtime
+                .dispatch_get(setup_category_axis, "AxisTitle", &[])
+                .expect("setup Axis.AxisTitle"),
+        );
+        setup_runtime
+            .dispatch_set(
+                setup_axis_title,
+                "Text",
+                OmValue::Text("Original axis".to_string()),
+                &[],
+            )
+            .expect("setup AxisTitle.Text");
+        let setup_value_axis = expect_object_handle(
+            setup_runtime
+                .dispatch_get(
+                    setup_chart,
+                    "Axes",
+                    &[OmValue::Number(f64::from(super::XL_VALUE))],
+                )
+                .expect("setup Chart.Axes(xlValue)"),
+        );
+        setup_runtime
+            .dispatch_set(
+                setup_value_axis,
+                "DisplayUnit",
+                OmValue::Number(f64::from(super::XL_DISPLAY_UNIT_CUSTOM)),
+                &[],
+            )
+            .expect("setup Axis.DisplayUnit");
+        setup_runtime
+            .dispatch_set(
+                setup_value_axis,
+                "HasDisplayUnitLabel",
+                OmValue::Bool(true),
+                &[],
+            )
+            .expect("setup Axis.HasDisplayUnitLabel");
+        let setup_display_unit_label = expect_object_handle(
+            setup_runtime
+                .dispatch_get(setup_value_axis, "DisplayUnitLabel", &[])
+                .expect("setup Axis.DisplayUnitLabel"),
+        );
+        setup_runtime
+            .dispatch_set(
+                setup_display_unit_label,
+                "Text",
+                OmValue::Text("Original units".to_string()),
+                &[],
+            )
+            .expect("setup DisplayUnitLabel.Text");
+        let saved = setup_runtime
+            .save_workbook(
+                setup_workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook with display child properties");
+
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: true,
+            })
+            .expect("open read-only workbook with display child properties");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let chart_title = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartTitle", &[])
+                .expect("Chart.ChartTitle"),
+        );
+        let legend = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "Legend", &[])
+                .expect("Chart.Legend"),
+        );
+        let data_table = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "DataTable", &[])
+                .expect("Chart.DataTable"),
+        );
+        let category_axis = expect_object_handle(
+            runtime
+                .dispatch_get(
+                    chart,
+                    "Axes",
+                    &[OmValue::Number(f64::from(super::XL_CATEGORY))],
+                )
+                .expect("Chart.Axes(xlCategory)"),
+        );
+        let axis_title = expect_object_handle(
+            runtime
+                .dispatch_get(category_axis, "AxisTitle", &[])
+                .expect("Axis.AxisTitle"),
+        );
+        let value_axis = expect_object_handle(
+            runtime
+                .dispatch_get(
+                    chart,
+                    "Axes",
+                    &[OmValue::Number(f64::from(super::XL_VALUE))],
+                )
+                .expect("Chart.Axes(xlValue)"),
+        );
+        let display_unit_label = expect_object_handle(
+            runtime
+                .dispatch_get(value_axis, "DisplayUnitLabel", &[])
+                .expect("Axis.DisplayUnitLabel"),
+        );
+
+        for (handle, owner, member, value) in [
+            (
+                chart_title,
+                "ChartTitle",
+                "Text",
+                OmValue::Text("Changed chart".to_string()),
+            ),
+            (
+                legend,
+                "Legend",
+                "Position",
+                OmValue::Number(f64::from(super::XL_LEGEND_POSITION_LEFT)),
+            ),
+            (legend, "Legend", "IncludeInLayout", OmValue::Bool(false)),
+            (
+                data_table,
+                "DataTable",
+                "ShowLegendKey",
+                OmValue::Bool(false),
+            ),
+            (
+                axis_title,
+                "AxisTitle",
+                "Text",
+                OmValue::Text("Changed axis".to_string()),
+            ),
+            (
+                display_unit_label,
+                "DisplayUnitLabel",
+                "Text",
+                OmValue::Text("Changed units".to_string()),
+            ),
+        ] {
+            let error = match runtime.dispatch_set(handle, member, value, &[]) {
+                Ok(()) => panic!("{owner}.{member} should reject read-only workbooks"),
+                Err(error) => error,
+            };
+            assert_eq!(
+                error.code,
+                OmErrorCode::InvalidState,
+                "{owner}.{member}: {error:?}"
+            );
+            assert!(
+                error.message.contains("read-only"),
+                "{owner}.{member}: {error:?}"
+            );
+        }
+
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_title, "Text", &[])
+                .expect("ChartTitle.Text after rejected setter"),
+            OmValue::Text("Original chart".to_string())
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(legend, "Position", &[])
+                .expect("Legend.Position after rejected setter"),
+            OmValue::Number(f64::from(super::XL_LEGEND_POSITION_RIGHT))
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(legend, "IncludeInLayout", &[])
+                .expect("Legend.IncludeInLayout after rejected setter"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(data_table, "ShowLegendKey", &[])
+                .expect("DataTable.ShowLegendKey after rejected setter"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(axis_title, "Text", &[])
+                .expect("AxisTitle.Text after rejected setter"),
+            OmValue::Text("Original axis".to_string())
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(display_unit_label, "Text", &[])
+                .expect("DisplayUnitLabel.Text after rejected setter"),
+            OmValue::Text("Original units".to_string())
+        );
+    }
+
+    #[test]
     fn chartarea_clear_methods_remove_series_and_preserve_extensions_on_save() {
         for member in ["ClearContents", "Clear"] {
             let marker = format!("urn:chartarea-{}-preserve", member.to_ascii_lowercase());
