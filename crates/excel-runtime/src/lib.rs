@@ -15397,6 +15397,12 @@ impl ExcelRuntime {
 
                     match where_value as i32 {
                         XL_LOCATION_AS_NEW_SHEET => {
+                            if self.runtime_workbook(workbook)?.read_only {
+                                return Err(OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "cannot modify a read-only workbook",
+                                ));
+                            }
                             let target_chart = if self
                                 .chart_sheet_id_for_chart(workbook, chart_id)?
                                 .is_some()
@@ -15449,6 +15455,12 @@ impl ExcelRuntime {
                             Ok(OmValue::Object(target_chart))
                         }
                         XL_LOCATION_AS_OBJECT => {
+                            if self.runtime_workbook(workbook)?.read_only {
+                                return Err(OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "cannot modify a read-only workbook",
+                                ));
+                            }
                             let Some(target_sheet_name) = target_name else {
                                 return Err(OmError::invalid_argument(
                                     "Chart.Location Name is required for xlLocationAsObject",
@@ -122598,6 +122610,89 @@ mod tests {
                 runtime
                     .dispatch_get(chart_objects, "Count", &[])
                     .expect("ChartObjects.Count after rejected Chart.Delete")
+            ),
+            1.0
+        );
+    }
+
+    #[test]
+    fn chart_location_rejects_read_only_workbook_for_host_changes() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: true,
+            })
+            .expect("open read-only workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+
+        for (args, label) in [
+            (
+                vec![
+                    OmValue::Number(f64::from(super::XL_LOCATION_AS_NEW_SHEET)),
+                    OmValue::Text("Read Only Chart".to_string()),
+                ],
+                "xlLocationAsNewSheet",
+            ),
+            (
+                vec![
+                    OmValue::Number(f64::from(super::XL_LOCATION_AS_OBJECT)),
+                    OmValue::Text("Sheet1".to_string()),
+                ],
+                "xlLocationAsObject",
+            ),
+        ] {
+            let error = match runtime.dispatch_invoke(chart, "Location", &args) {
+                Ok(_) => panic!("Chart.Location {label} should reject read-only workbooks"),
+                Err(error) => error,
+            };
+            assert_eq!(error.code, OmErrorCode::InvalidState, "{label}: {error:?}");
+            assert!(error.message.contains("read-only"), "{label}: {error:?}");
+        }
+
+        let automatic_chart = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    chart,
+                    "Location",
+                    &[OmValue::Number(f64::from(super::XL_LOCATION_AUTOMATIC))],
+                )
+                .expect("Chart.Location xlLocationAutomatic"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(automatic_chart, "Name", &[])
+                .expect("automatic Chart.Name"),
+            runtime
+                .dispatch_get(chart, "Name", &[])
+                .expect("original Chart.Name after xlLocationAutomatic")
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_objects, "Count", &[])
+                    .expect("ChartObjects.Count after rejected Chart.Location")
             ),
             1.0
         );
