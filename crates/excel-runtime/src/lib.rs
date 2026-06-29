@@ -23673,7 +23673,7 @@ impl ExcelRuntime {
                     .loaded
                     .state
                     .charts
-                    .get(&chart_id)
+                    .get_mut(&chart_id)
                     .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart not found"))?;
                 if group_index != 0 {
                     return Err(OmError::new(OmErrorCode::NotFound, "chart group not found"));
@@ -23692,6 +23692,8 @@ impl ExcelRuntime {
                         format!("{surface} not found"),
                     ));
                 }
+                chart.dirty = true;
+                runtime.dirty = true;
                 Ok(OmValue::Empty)
             }
             _ => Err(OmError::unsupported(format!(
@@ -115178,8 +115180,18 @@ mod tests {
                 .dispatch_invoke(line_object, "Select", &[])
                 .expect("ChartGroup line object Select");
             runtime
+                .dispatch_set(workbook.0, "Saved", OmValue::Bool(true), &[])
+                .expect("reset Saved before ChartGroup line ClearFormats");
+            runtime
                 .dispatch_invoke(line_object, "ClearFormats", &[])
                 .expect("ChartGroup line object ClearFormats");
+            assert_eq!(
+                runtime
+                    .dispatch_get(workbook.0, "Saved", &[])
+                    .expect("Workbook.Saved after ChartGroup line ClearFormats"),
+                OmValue::Bool(false),
+                "{member}.ClearFormats should dirty the workbook"
+            );
             assert_eq!(
                 runtime
                     .dispatch_get(chart_group, flag_member, &[])
