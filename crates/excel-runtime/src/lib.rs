@@ -6879,12 +6879,7 @@ impl ExcelRuntime {
                             let chart = runtime.loaded.state.charts.get_mut(&chart_id).ok_or_else(
                                 || OmError::new(OmErrorCode::NotFound, "chart not found"),
                             )?;
-                            if group_index != 0 {
-                                return Err(OmError::new(
-                                    OmErrorCode::NotFound,
-                                    "chart group not found",
-                                ));
-                            }
+                            chart_group_axis_group(chart, group_index)?;
                             let target = match line_kind {
                                 ChartGroupLineKind::SeriesLines => &mut chart.has_series_lines,
                                 ChartGroupLineKind::DropLines => &mut chart.has_drop_lines,
@@ -23627,9 +23622,7 @@ impl ExcelRuntime {
                         .charts
                         .get_mut(&chart_id)
                         .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart not found"))?;
-                    if group_index != 0 {
-                        return Err(OmError::new(OmErrorCode::NotFound, "chart group not found"));
-                    }
+                    chart_group_axis_group(chart, group_index)?;
                     let target = match kind {
                         ChartGroupLineKind::SeriesLines => &mut chart.has_series_lines,
                         ChartGroupLineKind::DropLines => &mut chart.has_drop_lines,
@@ -23675,9 +23668,7 @@ impl ExcelRuntime {
                     .charts
                     .get_mut(&chart_id)
                     .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart not found"))?;
-                if group_index != 0 {
-                    return Err(OmError::new(OmErrorCode::NotFound, "chart group not found"));
-                }
+                chart_group_axis_group(chart, group_index)?;
                 let exists = match kind {
                     ChartGroupLineKind::SeriesLines => chart.has_series_lines,
                     ChartGroupLineKind::DropLines => chart.has_drop_lines,
@@ -144336,6 +144327,164 @@ mod tests {
                 )
                 .expect("reopened Chart.HasAxis(xlValue, xlSecondary)"),
             OmValue::Bool(true)
+        );
+    }
+
+    #[test]
+    fn secondary_chart_group_line_flags_and_objects_use_existing_state() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection"),
+        );
+        let secondary_series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "NewSeries", &[])
+                .expect("SeriesCollection.NewSeries secondary seed"),
+        );
+        runtime
+            .dispatch_set(
+                secondary_series,
+                "AxisGroup",
+                OmValue::Number(f64::from(super::XL_SECONDARY)),
+                &[],
+            )
+            .expect("set seed Series.AxisGroup xlSecondary");
+        let chart_groups = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartGroups", &[])
+                .expect("Chart.ChartGroups"),
+        );
+        let primary_group = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_groups, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartGroups.Item(1)"),
+        );
+        let secondary_group = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_groups, "Item", &[OmValue::Number(2.0)])
+                .expect("ChartGroups.Item(2)"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(secondary_group, "AxisGroup", &[])
+                    .expect("secondary ChartGroup.AxisGroup")
+            ),
+            f64::from(super::XL_SECONDARY)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(secondary_group, "HasSeriesLines", &[])
+                .expect("secondary ChartGroup.HasSeriesLines before mutation"),
+            OmValue::Bool(true)
+        );
+
+        let secondary_series_lines = expect_object_handle(
+            runtime
+                .dispatch_get(secondary_group, "SeriesLines", &[])
+                .expect("secondary ChartGroup.SeriesLines"),
+        );
+        let secondary_series_lines_format = expect_object_handle(
+            runtime
+                .dispatch_get(secondary_series_lines, "Format", &[])
+                .expect("secondary ChartGroup.SeriesLines.Format"),
+        );
+        runtime
+            .dispatch_set(workbook.0, "Saved", OmValue::Bool(true), &[])
+            .expect("reset Saved before secondary SeriesLines.ClearFormats");
+        runtime
+            .dispatch_invoke(secondary_series_lines, "ClearFormats", &[])
+            .expect("secondary ChartGroup.SeriesLines.ClearFormats");
+        assert_eq!(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved after secondary SeriesLines.ClearFormats"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(secondary_group, "HasSeriesLines", &[])
+                .expect("secondary ChartGroup.HasSeriesLines after ClearFormats"),
+            OmValue::Bool(true)
+        );
+
+        runtime
+            .dispatch_set(secondary_group, "HasSeriesLines", OmValue::Bool(false), &[])
+            .expect("set secondary ChartGroup.HasSeriesLines false");
+        assert_eq!(
+            runtime
+                .dispatch_get(secondary_series_lines, "Name", &[])
+                .expect_err("secondary SeriesLines handle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(secondary_series_lines_format, "Creator", &[])
+                .expect_err("secondary SeriesLines.Format handle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(secondary_group, "SeriesLines", &[])
+                .expect_err("secondary ChartGroup.SeriesLines should be unavailable")
+                .code,
+            OmErrorCode::NotFound
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(primary_group, "HasSeriesLines", &[])
+                .expect("primary ChartGroup.HasSeriesLines after secondary mutation"),
+            OmValue::Bool(false)
+        );
+
+        runtime
+            .dispatch_set(secondary_group, "HasSeriesLines", OmValue::Bool(true), &[])
+            .expect("restore secondary ChartGroup.HasSeriesLines true");
+        let secondary_series_lines = expect_object_handle(
+            runtime
+                .dispatch_get(secondary_group, "SeriesLines", &[])
+                .expect("secondary ChartGroup.SeriesLines after restore"),
+        );
+        runtime
+            .dispatch_invoke(secondary_series_lines, "Delete", &[])
+            .expect("secondary ChartGroup.SeriesLines.Delete");
+        assert_eq!(
+            runtime
+                .dispatch_get(secondary_group, "HasSeriesLines", &[])
+                .expect("secondary ChartGroup.HasSeriesLines after Delete"),
+            OmValue::Bool(false)
         );
     }
 
