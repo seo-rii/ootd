@@ -122699,6 +122699,72 @@ mod tests {
     }
 
     #[test]
+    fn chart_source_and_style_mutators_reject_read_only_workbook() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: true,
+            })
+            .expect("open read-only workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let source = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3)"),
+        );
+
+        let cases = [
+            ("ClearToMatchStyle", Vec::new()),
+            (
+                "ApplyCustomType",
+                vec![OmValue::Number(f64::from(super::XL_LINE))],
+            ),
+            (
+                "ApplyDataLabels",
+                vec![OmValue::Number(f64::from(super::XL_DATA_LABELS_SHOW_VALUE))],
+            ),
+            ("SetSourceData", vec![OmValue::Object(source)]),
+        ];
+        for (member, args) in cases {
+            let error = match runtime.dispatch_invoke(chart, member, &args) {
+                Ok(_) => panic!("Chart.{member} should reject read-only workbooks"),
+                Err(error) => error,
+            };
+            assert_eq!(
+                error.code,
+                OmErrorCode::InvalidState,
+                "Chart.{member}: {error:?}"
+            );
+            assert!(
+                error.message.contains("read-only"),
+                "Chart.{member}: {error:?}"
+            );
+        }
+    }
+
+    #[test]
     fn chartarea_clear_methods_remove_series_and_preserve_extensions_on_save() {
         for member in ["ClearContents", "Clear"] {
             let marker = format!("urn:chartarea-{}-preserve", member.to_ascii_lowercase());
