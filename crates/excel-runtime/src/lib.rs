@@ -107621,6 +107621,117 @@ mod tests {
     }
 
     #[test]
+    fn chart_sheet_chart_copy_allows_read_only_source_workbook() {
+        let mut setup_runtime = ExcelRuntime::new();
+        let setup_workbook = setup_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open setup workbook");
+        let setup_charts = expect_object_handle(
+            setup_runtime
+                .dispatch_get(setup_workbook.0, "Charts", &[])
+                .expect("setup Workbook.Charts"),
+        );
+        let setup_chart = expect_object_handle(
+            setup_runtime
+                .dispatch_invoke(setup_charts, "Add", &[])
+                .expect("setup Charts.Add"),
+        );
+        setup_runtime
+            .dispatch_set(
+                setup_chart,
+                "ChartType",
+                OmValue::Number(f64::from(super::XL_LINE)),
+                &[],
+            )
+            .expect("set setup chart sheet ChartType");
+        let saved = setup_runtime
+            .save_workbook(
+                setup_workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save setup chart sheet workbook");
+
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: true,
+            })
+            .expect("open read-only chart sheet workbook");
+        let application = runtime.root_application();
+        let charts = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Charts", &[])
+                .expect("read-only Workbook.Charts"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(charts, "Item", &[OmValue::Number(1.0)])
+                .expect("read-only Charts.Item(1)"),
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart, "Copy", &[])
+                .expect("read-only chart sheet Chart.Copy"),
+            OmValue::Empty
+        );
+        let copied_workbook = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveWorkbook", &[])
+                .expect("ActiveWorkbook after read-only Chart.Copy"),
+        );
+        assert_ne!(copied_workbook, workbook.0);
+        let copied_charts = expect_object_handle(
+            runtime
+                .dispatch_get(copied_workbook, "Charts", &[])
+                .expect("copied Workbook.Charts"),
+        );
+        let copied_chart = expect_object_handle(
+            runtime
+                .dispatch_get(copied_charts, "Item", &[OmValue::Number(1.0)])
+                .expect("copied Charts.Item(1)"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(copied_chart, "ChartType", &[])
+                    .expect("copied Chart.ChartType")
+            ),
+            f64::from(super::XL_LINE)
+        );
+
+        assert!(runtime.is_read_only(workbook).expect("source is read-only"));
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(charts, "Count", &[])
+                    .expect("source Charts.Count after read-only Chart.Copy")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart, "ChartType", &[])
+                    .expect("source Chart.ChartType after read-only Chart.Copy")
+            ),
+            f64::from(super::XL_LINE)
+        );
+    }
+
+    #[test]
     fn chart_copy_preserves_chart_sheet_support_parts() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
