@@ -13279,6 +13279,12 @@ impl ExcelRuntime {
                         }
                         let chart_object = self.chart_object_model(workbook, chart_object_id)?;
                         self.chart_model(workbook, chart_object.chart_id)?;
+                        if self.runtime_workbook(workbook)?.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
                         self.set_headless_cut_mode();
                         Ok(OmValue::Empty)
                     }
@@ -20511,6 +20517,12 @@ impl ExcelRuntime {
                     ));
                 }
                 self.chart_object_entries_for_selection(workbook, sheet_id, chart_object_ids)?;
+                if self.runtime_workbook(workbook)?.read_only {
+                    return Err(OmError::new(
+                        OmErrorCode::InvalidState,
+                        "cannot modify a read-only workbook",
+                    ));
+                }
                 self.set_headless_cut_mode();
                 Ok(OmValue::Empty)
             }
@@ -122484,6 +122496,52 @@ mod tests {
                 .code,
             OmErrorCode::InvalidArgument
         );
+    }
+
+    #[test]
+    fn chart_cut_methods_reject_read_only_workbook() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: true,
+            })
+            .expect("open read-only workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let shape_range = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "ShapeRange", &[])
+                .expect("ChartObject.ShapeRange"),
+        );
+
+        for (handle, label) in [
+            (chart_object, "ChartObject.Cut"),
+            (chart_objects, "ChartObjects.Cut"),
+            (shape_range, "ShapeRange.Cut"),
+        ] {
+            let error = match runtime.dispatch_invoke(handle, "Cut", &[]) {
+                Ok(_) => panic!("{label} should reject read-only workbooks"),
+                Err(error) => error,
+            };
+            assert_eq!(error.code, OmErrorCode::InvalidState, "{label}: {error:?}");
+            assert!(error.message.contains("read-only"), "{label}: {error:?}");
+        }
     }
 
     #[test]
