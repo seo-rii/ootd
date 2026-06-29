@@ -105170,6 +105170,99 @@ mod tests {
     }
 
     #[test]
+    fn charts_collection_mutators_reject_read_only_workbook() {
+        let mut setup_runtime = ExcelRuntime::new();
+        let setup_workbook = setup_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open setup workbook");
+        let setup_charts = expect_object_handle(
+            setup_runtime
+                .dispatch_get(setup_workbook.0, "Charts", &[])
+                .expect("setup Workbook.Charts"),
+        );
+        setup_runtime
+            .dispatch_invoke(setup_charts, "Add", &[])
+            .expect("setup first Charts.Add");
+        setup_runtime
+            .dispatch_invoke(setup_charts, "Add", &[])
+            .expect("setup second Charts.Add");
+        let saved = setup_runtime
+            .save_workbook(
+                setup_workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save setup chart sheet workbook");
+
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: true,
+            })
+            .expect("open read-only chart sheet workbook");
+        let charts = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Charts", &[])
+                .expect("read-only Workbook.Charts"),
+        );
+
+        for member in ["Add", "Delete", "Move"] {
+            let error = match runtime.dispatch_invoke(charts, member, &[]) {
+                Ok(_) => panic!("Charts.{member} should reject read-only workbooks"),
+                Err(error) => error,
+            };
+            assert_eq!(
+                error.code,
+                OmErrorCode::InvalidState,
+                "Charts.{member}: {error:?}"
+            );
+            assert!(
+                error.message.contains("read-only"),
+                "Charts.{member}: {error:?}"
+            );
+        }
+
+        let error = runtime
+            .dispatch_set(
+                charts,
+                "Visible",
+                OmValue::Number(f64::from(super::XL_SHEET_HIDDEN)),
+                &[],
+            )
+            .expect_err("Charts.Visible should reject read-only workbooks");
+        assert_eq!(error.code, OmErrorCode::InvalidState, "{error:?}");
+        assert!(error.message.contains("read-only"), "{error:?}");
+
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(charts, "Count", &[])
+                    .expect("Charts.Count after rejected mutators")
+            ),
+            2.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(charts, "Visible", &[])
+                    .expect("Charts.Visible after rejected setter")
+            ),
+            f64::from(super::XL_SHEET_VISIBLE)
+        );
+    }
+
+    #[test]
     fn charts_collection_metadata_and_item_return_chart_handles() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
