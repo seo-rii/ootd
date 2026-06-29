@@ -6841,12 +6841,7 @@ impl ExcelRuntime {
                                 .ok_or_else(|| {
                                     OmError::new(OmErrorCode::NotFound, "chart not found")
                                 })?;
-                        if group_index != 0 {
-                            return Err(OmError::new(
-                                OmErrorCode::NotFound,
-                                "chart group not found",
-                            ));
-                        }
+                        chart_group_axis_group(chart, group_index)?;
                         if chart.vary_by_categories != Some(vary_by_categories) {
                             chart.vary_by_categories = Some(vary_by_categories);
                             chart.dirty = true;
@@ -6927,12 +6922,7 @@ impl ExcelRuntime {
                                 .ok_or_else(|| {
                                     OmError::new(OmErrorCode::NotFound, "chart not found")
                                 })?;
-                        if group_index != 0 {
-                            return Err(OmError::new(
-                                OmErrorCode::NotFound,
-                                "chart group not found",
-                            ));
-                        }
+                        chart_group_axis_group(chart, group_index)?;
                         let target = match member {
                             "ShowNegativeBubbles" => &mut chart.show_negative_bubbles,
                             "Has3DShading" => &mut chart.has_3d_shading,
@@ -6979,12 +6969,7 @@ impl ExcelRuntime {
                                 .ok_or_else(|| {
                                     OmError::new(OmErrorCode::NotFound, "chart not found")
                                 })?;
-                        if group_index != 0 {
-                            return Err(OmError::new(
-                                OmErrorCode::NotFound,
-                                "chart group not found",
-                            ));
-                        }
+                        chart_group_axis_group(chart, group_index)?;
                         if member == "Explosion"
                             && !chart_type_supports_explosion(&chart.chart_type)
                         {
@@ -7091,12 +7076,7 @@ impl ExcelRuntime {
                                 .ok_or_else(|| {
                                     OmError::new(OmErrorCode::NotFound, "chart not found")
                                 })?;
-                        if group_index != 0 {
-                            return Err(OmError::new(
-                                OmErrorCode::NotFound,
-                                "chart group not found",
-                            ));
-                        }
+                        chart_group_axis_group(chart, group_index)?;
                         if chart.size_represents != Some(size_represents) {
                             chart.size_represents = Some(size_represents);
                             chart.dirty = true;
@@ -7133,12 +7113,7 @@ impl ExcelRuntime {
                                 .ok_or_else(|| {
                                     OmError::new(OmErrorCode::NotFound, "chart not found")
                                 })?;
-                        if group_index != 0 {
-                            return Err(OmError::new(
-                                OmErrorCode::NotFound,
-                                "chart group not found",
-                            ));
-                        }
+                        chart_group_axis_group(chart, group_index)?;
                         if chart.split_type != Some(split_type) {
                             chart.split_type = Some(split_type);
                             chart.dirty = true;
@@ -7174,12 +7149,7 @@ impl ExcelRuntime {
                                 .ok_or_else(|| {
                                     OmError::new(OmErrorCode::NotFound, "chart not found")
                                 })?;
-                        if group_index != 0 {
-                            return Err(OmError::new(
-                                OmErrorCode::NotFound,
-                                "chart group not found",
-                            ));
-                        }
+                        chart_group_axis_group(chart, group_index)?;
                         if chart.split_value != Some(split_value) {
                             chart.split_value = Some(split_value);
                             chart.dirty = true;
@@ -144486,6 +144456,148 @@ mod tests {
                 .expect("secondary ChartGroup.HasSeriesLines after Delete"),
             OmValue::Bool(false)
         );
+    }
+
+    #[test]
+    fn secondary_chart_group_chart_wide_setters_use_existing_state() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection"),
+        );
+        let secondary_series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "NewSeries", &[])
+                .expect("SeriesCollection.NewSeries secondary seed"),
+        );
+        runtime
+            .dispatch_set(
+                secondary_series,
+                "AxisGroup",
+                OmValue::Number(f64::from(super::XL_SECONDARY)),
+                &[],
+            )
+            .expect("set seed Series.AxisGroup xlSecondary");
+        let chart_groups = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartGroups", &[])
+                .expect("Chart.ChartGroups"),
+        );
+        let primary_group = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_groups, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartGroups.Item(1)"),
+        );
+        let secondary_group = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_groups, "Item", &[OmValue::Number(2.0)])
+                .expect("ChartGroups.Item(2)"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(secondary_group, "AxisGroup", &[])
+                    .expect("secondary ChartGroup.AxisGroup")
+            ),
+            f64::from(super::XL_SECONDARY)
+        );
+
+        let mut cases = Vec::new();
+        for member in ["VaryByCategories", "ShowNegativeBubbles", "Has3DShading"] {
+            let current = runtime
+                .dispatch_get(secondary_group, member, &[])
+                .unwrap_or_else(|error| panic!("secondary ChartGroup.{member}: {error:?}"));
+            let OmValue::Bool(current) = current else {
+                panic!("secondary ChartGroup.{member} should be boolean");
+            };
+            cases.push((member, OmValue::Bool(!current)));
+        }
+        let size_represents = runtime
+            .dispatch_get(secondary_group, "SizeRepresents", &[])
+            .expect("secondary ChartGroup.SizeRepresents");
+        let size_represents_value =
+            if size_represents == OmValue::Number(f64::from(super::XL_SIZE_IS_WIDTH)) {
+                OmValue::Number(f64::from(super::XL_SIZE_IS_AREA))
+            } else {
+                OmValue::Number(f64::from(super::XL_SIZE_IS_WIDTH))
+            };
+        let split_type = runtime
+            .dispatch_get(secondary_group, "SplitType", &[])
+            .expect("secondary ChartGroup.SplitType");
+        let split_type_value =
+            if split_type == OmValue::Number(f64::from(super::XL_SPLIT_BY_PERCENT_VALUE)) {
+                OmValue::Number(f64::from(super::XL_SPLIT_BY_POSITION))
+            } else {
+                OmValue::Number(f64::from(super::XL_SPLIT_BY_PERCENT_VALUE))
+            };
+        cases.extend([
+            ("GapWidth", OmValue::Number(180.0)),
+            ("Overlap", OmValue::Number(-25.0)),
+            ("BubbleScale", OmValue::Number(135.0)),
+            ("SizeRepresents", size_represents_value),
+            ("SplitType", split_type_value),
+            ("SplitValue", OmValue::Number(12.5)),
+        ]);
+        for (member, value) in cases {
+            runtime
+                .dispatch_set(workbook.0, "Saved", OmValue::Bool(true), &[])
+                .expect("reset Saved before secondary ChartGroup setter");
+            runtime
+                .dispatch_set(secondary_group, member, value.clone(), &[])
+                .unwrap_or_else(|error| {
+                    panic!("secondary ChartGroup.{member} setter failed: {error:?}")
+                });
+            assert_eq!(
+                runtime
+                    .dispatch_get(workbook.0, "Saved", &[])
+                    .expect("Workbook.Saved after secondary ChartGroup setter"),
+                OmValue::Bool(false),
+                "secondary ChartGroup.{member} should dirty the workbook"
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(secondary_group, member, &[])
+                    .unwrap_or_else(|error| panic!("secondary ChartGroup.{member}: {error:?}")),
+                value,
+                "secondary ChartGroup.{member} should expose the written value"
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(primary_group, member, &[])
+                    .unwrap_or_else(|error| panic!("primary ChartGroup.{member}: {error:?}")),
+                value,
+                "primary ChartGroup.{member} should share the current chart-wide value"
+            );
+        }
     }
 
     #[test]
