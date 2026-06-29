@@ -122833,6 +122833,117 @@ mod tests {
     }
 
     #[test]
+    fn chart_series_and_point_mutators_reject_read_only_workbook() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: true,
+            })
+            .expect("open read-only workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection"),
+        );
+        let series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("SeriesCollection.Item(1)"),
+        );
+        let first_point = expect_object_handle(
+            runtime
+                .dispatch_get(series, "Points", &[OmValue::Number(1.0)])
+                .expect("Series.Points(1)"),
+        );
+
+        let series_cases = [
+            (
+                "ApplyDataLabels",
+                vec![OmValue::Number(f64::from(super::XL_DATA_LABELS_SHOW_VALUE))],
+            ),
+            ("ClearFormats", Vec::new()),
+            ("Paste", Vec::new()),
+            ("Delete", Vec::new()),
+        ];
+        for (member, args) in series_cases {
+            let error = match runtime.dispatch_invoke(series, member, &args) {
+                Ok(_) => panic!("Series.{member} should reject read-only workbooks"),
+                Err(error) => error,
+            };
+            assert_eq!(
+                error.code,
+                OmErrorCode::InvalidState,
+                "Series.{member}: {error:?}"
+            );
+            assert!(
+                error.message.contains("read-only"),
+                "Series.{member}: {error:?}"
+            );
+        }
+
+        let error = runtime
+            .dispatch_invoke(series_collection, "NewSeries", &[])
+            .expect_err("SeriesCollection.NewSeries should reject read-only workbooks");
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("read-only"), "{error:?}");
+
+        let point_cases = [
+            (
+                "ApplyDataLabels",
+                vec![OmValue::Number(f64::from(super::XL_DATA_LABELS_SHOW_LABEL))],
+            ),
+            ("ClearFormats", Vec::new()),
+        ];
+        for (member, args) in point_cases {
+            let error = match runtime.dispatch_invoke(first_point, member, &args) {
+                Ok(_) => panic!("Point.{member} should reject read-only workbooks"),
+                Err(error) => error,
+            };
+            assert_eq!(
+                error.code,
+                OmErrorCode::InvalidState,
+                "Point.{member}: {error:?}"
+            );
+            assert!(
+                error.message.contains("read-only"),
+                "Point.{member}: {error:?}"
+            );
+        }
+
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(series_collection, "Count", &[])
+                    .expect("SeriesCollection.Count after rejected mutators")
+            ),
+            1.0
+        );
+    }
+
+    #[test]
     fn chartarea_clear_methods_remove_series_and_preserve_extensions_on_save() {
         for member in ["ClearContents", "Clear"] {
             let marker = format!("urn:chartarea-{}-preserve", member.to_ascii_lowercase());
