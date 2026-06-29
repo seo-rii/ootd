@@ -125781,7 +125781,7 @@ mod tests {
     }
 
     #[test]
-    fn plotarea_clear_formats_rejects_read_only_workbook() {
+    fn chart_area_and_plot_area_clear_methods_reject_read_only_workbook() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
             .open_workbook(OpenWorkbookSpec {
@@ -125811,17 +125811,39 @@ mod tests {
                 .dispatch_get(chart_object, "Chart", &[])
                 .expect("ChartObject.Chart"),
         );
+        let chart_area = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartArea", &[])
+                .expect("Chart.ChartArea"),
+        );
         let plot_area = expect_object_handle(
             runtime
                 .dispatch_get(chart, "PlotArea", &[])
                 .expect("Chart.PlotArea"),
         );
 
-        let error = runtime
-            .dispatch_invoke(plot_area, "ClearFormats", &[])
-            .expect_err("PlotArea.ClearFormats should reject read-only workbooks");
-        assert_eq!(error.code, OmErrorCode::InvalidState);
-        assert!(error.message.contains("read-only"));
+        for (handle, owner, member) in [
+            (chart_area, "ChartArea", "Clear"),
+            (chart_area, "ChartArea", "ClearContents"),
+            (chart_area, "ChartArea", "ClearFormats"),
+            (plot_area, "PlotArea", "Clear"),
+            (plot_area, "PlotArea", "ClearContents"),
+            (plot_area, "PlotArea", "ClearFormats"),
+        ] {
+            let error = match runtime.dispatch_invoke(handle, member, &[]) {
+                Ok(_) => panic!("{owner}.{member} should reject read-only workbooks"),
+                Err(error) => error,
+            };
+            assert_eq!(
+                error.code,
+                OmErrorCode::InvalidState,
+                "{owner}.{member}: {error:?}"
+            );
+            assert!(
+                error.message.contains("read-only"),
+                "{owner}.{member}: {error:?}"
+            );
+        }
     }
 
     #[test]
