@@ -122569,6 +122569,166 @@ mod tests {
     }
 
     #[test]
+    fn chart_shape_range_mutators_reject_read_only_workbook() {
+        let mut setup_runtime = ExcelRuntime::new();
+        let setup_workbook = setup_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let setup_worksheet = expect_object_handle(
+            setup_runtime
+                .dispatch_get(setup_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("setup Workbook.Worksheets(1)"),
+        );
+        let setup_chart_objects = expect_object_handle(
+            setup_runtime
+                .dispatch_get(setup_worksheet, "ChartObjects", &[])
+                .expect("setup Worksheet.ChartObjects"),
+        );
+        let setup_chart_object = expect_object_handle(
+            setup_runtime
+                .dispatch_invoke(setup_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("setup ChartObjects.Item(1)"),
+        );
+        let setup_shape_range = expect_object_handle(
+            setup_runtime
+                .dispatch_get(setup_chart_object, "ShapeRange", &[])
+                .expect("setup ChartObject.ShapeRange"),
+        );
+        setup_runtime
+            .dispatch_set(
+                setup_shape_range,
+                "AlternativeText",
+                OmValue::Text("Original alt".to_string()),
+                &[],
+            )
+            .expect("setup ShapeRange.AlternativeText");
+        setup_runtime
+            .dispatch_set(
+                setup_shape_range,
+                "Title",
+                OmValue::Text("Original title".to_string()),
+                &[],
+            )
+            .expect("setup ShapeRange.Title");
+        setup_runtime
+            .dispatch_set(
+                setup_shape_range,
+                "OnAction",
+                OmValue::Text("OriginalMacro".to_string()),
+                &[],
+            )
+            .expect("setup ShapeRange.OnAction");
+        let saved = setup_runtime
+            .save_workbook(
+                setup_workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook with shape range metadata");
+
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: true,
+            })
+            .expect("open read-only workbook with shape range metadata");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let shape_range = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "ShapeRange", &[])
+                .expect("ChartObject.ShapeRange"),
+        );
+
+        for (member, value) in [
+            ("AlternativeText", OmValue::Text("Changed alt".to_string())),
+            ("Title", OmValue::Text("Changed title".to_string())),
+            ("OnAction", OmValue::Text("ChangedMacro".to_string())),
+        ] {
+            let error = match runtime.dispatch_set(shape_range, member, value, &[]) {
+                Ok(()) => panic!("ShapeRange.{member} should reject read-only workbooks"),
+                Err(error) => error,
+            };
+            assert_eq!(
+                error.code,
+                OmErrorCode::InvalidState,
+                "ShapeRange.{member}: {error:?}"
+            );
+            assert!(
+                error.message.contains("read-only"),
+                "ShapeRange.{member}: {error:?}"
+            );
+        }
+
+        for member in ["Delete", "Duplicate"] {
+            let error = match runtime.dispatch_invoke(shape_range, member, &[]) {
+                Ok(_) => panic!("ShapeRange.{member} should reject read-only workbooks"),
+                Err(error) => error,
+            };
+            assert_eq!(
+                error.code,
+                OmErrorCode::InvalidState,
+                "ShapeRange.{member}: {error:?}"
+            );
+            assert!(
+                error.message.contains("read-only"),
+                "ShapeRange.{member}: {error:?}"
+            );
+        }
+
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_objects, "Count", &[])
+                    .expect("ChartObjects.Count after rejected ShapeRange mutators")
+            ),
+            1.0
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(shape_range, "AlternativeText", &[])
+                .expect("ShapeRange.AlternativeText after rejected setters"),
+            OmValue::Text("Original alt".to_string())
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(shape_range, "Title", &[])
+                .expect("ShapeRange.Title after rejected setters"),
+            OmValue::Text("Original title".to_string())
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(shape_range, "OnAction", &[])
+                .expect("ShapeRange.OnAction after rejected setters"),
+            OmValue::Text("OriginalMacro".to_string())
+        );
+    }
+
+    #[test]
     fn chart_delete_rejects_read_only_workbook() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
@@ -122693,6 +122853,134 @@ mod tests {
                 runtime
                     .dispatch_get(chart_objects, "Count", &[])
                     .expect("ChartObjects.Count after rejected Chart.Location")
+            ),
+            1.0
+        );
+    }
+
+    #[test]
+    fn chart_area_mutators_reject_read_only_workbook() {
+        let mut setup_runtime = ExcelRuntime::new();
+        let setup_workbook = setup_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let setup_worksheet = expect_object_handle(
+            setup_runtime
+                .dispatch_get(setup_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("setup Workbook.Worksheets(1)"),
+        );
+        let setup_chart_objects = expect_object_handle(
+            setup_runtime
+                .dispatch_get(setup_worksheet, "ChartObjects", &[])
+                .expect("setup Worksheet.ChartObjects"),
+        );
+        let setup_chart_object = expect_object_handle(
+            setup_runtime
+                .dispatch_invoke(setup_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("setup ChartObjects.Item(1)"),
+        );
+        let setup_chart = expect_object_handle(
+            setup_runtime
+                .dispatch_get(setup_chart_object, "Chart", &[])
+                .expect("setup ChartObject.Chart"),
+        );
+        let setup_chart_area = expect_object_handle(
+            setup_runtime
+                .dispatch_get(setup_chart, "ChartArea", &[])
+                .expect("setup Chart.ChartArea"),
+        );
+        setup_runtime
+            .dispatch_set(setup_chart_area, "RoundedCorners", OmValue::Bool(true), &[])
+            .expect("setup ChartArea.RoundedCorners");
+        let saved = setup_runtime
+            .save_workbook(
+                setup_workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook with chart area properties");
+
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: true,
+            })
+            .expect("open read-only workbook with chart area properties");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let chart_area = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartArea", &[])
+                .expect("Chart.ChartArea"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection"),
+        );
+
+        let error = runtime
+            .dispatch_set(chart_area, "RoundedCorners", OmValue::Bool(false), &[])
+            .expect_err("ChartArea.RoundedCorners should reject read-only workbooks");
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("read-only"), "{error:?}");
+
+        for member in ["ClearFormats", "Clear", "ClearContents"] {
+            let error = match runtime.dispatch_invoke(chart_area, member, &[]) {
+                Ok(_) => panic!("ChartArea.{member} should reject read-only workbooks"),
+                Err(error) => error,
+            };
+            assert_eq!(
+                error.code,
+                OmErrorCode::InvalidState,
+                "ChartArea.{member}: {error:?}"
+            );
+            assert!(
+                error.message.contains("read-only"),
+                "ChartArea.{member}: {error:?}"
+            );
+        }
+
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_area, "RoundedCorners", &[])
+                .expect("ChartArea.RoundedCorners after rejected mutators"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(series_collection, "Count", &[])
+                    .expect("SeriesCollection.Count after rejected ChartArea mutators")
             ),
             1.0
         );
