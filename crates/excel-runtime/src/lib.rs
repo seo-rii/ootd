@@ -115358,6 +115358,10 @@ mod tests {
         )
         .expect("chart xml utf8")
         .replace(
+            "<c:val><c:numRef><c:f>Sheet1!$A$1:$C$1</c:f></c:numRef></c:val>",
+            r#"<c:val><c:numRef><c:f>Sheet1!$A$1:$C$1</c:f><c:numCache><c:ptCount val="3"/><c:pt idx="0"><c:v>42</c:v></c:pt></c:numCache></c:numRef></c:val>"#,
+        )
+        .replace(
             "</c:chartSpace>",
             r#"<c:extLst><c:ext uri="urn:preserve"/></c:extLst></c:chartSpace>"#,
         );
@@ -115418,6 +115422,9 @@ mod tests {
         assert!(saved_chart_xml.contains("<c:f>'Data 2026'!$C$1</c:f>"));
         assert!(saved_chart_xml.contains("<c:f>'Data 2026'!$A$1:$B$1</c:f>"));
         assert!(saved_chart_xml.contains("<c:f>'Data 2026'!$A$1:$C$1</c:f>"));
+        assert!(saved_chart_xml.contains(
+            r#"<c:numCache><c:ptCount val="3"/><c:pt idx="0"><c:v>42</c:v></c:pt></c:numCache>"#
+        ));
         assert!(!saved_chart_xml.contains("Sheet1!$A$1:$C$1"));
     }
 
