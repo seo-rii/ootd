@@ -17137,11 +17137,13 @@ impl ExcelRuntime {
                             | "RoundedCorners"
                             | "ShapeRange"
                             | "Select"
+                            | "BringToFront"
                             | "Copy"
                             | "Cut"
                             | "Duplicate"
                             | "CopyPicture"
                             | "Delete"
+                            | "SendToBack"
                     )
                     | (
                         "ChartObject",
@@ -20302,7 +20304,16 @@ impl ExcelRuntime {
     ) -> OmResult<OmValue> {
         if matches!(
             member,
-            "Item" | "Add" | "Delete" | "Copy" | "Cut" | "Duplicate" | "CopyPicture" | "Select"
+            "Item"
+                | "Add"
+                | "Delete"
+                | "Copy"
+                | "Cut"
+                | "Duplicate"
+                | "CopyPicture"
+                | "Select"
+                | "BringToFront"
+                | "SendToBack"
         ) {
             self.focus_member_supported("ChartObjects", member, false)?;
         }
@@ -20465,6 +20476,20 @@ impl ExcelRuntime {
                 validate_copy_picture_args(args, 2, "ChartObjects.CopyPicture")?;
                 self.chart_object_entries_for_selection(workbook, sheet_id, chart_object_ids)?;
                 self.set_headless_copy_mode();
+                Ok(OmValue::Empty)
+            }
+            "BringToFront" | "SendToBack" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(format!(
+                        "ChartObjects.{member} does not accept arguments"
+                    )));
+                }
+                let chart_object_ids = self
+                    .chart_object_entries_for_selection(workbook, sheet_id, chart_object_ids)?
+                    .into_iter()
+                    .map(|(chart_object_id, _)| chart_object_id)
+                    .collect::<Vec<_>>();
+                self.move_chart_objects_z_order(workbook, &chart_object_ids, member)?;
                 Ok(OmValue::Empty)
             }
             "Select" => {
@@ -66911,13 +66936,13 @@ fn column_to_letters(mut col: u32) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        APPLICATION_NAME, APPLICATION_VERSION, ExcelRuntime, RangeProjection, XL_4_DIGIT_YEARS,
-        XL_24_HOUR_CLOCK, XL_A1, XL_CALCULATION_AUTOMATIC, XL_CALCULATION_MANUAL,
-        XL_CALCULATION_SEMIAUTOMATIC, XL_COLUMN_SEPARATOR, XL_COUNTRY_CODE, XL_CURRENCY_CODE,
-        XL_CURRENCY_DIGITS, XL_DATE_SEPARATOR, XL_DECIMAL_SEPARATOR, XL_LIST_SEPARATOR, XL_R1C1,
-        XL_ROW_SEPARATOR, XL_THOUSANDS_SEPARATOR, XL_TIME_SEPARATOR, XL_UPPER_CASE_COLUMN_LETTER,
-        XL_UPPER_CASE_ROW_LETTER, blank_workbook_bytes, formula_complex_from_text, supports_format,
-        worksheet_relationships_part_uri_for,
+        APPLICATION_NAME, APPLICATION_VERSION, ChartObjectsParent, ExcelRuntime, RangeProjection,
+        RuntimeObjectKind, XL_4_DIGIT_YEARS, XL_24_HOUR_CLOCK, XL_A1, XL_CALCULATION_AUTOMATIC,
+        XL_CALCULATION_MANUAL, XL_CALCULATION_SEMIAUTOMATIC, XL_COLUMN_SEPARATOR, XL_COUNTRY_CODE,
+        XL_CURRENCY_CODE, XL_CURRENCY_DIGITS, XL_DATE_SEPARATOR, XL_DECIMAL_SEPARATOR,
+        XL_LIST_SEPARATOR, XL_R1C1, XL_ROW_SEPARATOR, XL_THOUSANDS_SEPARATOR, XL_TIME_SEPARATOR,
+        XL_UPPER_CASE_COLUMN_LETTER, XL_UPPER_CASE_ROW_LETTER, blank_workbook_bytes,
+        formula_complex_from_text, supports_format, worksheet_relationships_part_uri_for,
     };
     use excel_model::{ChartDataLabelPosition, ChartSheetBinding, DrawingObjectModel};
     use std::fs;
@@ -137350,6 +137375,75 @@ mod tests {
                 .expect_err("ChartObjects.Item rejects duplicate array entries")
                 .code,
             OmErrorCode::InvalidArgument
+        );
+
+        let sheet_id = match runtime
+            .runtime_object(worksheet)
+            .expect("worksheet runtime object")
+        {
+            RuntimeObjectKind::Worksheet { sheet_id, .. } => sheet_id,
+            _ => panic!("worksheet handle should resolve to a worksheet object"),
+        };
+        let higher_z_chart_id = match runtime
+            .runtime_object(higher_z_chart)
+            .expect("higher z-order chart object runtime object")
+        {
+            RuntimeObjectKind::ChartObject {
+                chart_object_id, ..
+            } => chart_object_id,
+            _ => panic!("chart object handle should resolve to a chart object"),
+        };
+        let selected_chart_objects = runtime.register_chart_objects_selection_handle_with_parent(
+            workbook,
+            sheet_id,
+            ChartObjectsParent::Worksheet(sheet_id),
+            vec![higher_z_chart_id],
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_invoke(selected_chart_objects, "BringToFront", &[OmValue::Missing],)
+                .expect_err("ChartObjects.BringToFront rejects arguments")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(selected_chart_objects, "BringToFront", &[])
+                .expect("selected ChartObjects.BringToFront"),
+            OmValue::Empty
+        );
+        let front_chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(3.0)])
+                .expect("ChartObjects.Item(3) after selected BringToFront"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(front_chart_object, "Name", &[])
+                    .expect("front ChartObject.Name after selected BringToFront")
+            ),
+            "Z Ten Chart"
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(selected_chart_objects, "SendToBack", &[])
+                .expect("selected ChartObjects.SendToBack"),
+            OmValue::Empty
+        );
+        let back_chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1) after selected SendToBack"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(back_chart_object, "Name", &[])
+                    .expect("back ChartObject.Name after selected SendToBack")
+            ),
+            "Z Ten Chart"
         );
     }
 
