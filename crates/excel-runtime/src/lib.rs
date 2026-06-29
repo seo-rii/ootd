@@ -127833,6 +127833,72 @@ mod tests {
     }
 
     #[test]
+    fn chart_template_noops_allow_read_only_workbook() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: true,
+            })
+            .expect("open read-only workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved before read-only template no-ops"),
+            OmValue::Bool(true)
+        );
+
+        for (member, value) in [
+            (
+                "SaveChartTemplate",
+                OmValue::Text("presentation chart.crtx".to_string()),
+            ),
+            (
+                "SetDefaultChart",
+                OmValue::Text("Monthly Sales".to_string()),
+            ),
+            ("SetDefaultChart", OmValue::Number(-4102.0)),
+        ] {
+            assert_eq!(
+                runtime
+                    .dispatch_invoke(chart, member, &[value])
+                    .unwrap_or_else(|error| panic!("Chart.{member}: {error:?}")),
+                OmValue::Empty,
+                "Chart.{member} should be allowed for read-only workbooks"
+            );
+        }
+
+        assert_eq!(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved after read-only template no-ops"),
+            OmValue::Bool(true)
+        );
+    }
+
+    #[test]
     fn chart_layout_and_preserve_only_element_mutators_reject_read_only_workbook() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
