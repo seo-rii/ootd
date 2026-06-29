@@ -16178,7 +16178,16 @@ impl ExcelRuntime {
                                 "PlotArea.ClearFormats does not accept arguments",
                             ));
                         }
-                        self.chart_model(workbook, chart_id)?;
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        runtime.loaded.state.charts.get(&chart_id).ok_or_else(|| {
+                            OmError::new(OmErrorCode::NotFound, "chart not found")
+                        })?;
                         Ok(OmValue::Empty)
                     }
                     "Select" => {
@@ -122813,6 +122822,50 @@ mod tests {
                 0.0
             );
         }
+    }
+
+    #[test]
+    fn plotarea_clear_formats_rejects_read_only_workbook() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: true,
+            })
+            .expect("open read-only workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let plot_area = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "PlotArea", &[])
+                .expect("Chart.PlotArea"),
+        );
+
+        let error = runtime
+            .dispatch_invoke(plot_area, "ClearFormats", &[])
+            .expect_err("PlotArea.ClearFormats should reject read-only workbooks");
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("read-only"));
     }
 
     #[test]
