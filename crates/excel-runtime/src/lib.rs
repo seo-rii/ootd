@@ -23602,6 +23602,44 @@ impl ExcelRuntime {
                 );
                 Ok(OmValue::Empty)
             }
+            "ClearFormats" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(format!(
+                        "{surface}.ClearFormats does not accept arguments"
+                    )));
+                }
+                let runtime = self.runtime_workbook_mut(workbook)?;
+                if runtime.read_only {
+                    return Err(OmError::new(
+                        OmErrorCode::InvalidState,
+                        "cannot modify a read-only workbook",
+                    ));
+                }
+                let chart = runtime
+                    .loaded
+                    .state
+                    .charts
+                    .get(&chart_id)
+                    .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart not found"))?;
+                if group_index != 0 {
+                    return Err(OmError::new(OmErrorCode::NotFound, "chart group not found"));
+                }
+                let exists = match kind {
+                    ChartGroupLineKind::SeriesLines => chart.has_series_lines,
+                    ChartGroupLineKind::DropLines => chart.has_drop_lines,
+                    ChartGroupLineKind::HiLoLines => chart.has_hi_lo_lines,
+                    ChartGroupLineKind::UpBars | ChartGroupLineKind::DownBars => {
+                        chart.has_up_down_bars
+                    }
+                };
+                if exists != Some(true) {
+                    return Err(OmError::new(
+                        OmErrorCode::NotFound,
+                        format!("{surface} not found"),
+                    ));
+                }
+                Ok(OmValue::Empty)
+            }
             _ => Err(OmError::unsupported(format!(
                 "{surface}.{member} is not implemented as a method"
             ))),
@@ -114911,6 +114949,16 @@ mod tests {
             runtime
                 .dispatch_invoke(line_object, "Select", &[])
                 .expect("ChartGroup line object Select");
+            runtime
+                .dispatch_invoke(line_object, "ClearFormats", &[])
+                .expect("ChartGroup line object ClearFormats");
+            assert_eq!(
+                runtime
+                    .dispatch_get(chart_group, flag_member, &[])
+                    .expect("ChartGroup line flag after ClearFormats"),
+                OmValue::Bool(true),
+                "{member}.ClearFormats should keep {flag_member} enabled"
+            );
             assert_eq!(
                 runtime
                     .dispatch_set(
@@ -123782,6 +123830,19 @@ mod tests {
             };
             assert_eq!(error.code, OmErrorCode::InvalidState, "{owner}: {error:?}");
             assert!(error.message.contains("read-only"), "{owner}: {error:?}");
+            let error = match runtime.dispatch_invoke(lines, "ClearFormats", &[]) {
+                Ok(_) => panic!("{owner}.ClearFormats should reject read-only workbooks"),
+                Err(error) => error,
+            };
+            assert_eq!(
+                error.code,
+                OmErrorCode::InvalidState,
+                "{owner}.ClearFormats: {error:?}"
+            );
+            assert!(
+                error.message.contains("read-only"),
+                "{owner}.ClearFormats: {error:?}"
+            );
             assert_eq!(
                 runtime
                     .dispatch_get(chart_group, flag, &[])
