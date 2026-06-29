@@ -122361,6 +122361,93 @@ mod tests {
     }
 
     #[test]
+    fn chart_headless_noops_allow_read_only_workbooks() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: true,
+            })
+            .expect("open read-only workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved before read-only chart no-ops"),
+            OmValue::Bool(true)
+        );
+
+        for (member, args) in [
+            ("Refresh", Vec::new()),
+            (
+                "CheckSpelling",
+                vec![
+                    OmValue::Text("custom.dic".to_string()),
+                    OmValue::Bool(true),
+                    OmValue::Bool(false),
+                    OmValue::Number(1033.0),
+                ],
+            ),
+            ("PrintPreview", vec![OmValue::Bool(false)]),
+            (
+                "PrintOut",
+                vec![
+                    OmValue::Number(1.0),
+                    OmValue::Number(1.0),
+                    OmValue::Number(2.0),
+                    OmValue::Bool(true),
+                    OmValue::Text("Printer".to_string()),
+                    OmValue::Bool(true),
+                    OmValue::Bool(false),
+                    OmValue::Text("readonly-chart.prn".to_string()),
+                    OmValue::Bool(true),
+                ],
+            ),
+        ] {
+            assert_eq!(
+                runtime
+                    .dispatch_invoke(chart, member, &args)
+                    .unwrap_or_else(|error| panic!("Chart.{member}: {error:?}")),
+                OmValue::Empty,
+                "Chart.{member} should be allowed for read-only workbooks"
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(workbook.0, "Saved", &[])
+                    .expect("Workbook.Saved after read-only chart no-op"),
+                OmValue::Bool(true),
+                "Chart.{member} should not dirty the read-only workbook"
+            );
+        }
+        assert!(
+            runtime
+                .is_read_only(workbook)
+                .expect("workbook is read-only")
+        );
+    }
+
+    #[test]
     fn chart_print_methods_are_noops_and_validate_arguments() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
