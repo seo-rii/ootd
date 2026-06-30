@@ -13922,6 +13922,9 @@ impl ExcelRuntime {
                         .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart not found"))?;
                     chart.dirty = true;
                     runtime.dirty = true;
+                    self.find_state = None;
+                    self.cut_copy_mode = None;
+                    self.clipboard = None;
                     Ok(OmValue::Empty)
                 }
                 "ClearToMatchStyle" => {
@@ -14056,6 +14059,9 @@ impl ExcelRuntime {
                                 })?;
                         chart.dirty = true;
                         runtime.dirty = true;
+                        self.find_state = None;
+                        self.cut_copy_mode = None;
+                        self.clipboard = None;
                     }
                     if let Some(chart_type) = args.get(1)
                         && !om_value_is_omitted(chart_type)
@@ -14727,6 +14733,9 @@ impl ExcelRuntime {
                         chart.data_labels = Some(data_labels);
                         chart.dirty = true;
                         runtime.dirty = true;
+                        self.find_state = None;
+                        self.cut_copy_mode = None;
+                        self.clipboard = None;
                         return Ok(OmValue::Empty);
                     }
                     let data_table_legend_keys = match element {
@@ -14756,6 +14765,9 @@ impl ExcelRuntime {
                                 &[],
                             )?;
                         }
+                        self.find_state = None;
+                        self.cut_copy_mode = None;
+                        self.clipboard = None;
                         return Ok(OmValue::Empty);
                     }
                     let chart_group_line_flags = match element {
@@ -14810,6 +14822,9 @@ impl ExcelRuntime {
                                 &[],
                             )?;
                         }
+                        self.find_state = None;
+                        self.cut_copy_mode = None;
+                        self.clipboard = None;
                         return Ok(OmValue::Empty);
                     }
                     let axis_visibility = match element {
@@ -14849,6 +14864,9 @@ impl ExcelRuntime {
                         self.set_chart_axis_presence(
                             workbook, chart_id, axis_type, axis_group, has_axis,
                         )?;
+                        self.find_state = None;
+                        self.cut_copy_mode = None;
+                        self.clipboard = None;
                         return Ok(OmValue::Empty);
                     }
                     let gridlines = match element {
@@ -14935,6 +14953,9 @@ impl ExcelRuntime {
                         };
                         self.dispatch_set(axis, "HasMajorGridlines", OmValue::Bool(major), &[])?;
                         self.dispatch_set(axis, "HasMinorGridlines", OmValue::Bool(minor), &[])?;
+                        self.find_state = None;
+                        self.cut_copy_mode = None;
+                        self.clipboard = None;
                         return Ok(OmValue::Empty);
                     }
                     let axis_setting = match element {
@@ -15092,6 +15113,9 @@ impl ExcelRuntime {
                             unreachable!("Chart.Axes returned a non-object value")
                         };
                         self.dispatch_set(axis, member, value, &[])?;
+                        self.find_state = None;
+                        self.cut_copy_mode = None;
+                        self.clipboard = None;
                         return Ok(OmValue::Empty);
                     }
                     let axis_title = match element {
@@ -15167,6 +15191,9 @@ impl ExcelRuntime {
                             unreachable!("Chart.Axes returned a non-object value")
                         };
                         self.dispatch_set(axis, "HasTitle", OmValue::Bool(has_title), &[])?;
+                        self.find_state = None;
+                        self.cut_copy_mode = None;
+                        self.clipboard = None;
                         return Ok(OmValue::Empty);
                     }
                     let valid_unimplemented_element = matches!(
@@ -15221,6 +15248,7 @@ impl ExcelRuntime {
 
                     let mut stale_titles = false;
                     let mut stale_legends = false;
+                    let mut changed = false;
                     {
                         let runtime = self.runtime_workbook_mut(workbook)?;
                         if runtime.read_only {
@@ -15244,6 +15272,7 @@ impl ExcelRuntime {
                                     stale_titles = true;
                                     chart.dirty = true;
                                     runtime.dirty = true;
+                                    changed = true;
                                 }
                             }
                             MSO_ELEMENT_CHART_TITLE_CENTERED_OVERLAY
@@ -15254,6 +15283,7 @@ impl ExcelRuntime {
                                     });
                                     chart.dirty = true;
                                     runtime.dirty = true;
+                                    changed = true;
                                 }
                             }
                             MSO_ELEMENT_LEGEND_NONE => {
@@ -15261,6 +15291,7 @@ impl ExcelRuntime {
                                     stale_legends = true;
                                     chart.dirty = true;
                                     runtime.dirty = true;
+                                    changed = true;
                                 }
                             }
                             MSO_ELEMENT_LEGEND_RIGHT | MSO_ELEMENT_LEGEND_RIGHT_OVERLAY => {
@@ -15276,6 +15307,7 @@ impl ExcelRuntime {
                                             legend.include_in_layout = Some(include_in_layout);
                                             chart.dirty = true;
                                             runtime.dirty = true;
+                                            changed = true;
                                         }
                                     }
                                     None => {
@@ -15286,6 +15318,7 @@ impl ExcelRuntime {
                                         });
                                         chart.dirty = true;
                                         runtime.dirty = true;
+                                        changed = true;
                                     }
                                 }
                             }
@@ -15300,6 +15333,7 @@ impl ExcelRuntime {
                                         legend.include_in_layout = Some(true);
                                         chart.dirty = true;
                                         runtime.dirty = true;
+                                        changed = true;
                                     }
                                 }
                                 None => {
@@ -15310,6 +15344,7 @@ impl ExcelRuntime {
                                     });
                                     chart.dirty = true;
                                     runtime.dirty = true;
+                                    changed = true;
                                 }
                             },
                             MSO_ELEMENT_LEGEND_LEFT | MSO_ELEMENT_LEGEND_LEFT_OVERLAY => {
@@ -15325,6 +15360,7 @@ impl ExcelRuntime {
                                             legend.include_in_layout = Some(include_in_layout);
                                             chart.dirty = true;
                                             runtime.dirty = true;
+                                            changed = true;
                                         }
                                     }
                                     None => {
@@ -15335,6 +15371,7 @@ impl ExcelRuntime {
                                         });
                                         chart.dirty = true;
                                         runtime.dirty = true;
+                                        changed = true;
                                     }
                                 }
                             }
@@ -15349,6 +15386,7 @@ impl ExcelRuntime {
                                         legend.include_in_layout = Some(true);
                                         chart.dirty = true;
                                         runtime.dirty = true;
+                                        changed = true;
                                     }
                                 }
                                 None => {
@@ -15359,6 +15397,7 @@ impl ExcelRuntime {
                                     });
                                     chart.dirty = true;
                                     runtime.dirty = true;
+                                    changed = true;
                                 }
                             },
                             _ => unreachable!("chart SetElement element was matched above"),
@@ -15369,6 +15408,11 @@ impl ExcelRuntime {
                     }
                     if stale_legends {
                         self.stale_legend_handles_for_chart(workbook, chart_id);
+                    }
+                    if changed {
+                        self.find_state = None;
+                        self.cut_copy_mode = None;
+                        self.clipboard = None;
                     }
                     Ok(OmValue::Empty)
                 }
@@ -130366,6 +130410,11 @@ mod tests {
                 .expect("Workbook.Saved before layout helper methods"),
             OmValue::Bool(true)
         );
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before chart layout helper methods"),
+        );
 
         assert_eq!(
             runtime
@@ -130382,17 +130431,77 @@ mod tests {
                 .expect("Chart.CheckSpelling"),
             OmValue::Empty
         );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before Chart.ClearToMatchColorStyle");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Chart.ClearToMatchColorStyle");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Chart.ClearToMatchColorStyle")
+            ),
+            f64::from(super::XL_COPY)
+        );
         assert_eq!(
             runtime
                 .dispatch_invoke(chart, "ClearToMatchColorStyle", &[])
                 .expect("Chart.ClearToMatchColorStyle"),
             OmValue::Empty
         );
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Chart.ClearToMatchColorStyle")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err(
+                    "Range.FindNext should require a new Find after Chart.ClearToMatchColorStyle"
+                )
+                .code,
+            OmErrorCode::InvalidState
+        );
         assert_eq!(
             runtime
                 .dispatch_invoke(chart, "ClearToMatchStyle", &[])
                 .expect("Chart.ClearToMatchStyle"),
             OmValue::Empty
+        );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before Chart.ApplyLayout");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Chart.ApplyLayout");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Chart.ApplyLayout")
+            ),
+            f64::from(super::XL_COPY)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart, "ApplyLayout", &[OmValue::Number(1.0)])
+                .expect("Chart.ApplyLayout without ChartType"),
+            OmValue::Empty
+        );
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Chart.ApplyLayout")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after Chart.ApplyLayout")
+                .code,
+            OmErrorCode::InvalidState
         );
         assert_eq!(
             runtime
@@ -130521,6 +130630,20 @@ mod tests {
                 .expect("SeriesCollection.Item(1) before SetElement data labels"),
         );
         runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before Chart.SetElement data labels");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Chart.SetElement data labels");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Chart.SetElement data labels")
+            ),
+            f64::from(super::XL_COPY)
+        );
+        runtime
             .dispatch_invoke(
                 chart,
                 "SetElement",
@@ -130529,6 +130652,20 @@ mod tests {
                 ))],
             )
             .expect("Chart.SetElement msoElementDataLabelTop");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Chart.SetElement data labels")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err(
+                    "Range.FindNext should require a new Find after Chart.SetElement data labels"
+                )
+                .code,
+            OmErrorCode::InvalidState
+        );
         assert_eq!(
             runtime
                 .dispatch_get(first_series, "HasDataLabels", &[])
@@ -131590,12 +131727,40 @@ mod tests {
                 .expect("Chart.Legend before SetElement"),
         );
         runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before Chart.SetElement legend");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Chart.SetElement legend");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Chart.SetElement legend")
+            ),
+            f64::from(super::XL_COPY)
+        );
+        runtime
             .dispatch_invoke(
                 chart,
                 "SetElement",
                 &[OmValue::Number(f64::from(super::MSO_ELEMENT_LEGEND_LEFT))],
             )
             .expect("Chart.SetElement msoElementLegendLeft");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Chart.SetElement legend")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err(
+                    "Range.FindNext should require a new Find after Chart.SetElement legend"
+                )
+                .code,
+            OmErrorCode::InvalidState
+        );
         assert_eq!(
             expect_number(
                 runtime
