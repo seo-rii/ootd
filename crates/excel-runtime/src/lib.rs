@@ -3264,16 +3264,25 @@ impl ExcelRuntime {
                                 "Workbook.Date1904 expects a boolean value",
                             ));
                         };
-                        let runtime = self.runtime_workbook_mut(workbook)?;
-                        if runtime.read_only {
-                            return Err(OmError::new(
-                                OmErrorCode::InvalidState,
-                                "cannot modify a read-only workbook",
-                            ));
+                        let mut changed = false;
+                        {
+                            let runtime = self.runtime_workbook_mut(workbook)?;
+                            if runtime.read_only {
+                                return Err(OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "cannot modify a read-only workbook",
+                                ));
+                            }
+                            if runtime.loaded.state.model.date1904 != date1904 {
+                                runtime.loaded.state.model.date1904 = date1904;
+                                runtime.dirty = true;
+                                changed = true;
+                            }
                         }
-                        if runtime.loaded.state.model.date1904 != date1904 {
-                            runtime.loaded.state.model.date1904 = date1904;
-                            runtime.dirty = true;
+                        if changed {
+                            self.find_state = None;
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
                         }
                         Ok(())
                     }
@@ -3283,16 +3292,25 @@ impl ExcelRuntime {
                                 "Workbook.IsAddin expects a boolean value",
                             ));
                         };
-                        let runtime = self.runtime_workbook_mut(workbook)?;
-                        if runtime.read_only {
-                            return Err(OmError::new(
-                                OmErrorCode::InvalidState,
-                                "cannot modify a read-only workbook",
-                            ));
+                        let mut changed = false;
+                        {
+                            let runtime = self.runtime_workbook_mut(workbook)?;
+                            if runtime.read_only {
+                                return Err(OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "cannot modify a read-only workbook",
+                                ));
+                            }
+                            if runtime.loaded.state.model.is_addin != is_addin {
+                                runtime.loaded.state.model.is_addin = is_addin;
+                                runtime.dirty = true;
+                                changed = true;
+                            }
                         }
-                        if runtime.loaded.state.model.is_addin != is_addin {
-                            runtime.loaded.state.model.is_addin = is_addin;
-                            runtime.dirty = true;
+                        if changed {
+                            self.find_state = None;
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
                         }
                         Ok(())
                     }
@@ -3328,6 +3346,7 @@ impl ExcelRuntime {
                                 "Worksheet.Name expects a string value",
                             ));
                         };
+                        let mut changed = false;
                         let runtime = self.runtime_workbook_mut(workbook)?;
                         if runtime.read_only {
                             return Err(OmError::new(
@@ -3775,6 +3794,12 @@ impl ExcelRuntime {
                                 }
                             }
                             runtime.dirty = true;
+                            changed = true;
+                        }
+                        if changed {
+                            self.find_state = None;
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
                         }
                         Ok(())
                     }
@@ -3783,6 +3808,7 @@ impl ExcelRuntime {
                         let active_sheet_is_target = self.active_workbook == Some(workbook)
                             && self.active_sheet_id(workbook).ok() == Some(sheet_id);
                         let mut replacement_selection = None;
+                        let mut changed = false;
                         {
                             let runtime = self.runtime_workbook_mut(workbook)?;
                             if runtime.read_only {
@@ -3844,6 +3870,7 @@ impl ExcelRuntime {
                             if worksheet.visibility != new_visibility {
                                 worksheet.visibility = new_visibility;
                                 runtime.dirty = true;
+                                changed = true;
                             }
                         }
                         if let Some(replacement_sheet_id) = replacement_selection {
@@ -3852,6 +3879,11 @@ impl ExcelRuntime {
                                 replacement_sheet_id,
                                 Rect::single_cell(1, 1),
                             );
+                        }
+                        if changed {
+                            self.find_state = None;
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
                         }
                         Ok(())
                     }
@@ -32683,6 +32715,9 @@ impl ExcelRuntime {
         }
         if workbook_dirty {
             runtime.dirty = true;
+            self.find_state = None;
+            self.cut_copy_mode = None;
+            self.clipboard = None;
         }
         Ok(())
     }
@@ -69141,6 +69176,43 @@ mod tests {
                 .dispatch_get(workbook.0, "Date1904", &[])
                 .expect("Workbook.Date1904 default")
         ));
+        let application = runtime.root_application();
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveSheet", &[])
+                .expect("ActiveSheet before Workbook.Date1904"),
+        );
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1".to_string())])
+                .expect("search range before Workbook.Date1904"),
+        );
+        runtime
+            .dispatch_set(
+                search_range,
+                "Value",
+                OmValue::Text("date1904 needle".to_string()),
+                &[],
+            )
+            .expect("seed Range.Find value before Workbook.Date1904");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Workbook.Date1904");
+        runtime
+            .dispatch_invoke(
+                search_range,
+                "Find",
+                &[OmValue::Text("date1904 needle".to_string())],
+            )
+            .expect("Range.Find before Workbook.Date1904");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(application, "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Workbook.Date1904")
+            ),
+            f64::from(super::XL_COPY)
+        );
 
         runtime
             .dispatch_set(workbook.0, "Date1904", OmValue::Bool(true), &[])
@@ -69155,6 +69227,18 @@ mod tests {
                 .dispatch_get(workbook.0, "Saved", &[])
                 .expect("Workbook.Saved after Date1904")
         ));
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(application, "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Workbook.Date1904")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after Workbook.Date1904")
+                .code,
+            OmErrorCode::InvalidState
+        );
 
         runtime
             .dispatch_set(workbook.0, "Date1904", OmValue::Bool(false), &[])
@@ -69226,6 +69310,43 @@ mod tests {
                 .dispatch_get(workbook.0, "IsAddin", &[])
                 .expect("Workbook.IsAddin default")
         ));
+        let application = runtime.root_application();
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveSheet", &[])
+                .expect("ActiveSheet before Workbook.IsAddin"),
+        );
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1".to_string())])
+                .expect("search range before Workbook.IsAddin"),
+        );
+        runtime
+            .dispatch_set(
+                search_range,
+                "Value",
+                OmValue::Text("addin needle".to_string()),
+                &[],
+            )
+            .expect("seed Range.Find value before Workbook.IsAddin");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Workbook.IsAddin");
+        runtime
+            .dispatch_invoke(
+                search_range,
+                "Find",
+                &[OmValue::Text("addin needle".to_string())],
+            )
+            .expect("Range.Find before Workbook.IsAddin");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(application, "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Workbook.IsAddin")
+            ),
+            f64::from(super::XL_COPY)
+        );
 
         runtime
             .dispatch_set(workbook.0, "IsAddin", OmValue::Bool(true), &[])
@@ -69240,6 +69361,18 @@ mod tests {
                 .dispatch_get(workbook.0, "Saved", &[])
                 .expect("Workbook.Saved after IsAddin")
         ));
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(application, "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Workbook.IsAddin")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after Workbook.IsAddin")
+                .code,
+            OmErrorCode::InvalidState
+        );
 
         runtime
             .dispatch_set(workbook.0, "IsAddin", OmValue::Bool(false), &[])
@@ -103418,6 +103551,37 @@ mod tests {
                 .dispatch_get(application, "ActiveSheet", &[])
                 .expect("ActiveSheet"),
         );
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1".to_string())])
+                .expect("search range before Worksheet.Name"),
+        );
+        runtime
+            .dispatch_set(
+                search_range,
+                "Value",
+                OmValue::Text("rename needle".to_string()),
+                &[],
+            )
+            .expect("seed Range.Find value before Worksheet.Name");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Worksheet.Name");
+        runtime
+            .dispatch_invoke(
+                search_range,
+                "Find",
+                &[OmValue::Text("rename needle".to_string())],
+            )
+            .expect("Range.Find before Worksheet.Name");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(application, "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Worksheet.Name")
+            ),
+            f64::from(super::XL_COPY)
+        );
 
         runtime
             .dispatch_set(
@@ -103435,6 +103599,18 @@ mod tests {
                     .expect("renamed sheet name")
             ),
             "Renamed"
+        );
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(application, "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Worksheet.Name")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after Worksheet.Name")
+                .code,
+            OmErrorCode::InvalidState
         );
 
         let worksheets = expect_object_handle(
@@ -103472,6 +103648,83 @@ mod tests {
             .expect("reopen saved workbook");
 
         assert_eq!(reopened.state.worksheets[0].name, "Renamed");
+    }
+
+    #[test]
+    fn worksheet_visible_setter_resets_range_find_and_copy_state() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let application = runtime.root_application();
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let added_sheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets, "Add", &[])
+                .expect("Worksheets.Add"),
+        );
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(added_sheet, "Range", &[OmValue::Text("A1".to_string())])
+                .expect("search range before Worksheet.Visible"),
+        );
+        runtime
+            .dispatch_set(
+                search_range,
+                "Value",
+                OmValue::Text("visible needle".to_string()),
+                &[],
+            )
+            .expect("seed Range.Find value before Worksheet.Visible");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Worksheet.Visible");
+        runtime
+            .dispatch_invoke(
+                search_range,
+                "Find",
+                &[OmValue::Text("visible needle".to_string())],
+            )
+            .expect("Range.Find before Worksheet.Visible");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(application, "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Worksheet.Visible")
+            ),
+            f64::from(super::XL_COPY)
+        );
+
+        runtime
+            .dispatch_set(
+                added_sheet,
+                "Visible",
+                OmValue::Number(f64::from(super::XL_SHEET_HIDDEN)),
+                &[],
+            )
+            .expect("hide added worksheet");
+
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(application, "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Worksheet.Visible")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after Worksheet.Visible")
+                .code,
+            OmErrorCode::InvalidState
+        );
     }
 
     #[test]
@@ -144704,6 +144957,37 @@ mod tests {
                 .code,
             OmErrorCode::Unsupported
         );
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1".to_string())])
+                .expect("search range before ChartObject.ZOrder"),
+        );
+        runtime
+            .dispatch_set(
+                search_range,
+                "Value",
+                OmValue::Text("zorder needle".to_string()),
+                &[],
+            )
+            .expect("seed Range.Find value before ChartObject.ZOrder");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before ChartObject.ZOrder");
+        runtime
+            .dispatch_invoke(
+                search_range,
+                "Find",
+                &[OmValue::Text("zorder needle".to_string())],
+            )
+            .expect("Range.Find before ChartObject.ZOrder");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before ChartObject.ZOrder")
+            ),
+            f64::from(super::XL_COPY)
+        );
         assert_eq!(
             runtime
                 .dispatch_invoke(
@@ -144713,6 +144997,18 @@ mod tests {
                 )
                 .expect("ChartObject.ZOrder msoBringForward"),
             OmValue::Empty
+        );
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after ChartObject.ZOrder")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after ChartObject.ZOrder")
+                .code,
+            OmErrorCode::InvalidState
         );
         let initial_ordered_first = expect_object_handle(
             runtime
