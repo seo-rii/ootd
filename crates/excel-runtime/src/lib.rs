@@ -17672,6 +17672,14 @@ impl ExcelRuntime {
                             | "LogBase"
                             | "Crosses"
                             | "CrossesAt"
+                            | "MinimumScale"
+                            | "MaximumScale"
+                            | "MajorUnit"
+                            | "MinorUnit"
+                            | "MinimumScaleIsAuto"
+                            | "MaximumScaleIsAuto"
+                            | "MajorUnitIsAuto"
+                            | "MinorUnitIsAuto"
                             | "MajorUnitScale"
                             | "MinorUnitScale"
                             | "MajorTickMark"
@@ -67307,6 +67315,30 @@ mod tests {
                 clear_formats.support,
                 office_idl::SupportState::Stub
             ));
+        }
+        let axis = runtime
+            .dispatch_registry()
+            .focus_surfaces
+            .iter()
+            .find(|surface| surface.name == "Axis")
+            .expect("Axis focus surface");
+        for member_name in [
+            "MinimumScale",
+            "MaximumScale",
+            "MajorUnit",
+            "MinorUnit",
+            "MinimumScaleIsAuto",
+            "MaximumScaleIsAuto",
+            "MajorUnitIsAuto",
+            "MinorUnitIsAuto",
+        ] {
+            let member = axis
+                .members
+                .iter()
+                .find(|member| member.name == member_name)
+                .unwrap_or_else(|| panic!("Axis.{member_name} focus member"));
+            assert!(matches!(member.support, office_idl::SupportState::Stub));
+            assert!(matches!(member.access, office_idl::AccessMode::Readwrite));
         }
         let shape_range = runtime
             .dispatch_registry()
