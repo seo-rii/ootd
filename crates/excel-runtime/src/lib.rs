@@ -126494,6 +126494,20 @@ mod tests {
         }
 
         runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before Chart.ApplyDataLabels");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Chart.ApplyDataLabels");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Chart.ApplyDataLabels")
+            ),
+            f64::from(super::XL_COPY)
+        );
+        runtime
             .dispatch_invoke(
                 chart,
                 "ApplyDataLabels",
@@ -126511,6 +126525,18 @@ mod tests {
                 ],
             )
             .expect("Chart.ApplyDataLabels");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Chart.ApplyDataLabels")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after Chart.ApplyDataLabels")
+                .code,
+            OmErrorCode::InvalidState
+        );
         {
             let state = runtime.workbook_state(workbook).expect("workbook state");
             let chart_model = state.charts.values().next().expect("chart model");
