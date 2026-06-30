@@ -123620,6 +123620,20 @@ mod tests {
             OmErrorCode::InvalidState
         );
         runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before DataLabels.NumberFormat");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before DataLabels.NumberFormat");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before DataLabels.NumberFormat")
+            ),
+            f64::from(super::XL_COPY)
+        );
+        runtime
             .dispatch_set(
                 data_labels,
                 "NumberFormat",
@@ -123627,9 +123641,51 @@ mod tests {
                 &[],
             )
             .expect("DataLabels.NumberFormat = percent");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after DataLabels.NumberFormat")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err(
+                    "Range.FindNext should require a new Find after DataLabels.NumberFormat"
+                )
+                .code,
+            OmErrorCode::InvalidState
+        );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before DataLabels.NumberFormatLinked");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before DataLabels.NumberFormatLinked");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before DataLabels.NumberFormatLinked")
+            ),
+            f64::from(super::XL_COPY)
+        );
         runtime
             .dispatch_set(data_labels, "NumberFormatLinked", OmValue::Bool(true), &[])
             .expect("DataLabels.NumberFormatLinked = true");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after DataLabels.NumberFormatLinked")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err(
+                    "Range.FindNext should require a new Find after DataLabels.NumberFormatLinked",
+                )
+                .code,
+            OmErrorCode::InvalidState
+        );
         runtime
             .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
             .expect("Range.Find before DataLabels.Position");
