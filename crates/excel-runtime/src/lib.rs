@@ -127067,6 +127067,16 @@ mod tests {
                     .dispatch_invoke(series_collection, "Item", &[OmValue::Number(1.0)])
                     .expect("SeriesCollection.Item(1)"),
             );
+            let first_series_format = expect_object_handle(
+                runtime
+                    .dispatch_get(first_series, "Format", &[])
+                    .expect("Series.Format before PlotArea clear"),
+            );
+            let first_series_points = expect_object_handle(
+                runtime
+                    .dispatch_get(first_series, "Points", &[])
+                    .expect("Series.Points before PlotArea clear"),
+            );
             assert_eq!(
                 expect_number(
                     runtime
@@ -127089,6 +127099,20 @@ mod tests {
                 runtime
                     .dispatch_get(first_series, "PlotOrder", &[])
                     .expect_err("old series handle should be stale after PlotArea clear")
+                    .code,
+                OmErrorCode::InvalidState
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(first_series_format, "Creator", &[])
+                    .expect_err("Series.Format handle should be stale after PlotArea clear")
+                    .code,
+                OmErrorCode::InvalidState
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(first_series_points, "Count", &[])
+                    .expect_err("Series.Points handle should be stale after PlotArea clear")
                     .code,
                 OmErrorCode::InvalidState
             );
