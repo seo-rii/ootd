@@ -67242,6 +67242,20 @@ mod tests {
             .iter()
             .find(|surface| surface.name == "ChartObject")
             .expect("ChartObject focus surface");
+        let chart_objects = runtime
+            .dispatch_registry()
+            .focus_surfaces
+            .iter()
+            .find(|surface| surface.name == "ChartObjects")
+            .expect("ChartObjects focus surface");
+        for member_name in ["BringToFront", "SendToBack"] {
+            let member = chart_objects
+                .members
+                .iter()
+                .find(|member| member.name == member_name)
+                .unwrap_or_else(|| panic!("ChartObjects.{member_name} focus member"));
+            assert!(matches!(member.support, office_idl::SupportState::Stub));
+        }
         for member_name in [
             "IncrementLeft",
             "IncrementTop",

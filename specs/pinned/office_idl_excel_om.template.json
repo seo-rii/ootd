@@ -7195,6 +7195,22 @@
           }
         },
         {
+          "name": "BringToFront",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "ChartObjects",
+                  "sourceMember": "BringToFront"
+                }
+              ]
+            }
+          }
+        },
+        {
           "name": "Cut",
           "memberKind": "method",
           "support": "stub",
@@ -7283,6 +7299,22 @@
                   "kind": "method",
                   "sourceInterface": "ChartObjects",
                   "sourceMember": "Delete"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "SendToBack",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "ChartObjects",
+                  "sourceMember": "SendToBack"
                 }
               ]
             }
