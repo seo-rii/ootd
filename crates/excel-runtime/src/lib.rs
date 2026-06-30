@@ -67236,6 +67236,25 @@ mod tests {
                 .unwrap_or_else(|| panic!("PlotArea.{member_name} focus member"));
             assert!(matches!(member.support, office_idl::SupportState::Stub));
         }
+        let chart_area = runtime
+            .dispatch_registry()
+            .focus_surfaces
+            .iter()
+            .find(|surface| surface.name == "ChartArea")
+            .expect("ChartArea focus surface");
+        let rounded_corners = chart_area
+            .members
+            .iter()
+            .find(|member| member.name == "RoundedCorners")
+            .expect("ChartArea.RoundedCorners focus member");
+        assert!(matches!(
+            rounded_corners.support,
+            office_idl::SupportState::Stub
+        ));
+        assert!(matches!(
+            rounded_corners.access,
+            office_idl::AccessMode::Readwrite
+        ));
         let chart = runtime
             .dispatch_registry()
             .focus_surfaces

@@ -10990,6 +10990,33 @@
           }
         },
         {
+          "name": "RoundedCorners",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "ChartArea",
+                  "sourceMember": "RoundedCorners"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "bool",
+                "aliasOf": "VARIANT_BOOL"
+              }
+            }
+          },
+          "access": "readwrite",
+          "returnType": {
+            "kind": "primitive",
+            "name": "bool",
+            "aliasOf": "VARIANT_BOOL"
+          }
+        },
+        {
           "name": "Creator",
           "memberKind": "property",
           "support": "stub",
