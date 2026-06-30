@@ -32724,6 +32724,9 @@ impl ExcelRuntime {
         };
         if changed {
             self.stale_axis_handles_for_chart(workbook, chart_id);
+            self.find_state = None;
+            self.cut_copy_mode = None;
+            self.clipboard = None;
         }
         Ok(changed)
     }
@@ -144734,6 +144737,25 @@ mod tests {
             OmErrorCode::InvalidArgument
         );
 
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before Chart.HasAxis add"),
+        );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before Chart.HasAxis add");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Chart.HasAxis add");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Chart.HasAxis add")
+            ),
+            f64::from(super::XL_COPY)
+        );
         runtime
             .dispatch_set(
                 chart,
@@ -144745,6 +144767,18 @@ mod tests {
                 ],
             )
             .expect("Chart.HasAxis adds secondary value axis");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Chart.HasAxis add")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after Chart.HasAxis add")
+                .code,
+            OmErrorCode::InvalidState
+        );
         assert_eq!(
             runtime
                 .dispatch_get(
@@ -144808,6 +144842,20 @@ mod tests {
         );
 
         runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before Chart.HasAxis remove");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Chart.HasAxis remove");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Chart.HasAxis remove")
+            ),
+            f64::from(super::XL_COPY)
+        );
+        runtime
             .dispatch_set(
                 chart,
                 "HasAxis",
@@ -144815,6 +144863,18 @@ mod tests {
                 &[OmValue::Number(f64::from(super::XL_CATEGORY))],
             )
             .expect("Chart.HasAxis removes category axis");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Chart.HasAxis remove")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after Chart.HasAxis remove")
+                .code,
+            OmErrorCode::InvalidState
+        );
         assert_eq!(
             runtime
                 .dispatch_get(
