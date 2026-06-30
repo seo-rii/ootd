@@ -15500,6 +15500,9 @@ impl ExcelRuntime {
                         runtime.dirty = true;
                     }
                     self.stale_series_handles_for_chart(workbook, chart_id);
+                    self.find_state = None;
+                    self.cut_copy_mode = None;
+                    self.clipboard = None;
                     Ok(OmValue::Empty)
                 }
                 "Location" => {
@@ -16101,6 +16104,9 @@ impl ExcelRuntime {
                         runtime.dirty = true;
                     }
                     self.stale_series_handles_for_chart(workbook, chart_id);
+                    self.find_state = None;
+                    self.cut_copy_mode = None;
+                    self.clipboard = None;
                     Ok(OmValue::Empty)
                 }
                 _ => Err(OmError::unsupported(format!(
@@ -24955,6 +24961,9 @@ impl ExcelRuntime {
                     runtime.dirty = true;
                     series_index
                 };
+                self.find_state = None;
+                self.cut_copy_mode = None;
+                self.clipboard = None;
                 Ok(OmValue::Object(
                     self.register_series_handle_with_chart_object_parent_origin(
                         workbook,
@@ -25084,6 +25093,9 @@ impl ExcelRuntime {
                     runtime.dirty = true;
                     first_new_series_index
                 };
+                self.find_state = None;
+                self.cut_copy_mode = None;
+                self.clipboard = None;
                 Ok(OmValue::Object(
                     self.register_series_handle_with_chart_object_parent_origin(
                         workbook,
@@ -133491,6 +133503,20 @@ mod tests {
             ),
             0.0
         );
+        runtime
+            .dispatch_invoke(source_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before SeriesCollection.Add");
+        runtime
+            .dispatch_invoke(source_range, "Copy", &[])
+            .expect("Range.Copy before SeriesCollection.Add");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before SeriesCollection.Add")
+            ),
+            f64::from(super::XL_COPY)
+        );
 
         let first_added_series = expect_object_handle(
             runtime
@@ -133503,6 +133529,18 @@ mod tests {
                     ],
                 )
                 .expect("SeriesCollection.Add xlColumns"),
+        );
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after SeriesCollection.Add")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(source_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after SeriesCollection.Add")
+                .code,
+            OmErrorCode::InvalidState
         );
         assert_eq!(
             expect_number(
@@ -142306,10 +142344,43 @@ mod tests {
             ),
             0.0
         );
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before SeriesCollection.NewSeries"),
+        );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before SeriesCollection.NewSeries");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before SeriesCollection.NewSeries");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before SeriesCollection.NewSeries")
+            ),
+            f64::from(super::XL_COPY)
+        );
         let series = expect_object_handle(
             runtime
                 .dispatch_invoke(series_collection, "NewSeries", &[])
                 .expect("SeriesCollection.NewSeries"),
+        );
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after SeriesCollection.NewSeries")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err(
+                    "Range.FindNext should require a new Find after SeriesCollection.NewSeries"
+                )
+                .code,
+            OmErrorCode::InvalidState
         );
         assert_eq!(
             expect_number(
@@ -147420,9 +147491,40 @@ mod tests {
             ),
             2.0
         );
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before Series.Delete"),
+        );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before Series.Delete");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Series.Delete");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Series.Delete")
+            ),
+            f64::from(super::XL_COPY)
+        );
         runtime
             .dispatch_invoke(first_series, "Delete", &[])
             .expect("Series.Delete");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Series.Delete")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after Series.Delete")
+                .code,
+            OmErrorCode::InvalidState
+        );
         assert_eq!(
             runtime
                 .dispatch_get(first_series, "PlotOrder", &[])
@@ -150020,8 +150122,34 @@ mod tests {
                 .expect("ChartObject.Chart"),
         );
         runtime
+            .dispatch_invoke(source_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before Chart.SetSourceData");
+        runtime
+            .dispatch_invoke(source_range, "Copy", &[])
+            .expect("Range.Copy before Chart.SetSourceData");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Chart.SetSourceData")
+            ),
+            f64::from(super::XL_COPY)
+        );
+        runtime
             .dispatch_invoke(chart, "SetSourceData", &[OmValue::Object(source_range)])
             .expect("Chart.SetSourceData");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Chart.SetSourceData")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(source_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after Chart.SetSourceData")
+                .code,
+            OmErrorCode::InvalidState
+        );
         let series_collection = expect_object_handle(
             runtime
                 .dispatch_get(chart, "SeriesCollection", &[])
