@@ -31904,6 +31904,9 @@ impl ExcelRuntime {
                 self.active_chart = None;
             }
         }
+        self.find_state = None;
+        self.cut_copy_mode = None;
+        self.clipboard = None;
 
         Ok(true)
     }
@@ -144023,6 +144026,11 @@ mod tests {
                 .dispatch_get(chart_object, "Chart", &[])
                 .expect("ChartObject.Chart"),
         );
+        let range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3)"),
+        );
         runtime
             .dispatch_invoke(chart_object, "Activate", &[])
             .expect("ChartObject.Activate");
@@ -144032,12 +144040,38 @@ mod tests {
                 .expect("ActiveChart after ChartObject.Activate"),
             OmValue::Object(_)
         ));
+        runtime
+            .dispatch_invoke(range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before ChartObject.Delete");
+        runtime
+            .dispatch_invoke(range, "Copy", &[])
+            .expect("Range.Copy before ChartObject.Delete");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before ChartObject.Delete")
+            ),
+            f64::from(super::XL_COPY)
+        );
 
         assert_eq!(
             runtime
                 .dispatch_invoke(chart_object, "Delete", &[])
                 .expect("ChartObject.Delete"),
             OmValue::Bool(true)
+        );
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after ChartObject.Delete")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after ChartObject.Delete")
+                .code,
+            OmErrorCode::InvalidState
         );
         assert_eq!(
             expect_number(
