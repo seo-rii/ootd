@@ -13954,6 +13954,9 @@ impl ExcelRuntime {
                                 .insert(target_chart_id, source_chart_support_part_sources);
                         }
                         runtime.dirty = true;
+                        self.find_state = None;
+                        self.cut_copy_mode = None;
+                        self.clipboard = None;
                     }
                     let moved_sheet_name = {
                         let worksheets = &self
@@ -16056,6 +16059,9 @@ impl ExcelRuntime {
                                     );
                                 }
                                 runtime.dirty = true;
+                                self.find_state = None;
+                                self.cut_copy_mode = None;
+                                self.clipboard = None;
                             }
                             if let Some((_, source_chart_object_id, _)) =
                                 source_embedded_chart_object
@@ -110555,6 +110561,25 @@ mod tests {
             )
             .expect("set embedded chart type before Chart.Location");
 
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before Chart.Location xlLocationAsNewSheet"),
+        );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before Chart.Location xlLocationAsNewSheet");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Chart.Location xlLocationAsNewSheet");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Chart.Location xlLocationAsNewSheet")
+            ),
+            f64::from(super::XL_COPY)
+        );
         let relocated_chart = expect_object_handle(
             runtime
                 .dispatch_invoke(
@@ -110566,6 +110591,20 @@ mod tests {
                     ],
                 )
                 .expect("Chart.Location xlLocationAsNewSheet"),
+        );
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Chart.Location xlLocationAsNewSheet")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err(
+                    "Range.FindNext should require a new Find after Chart.Location xlLocationAsNewSheet",
+                )
+                .code,
+            OmErrorCode::InvalidState
         );
         assert_eq!(
             expect_number(
@@ -110681,6 +110720,20 @@ mod tests {
                 .code,
             OmErrorCode::InvalidArgument
         );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before Chart.Location xlLocationAsObject");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Chart.Location xlLocationAsObject");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Chart.Location xlLocationAsObject")
+            ),
+            f64::from(super::XL_COPY)
+        );
         let embedded_again_chart = expect_object_handle(
             runtime
                 .dispatch_invoke(
@@ -110692,6 +110745,20 @@ mod tests {
                     ],
                 )
                 .expect("Chart.Location xlLocationAsObject"),
+        );
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Chart.Location xlLocationAsObject")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err(
+                    "Range.FindNext should require a new Find after Chart.Location xlLocationAsObject",
+                )
+                .code,
+            OmErrorCode::InvalidState
         );
         assert_eq!(
             expect_number(
