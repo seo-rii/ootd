@@ -120224,8 +120224,38 @@ mod tests {
             OmErrorCode::InvalidState
         );
         runtime
+            .dispatch_invoke(
+                chart_content_search_range,
+                "Find",
+                &[OmValue::Text("1".to_string())],
+            )
+            .expect("Range.Find before Chart.PlotVisibleOnly");
+        runtime
+            .dispatch_invoke(chart_content_search_range, "Copy", &[])
+            .expect("Range.Copy before Chart.PlotVisibleOnly");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Chart.PlotVisibleOnly")
+            ),
+            f64::from(super::XL_COPY)
+        );
+        runtime
             .dispatch_set(chart, "PlotVisibleOnly", OmValue::Bool(false), &[])
             .expect("set loaded Chart.PlotVisibleOnly");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Chart.PlotVisibleOnly")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart_content_search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after Chart.PlotVisibleOnly")
+                .code,
+            OmErrorCode::InvalidState
+        );
         runtime
             .dispatch_set(
                 chart,
@@ -120276,6 +120306,24 @@ mod tests {
             OmValue::Bool(true)
         );
         runtime
+            .dispatch_invoke(
+                chart_content_search_range,
+                "Find",
+                &[OmValue::Text("1".to_string())],
+            )
+            .expect("Range.Find before Chart.DisplayBlanksAs");
+        runtime
+            .dispatch_invoke(chart_content_search_range, "Copy", &[])
+            .expect("Range.Copy before Chart.DisplayBlanksAs");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Chart.DisplayBlanksAs")
+            ),
+            f64::from(super::XL_COPY)
+        );
+        runtime
             .dispatch_set(
                 chart,
                 "DisplayBlanksAs",
@@ -120283,6 +120331,18 @@ mod tests {
                 &[],
             )
             .expect("set loaded Chart.DisplayBlanksAs");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Chart.DisplayBlanksAs")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart_content_search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after Chart.DisplayBlanksAs")
+                .code,
+            OmErrorCode::InvalidState
+        );
         runtime
             .dispatch_invoke(
                 chart_content_search_range,
