@@ -11449,122 +11449,136 @@ impl ExcelRuntime {
                                 ));
                             }
                         };
-                        let runtime = self.runtime_workbook_mut(workbook)?;
-                        if runtime.read_only {
-                            return Err(OmError::new(
-                                OmErrorCode::InvalidState,
-                                "cannot modify a read-only workbook",
-                            ));
-                        }
-                        let worksheet = runtime
-                            .loaded
-                            .state
-                            .worksheet_data_for_sheet_mut(sheet_id)?;
-                        match shift {
-                            XL_SHIFT_UP => {
-                                let shift_height = rect.height();
-                                let affected_columns = worksheet
-                                    .cells
-                                    .keys()
-                                    .filter_map(|&(row, col)| {
-                                        (row >= rect.row_first
-                                            && (rect.col_first..=rect.col_last).contains(&col))
-                                        .then_some(col)
-                                    })
-                                    .collect::<BTreeSet<_>>();
-                                for col in affected_columns {
-                                    let Some(max_row) = worksheet
+                        let changed = {
+                            let runtime = self.runtime_workbook_mut(workbook)?;
+                            if runtime.read_only {
+                                return Err(OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "cannot modify a read-only workbook",
+                                ));
+                            }
+                            let worksheet = runtime
+                                .loaded
+                                .state
+                                .worksheet_data_for_sheet_mut(sheet_id)?;
+                            match shift {
+                                XL_SHIFT_UP => {
+                                    let mut changed = false;
+                                    let shift_height = rect.height();
+                                    let affected_columns = worksheet
                                         .cells
                                         .keys()
-                                        .filter_map(|&(row, cell_col)| {
-                                            (cell_col == col && row >= rect.row_first)
+                                        .filter_map(|&(row, col)| {
+                                            (row >= rect.row_first
+                                                && (rect.col_first..=rect.col_last).contains(&col))
+                                            .then_some(col)
+                                        })
+                                        .collect::<BTreeSet<_>>();
+                                    for col in affected_columns {
+                                        let Some(max_row) = worksheet
+                                            .cells
+                                            .keys()
+                                            .filter_map(|&(row, cell_col)| {
+                                                (cell_col == col && row >= rect.row_first)
+                                                    .then_some(row)
+                                            })
+                                            .max()
+                                        else {
+                                            continue;
+                                        };
+                                        for row in rect.row_first..=max_row {
+                                            let key = (row, col);
+                                            let source_row = row.saturating_add(shift_height);
+                                            let source_key = (source_row, col);
+                                            let next_cell = if source_row <= max_row {
+                                                worksheet.cells.remove(&source_key)
+                                            } else {
+                                                None
+                                            };
+                                            match next_cell {
+                                                Some(cell) => {
+                                                    worksheet.cells.insert(key, cell);
+                                                    worksheet.dirty = true;
+                                                    worksheet.dirty_cells.insert(key);
+                                                    worksheet.dirty_cells.insert(source_key);
+                                                    changed = true;
+                                                }
+                                                None => {
+                                                    if worksheet.cells.remove(&key).is_some() {
+                                                        worksheet.dirty = true;
+                                                        worksheet.dirty_cells.insert(key);
+                                                        changed = true;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    changed
+                                }
+                                XL_SHIFT_TO_LEFT => {
+                                    let mut changed = false;
+                                    let shift_width = rect.width();
+                                    let affected_rows = worksheet
+                                        .cells
+                                        .keys()
+                                        .filter_map(|&(row, col)| {
+                                            ((rect.row_first..=rect.row_last).contains(&row)
+                                                && col >= rect.col_first)
                                                 .then_some(row)
                                         })
-                                        .max()
-                                    else {
-                                        continue;
-                                    };
-                                    for row in rect.row_first..=max_row {
-                                        let key = (row, col);
-                                        let source_row = row.saturating_add(shift_height);
-                                        let source_key = (source_row, col);
-                                        let next_cell = if source_row <= max_row {
-                                            worksheet.cells.remove(&source_key)
-                                        } else {
-                                            None
+                                        .collect::<BTreeSet<_>>();
+                                    for row in affected_rows {
+                                        let Some(max_col) = worksheet
+                                            .cells
+                                            .keys()
+                                            .filter_map(|&(cell_row, col)| {
+                                                (cell_row == row && col >= rect.col_first)
+                                                    .then_some(col)
+                                            })
+                                            .max()
+                                        else {
+                                            continue;
                                         };
-                                        match next_cell {
-                                            Some(cell) => {
-                                                worksheet.cells.insert(key, cell);
-                                                worksheet.dirty = true;
-                                                worksheet.dirty_cells.insert(key);
-                                                worksheet.dirty_cells.insert(source_key);
-                                            }
-                                            None => {
-                                                if worksheet.cells.remove(&key).is_some() {
+                                        for col in rect.col_first..=max_col {
+                                            let key = (row, col);
+                                            let source_col = col.saturating_add(shift_width);
+                                            let source_key = (row, source_col);
+                                            let next_cell = if source_col <= max_col {
+                                                worksheet.cells.remove(&source_key)
+                                            } else {
+                                                None
+                                            };
+                                            match next_cell {
+                                                Some(cell) => {
+                                                    worksheet.cells.insert(key, cell);
                                                     worksheet.dirty = true;
                                                     worksheet.dirty_cells.insert(key);
+                                                    worksheet.dirty_cells.insert(source_key);
+                                                    changed = true;
+                                                }
+                                                None => {
+                                                    if worksheet.cells.remove(&key).is_some() {
+                                                        worksheet.dirty = true;
+                                                        worksheet.dirty_cells.insert(key);
+                                                        changed = true;
+                                                    }
                                                 }
                                             }
                                         }
                                     }
+                                    changed
                                 }
-                                Ok(OmValue::Empty)
-                            }
-                            XL_SHIFT_TO_LEFT => {
-                                let shift_width = rect.width();
-                                let affected_rows = worksheet
-                                    .cells
-                                    .keys()
-                                    .filter_map(|&(row, col)| {
-                                        ((rect.row_first..=rect.row_last).contains(&row)
-                                            && col >= rect.col_first)
-                                            .then_some(row)
-                                    })
-                                    .collect::<BTreeSet<_>>();
-                                for row in affected_rows {
-                                    let Some(max_col) = worksheet
-                                        .cells
-                                        .keys()
-                                        .filter_map(|&(cell_row, col)| {
-                                            (cell_row == row && col >= rect.col_first)
-                                                .then_some(col)
-                                        })
-                                        .max()
-                                    else {
-                                        continue;
-                                    };
-                                    for col in rect.col_first..=max_col {
-                                        let key = (row, col);
-                                        let source_col = col.saturating_add(shift_width);
-                                        let source_key = (row, source_col);
-                                        let next_cell = if source_col <= max_col {
-                                            worksheet.cells.remove(&source_key)
-                                        } else {
-                                            None
-                                        };
-                                        match next_cell {
-                                            Some(cell) => {
-                                                worksheet.cells.insert(key, cell);
-                                                worksheet.dirty = true;
-                                                worksheet.dirty_cells.insert(key);
-                                                worksheet.dirty_cells.insert(source_key);
-                                            }
-                                            None => {
-                                                if worksheet.cells.remove(&key).is_some() {
-                                                    worksheet.dirty = true;
-                                                    worksheet.dirty_cells.insert(key);
-                                                }
-                                            }
-                                        }
-                                    }
+                                other => {
+                                    return Err(OmError::unsupported(format!(
+                                        "Range.Delete Shift {other} is not implemented"
+                                    )));
                                 }
-                                Ok(OmValue::Empty)
                             }
-                            other => Err(OmError::unsupported(format!(
-                                "Range.Delete Shift {other} is not implemented"
-                            ))),
+                        };
+                        if changed {
+                            self.find_state = None;
                         }
+                        Ok(OmValue::Empty)
                     }
                     "Insert" => {
                         let shift = match args {
@@ -11602,116 +11616,128 @@ impl ExcelRuntime {
                                 ));
                             }
                         };
-                        let runtime = self.runtime_workbook_mut(workbook)?;
-                        if runtime.read_only {
-                            return Err(OmError::new(
-                                OmErrorCode::InvalidState,
-                                "cannot modify a read-only workbook",
-                            ));
-                        }
-                        let worksheet = runtime
-                            .loaded
-                            .state
-                            .worksheet_data_for_sheet_mut(sheet_id)?;
-                        match shift {
-                            XL_SHIFT_DOWN => {
-                                let shift_height = rect.height();
-                                let affected_columns = worksheet
-                                    .cells
-                                    .keys()
-                                    .filter_map(|&(row, col)| {
-                                        (row >= rect.row_first
-                                            && (rect.col_first..=rect.col_last).contains(&col))
-                                        .then_some(col)
-                                    })
-                                    .collect::<BTreeSet<_>>();
-                                for col in affected_columns {
-                                    let Some(max_row) = worksheet
+                        let changed = {
+                            let runtime = self.runtime_workbook_mut(workbook)?;
+                            if runtime.read_only {
+                                return Err(OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "cannot modify a read-only workbook",
+                                ));
+                            }
+                            let worksheet = runtime
+                                .loaded
+                                .state
+                                .worksheet_data_for_sheet_mut(sheet_id)?;
+                            match shift {
+                                XL_SHIFT_DOWN => {
+                                    let mut changed = false;
+                                    let shift_height = rect.height();
+                                    let affected_columns = worksheet
                                         .cells
                                         .keys()
-                                        .filter_map(|&(row, cell_col)| {
-                                            (cell_col == col && row >= rect.row_first)
-                                                .then_some(row)
+                                        .filter_map(|&(row, col)| {
+                                            (row >= rect.row_first
+                                                && (rect.col_first..=rect.col_last).contains(&col))
+                                            .then_some(col)
                                         })
-                                        .max()
-                                    else {
-                                        continue;
-                                    };
-                                    let shifted_max_row =
+                                        .collect::<BTreeSet<_>>();
+                                    for col in affected_columns {
+                                        let Some(max_row) = worksheet
+                                            .cells
+                                            .keys()
+                                            .filter_map(|&(row, cell_col)| {
+                                                (cell_col == col && row >= rect.row_first)
+                                                    .then_some(row)
+                                            })
+                                            .max()
+                                        else {
+                                            continue;
+                                        };
+                                        let shifted_max_row =
                                         max_row.checked_add(shift_height).ok_or_else(|| {
                                             OmError::invalid_argument(
                                                 "Range.Insert would shift cells beyond worksheet rows",
                                             )
                                         })?;
-                                    if shifted_max_row > EXCEL_MAX_ROW_INDEX {
-                                        return Err(OmError::invalid_argument(
-                                            "Range.Insert would shift cells beyond worksheet rows",
-                                        ));
-                                    }
-                                    for row in (rect.row_first..=max_row).rev() {
-                                        let key = (row, col);
-                                        let target_key = (row + shift_height, col);
-                                        if let Some(cell) = worksheet.cells.remove(&key) {
-                                            worksheet.cells.insert(target_key, cell);
-                                            worksheet.dirty = true;
-                                            worksheet.dirty_cells.insert(key);
-                                            worksheet.dirty_cells.insert(target_key);
+                                        if shifted_max_row > EXCEL_MAX_ROW_INDEX {
+                                            return Err(OmError::invalid_argument(
+                                                "Range.Insert would shift cells beyond worksheet rows",
+                                            ));
+                                        }
+                                        for row in (rect.row_first..=max_row).rev() {
+                                            let key = (row, col);
+                                            let target_key = (row + shift_height, col);
+                                            if let Some(cell) = worksheet.cells.remove(&key) {
+                                                worksheet.cells.insert(target_key, cell);
+                                                worksheet.dirty = true;
+                                                worksheet.dirty_cells.insert(key);
+                                                worksheet.dirty_cells.insert(target_key);
+                                                changed = true;
+                                            }
                                         }
                                     }
+                                    changed
                                 }
-                                Ok(OmValue::Empty)
-                            }
-                            XL_SHIFT_TO_RIGHT => {
-                                let shift_width = rect.width();
-                                let affected_rows = worksheet
-                                    .cells
-                                    .keys()
-                                    .filter_map(|&(row, col)| {
-                                        ((rect.row_first..=rect.row_last).contains(&row)
-                                            && col >= rect.col_first)
-                                            .then_some(row)
-                                    })
-                                    .collect::<BTreeSet<_>>();
-                                for row in affected_rows {
-                                    let Some(max_col) = worksheet
+                                XL_SHIFT_TO_RIGHT => {
+                                    let mut changed = false;
+                                    let shift_width = rect.width();
+                                    let affected_rows = worksheet
                                         .cells
                                         .keys()
-                                        .filter_map(|&(cell_row, col)| {
-                                            (cell_row == row && col >= rect.col_first)
-                                                .then_some(col)
+                                        .filter_map(|&(row, col)| {
+                                            ((rect.row_first..=rect.row_last).contains(&row)
+                                                && col >= rect.col_first)
+                                                .then_some(row)
                                         })
-                                        .max()
-                                    else {
-                                        continue;
-                                    };
-                                    let shifted_max_col =
+                                        .collect::<BTreeSet<_>>();
+                                    for row in affected_rows {
+                                        let Some(max_col) = worksheet
+                                            .cells
+                                            .keys()
+                                            .filter_map(|&(cell_row, col)| {
+                                                (cell_row == row && col >= rect.col_first)
+                                                    .then_some(col)
+                                            })
+                                            .max()
+                                        else {
+                                            continue;
+                                        };
+                                        let shifted_max_col =
                                         max_col.checked_add(shift_width).ok_or_else(|| {
                                             OmError::invalid_argument(
                                                 "Range.Insert would shift cells beyond worksheet columns",
                                             )
                                         })?;
-                                    if shifted_max_col > EXCEL_MAX_COLUMN_INDEX {
-                                        return Err(OmError::invalid_argument(
-                                            "Range.Insert would shift cells beyond worksheet columns",
-                                        ));
-                                    }
-                                    for col in (rect.col_first..=max_col).rev() {
-                                        let key = (row, col);
-                                        let target_key = (row, col + shift_width);
-                                        if let Some(cell) = worksheet.cells.remove(&key) {
-                                            worksheet.cells.insert(target_key, cell);
-                                            worksheet.dirty = true;
-                                            worksheet.dirty_cells.insert(key);
-                                            worksheet.dirty_cells.insert(target_key);
+                                        if shifted_max_col > EXCEL_MAX_COLUMN_INDEX {
+                                            return Err(OmError::invalid_argument(
+                                                "Range.Insert would shift cells beyond worksheet columns",
+                                            ));
+                                        }
+                                        for col in (rect.col_first..=max_col).rev() {
+                                            let key = (row, col);
+                                            let target_key = (row, col + shift_width);
+                                            if let Some(cell) = worksheet.cells.remove(&key) {
+                                                worksheet.cells.insert(target_key, cell);
+                                                worksheet.dirty = true;
+                                                worksheet.dirty_cells.insert(key);
+                                                worksheet.dirty_cells.insert(target_key);
+                                                changed = true;
+                                            }
                                         }
                                     }
+                                    changed
                                 }
-                                Ok(OmValue::Empty)
+                                other => {
+                                    return Err(OmError::unsupported(format!(
+                                        "Range.Insert Shift {other} is not implemented"
+                                    )));
+                                }
                             }
-                            other => Err(OmError::unsupported(format!(
-                                "Range.Insert Shift {other} is not implemented"
-                            ))),
+                        };
+                        if changed {
+                            self.find_state = None;
                         }
+                        Ok(OmValue::Empty)
                     }
                     "Copy" => {
                         let destination = match args {
@@ -91996,6 +92022,89 @@ mod tests {
                     .expect("Range.Find case-insensitive Address")
             ),
             "$A$2"
+        );
+    }
+
+    #[test]
+    fn range_find_state_is_cleared_by_structural_range_mutations() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:C1".to_string())])
+                .expect("Range(A1:C1)"),
+        );
+        let b1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B1".to_string())])
+                .expect("Range(B1)"),
+        );
+        runtime
+            .dispatch_set(
+                search_range,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        1,
+                        3,
+                        vec![
+                            OmValue::Text("needle".to_string()),
+                            OmValue::Text("middle".to_string()),
+                            OmValue::Text("needle".to_string()),
+                        ],
+                    )
+                    .expect("A1:C1 values"),
+                ),
+                &[],
+            )
+            .expect("A1:C1.Value2");
+
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("needle".to_string())])
+            .expect("Range.Find before delete");
+        runtime
+            .dispatch_invoke(
+                b1,
+                "Delete",
+                &[OmValue::Number(f64::from(super::XL_SHIFT_TO_LEFT))],
+            )
+            .expect("B1.Delete(xlShiftToLeft)");
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after Delete")
+                .code,
+            OmErrorCode::InvalidState
+        );
+
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("needle".to_string())])
+            .expect("Range.Find before insert");
+        runtime
+            .dispatch_invoke(
+                b1,
+                "Insert",
+                &[OmValue::Number(f64::from(super::XL_SHIFT_TO_RIGHT))],
+            )
+            .expect("B1.Insert(xlShiftToRight)");
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after Insert")
+                .code,
+            OmErrorCode::InvalidState
         );
     }
 
