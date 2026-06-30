@@ -145839,6 +145839,14 @@ mod tests {
                 .dispatch_invoke(secondary_group_series_collection, "NewSeries", &[])
                 .expect("secondary ChartGroup.SeriesCollection.NewSeries"),
         );
+        runtime
+            .dispatch_set(
+                new_secondary_series,
+                "Name",
+                OmValue::Text("Secondary New Series".to_string()),
+                &[],
+            )
+            .expect("set new secondary Series.Name");
         assert_eq!(
             expect_number(
                 runtime
@@ -145859,6 +145867,14 @@ mod tests {
                 )
                 .expect("secondary ChartGroup.SeriesCollection.Add"),
         );
+        runtime
+            .dispatch_set(
+                added_secondary_series,
+                "Name",
+                OmValue::Text("Secondary Added Series".to_string()),
+                &[],
+            )
+            .expect("set added secondary Series.Name");
         assert_eq!(
             expect_number(
                 runtime
@@ -145882,6 +145898,23 @@ mod tests {
                     .expect("full SeriesCollection.Count after mutations")
             ),
             5.0
+        );
+        let added_secondary_series_by_name = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    secondary_group_series_collection,
+                    "Item",
+                    &[OmValue::Text("Secondary Added Series".to_string())],
+                )
+                .expect("secondary ChartGroup.SeriesCollection.Item by added name"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(added_secondary_series_by_name, "AxisGroup", &[])
+                    .expect("added secondary named Series.AxisGroup")
+            ),
+            f64::from(super::XL_SECONDARY)
         );
 
         let saved = runtime
@@ -145968,6 +146001,23 @@ mod tests {
                 reopened_runtime
                     .dispatch_get(reopened_added_secondary_series, "AxisGroup", &[])
                     .expect("reopened added secondary Series.AxisGroup")
+            ),
+            f64::from(super::XL_SECONDARY)
+        );
+        let reopened_added_secondary_series_by_name = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(
+                    reopened_secondary_group_series_collection,
+                    "Item",
+                    &[OmValue::Text("Secondary Added Series".to_string())],
+                )
+                .expect("reopened secondary ChartGroup.SeriesCollection.Item by added name"),
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_added_secondary_series_by_name, "AxisGroup", &[])
+                    .expect("reopened added secondary named Series.AxisGroup")
             ),
             f64::from(super::XL_SECONDARY)
         );
