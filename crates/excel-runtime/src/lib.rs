@@ -118468,6 +118468,64 @@ mod tests {
             .dispatch_set(chart_group, "HasHiLoLines", OmValue::Bool(true), &[])
             .expect("restore ChartGroup.HasHiLoLines true");
 
+        let up_down_bars_search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before ChartGroup.HasUpDownBars"),
+        );
+        runtime
+            .dispatch_invoke(
+                up_down_bars_search_range,
+                "Find",
+                &[OmValue::Text("1".to_string())],
+            )
+            .expect("Range.Find before ChartGroup.HasUpDownBars");
+        runtime
+            .dispatch_invoke(up_down_bars_search_range, "Copy", &[])
+            .expect("Range.Copy before ChartGroup.HasUpDownBars");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before ChartGroup.HasUpDownBars")
+            ),
+            f64::from(super::XL_COPY)
+        );
+        runtime
+            .dispatch_set(chart_group, "HasUpDownBars", OmValue::Bool(false), &[])
+            .expect("set ChartGroup.HasUpDownBars false");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after ChartGroup.HasUpDownBars")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(up_down_bars_search_range, "FindNext", &[])
+                .expect_err(
+                    "Range.FindNext should require a new Find after ChartGroup.HasUpDownBars",
+                )
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_group, "UpBars", &[])
+                .expect_err("ChartGroup.UpBars should be unavailable when hidden")
+                .code,
+            OmErrorCode::NotFound
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_group, "DownBars", &[])
+                .expect_err("ChartGroup.DownBars should be unavailable when hidden")
+                .code,
+            OmErrorCode::NotFound
+        );
+        runtime
+            .dispatch_set(chart_group, "HasUpDownBars", OmValue::Bool(true), &[])
+            .expect("restore ChartGroup.HasUpDownBars true");
+
         let mut line_objects = Vec::new();
         for (member, display_name, flag_member) in [
             ("SeriesLines", "Series Lines", "HasSeriesLines"),
