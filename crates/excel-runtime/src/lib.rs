@@ -8698,6 +8698,9 @@ impl ExcelRuntime {
                             if changed {
                                 chart.dirty = true;
                                 runtime.dirty = true;
+                                self.find_state = None;
+                                self.cut_copy_mode = None;
+                                self.clipboard = None;
                             }
                             removed_axis_title
                         };
@@ -8737,6 +8740,9 @@ impl ExcelRuntime {
                                 *target = Some(has_gridlines);
                                 chart.dirty = true;
                                 runtime.dirty = true;
+                                self.find_state = None;
+                                self.cut_copy_mode = None;
+                                self.clipboard = None;
                             }
                             changed && !has_gridlines
                         };
@@ -138876,9 +138882,40 @@ mod tests {
                 .expect("Axis.HasTitle before set"),
             OmValue::Bool(false)
         );
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before Axis.HasTitle"),
+        );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before Axis.HasTitle");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Axis.HasTitle");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Axis.HasTitle")
+            ),
+            f64::from(super::XL_COPY)
+        );
         runtime
             .dispatch_set(category_axis, "HasTitle", OmValue::Bool(true), &[])
             .expect("set loaded Axis.HasTitle");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Axis.HasTitle")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after Axis.HasTitle")
+                .code,
+            OmErrorCode::InvalidState
+        );
         let axis_title = expect_object_handle(
             runtime
                 .dispatch_get(category_axis, "AxisTitle", &[])
@@ -139163,8 +139200,34 @@ mod tests {
             OmErrorCode::NotFound
         );
         runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before Axis.HasMinorGridlines");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Axis.HasMinorGridlines");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Axis.HasMinorGridlines")
+            ),
+            f64::from(super::XL_COPY)
+        );
+        runtime
             .dispatch_set(value_axis, "HasMinorGridlines", OmValue::Bool(true), &[])
             .expect("set Axis.HasMinorGridlines");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Axis.HasMinorGridlines")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after Axis.HasMinorGridlines")
+                .code,
+            OmErrorCode::InvalidState
+        );
         let minor_gridlines = expect_object_handle(
             runtime
                 .dispatch_get(value_axis, "MinorGridlines", &[])
