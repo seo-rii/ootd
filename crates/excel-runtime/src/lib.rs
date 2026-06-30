@@ -67412,6 +67412,16 @@ mod tests {
             ("ChartTitle", &["Text", "Caption"][..]),
             ("AxisTitle", &["Text", "Caption"][..]),
             ("DisplayUnitLabel", &["Text", "Caption"][..]),
+            ("Legend", &["Position", "IncludeInLayout"][..]),
+            (
+                "DataTable",
+                &[
+                    "HasBorderHorizontal",
+                    "HasBorderVertical",
+                    "HasBorderOutline",
+                    "ShowLegendKey",
+                ][..],
+            ),
         ] {
             let surface = runtime
                 .dispatch_registry()
