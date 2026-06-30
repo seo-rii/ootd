@@ -23875,6 +23875,9 @@ impl ExcelRuntime {
                     group_index,
                     kind,
                 );
+                self.find_state = None;
+                self.cut_copy_mode = None;
+                self.clipboard = None;
                 Ok(OmValue::Empty)
             }
             "ClearFormats" => {
@@ -23913,6 +23916,9 @@ impl ExcelRuntime {
                 }
                 chart.dirty = true;
                 runtime.dirty = true;
+                self.find_state = None;
+                self.cut_copy_mode = None;
+                self.clipboard = None;
                 Ok(OmValue::Empty)
             }
             _ => Err(OmError::unsupported(format!(
@@ -116736,9 +116742,42 @@ mod tests {
             runtime
                 .dispatch_set(workbook.0, "Saved", OmValue::Bool(true), &[])
                 .expect("reset Saved before ChartGroup line ClearFormats");
+            let search_range = expect_object_handle(
+                runtime
+                    .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                    .expect("Worksheet.Range(A1:B3) before ChartGroup line ClearFormats"),
+            );
+            runtime
+                .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+                .expect("Range.Find before ChartGroup line ClearFormats");
+            runtime
+                .dispatch_invoke(search_range, "Copy", &[])
+                .expect("Range.Copy before ChartGroup line ClearFormats");
+            assert_eq!(
+                expect_number(
+                    runtime
+                        .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                        .expect("Application.CutCopyMode before ChartGroup line ClearFormats")
+                ),
+                f64::from(super::XL_COPY)
+            );
             runtime
                 .dispatch_invoke(line_object, "ClearFormats", &[])
                 .expect("ChartGroup line object ClearFormats");
+            assert!(!expect_bool(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode after ChartGroup line ClearFormats")
+            ));
+            assert_eq!(
+                runtime
+                    .dispatch_invoke(search_range, "FindNext", &[])
+                    .expect_err(
+                        "Range.FindNext should require a new Find after ChartGroup line ClearFormats"
+                    )
+                    .code,
+                OmErrorCode::InvalidState
+            );
             assert_eq!(
                 runtime
                     .dispatch_get(workbook.0, "Saved", &[])
@@ -116774,9 +116813,42 @@ mod tests {
                 down_bars_handles = Some((line_object, format));
                 continue;
             }
+            let search_range = expect_object_handle(
+                runtime
+                    .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                    .expect("Worksheet.Range(A1:B3) before ChartGroup line Delete"),
+            );
+            runtime
+                .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+                .expect("Range.Find before ChartGroup line Delete");
+            runtime
+                .dispatch_invoke(search_range, "Copy", &[])
+                .expect("Range.Copy before ChartGroup line Delete");
+            assert_eq!(
+                expect_number(
+                    runtime
+                        .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                        .expect("Application.CutCopyMode before ChartGroup line Delete")
+                ),
+                f64::from(super::XL_COPY)
+            );
             runtime
                 .dispatch_invoke(line_object, "Delete", &[])
                 .expect("ChartGroup line object Delete");
+            assert!(!expect_bool(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode after ChartGroup line Delete")
+            ));
+            assert_eq!(
+                runtime
+                    .dispatch_invoke(search_range, "FindNext", &[])
+                    .expect_err(
+                        "Range.FindNext should require a new Find after ChartGroup line Delete"
+                    )
+                    .code,
+                OmErrorCode::InvalidState
+            );
             assert_eq!(
                 runtime
                     .dispatch_get(chart_group, flag_member, &[])
@@ -116844,9 +116916,40 @@ mod tests {
                 .dispatch_get(down_bars, "Format", &[])
                 .expect("DownBars.Format after restore"),
         );
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before DownBars.Delete"),
+        );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before DownBars.Delete");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before DownBars.Delete");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before DownBars.Delete")
+            ),
+            f64::from(super::XL_COPY)
+        );
         runtime
             .dispatch_invoke(down_bars, "Delete", &[])
             .expect("DownBars.Delete after restore");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after DownBars.Delete")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after DownBars.Delete")
+                .code,
+            OmErrorCode::InvalidState
+        );
         assert_eq!(
             runtime
                 .dispatch_get(chart_group, "HasUpDownBars", &[])
