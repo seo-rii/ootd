@@ -5194,6 +5194,9 @@ impl ExcelRuntime {
                             series.axis_group = axis_group;
                             chart.dirty = true;
                             runtime.dirty = true;
+                            self.find_state = None;
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
                         }
                         Ok(())
                     }
@@ -5891,6 +5894,9 @@ impl ExcelRuntime {
                         if update_series_plot_order(&mut chart.series, series_index, plot_order) {
                             chart.dirty = true;
                             runtime.dirty = true;
+                            self.find_state = None;
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
                         }
                         Ok(())
                     }
@@ -147325,9 +147331,40 @@ mod tests {
                 .dispatch_invoke(series_collection, "NewSeries", &[])
                 .expect("SeriesCollection.NewSeries second"),
         );
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before Series.PlotOrder"),
+        );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before Series.PlotOrder");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Series.PlotOrder");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Series.PlotOrder")
+            ),
+            f64::from(super::XL_COPY)
+        );
         runtime
             .dispatch_set(second_series, "PlotOrder", OmValue::Number(1.0), &[])
             .expect("set second Series.PlotOrder");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Series.PlotOrder")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after Series.PlotOrder")
+                .code,
+            OmErrorCode::InvalidState
+        );
         assert_eq!(
             expect_number(
                 runtime
@@ -147609,6 +147646,25 @@ mod tests {
                 &[],
             )
             .expect("set second Series.Name");
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before Series.AxisGroup"),
+        );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before Series.AxisGroup");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Series.AxisGroup");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Series.AxisGroup")
+            ),
+            f64::from(super::XL_COPY)
+        );
         runtime
             .dispatch_set(
                 second_series,
@@ -147617,6 +147673,18 @@ mod tests {
                 &[],
             )
             .expect("set second Series.AxisGroup xlSecondary");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Series.AxisGroup")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after Series.AxisGroup")
+                .code,
+            OmErrorCode::InvalidState
+        );
         let chart_groups = expect_object_handle(
             runtime
                 .dispatch_get(chart, "ChartGroups", &[])
