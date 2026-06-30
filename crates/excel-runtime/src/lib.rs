@@ -116504,6 +116504,22 @@ mod tests {
             ),
             2.0
         );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(categories, "Creator", &[])
+                    .expect("CategoryCollection.Creator")
+            ),
+            f64::from(super::XL_CREATOR_CODE)
+        );
+        assert_eq!(
+            expect_object_handle(
+                runtime
+                    .dispatch_get(categories, "Application", &[])
+                    .expect("CategoryCollection.Application")
+            ),
+            runtime.root_application()
+        );
         let parent_group = expect_object_handle(
             runtime
                 .dispatch_get(categories, "Parent", &[])
@@ -116544,6 +116560,35 @@ mod tests {
                 .dispatch_get(first_category, "IsFiltered", &[])
                 .expect("ChartCategory.IsFiltered")
         ));
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(first_category, "Creator", &[])
+                    .expect("ChartCategory.Creator")
+            ),
+            f64::from(super::XL_CREATOR_CODE)
+        );
+        assert_eq!(
+            expect_object_handle(
+                runtime
+                    .dispatch_get(first_category, "Application", &[])
+                    .expect("ChartCategory.Application")
+            ),
+            runtime.root_application()
+        );
+        let category_parent = expect_object_handle(
+            runtime
+                .dispatch_get(first_category, "Parent", &[])
+                .expect("ChartCategory.Parent"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(category_parent, "Count", &[])
+                    .expect("ChartCategory.Parent.Count")
+            ),
+            2.0
+        );
         let second_category = expect_object_handle(
             runtime
                 .dispatch_get(chart_group, "CategoryCollection", &[OmValue::Number(2.0)])
