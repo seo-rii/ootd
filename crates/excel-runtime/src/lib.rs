@@ -13674,6 +13674,7 @@ impl ExcelRuntime {
                             "Chart.Protect accepts at most Password, DrawingObjects, Contents, Scenarios, and UserInterfaceOnly arguments",
                         ));
                     }
+                    validate_optional_text_arg(args, 0, "Chart.Protect Password")?;
                     self.chart_model(workbook, chart_id)?;
                     let drawing_objects = args
                         .get(1)
@@ -13737,6 +13738,7 @@ impl ExcelRuntime {
                             "Chart.Unprotect accepts at most a Password argument",
                         ));
                     }
+                    validate_optional_text_arg(args, 0, "Chart.Unprotect Password")?;
                     let runtime = self.runtime_workbook_mut(workbook)?;
                     if runtime.read_only {
                         return Err(OmError::new(
@@ -123150,6 +123152,13 @@ mod tests {
                 .code,
             OmErrorCode::TypeMismatch
         );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart, "Protect", &[OmValue::Number(123.0)])
+                .expect_err("Chart.Protect rejects non-text Password")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
 
         let protected_saved = runtime
             .save_workbook(
@@ -123232,6 +123241,13 @@ mod tests {
                 &[OmValue::Text("pw".to_string())],
             )
             .expect("Chart.Unprotect");
+        assert_eq!(
+            protected_runtime
+                .dispatch_invoke(protected_chart, "Unprotect", &[OmValue::Number(123.0)])
+                .expect_err("Chart.Unprotect rejects non-text Password")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
         for member in [
             "ProtectContents",
             "ProtectDrawingObjects",
