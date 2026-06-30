@@ -123725,30 +123725,72 @@ mod tests {
                 .dispatch_invoke(data_labels, "Item", &[OmValue::Number(1.0)])
                 .expect("DataLabels.Item(1) before ClearFormats"),
         );
-        runtime
-            .dispatch_set(
-                first_data_label,
-                "Separator",
-                OmValue::Text(" :: ".to_string()),
-                &[],
-            )
-            .expect("DataLabel.Separator point override");
-        runtime
-            .dispatch_set(
-                first_data_label,
-                "NumberFormat",
-                OmValue::Text("0.00".to_string()),
-                &[],
-            )
-            .expect("DataLabel.NumberFormat point override");
-        runtime
-            .dispatch_set(
-                first_data_label,
+        for (member, value) in [
+            ("Separator", OmValue::Text(" :: ".to_string())),
+            ("NumberFormat", OmValue::Text("0.00".to_string())),
+            (
                 "Position",
                 OmValue::Number(f64::from(super::XL_LABEL_POSITION_ABOVE)),
-                &[],
-            )
-            .expect("DataLabel.Position point override");
+            ),
+        ] {
+            let search_range = expect_object_handle(
+                runtime
+                    .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                    .unwrap_or_else(|error| {
+                        panic!(
+                            "Worksheet.Range(A1:B3) before DataLabel.{member} point override: {error:?}"
+                        )
+                    }),
+            );
+            runtime
+                .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+                .unwrap_or_else(|error| {
+                    panic!("Range.Find before DataLabel.{member} point override: {error:?}")
+                });
+            runtime
+                .dispatch_invoke(search_range, "Copy", &[])
+                .unwrap_or_else(|error| {
+                    panic!("Range.Copy before DataLabel.{member} point override: {error:?}")
+                });
+            assert_eq!(
+                expect_number(
+                    runtime
+                        .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                        .unwrap_or_else(|error| {
+                            panic!(
+                                "Application.CutCopyMode before DataLabel.{member} point override: {error:?}"
+                            )
+                        })
+                ),
+                f64::from(super::XL_COPY)
+            );
+            runtime
+                .dispatch_set(first_data_label, member, value, &[])
+                .unwrap_or_else(|error| {
+                    panic!("DataLabel.{member} point override failed: {error:?}")
+                });
+            assert!(!expect_bool(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .unwrap_or_else(|error| {
+                        panic!(
+                            "Application.CutCopyMode after DataLabel.{member} point override: {error:?}"
+                        )
+                    })
+            ));
+            assert_eq!(
+                runtime
+                    .dispatch_invoke(search_range, "FindNext", &[])
+                    .err()
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "Range.FindNext should require a new Find after DataLabel.{member} point override"
+                        )
+                    })
+                    .code,
+                OmErrorCode::InvalidState
+            );
+        }
         let search_range = expect_object_handle(
             runtime
                 .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
