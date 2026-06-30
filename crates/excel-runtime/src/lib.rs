@@ -67494,6 +67494,42 @@ mod tests {
                 assert!(matches!(member.access, office_idl::AccessMode::Readwrite));
             }
         }
+        let chart_group = runtime
+            .dispatch_registry()
+            .focus_surfaces
+            .iter()
+            .find(|surface| surface.name == "ChartGroup")
+            .expect("ChartGroup focus surface");
+        for member_name in [
+            "ChartType",
+            "AxisGroup",
+            "VaryByCategories",
+            "GapWidth",
+            "Overlap",
+            "HasRadarAxisLabels",
+            "HasSeriesLines",
+            "HasDropLines",
+            "HasHiLoLines",
+            "HasUpDownBars",
+            "FirstSliceAngle",
+            "Explosion",
+            "BubbleScale",
+            "ShowNegativeBubbles",
+            "Has3DShading",
+            "DoughnutHoleSize",
+            "SecondPlotSize",
+            "SizeRepresents",
+            "SplitType",
+            "SplitValue",
+        ] {
+            let member = chart_group
+                .members
+                .iter()
+                .find(|member| member.name == member_name)
+                .unwrap_or_else(|| panic!("ChartGroup.{member_name} focus member"));
+            assert!(matches!(member.support, office_idl::SupportState::Stub));
+            assert!(matches!(member.access, office_idl::AccessMode::Readwrite));
+        }
         let shape_range = runtime
             .dispatch_registry()
             .focus_surfaces
