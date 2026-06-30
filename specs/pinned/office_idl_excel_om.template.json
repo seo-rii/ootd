@@ -8050,6 +8050,170 @@
               ]
             }
           }
+        },
+        {
+          "name": "IncrementLeft",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "ChartObject",
+                  "sourceMember": "IncrementLeft"
+                }
+              ]
+            }
+          },
+          "params": [
+            {
+              "name": "Increment",
+              "type": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          ]
+        },
+        {
+          "name": "IncrementTop",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "ChartObject",
+                  "sourceMember": "IncrementTop"
+                }
+              ]
+            }
+          },
+          "params": [
+            {
+              "name": "Increment",
+              "type": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          ]
+        },
+        {
+          "name": "IncrementRotation",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "ChartObject",
+                  "sourceMember": "IncrementRotation"
+                }
+              ]
+            }
+          },
+          "params": [
+            {
+              "name": "Increment",
+              "type": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          ]
+        },
+        {
+          "name": "ScaleWidth",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "ChartObject",
+                  "sourceMember": "ScaleWidth"
+                }
+              ]
+            }
+          },
+          "params": [
+            {
+              "name": "Factor",
+              "type": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            },
+            {
+              "name": "RelativeToOriginalSize",
+              "type": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "Int32"
+              }
+            },
+            {
+              "name": "Scale",
+              "type": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "Int32"
+              },
+              "optional": true
+            }
+          ]
+        },
+        {
+          "name": "ScaleHeight",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "ChartObject",
+                  "sourceMember": "ScaleHeight"
+                }
+              ]
+            }
+          },
+          "params": [
+            {
+              "name": "Factor",
+              "type": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            },
+            {
+              "name": "RelativeToOriginalSize",
+              "type": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "Int32"
+              }
+            },
+            {
+              "name": "Scale",
+              "type": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "Int32"
+              },
+              "optional": true
+            }
+          ]
         }
       ]
     },
