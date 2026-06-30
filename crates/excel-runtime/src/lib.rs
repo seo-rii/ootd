@@ -150926,9 +150926,40 @@ mod tests {
                 .dispatch_get(secondary_group, "SeriesLines", &[])
                 .expect("secondary ChartGroup.SeriesLines after restore"),
         );
+        let delete_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before SeriesLines.Delete"),
+        );
+        runtime
+            .dispatch_invoke(delete_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before SeriesLines.Delete");
+        runtime
+            .dispatch_invoke(delete_range, "Copy", &[])
+            .expect("Range.Copy before SeriesLines.Delete");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before SeriesLines.Delete")
+            ),
+            f64::from(super::XL_COPY)
+        );
         runtime
             .dispatch_invoke(secondary_series_lines, "Delete", &[])
             .expect("secondary ChartGroup.SeriesLines.Delete");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after SeriesLines.Delete")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(delete_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after SeriesLines.Delete")
+                .code,
+            OmErrorCode::InvalidState
+        );
         assert_eq!(
             runtime
                 .dispatch_get(secondary_group, "HasSeriesLines", &[])
