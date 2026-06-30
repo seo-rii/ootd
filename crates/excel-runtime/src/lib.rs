@@ -142389,6 +142389,22 @@ mod tests {
             ),
             "Z Later Chart"
         );
+        runtime
+            .dispatch_invoke(selected_shape_range, "Select", &[])
+            .expect("selected ShapeRange.Select");
+        let active_chart = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveChart", &[])
+                .expect("Application.ActiveChart after selected ShapeRange.Select"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(active_chart, "Name", &[])
+                    .expect("ActiveChart.Name after selected ShapeRange.Select")
+            ),
+            "Z Ten Chart"
+        );
         let missing_shape = runtime
             .dispatch_invoke(
                 selected_shape_range,
