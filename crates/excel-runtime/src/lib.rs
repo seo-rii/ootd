@@ -103091,6 +103091,26 @@ mod tests {
             ),
             f64::from(super::XL_BAR_CLUSTERED)
         );
+        let chart_area = expect_object_handle(
+            runtime
+                .dispatch_get(active_chart, "ChartArea", &[])
+                .expect("chart sheet Chart.ChartArea"),
+        );
+        for (member, expected) in [
+            ("Left", 0.0),
+            ("Top", 0.0),
+            ("Width", 432.0),
+            ("Height", 252.0),
+        ] {
+            assert_eq!(
+                expect_number(
+                    runtime
+                        .dispatch_get(chart_area, member, &[])
+                        .unwrap_or_else(|error| panic!("ChartArea.{member}: {error:?}"))
+                ),
+                expected
+            );
+        }
     }
 
     #[test]
