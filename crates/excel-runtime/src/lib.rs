@@ -67245,6 +67245,25 @@ mod tests {
             .iter()
             .find(|surface| surface.name == "ChartArea")
             .expect("ChartArea focus surface");
+        for member_name in [
+            "Name",
+            "Format",
+            "Left",
+            "Top",
+            "Width",
+            "Height",
+            "Creator",
+            "Application",
+            "Parent",
+        ] {
+            let member = chart_area
+                .members
+                .iter()
+                .find(|member| member.name == member_name)
+                .unwrap_or_else(|| panic!("ChartArea.{member_name} focus member"));
+            assert!(matches!(member.support, office_idl::SupportState::Stub));
+            assert!(matches!(member.access, office_idl::AccessMode::Read));
+        }
         let rounded_corners = chart_area
             .members
             .iter()
@@ -67258,6 +67277,70 @@ mod tests {
             rounded_corners.access,
             office_idl::AccessMode::Readwrite
         ));
+        for member_name in ["Select", "Copy", "Clear", "ClearFormats", "ClearContents"] {
+            let member = chart_area
+                .members
+                .iter()
+                .find(|member| member.name == member_name)
+                .unwrap_or_else(|| panic!("ChartArea.{member_name} focus member"));
+            assert!(matches!(member.support, office_idl::SupportState::Stub));
+        }
+        for (surface_name, read_members, method_members) in [
+            (
+                "PlotArea",
+                &["Name", "Format", "Creator", "Application", "Parent"][..],
+                &["Select", "Clear", "ClearFormats", "ClearContents"][..],
+            ),
+            (
+                "ChartTitle",
+                &["Name", "Format", "Creator", "Application", "Parent"][..],
+                &["Select", "Delete"][..],
+            ),
+            (
+                "Legend",
+                &["Name", "Format", "Creator", "Application", "Parent"][..],
+                &["Select", "Clear", "Delete"][..],
+            ),
+            (
+                "DataTable",
+                &["Format", "Creator", "Application", "Parent"][..],
+                &["Select", "Delete"][..],
+            ),
+            (
+                "AxisTitle",
+                &["Name", "Format", "Creator", "Application", "Parent"][..],
+                &["Select", "Delete"][..],
+            ),
+            (
+                "DisplayUnitLabel",
+                &["Name", "Format", "Creator", "Application", "Parent"][..],
+                &["Select", "Delete"][..],
+            ),
+        ] {
+            let surface = runtime
+                .dispatch_registry()
+                .focus_surfaces
+                .iter()
+                .find(|surface| surface.name == surface_name)
+                .unwrap_or_else(|| panic!("{surface_name} focus surface"));
+            for member_name in read_members {
+                let member = surface
+                    .members
+                    .iter()
+                    .find(|member| member.name == *member_name)
+                    .unwrap_or_else(|| panic!("{surface_name}.{member_name} focus member"));
+                assert!(matches!(member.support, office_idl::SupportState::Stub));
+                assert!(matches!(member.access, office_idl::AccessMode::Read));
+            }
+            for member_name in method_members {
+                let member = surface
+                    .members
+                    .iter()
+                    .find(|member| member.name == *member_name)
+                    .unwrap_or_else(|| panic!("{surface_name}.{member_name} focus member"));
+                assert!(matches!(member.support, office_idl::SupportState::Stub));
+            }
+        }
         let chart = runtime
             .dispatch_registry()
             .focus_surfaces
