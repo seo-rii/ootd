@@ -151367,11 +151367,53 @@ mod tests {
             runtime
                 .dispatch_set(workbook.0, "Saved", OmValue::Bool(true), &[])
                 .expect("reset Saved before secondary ChartGroup setter");
+            let search_range = if member == "SplitValue" {
+                let search_range = expect_object_handle(
+                    runtime
+                        .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                        .expect("Worksheet.Range(A1:B3) before secondary ChartGroup.SplitValue"),
+                );
+                runtime
+                    .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+                    .expect("Range.Find before secondary ChartGroup.SplitValue");
+                runtime
+                    .dispatch_invoke(search_range, "Copy", &[])
+                    .expect("Range.Copy before secondary ChartGroup.SplitValue");
+                assert_eq!(
+                    expect_number(
+                        runtime
+                            .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                            .expect(
+                                "Application.CutCopyMode before secondary ChartGroup.SplitValue",
+                            )
+                    ),
+                    f64::from(super::XL_COPY)
+                );
+                Some(search_range)
+            } else {
+                None
+            };
             runtime
                 .dispatch_set(secondary_group, member, value.clone(), &[])
                 .unwrap_or_else(|error| {
                     panic!("secondary ChartGroup.{member} setter failed: {error:?}")
                 });
+            if let Some(search_range) = search_range {
+                assert!(!expect_bool(
+                    runtime
+                        .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                        .expect("Application.CutCopyMode after secondary ChartGroup.SplitValue")
+                ));
+                assert_eq!(
+                    runtime
+                        .dispatch_invoke(search_range, "FindNext", &[])
+                        .expect_err(
+                            "Range.FindNext should require a new Find after secondary ChartGroup.SplitValue",
+                        )
+                        .code,
+                    OmErrorCode::InvalidState
+                );
+            }
             assert_eq!(
                 runtime
                     .dispatch_get(workbook.0, "Saved", &[])
