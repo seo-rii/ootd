@@ -8324,6 +8324,9 @@ impl ExcelRuntime {
                             data_labels.dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
+                            self.find_state = None;
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
                         }
                         Ok(())
                     }
@@ -8374,6 +8377,9 @@ impl ExcelRuntime {
                             data_labels.dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
+                            self.find_state = None;
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
                         }
                         Ok(())
                     }
@@ -8420,6 +8426,9 @@ impl ExcelRuntime {
                             data_labels.dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
+                            self.find_state = None;
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
                         }
                         Ok(())
                     }
@@ -8471,6 +8480,9 @@ impl ExcelRuntime {
                             data_labels.dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
+                            self.find_state = None;
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
                         }
                         Ok(())
                     }
@@ -8519,6 +8531,9 @@ impl ExcelRuntime {
                             data_labels.dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
+                            self.find_state = None;
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
                         }
                         Ok(())
                     }
@@ -8557,6 +8572,9 @@ impl ExcelRuntime {
                             data_labels.dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
+                            self.find_state = None;
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
                         }
                         Ok(())
                     }
@@ -121540,6 +121558,25 @@ mod tests {
         runtime
             .dispatch_set(data_labels, "HasLeaderLines", OmValue::Bool(true), &[])
             .expect("DataLabels.HasLeaderLines = true");
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before DataLabels.Separator"),
+        );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before DataLabels.Separator");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before DataLabels.Separator");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before DataLabels.Separator")
+            ),
+            f64::from(super::XL_COPY)
+        );
         runtime
             .dispatch_set(
                 data_labels,
@@ -121548,6 +121585,18 @@ mod tests {
                 &[],
             )
             .expect("DataLabels.Separator = pipe");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after DataLabels.Separator")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after DataLabels.Separator")
+                .code,
+            OmErrorCode::InvalidState
+        );
         runtime
             .dispatch_set(
                 data_labels,
@@ -121560,6 +121609,20 @@ mod tests {
             .dispatch_set(data_labels, "NumberFormatLinked", OmValue::Bool(true), &[])
             .expect("DataLabels.NumberFormatLinked = true");
         runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before DataLabels.Position");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before DataLabels.Position");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before DataLabels.Position")
+            ),
+            f64::from(super::XL_COPY)
+        );
+        runtime
             .dispatch_set(
                 data_labels,
                 "Position",
@@ -121567,6 +121630,18 @@ mod tests {
                 &[],
             )
             .expect("DataLabels.Position = outside end");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after DataLabels.Position")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after DataLabels.Position")
+                .code,
+            OmErrorCode::InvalidState
+        );
         let first_data_label = expect_object_handle(
             runtime
                 .dispatch_invoke(data_labels, "Item", &[OmValue::Number(1.0)])
