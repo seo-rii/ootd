@@ -115403,6 +115403,64 @@ mod tests {
         .expect("locked drawing utf8");
         assert!(locked_drawing.contains(r#"fLocksWithSheet="1""#));
 
+        let protect_search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before ChartObjects.ProtectChartObject"),
+        );
+        runtime
+            .dispatch_invoke(
+                protect_search_range,
+                "Find",
+                &[OmValue::Text("1".to_string())],
+            )
+            .expect("Range.Find before ChartObjects.ProtectChartObject");
+        runtime
+            .dispatch_invoke(protect_search_range, "Copy", &[])
+            .expect("Range.Copy before ChartObjects.ProtectChartObject");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before ChartObjects.ProtectChartObject")
+            ),
+            f64::from(super::XL_COPY)
+        );
+        runtime
+            .dispatch_set(
+                chart_objects,
+                "ProtectChartObject",
+                OmValue::Bool(false),
+                &[],
+            )
+            .expect("set ChartObjects.ProtectChartObject false");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after ChartObjects.ProtectChartObject")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(protect_search_range, "FindNext", &[])
+                .expect_err(
+                    "Range.FindNext should require a new Find after ChartObjects.ProtectChartObject",
+                )
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_object, "ProtectChartObject", &[])
+                .expect("ChartObject.ProtectChartObject after collection false"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_objects, "Locked", &[])
+                .expect("ChartObjects.Locked after ProtectChartObject false"),
+            OmValue::Bool(false)
+        );
+
         let invalid_locked = runtime
             .dispatch_set(
                 chart_object,
