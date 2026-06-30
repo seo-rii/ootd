@@ -8002,6 +8002,9 @@ impl ExcelRuntime {
                             if changed {
                                 chart.dirty = true;
                                 runtime.dirty = true;
+                                self.find_state = None;
+                                self.cut_copy_mode = None;
+                                self.clipboard = None;
                             }
                             removed_title
                         };
@@ -8045,6 +8048,9 @@ impl ExcelRuntime {
                                 chart.data_table_dirty = true;
                                 chart.dirty = true;
                                 runtime.dirty = true;
+                                self.find_state = None;
+                                self.cut_copy_mode = None;
+                                self.clipboard = None;
                             }
                             removed_data_table
                         };
@@ -8100,6 +8106,9 @@ impl ExcelRuntime {
                             if changed {
                                 chart.dirty = true;
                                 runtime.dirty = true;
+                                self.find_state = None;
+                                self.cut_copy_mode = None;
+                                self.clipboard = None;
                             }
                             removed_legend
                         };
@@ -121182,9 +121191,40 @@ mod tests {
                 .code,
             OmErrorCode::TypeMismatch
         );
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before Chart.HasDataTable"),
+        );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before Chart.HasDataTable");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Chart.HasDataTable");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Chart.HasDataTable")
+            ),
+            f64::from(super::XL_COPY)
+        );
         runtime
             .dispatch_set(chart, "HasDataTable", OmValue::Bool(true), &[])
             .expect("set Chart.HasDataTable true");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Chart.HasDataTable")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after Chart.HasDataTable")
+                .code,
+            OmErrorCode::InvalidState
+        );
         assert_eq!(
             runtime
                 .dispatch_get(chart, "HasDataTable", &[])
@@ -138476,9 +138516,40 @@ mod tests {
                 .expect("Chart.HasLegend before set"),
             OmValue::Bool(false)
         );
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before Chart.HasLegend"),
+        );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before Chart.HasLegend");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Chart.HasLegend");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Chart.HasLegend")
+            ),
+            f64::from(super::XL_COPY)
+        );
         runtime
             .dispatch_set(chart, "HasLegend", OmValue::Bool(true), &[])
             .expect("set loaded Chart.HasLegend");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Chart.HasLegend")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after Chart.HasLegend")
+                .code,
+            OmErrorCode::InvalidState
+        );
 
         let saved = runtime
             .save_workbook(
@@ -138611,9 +138682,40 @@ mod tests {
                 .expect("Chart.HasTitle before set"),
             OmValue::Bool(false)
         );
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before Chart.HasTitle"),
+        );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before Chart.HasTitle");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Chart.HasTitle");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Chart.HasTitle")
+            ),
+            f64::from(super::XL_COPY)
+        );
         runtime
             .dispatch_set(chart, "HasTitle", OmValue::Bool(true), &[])
             .expect("set loaded Chart.HasTitle");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Chart.HasTitle")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after Chart.HasTitle")
+                .code,
+            OmErrorCode::InvalidState
+        );
         let chart_title = expect_object_handle(
             runtime
                 .dispatch_get(chart, "ChartTitle", &[])
