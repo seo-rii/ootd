@@ -8948,6 +8948,9 @@ impl ExcelRuntime {
                                 axis.display_unit_label = next_display_unit_label;
                                 chart.dirty = true;
                                 runtime.dirty = true;
+                                self.find_state = None;
+                                self.cut_copy_mode = None;
+                                self.clipboard = None;
                             }
                             removed_display_unit_label
                         };
@@ -9003,6 +9006,9 @@ impl ExcelRuntime {
                             axis.has_display_unit_label = next_label;
                             chart.dirty = true;
                             runtime.dirty = true;
+                            self.find_state = None;
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
                         }
                         Ok(())
                     }
@@ -9051,6 +9057,9 @@ impl ExcelRuntime {
                                 axis.display_unit_label = next_display_unit_label;
                                 chart.dirty = true;
                                 runtime.dirty = true;
+                                self.find_state = None;
+                                self.cut_copy_mode = None;
+                                self.clipboard = None;
                             }
                             removed_display_unit_label
                         };
@@ -142015,6 +142024,25 @@ mod tests {
             f64::from(super::XL_DISPLAY_UNIT_NONE)
         );
 
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before Axis.DisplayUnit"),
+        );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before Axis.DisplayUnit");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Axis.DisplayUnit");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Axis.DisplayUnit")
+            ),
+            f64::from(super::XL_COPY)
+        );
         runtime
             .dispatch_set(
                 value_axis,
@@ -142023,9 +142051,49 @@ mod tests {
                 &[],
             )
             .expect("set Axis.DisplayUnit to thousands");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Axis.DisplayUnit")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after Axis.DisplayUnit")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before Axis.HasDisplayUnitLabel");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Axis.HasDisplayUnitLabel");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Axis.HasDisplayUnitLabel")
+            ),
+            f64::from(super::XL_COPY)
+        );
         runtime
             .dispatch_set(value_axis, "HasDisplayUnitLabel", OmValue::Bool(false), &[])
             .expect("clear Axis.HasDisplayUnitLabel");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Axis.HasDisplayUnitLabel")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err(
+                    "Range.FindNext should require a new Find after Axis.HasDisplayUnitLabel",
+                )
+                .code,
+            OmErrorCode::InvalidState
+        );
         assert_eq!(
             runtime
                 .dispatch_get(display_unit_label, "Text", &[])
@@ -142184,6 +142252,33 @@ mod tests {
                 .expect("reopened Axis.HasDisplayUnitLabel")
         ));
 
+        let reopened_search_range = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(
+                    reopened_worksheet,
+                    "Range",
+                    &[OmValue::Text("A1:B3".to_string())],
+                )
+                .expect("reopened Worksheet.Range(A1:B3) before Axis.DisplayUnitCustom"),
+        );
+        reopened_runtime
+            .dispatch_invoke(
+                reopened_search_range,
+                "Find",
+                &[OmValue::Text("1".to_string())],
+            )
+            .expect("Range.Find before Axis.DisplayUnitCustom");
+        reopened_runtime
+            .dispatch_invoke(reopened_search_range, "Copy", &[])
+            .expect("Range.Copy before Axis.DisplayUnitCustom");
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Axis.DisplayUnitCustom")
+            ),
+            f64::from(super::XL_COPY)
+        );
         reopened_runtime
             .dispatch_set(
                 reopened_value_axis,
@@ -142192,6 +142287,20 @@ mod tests {
                 &[],
             )
             .expect("set Axis.DisplayUnitCustom");
+        assert!(!expect_bool(
+            reopened_runtime
+                .dispatch_get(reopened_runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Axis.DisplayUnitCustom")
+        ));
+        assert_eq!(
+            reopened_runtime
+                .dispatch_invoke(reopened_search_range, "FindNext", &[])
+                .expect_err(
+                    "Range.FindNext should require a new Find after Axis.DisplayUnitCustom",
+                )
+                .code,
+            OmErrorCode::InvalidState
+        );
         reopened_runtime
             .dispatch_set(
                 reopened_value_axis,
