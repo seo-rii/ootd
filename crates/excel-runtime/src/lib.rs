@@ -32086,6 +32086,10 @@ impl ExcelRuntime {
         drawing.dirty = true;
         runtime.dirty = true;
 
+        self.find_state = None;
+        self.cut_copy_mode = None;
+        self.clipboard = None;
+
         Ok(new_chart_object_id)
     }
 
@@ -127883,6 +127887,11 @@ mod tests {
                 .dispatch_get(chart_object, "Chart", &[])
                 .expect("ChartObject.Chart"),
         );
+        let range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3)"),
+        );
         let original_geometry = ["Left", "Top", "Width", "Height"]
             .into_iter()
             .map(|member| {
@@ -127908,10 +127917,36 @@ mod tests {
             OmErrorCode::InvalidArgument
         );
 
+        runtime
+            .dispatch_invoke(range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before ChartObject.Duplicate");
+        runtime
+            .dispatch_invoke(range, "Copy", &[])
+            .expect("Range.Copy before ChartObject.Duplicate");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before ChartObject.Duplicate")
+            ),
+            f64::from(super::XL_COPY)
+        );
         let duplicate_chart_object = expect_object_handle(
             runtime
                 .dispatch_invoke(chart_object, "Duplicate", &[])
                 .expect("ChartObject.Duplicate"),
+        );
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after ChartObject.Duplicate")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after ChartObject.Duplicate")
+                .code,
+            OmErrorCode::InvalidState
         );
         assert_eq!(
             expect_number(
