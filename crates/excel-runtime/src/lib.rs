@@ -67371,7 +67371,39 @@ mod tests {
             .iter()
             .find(|surface| surface.name == "Axis")
             .expect("Axis focus surface");
+        let axes = runtime
+            .dispatch_registry()
+            .focus_surfaces
+            .iter()
+            .find(|surface| surface.name == "Axes")
+            .expect("Axes focus surface");
+        for member_name in ["Count", "Item", "Creator", "Application", "Parent"] {
+            let member = axes
+                .members
+                .iter()
+                .find(|member| member.name == member_name)
+                .unwrap_or_else(|| panic!("Axes.{member_name} focus member"));
+            assert!(matches!(member.support, office_idl::SupportState::Stub));
+            if member.member_kind == office_idl::MemberKind::Property {
+                assert!(matches!(member.access, office_idl::AccessMode::Read));
+            }
+        }
         for member_name in [
+            "AxisBetweenCategories",
+            "CategoryType",
+            "DisplayUnit",
+            "DisplayUnitCustom",
+            "HasDisplayUnitLabel",
+            "BaseUnit",
+            "BaseUnitIsAuto",
+            "HasTitle",
+            "HasMajorGridlines",
+            "HasMinorGridlines",
+            "ReversePlotOrder",
+            "ScaleType",
+            "LogBase",
+            "Crosses",
+            "CrossesAt",
             "MinimumScale",
             "MaximumScale",
             "MajorUnit",
@@ -67380,6 +67412,14 @@ mod tests {
             "MaximumScaleIsAuto",
             "MajorUnitIsAuto",
             "MinorUnitIsAuto",
+            "MajorUnitScale",
+            "MinorUnitScale",
+            "MajorTickMark",
+            "MinorTickMark",
+            "TickLabelPosition",
+            "TickLabelSpacing",
+            "TickLabelSpacingIsAuto",
+            "TickMarkSpacing",
         ] {
             let member = axis
                 .members
@@ -67388,6 +67428,58 @@ mod tests {
                 .unwrap_or_else(|| panic!("Axis.{member_name} focus member"));
             assert!(matches!(member.support, office_idl::SupportState::Stub));
             assert!(matches!(member.access, office_idl::AccessMode::Readwrite));
+        }
+        for member_name in [
+            "Type",
+            "Format",
+            "AxisGroup",
+            "DisplayUnitLabel",
+            "MajorGridlines",
+            "MinorGridlines",
+            "AxisTitle",
+            "TickLabels",
+            "Creator",
+            "Application",
+            "Parent",
+        ] {
+            let member = axis
+                .members
+                .iter()
+                .find(|member| member.name == member_name)
+                .unwrap_or_else(|| panic!("Axis.{member_name} focus member"));
+            assert!(matches!(member.support, office_idl::SupportState::Stub));
+            assert!(matches!(member.access, office_idl::AccessMode::Read));
+        }
+        for member_name in ["Select", "Delete"] {
+            let member = axis
+                .members
+                .iter()
+                .find(|member| member.name == member_name)
+                .unwrap_or_else(|| panic!("Axis.{member_name} focus member"));
+            assert!(matches!(member.support, office_idl::SupportState::Stub));
+        }
+        let gridlines = runtime
+            .dispatch_registry()
+            .focus_surfaces
+            .iter()
+            .find(|surface| surface.name == "Gridlines")
+            .expect("Gridlines focus surface");
+        for member_name in ["Name", "Format", "Creator", "Application", "Parent"] {
+            let member = gridlines
+                .members
+                .iter()
+                .find(|member| member.name == member_name)
+                .unwrap_or_else(|| panic!("Gridlines.{member_name} focus member"));
+            assert!(matches!(member.support, office_idl::SupportState::Stub));
+            assert!(matches!(member.access, office_idl::AccessMode::Read));
+        }
+        for member_name in ["Select", "Delete"] {
+            let member = gridlines
+                .members
+                .iter()
+                .find(|member| member.name == member_name)
+                .unwrap_or_else(|| panic!("Gridlines.{member_name} focus member"));
+            assert!(matches!(member.support, office_idl::SupportState::Stub));
         }
         let series = runtime
             .dispatch_registry()
