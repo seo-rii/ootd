@@ -6877,6 +6877,9 @@ impl ExcelRuntime {
                         if changed {
                             chart.dirty = true;
                             runtime.dirty = true;
+                            self.find_state = None;
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
                         }
                         Ok(())
                     }
@@ -21681,6 +21684,9 @@ impl ExcelRuntime {
                 }
                 if workbook_dirty {
                     runtime.dirty = true;
+                    self.find_state = None;
+                    self.cut_copy_mode = None;
+                    self.clipboard = None;
                 }
                 Ok(OmValue::Empty)
             }
@@ -21875,6 +21881,9 @@ impl ExcelRuntime {
                 }
                 if workbook_dirty {
                     runtime.dirty = true;
+                    self.find_state = None;
+                    self.cut_copy_mode = None;
+                    self.clipboard = None;
                 }
                 Ok(OmValue::Empty)
             }
@@ -112113,6 +112122,25 @@ mod tests {
             ),
             12.5
         );
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before ShapeRange.Flip"),
+        );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before ShapeRange.Flip");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before ShapeRange.Flip");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before ShapeRange.Flip")
+            ),
+            f64::from(super::XL_COPY)
+        );
         runtime
             .dispatch_invoke(
                 shape_range,
@@ -112120,6 +112148,18 @@ mod tests {
                 &[OmValue::Number(f64::from(super::MSO_FLIP_HORIZONTAL))],
             )
             .expect("ShapeRange.Flip horizontal");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after ShapeRange.Flip")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after ShapeRange.Flip")
+                .code,
+            OmErrorCode::InvalidState
+        );
         assert_eq!(
             expect_number(
                 runtime
@@ -113017,9 +113057,42 @@ mod tests {
                 .dispatch_get(second_chart_object, "ShapeRange", &[])
                 .expect("second ChartObject.ShapeRange"),
         );
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before ShapeRange.IncrementRotation"),
+        );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before ShapeRange.IncrementRotation");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before ShapeRange.IncrementRotation");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before ShapeRange.IncrementRotation")
+            ),
+            f64::from(super::XL_COPY)
+        );
         runtime
             .dispatch_invoke(shape_range, "IncrementRotation", &[OmValue::Number(15.0)])
             .expect("ShapeRange.IncrementRotation");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after ShapeRange.IncrementRotation")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err(
+                    "Range.FindNext should require a new Find after ShapeRange.IncrementRotation",
+                )
+                .code,
+            OmErrorCode::InvalidState
+        );
 
         assert_eq!(
             expect_number(
