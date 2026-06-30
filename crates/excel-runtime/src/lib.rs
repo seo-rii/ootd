@@ -16004,6 +16004,9 @@ impl ExcelRuntime {
                     if changed {
                         chart.dirty = true;
                         runtime.dirty = true;
+                        self.find_state = None;
+                        self.cut_copy_mode = None;
+                        self.clipboard = None;
                     }
                     Ok(OmValue::Empty)
                 }
@@ -16061,6 +16064,9 @@ impl ExcelRuntime {
                     if changed {
                         chart.dirty = true;
                         runtime.dirty = true;
+                        self.find_state = None;
+                        self.cut_copy_mode = None;
+                        self.clipboard = None;
                     }
                     Ok(OmValue::Empty)
                 }
@@ -16106,6 +16112,9 @@ impl ExcelRuntime {
                         series.marker_style = Some(ChartMarkerStyle::Picture);
                         chart.dirty = true;
                         runtime.dirty = true;
+                        self.find_state = None;
+                        self.cut_copy_mode = None;
+                        self.clipboard = None;
                     }
                     Ok(OmValue::Empty)
                 }
@@ -16213,6 +16222,9 @@ impl ExcelRuntime {
                         series.point_data_labels.insert(point_index, data_labels);
                         chart.dirty = true;
                         runtime.dirty = true;
+                        self.find_state = None;
+                        self.cut_copy_mode = None;
+                        self.clipboard = None;
                     }
                     Ok(OmValue::Empty)
                 }
@@ -16275,6 +16287,9 @@ impl ExcelRuntime {
                         point.dirty = true;
                         chart.dirty = true;
                         runtime.dirty = true;
+                        self.find_state = None;
+                        self.cut_copy_mode = None;
+                        self.clipboard = None;
                     }
                     Ok(OmValue::Empty)
                 }
@@ -119647,12 +119662,43 @@ mod tests {
         runtime
             .dispatch_set(series, "InvertIfNegative", OmValue::Bool(true), &[])
             .expect("set Series.InvertIfNegative true");
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before Series.ClearFormats"),
+        );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before Series.ClearFormats");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Series.ClearFormats");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Series.ClearFormats")
+            ),
+            f64::from(super::XL_COPY)
+        );
 
         assert_eq!(
             runtime
                 .dispatch_invoke(series, "ClearFormats", &[])
                 .expect("Series.ClearFormats"),
             OmValue::Empty
+        );
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Series.ClearFormats")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after Series.ClearFormats")
+                .code,
+            OmErrorCode::InvalidState
         );
         assert_eq!(
             expect_number(
@@ -119827,11 +119873,42 @@ mod tests {
                 .code,
             OmErrorCode::InvalidArgument
         );
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before Series.Paste"),
+        );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before Series.Paste");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Series.Paste");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Series.Paste")
+            ),
+            f64::from(super::XL_COPY)
+        );
         assert_eq!(
             runtime
                 .dispatch_invoke(series, "Paste", &[])
                 .expect("Series.Paste"),
             OmValue::Empty
+        );
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Series.Paste")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after Series.Paste")
+                .code,
+            OmErrorCode::InvalidState
         );
         assert_eq!(
             expect_number(
@@ -121764,12 +121841,43 @@ mod tests {
         runtime
             .dispatch_set(second_point, "Explosion", OmValue::Number(10.0), &[])
             .expect("set second Point.Explosion");
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before Point.ClearFormats"),
+        );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before Point.ClearFormats");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Point.ClearFormats");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Point.ClearFormats")
+            ),
+            f64::from(super::XL_COPY)
+        );
 
         assert_eq!(
             runtime
                 .dispatch_invoke(first_point, "ClearFormats", &[])
                 .expect("Point.ClearFormats"),
             OmValue::Empty
+        );
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Point.ClearFormats")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after Point.ClearFormats")
+                .code,
+            OmErrorCode::InvalidState
         );
         assert_eq!(
             expect_number(
@@ -121980,6 +122088,25 @@ mod tests {
                 .code,
             OmErrorCode::InvalidArgument
         );
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before Point.ApplyDataLabels"),
+        );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before Point.ApplyDataLabels");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Point.ApplyDataLabels");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Point.ApplyDataLabels")
+            ),
+            f64::from(super::XL_COPY)
+        );
 
         runtime
             .dispatch_invoke(
@@ -121999,6 +122126,18 @@ mod tests {
                 ],
             )
             .expect("Point.ApplyDataLabels");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Point.ApplyDataLabels")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after Point.ApplyDataLabels")
+                .code,
+            OmErrorCode::InvalidState
+        );
         assert_eq!(
             runtime
                 .dispatch_get(first_point, "HasDataLabel", &[])
@@ -123201,6 +123340,25 @@ mod tests {
         runtime
             .dispatch_set(second_point, "HasDataLabel", OmValue::Bool(false), &[])
             .expect("Point.HasDataLabel = false again");
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before Series.ApplyDataLabels"),
+        );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before Series.ApplyDataLabels");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Series.ApplyDataLabels");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Series.ApplyDataLabels")
+            ),
+            f64::from(super::XL_COPY)
+        );
         runtime
             .dispatch_invoke(
                 series,
@@ -123219,6 +123377,18 @@ mod tests {
                 ],
             )
             .expect("Series.ApplyDataLabels");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Series.ApplyDataLabels")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after Series.ApplyDataLabels")
+                .code,
+            OmErrorCode::InvalidState
+        );
         {
             let state = runtime.workbook_state(workbook).expect("workbook state");
             let chart_model = state.charts.values().next().expect("chart model");
