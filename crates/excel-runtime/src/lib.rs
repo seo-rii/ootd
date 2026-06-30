@@ -123181,6 +123181,15 @@ mod tests {
         let original_placement = runtime
             .dispatch_get(chart_object, "Placement", &[])
             .expect("ChartObject.Placement before rejected setters");
+        let original_print_object = runtime
+            .dispatch_get(chart_object, "PrintObject", &[])
+            .expect("ChartObject.PrintObject before rejected setters");
+        let original_locked = runtime
+            .dispatch_get(chart_object, "Locked", &[])
+            .expect("ChartObject.Locked before rejected setters");
+        let original_rounded_corners = runtime
+            .dispatch_get(chart_object, "RoundedCorners", &[])
+            .expect("ChartObject.RoundedCorners before rejected setters");
 
         for (handle, owner, member, value) in [
             (
@@ -123263,6 +123272,12 @@ mod tests {
                 "ProtectChartObject",
                 OmValue::Bool(false),
             ),
+            (
+                chart_objects,
+                "ChartObjects",
+                "RoundedCorners",
+                OmValue::Bool(true),
+            ),
         ] {
             let error = match runtime.dispatch_set(handle, member, value, &[]) {
                 Ok(()) => panic!("{owner}.{member} should reject read-only workbooks"),
@@ -123296,6 +123311,24 @@ mod tests {
                 .dispatch_get(chart_object, "Placement", &[])
                 .expect("ChartObject.Placement after rejected setters"),
             original_placement
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_object, "PrintObject", &[])
+                .expect("ChartObject.PrintObject after rejected setters"),
+            original_print_object
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_object, "Locked", &[])
+                .expect("ChartObject.Locked after rejected setters"),
+            original_locked
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_object, "RoundedCorners", &[])
+                .expect("ChartObject.RoundedCorners after rejected setters"),
+            original_rounded_corners
         );
         assert_eq!(
             expect_number(
