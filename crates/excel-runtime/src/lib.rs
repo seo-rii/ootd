@@ -114471,11 +114471,46 @@ mod tests {
             "Chart 2"
         );
 
+        let delete_search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before ShapeRange.Delete"),
+        );
+        runtime
+            .dispatch_invoke(
+                delete_search_range,
+                "Find",
+                &[OmValue::Text("1".to_string())],
+            )
+            .expect("Range.Find before ShapeRange.Delete");
+        runtime
+            .dispatch_invoke(delete_search_range, "Copy", &[])
+            .expect("Range.Copy before ShapeRange.Delete");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before ShapeRange.Delete")
+            ),
+            f64::from(super::XL_COPY)
+        );
         assert_eq!(
             runtime
                 .dispatch_invoke(duplicated_shape, "Delete", &[])
                 .expect("ShapeRange.Delete"),
             OmValue::Empty
+        );
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after ShapeRange.Delete")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(delete_search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after ShapeRange.Delete")
+                .code,
+            OmErrorCode::InvalidState
         );
         assert_eq!(
             expect_number(
