@@ -116835,9 +116835,49 @@ mod tests {
                     .expect("ChartGroup numeric setting"),
                 OmValue::Number(loaded)
             );
+            let search_range = if member == "BubbleScale" {
+                let search_range = expect_object_handle(
+                    runtime
+                        .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                        .expect("Worksheet.Range(A1:B3) before ChartGroup.BubbleScale"),
+                );
+                runtime
+                    .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+                    .expect("Range.Find before ChartGroup.BubbleScale");
+                runtime
+                    .dispatch_invoke(search_range, "Copy", &[])
+                    .expect("Range.Copy before ChartGroup.BubbleScale");
+                assert_eq!(
+                    expect_number(
+                        runtime
+                            .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                            .expect("Application.CutCopyMode before ChartGroup.BubbleScale")
+                    ),
+                    f64::from(super::XL_COPY)
+                );
+                Some(search_range)
+            } else {
+                None
+            };
             runtime
                 .dispatch_set(chart_group, member, OmValue::Number(updated), &[])
                 .expect("set ChartGroup numeric setting");
+            if let Some(search_range) = search_range {
+                assert!(!expect_bool(
+                    runtime
+                        .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                        .expect("Application.CutCopyMode after ChartGroup.BubbleScale")
+                ));
+                assert_eq!(
+                    runtime
+                        .dispatch_invoke(search_range, "FindNext", &[])
+                        .expect_err(
+                            "Range.FindNext should require a new Find after ChartGroup.BubbleScale",
+                        )
+                        .code,
+                    OmErrorCode::InvalidState
+                );
+            }
             assert_eq!(
                 runtime
                     .dispatch_get(chart_group, member, &[])
