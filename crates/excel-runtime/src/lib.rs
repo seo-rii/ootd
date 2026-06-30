@@ -17277,11 +17277,6 @@ impl ExcelRuntime {
                             | "CopyPicture"
                             | "Delete"
                             | "SendToBack"
-                            | "IncrementLeft"
-                            | "IncrementTop"
-                            | "IncrementRotation"
-                            | "ScaleWidth"
-                            | "ScaleHeight"
                     )
                     | (
                         "ChartObject",
@@ -67255,6 +67250,21 @@ mod tests {
                 .find(|member| member.name == member_name)
                 .unwrap_or_else(|| panic!("ChartObjects.{member_name} focus member"));
             assert!(matches!(member.support, office_idl::SupportState::Stub));
+        }
+        for member_name in [
+            "IncrementLeft",
+            "IncrementTop",
+            "IncrementRotation",
+            "ScaleWidth",
+            "ScaleHeight",
+        ] {
+            assert!(
+                !chart_objects
+                    .members
+                    .iter()
+                    .any(|member| member.name == member_name),
+                "ChartObjects.{member_name} should stay off the collection focus surface"
+            );
         }
         for member_name in [
             "IncrementLeft",
