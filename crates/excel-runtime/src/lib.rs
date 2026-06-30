@@ -8284,6 +8284,9 @@ impl ExcelRuntime {
                     chart.data_table_dirty = true;
                     chart.dirty = true;
                     runtime.dirty = true;
+                    self.find_state = None;
+                    self.cut_copy_mode = None;
+                    self.clipboard = None;
                 }
                 Ok(())
             }
@@ -121158,9 +121161,42 @@ mod tests {
         runtime
             .dispatch_set(data_table, "HasBorderOutline", OmValue::Bool(true), &[])
             .expect("set DataTable.HasBorderOutline");
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before DataTable.ShowLegendKey"),
+        );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before DataTable.ShowLegendKey");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before DataTable.ShowLegendKey");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before DataTable.ShowLegendKey")
+            ),
+            f64::from(super::XL_COPY)
+        );
         runtime
             .dispatch_set(data_table, "ShowLegendKey", OmValue::Bool(true), &[])
             .expect("set DataTable.ShowLegendKey");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after DataTable.ShowLegendKey")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err(
+                    "Range.FindNext should require a new Find after DataTable.ShowLegendKey"
+                )
+                .code,
+            OmErrorCode::InvalidState
+        );
         assert_eq!(
             runtime
                 .dispatch_set(data_table, "ShowLegendKey", OmValue::Number(1.0), &[])
