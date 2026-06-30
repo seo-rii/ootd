@@ -149071,6 +149071,14 @@ mod tests {
                 .dispatch_invoke(series_collection, "NewSeries", &[])
                 .expect("SeriesCollection.NewSeries second"),
         );
+        runtime
+            .dispatch_set(
+                second_series,
+                "AxisGroup",
+                OmValue::Number(f64::from(super::XL_SECONDARY)),
+                &[],
+            )
+            .expect("set second Series.AxisGroup xlSecondary");
 
         runtime
             .dispatch_set(
@@ -149097,6 +149105,54 @@ mod tests {
                     .expect("second Series.PlotOrder")
             ),
             1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(second_series, "AxisGroup", &[])
+                    .expect("second Series.AxisGroup after Formula")
+            ),
+            f64::from(super::XL_SECONDARY)
+        );
+        let chart_groups = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartGroups", &[])
+                .expect("Chart.ChartGroups after Formula"),
+        );
+        let secondary_group = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_groups, "Item", &[OmValue::Number(2.0)])
+                .expect("ChartGroups.Item(2) after Formula"),
+        );
+        let secondary_group_series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(secondary_group, "SeriesCollection", &[])
+                .expect("secondary ChartGroup.SeriesCollection after Formula"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(secondary_group_series_collection, "Count", &[])
+                    .expect("secondary ChartGroup.SeriesCollection.Count after Formula")
+            ),
+            1.0
+        );
+        let secondary_group_series = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    secondary_group_series_collection,
+                    "Item",
+                    &[OmValue::Number(1.0)],
+                )
+                .expect("secondary ChartGroup.SeriesCollection.Item(1) after Formula"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(secondary_group_series, "Formula", &[])
+                    .expect("secondary group Series.Formula after Formula")
+            ),
+            "=SERIES(Sheet1!$C$1,Sheet1!$A$1:$A$3,Sheet1!$B$1:$B$3,1)"
         );
         assert_eq!(
             expect_text(
