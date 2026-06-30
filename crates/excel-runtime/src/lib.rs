@@ -14202,6 +14202,9 @@ impl ExcelRuntime {
                                     runtime.dirty = true;
                                 }
                                 self.stale_series_handles_for_chart(workbook, chart_id);
+                                self.find_state = None;
+                                self.cut_copy_mode = None;
+                                self.clipboard = None;
                             }
                             _ => {
                                 return Err(OmError::type_mismatch(
@@ -14353,6 +14356,9 @@ impl ExcelRuntime {
                         .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart not found"))?;
                     chart.dirty = true;
                     runtime.dirty = true;
+                    self.find_state = None;
+                    self.cut_copy_mode = None;
+                    self.clipboard = None;
                     Ok(OmValue::Empty)
                 }
                 "SaveChartTemplate" => {
@@ -14445,6 +14451,9 @@ impl ExcelRuntime {
                         .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart not found"))?;
                     chart.dirty = true;
                     runtime.dirty = true;
+                    self.find_state = None;
+                    self.cut_copy_mode = None;
+                    self.clipboard = None;
                     Ok(OmValue::Empty)
                 }
                 "Paste" => {
@@ -32522,6 +32531,9 @@ impl ExcelRuntime {
         if changed {
             chart.dirty = true;
             runtime.dirty = true;
+            self.find_state = None;
+            self.cut_copy_mode = None;
+            self.clipboard = None;
         }
         Ok(())
     }
@@ -129705,6 +129717,20 @@ mod tests {
                 .dispatch_get(chart_object, "Chart", &[])
                 .expect("ChartObject.Chart"),
         );
+        runtime
+            .dispatch_invoke(source, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before Chart.ChartWizard");
+        runtime
+            .dispatch_invoke(source, "Copy", &[])
+            .expect("Range.Copy before Chart.ChartWizard");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Chart.ChartWizard")
+            ),
+            f64::from(super::XL_COPY)
+        );
 
         assert_eq!(
             runtime
@@ -129726,6 +129752,18 @@ mod tests {
                 )
                 .expect("Chart.ChartWizard"),
             OmValue::Empty
+        );
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Chart.ChartWizard")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(source, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after Chart.ChartWizard")
+                .code,
+            OmErrorCode::InvalidState
         );
         assert_eq!(
             runtime
@@ -130174,6 +130212,28 @@ mod tests {
                 OmValue::Bool(true),
                 "Workbook.Saved should start clean before Chart.{member}"
             );
+            let search_range = expect_object_handle(
+                runtime
+                    .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                    .expect("Worksheet.Range(A1:B3) before chart mutator"),
+            );
+            runtime
+                .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+                .unwrap_or_else(|error| panic!("Range.Find before Chart.{member}: {error:?}"));
+            runtime
+                .dispatch_invoke(search_range, "Copy", &[])
+                .unwrap_or_else(|error| panic!("Range.Copy before Chart.{member}: {error:?}"));
+            assert_eq!(
+                expect_number(
+                    runtime
+                        .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                        .unwrap_or_else(|error| {
+                            panic!("Application.CutCopyMode before Chart.{member}: {error:?}")
+                        })
+                ),
+                f64::from(super::XL_COPY),
+                "Application.CutCopyMode should be xlCopy before Chart.{member}"
+            );
 
             assert_eq!(
                 runtime
@@ -130187,6 +130247,24 @@ mod tests {
                     .expect("Workbook.Saved after chart mutator"),
                 OmValue::Bool(false),
                 "Chart.{member} should dirty the workbook"
+            );
+            assert!(
+                !expect_bool(
+                    runtime
+                        .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                        .unwrap_or_else(|error| {
+                            panic!("Application.CutCopyMode after Chart.{member}: {error:?}")
+                        })
+                ),
+                "Chart.{member} should clear Application.CutCopyMode"
+            );
+            assert_eq!(
+                match runtime.dispatch_invoke(search_range, "FindNext", &[]) {
+                    Ok(value) => panic!("Range.FindNext after Chart.{member} succeeded: {value:?}"),
+                    Err(error) => error.code,
+                },
+                OmErrorCode::InvalidState,
+                "Chart.{member} should clear Range.Find state"
             );
         }
     }
@@ -130545,6 +130623,20 @@ mod tests {
             ),
             f64::from(super::XL_LINE_MARKERS)
         );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before Chart.ApplyDataLabels");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Chart.ApplyDataLabels");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Chart.ApplyDataLabels")
+            ),
+            f64::from(super::XL_COPY)
+        );
         assert_eq!(
             runtime
                 .dispatch_invoke(
@@ -130565,6 +130657,18 @@ mod tests {
                 )
                 .expect("Chart.ApplyDataLabels"),
             OmValue::Empty
+        );
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Chart.ApplyDataLabels")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after Chart.ApplyDataLabels")
+                .code,
+            OmErrorCode::InvalidState
         );
         assert_eq!(
             runtime
