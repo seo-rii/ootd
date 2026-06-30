@@ -17598,6 +17598,7 @@ impl ExcelRuntime {
                             | "Parent"
                             | "Select"
                             | "Delete"
+                            | "ClearFormats"
                     )
                     | (
                         "DropLines",
@@ -17608,6 +17609,7 @@ impl ExcelRuntime {
                             | "Parent"
                             | "Select"
                             | "Delete"
+                            | "ClearFormats"
                     )
                     | (
                         "HiLoLines",
@@ -17618,6 +17620,7 @@ impl ExcelRuntime {
                             | "Parent"
                             | "Select"
                             | "Delete"
+                            | "ClearFormats"
                     )
                     | (
                         "UpBars",
@@ -17628,6 +17631,7 @@ impl ExcelRuntime {
                             | "Parent"
                             | "Select"
                             | "Delete"
+                            | "ClearFormats"
                     )
                     | (
                         "DownBars",
@@ -17638,6 +17642,7 @@ impl ExcelRuntime {
                             | "Parent"
                             | "Select"
                             | "Delete"
+                            | "ClearFormats"
                     )
                     | (
                         "Axes",
@@ -67279,6 +67284,29 @@ mod tests {
                 .find(|member| member.name == member_name)
                 .unwrap_or_else(|| panic!("ChartObject.{member_name} focus member"));
             assert!(matches!(member.support, office_idl::SupportState::Stub));
+        }
+        for surface_name in [
+            "SeriesLines",
+            "DropLines",
+            "HiLoLines",
+            "UpBars",
+            "DownBars",
+        ] {
+            let surface = runtime
+                .dispatch_registry()
+                .focus_surfaces
+                .iter()
+                .find(|surface| surface.name == surface_name)
+                .unwrap_or_else(|| panic!("{surface_name} focus surface"));
+            let clear_formats = surface
+                .members
+                .iter()
+                .find(|member| member.name == "ClearFormats")
+                .unwrap_or_else(|| panic!("{surface_name}.ClearFormats focus member"));
+            assert!(matches!(
+                clear_formats.support,
+                office_idl::SupportState::Stub
+            ));
         }
         let shape_range = runtime
             .dispatch_registry()

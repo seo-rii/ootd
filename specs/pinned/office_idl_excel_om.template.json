@@ -14914,6 +14914,22 @@
               ]
             }
           }
+        },
+        {
+          "name": "ClearFormats",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "SeriesLines",
+                  "sourceMember": "ClearFormats"
+                }
+              ]
+            }
+          }
         }
       ]
     },
@@ -15088,6 +15104,22 @@
                   "kind": "method",
                   "sourceInterface": "DropLines",
                   "sourceMember": "Delete"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "ClearFormats",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "DropLines",
+                  "sourceMember": "ClearFormats"
                 }
               ]
             }
@@ -15270,6 +15302,22 @@
               ]
             }
           }
+        },
+        {
+          "name": "ClearFormats",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "HiLoLines",
+                  "sourceMember": "ClearFormats"
+                }
+              ]
+            }
+          }
         }
       ]
     },
@@ -15448,6 +15496,22 @@
               ]
             }
           }
+        },
+        {
+          "name": "ClearFormats",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "UpBars",
+                  "sourceMember": "ClearFormats"
+                }
+              ]
+            }
+          }
         }
       ]
     },
@@ -15622,6 +15686,22 @@
                   "kind": "method",
                   "sourceInterface": "DownBars",
                   "sourceMember": "Delete"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "ClearFormats",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "DownBars",
+                  "sourceMember": "ClearFormats"
                 }
               ]
             }
