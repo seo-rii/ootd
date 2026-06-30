@@ -18360,6 +18360,114 @@
           "access": "readwrite"
         },
         {
+          "name": "BarShape",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Series",
+                  "sourceMember": "BarShape"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "Int32"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "Int32"
+          },
+          "access": "readwrite"
+        },
+        {
+          "name": "Smooth",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Series",
+                  "sourceMember": "Smooth"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "bool",
+                "aliasOf": "VARIANT_BOOL"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "primitive",
+            "name": "bool",
+            "aliasOf": "VARIANT_BOOL"
+          },
+          "access": "readwrite"
+        },
+        {
+          "name": "MarkerStyle",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Series",
+                  "sourceMember": "MarkerStyle"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "Int32"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "Int32"
+          },
+          "access": "readwrite"
+        },
+        {
+          "name": "MarkerSize",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Series",
+                  "sourceMember": "MarkerSize"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "Int32"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "Int32"
+          },
+          "access": "readwrite"
+        },
+        {
           "name": "Formula",
           "memberKind": "property",
           "support": "stub",

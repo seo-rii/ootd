@@ -17759,6 +17759,10 @@ impl ExcelRuntime {
                             | "Values"
                             | "XValues"
                             | "BubbleSizes"
+                            | "BarShape"
+                            | "Smooth"
+                            | "MarkerStyle"
+                            | "MarkerSize"
                             | "Formula"
                             | "AxisGroup"
                             | "HasDataLabels"
@@ -67337,6 +67341,21 @@ mod tests {
                 .iter()
                 .find(|member| member.name == member_name)
                 .unwrap_or_else(|| panic!("Axis.{member_name} focus member"));
+            assert!(matches!(member.support, office_idl::SupportState::Stub));
+            assert!(matches!(member.access, office_idl::AccessMode::Readwrite));
+        }
+        let series = runtime
+            .dispatch_registry()
+            .focus_surfaces
+            .iter()
+            .find(|surface| surface.name == "Series")
+            .expect("Series focus surface");
+        for member_name in ["BarShape", "Smooth", "MarkerStyle", "MarkerSize"] {
+            let member = series
+                .members
+                .iter()
+                .find(|member| member.name == member_name)
+                .unwrap_or_else(|| panic!("Series.{member_name} focus member"));
             assert!(matches!(member.support, office_idl::SupportState::Stub));
             assert!(matches!(member.access, office_idl::AccessMode::Readwrite));
         }
