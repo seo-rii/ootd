@@ -13240,6 +13240,7 @@ impl ExcelRuntime {
                         | "CopyPicture"
                         | "Delete"
                         | "SendToBack"
+                        | "ZOrder"
                 ) {
                     self.focus_member_supported("ChartObject", member, false)?;
                 }
@@ -13315,9 +13316,16 @@ impl ExcelRuntime {
                             self.delete_chart_object(workbook, chart_object_id)?,
                         ))
                     }
-                    "ZOrder" => Err(OmError::unsupported(
-                        "ChartObject.ZOrder is a read-only property",
-                    )),
+                    "ZOrder" => {
+                        let [command] = args else {
+                            return Err(OmError::invalid_argument(
+                                "ChartObject.ZOrder expects a single MsoZOrderCmd argument",
+                            ));
+                        };
+                        let operation = chart_object_z_order_operation(command, "ChartObject")?;
+                        self.move_chart_objects_z_order(workbook, &[chart_object_id], operation)?;
+                        Ok(OmValue::Empty)
+                    }
                     "IncrementLeft" | "IncrementTop" | "IncrementRotation" | "ScaleWidth"
                     | "ScaleHeight" => Err(OmError::unsupported(format!(
                         "ChartObject.{member} is exposed through ChartObject.ShapeRange.{member}"
@@ -21368,36 +21376,7 @@ impl ExcelRuntime {
                         "ShapeRange.ZOrder expects a single MsoZOrderCmd argument",
                     ));
                 };
-                let OmValue::Number(command) = command else {
-                    return Err(OmError::type_mismatch(
-                        "ShapeRange.ZOrder expects a numeric MsoZOrderCmd argument",
-                    ));
-                };
-                if !command.is_finite()
-                    || command.fract() != 0.0
-                    || *command < i32::MIN as f64
-                    || *command > i32::MAX as f64
-                {
-                    return Err(OmError::invalid_argument(
-                        "ShapeRange.ZOrder expects an integral MsoZOrderCmd argument",
-                    ));
-                }
-                let operation = match *command as i32 {
-                    MSO_BRING_TO_FRONT => "BringToFront",
-                    MSO_SEND_TO_BACK => "SendToBack",
-                    MSO_BRING_FORWARD => "BringForward",
-                    MSO_SEND_BACKWARD => "SendBackward",
-                    MSO_BRING_IN_FRONT_OF_TEXT | MSO_SEND_BEHIND_TEXT => {
-                        return Err(OmError::unsupported(
-                            "ShapeRange.ZOrder text wrapping commands are not supported for chart objects",
-                        ));
-                    }
-                    _ => {
-                        return Err(OmError::invalid_argument(
-                            "ShapeRange.ZOrder expects a supported MsoZOrderCmd value",
-                        ));
-                    }
-                };
+                let operation = chart_object_z_order_operation(command, "ShapeRange")?;
                 let chart_object_ids = self
                     .shape_range_chart_object_entries(workbook, &source)?
                     .into_iter()
@@ -45259,6 +45238,35 @@ fn chart_axis_group_from_excel_value(value: u32, label: &str) -> OmResult<ChartA
         XL_SECONDARY => Ok(ChartAxisGroup::Secondary),
         _ => Err(OmError::invalid_argument(format!(
             "{label} supports xlPrimary and xlSecondary"
+        ))),
+    }
+}
+
+fn chart_object_z_order_operation(command: &OmValue, surface: &str) -> OmResult<&'static str> {
+    let OmValue::Number(command) = command else {
+        return Err(OmError::type_mismatch(format!(
+            "{surface}.ZOrder expects a numeric MsoZOrderCmd argument"
+        )));
+    };
+    if !command.is_finite()
+        || command.fract() != 0.0
+        || *command < i32::MIN as f64
+        || *command > i32::MAX as f64
+    {
+        return Err(OmError::invalid_argument(format!(
+            "{surface}.ZOrder expects an integral MsoZOrderCmd argument"
+        )));
+    }
+    match *command as i32 {
+        MSO_BRING_TO_FRONT => Ok("BringToFront"),
+        MSO_SEND_TO_BACK => Ok("SendToBack"),
+        MSO_BRING_FORWARD => Ok("BringForward"),
+        MSO_SEND_BACKWARD => Ok("SendBackward"),
+        MSO_BRING_IN_FRONT_OF_TEXT | MSO_SEND_BEHIND_TEXT => Err(OmError::unsupported(format!(
+            "{surface}.ZOrder text wrapping commands are not supported for chart objects"
+        ))),
+        _ => Err(OmError::invalid_argument(format!(
+            "{surface}.ZOrder expects a supported MsoZOrderCmd value"
         ))),
     }
 }
@@ -139746,30 +139754,49 @@ mod tests {
                     "ZOrder",
                     &[OmValue::Number(f64::from(super::MSO_BRING_FORWARD))],
                 )
-                .expect_err("ChartObject.ZOrder is read-only")
-                .code,
-            OmErrorCode::Unsupported
+                .expect("ChartObject.ZOrder msoBringForward"),
+            OmValue::Empty
         );
         let initial_ordered_first = expect_object_handle(
             runtime
                 .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
-                .expect("ChartObjects.Item(1) after rejected ChartObject.ZOrder"),
+                .expect("ChartObjects.Item(1) after ChartObject.ZOrder"),
         );
         assert_eq!(
             expect_text(
                 runtime
                     .dispatch_get(initial_ordered_first, "Name", &[])
-                    .expect("first ordered ChartObject.Name after rejected ChartObject.ZOrder")
+                    .expect("first ordered ChartObject.Name after ChartObject.ZOrder")
             ),
-            "Embedded Revenue Chart"
+            "Chart 2"
         );
         assert_eq!(
             expect_number(
                 runtime
                     .dispatch_get(first_chart_object, "ZOrder", &[])
-                    .expect("first ChartObject.ZOrder after rejected ChartObject.ZOrder")
+                    .expect("first ChartObject.ZOrder after ChartObject.ZOrder")
             ),
-            1.0
+            2.0
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(first_chart_object, "ZOrder", &[])
+                .expect_err("ChartObject.ZOrder rejects missing command")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    first_chart_object,
+                    "ZOrder",
+                    &[OmValue::Number(f64::from(
+                        super::MSO_BRING_IN_FRONT_OF_TEXT
+                    ))],
+                )
+                .expect_err("ChartObject.ZOrder rejects text wrapping commands")
+                .code,
+            OmErrorCode::Unsupported
         );
         assert_eq!(
             runtime
