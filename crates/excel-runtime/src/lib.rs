@@ -126871,6 +126871,21 @@ mod tests {
                 ),
                 1.0
             );
+            let series = expect_object_handle(
+                runtime
+                    .dispatch_invoke(series_collection, "Item", &[OmValue::Number(1.0)])
+                    .expect("SeriesCollection.Item(1) before ChartArea clear"),
+            );
+            let series_format = expect_object_handle(
+                runtime
+                    .dispatch_get(series, "Format", &[])
+                    .expect("Series.Format before ChartArea clear"),
+            );
+            let points = expect_object_handle(
+                runtime
+                    .dispatch_get(series, "Points", &[])
+                    .expect("Series.Points before ChartArea clear"),
+            );
             let error = runtime
                 .dispatch_invoke(chart_area, member, &[OmValue::Missing])
                 .expect_err("ChartArea clear should reject arguments");
@@ -126894,6 +126909,27 @@ mod tests {
                         .expect("SeriesCollection.Count after ChartArea clear")
                 ),
                 0.0
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(series, "PlotOrder", &[])
+                    .expect_err("Series handle should be stale after ChartArea clear")
+                    .code,
+                OmErrorCode::InvalidState
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(series_format, "Creator", &[])
+                    .expect_err("Series.Format handle should be stale after ChartArea clear")
+                    .code,
+                OmErrorCode::InvalidState
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(points, "Count", &[])
+                    .expect_err("Series.Points handle should be stale after ChartArea clear")
+                    .code,
+                OmErrorCode::InvalidState
             );
 
             let saved = runtime
