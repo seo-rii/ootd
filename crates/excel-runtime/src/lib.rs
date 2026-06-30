@@ -11929,6 +11929,7 @@ impl ExcelRuntime {
                         }
                         self.cut_copy_mode = None;
                         self.clipboard = None;
+                        self.find_state = None;
                         Ok(OmValue::Empty)
                     }
                     "CopyPicture" => {
@@ -12314,6 +12315,7 @@ impl ExcelRuntime {
 
                         self.cut_copy_mode = None;
                         self.clipboard = None;
+                        self.find_state = None;
                         Ok(OmValue::Empty)
                     }
                     "PasteSpecial" => {
@@ -12461,6 +12463,7 @@ impl ExcelRuntime {
                                 XL_COPY | XL_CUT => {
                                     self.cut_copy_mode = None;
                                     self.clipboard = None;
+                                    self.find_state = None;
                                     Ok(OmValue::Empty)
                                 }
                                 _ => Err(OmError::invalid_state(
@@ -12870,6 +12873,7 @@ impl ExcelRuntime {
                             XL_COPY | XL_CUT => {
                                 self.cut_copy_mode = None;
                                 self.clipboard = None;
+                                self.find_state = None;
                                 Ok(OmValue::Empty)
                             }
                             _ => Err(OmError::invalid_state(
@@ -97048,6 +97052,9 @@ mod tests {
             f64::from(super::XL_COPY)
         );
 
+        runtime
+            .dispatch_invoke(source, "Find", &[OmValue::Text("42".to_string())])
+            .expect("Range.Find before destination copy");
         assert!(matches!(
             runtime
                 .dispatch_invoke(source, "Copy", &[OmValue::Object(destination)])
@@ -97059,6 +97066,13 @@ mod tests {
                 .dispatch_get(application, "CutCopyMode", &[])
                 .expect("Application.CutCopyMode after destination copy")
         ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(source, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after destination copy")
+                .code,
+            OmErrorCode::InvalidState
+        );
 
         let copied_range = expect_object_handle(
             runtime
@@ -97438,6 +97452,15 @@ mod tests {
                 )
                 .expect("destination Range(C3)"),
         );
+        let destination_search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    destination_sheet,
+                    "Range",
+                    &[OmValue::Text("A1:D3".to_string())],
+                )
+                .expect("destination Range(A1:D3)"),
+        );
 
         runtime
             .dispatch_invoke(source, "Copy", &[])
@@ -97450,6 +97473,13 @@ mod tests {
             ),
             f64::from(super::XL_COPY)
         );
+        runtime
+            .dispatch_invoke(
+                destination_search_range,
+                "Find",
+                &[OmValue::Text("42".to_string())],
+            )
+            .expect("destination Range.Find before PasteSpecial");
         assert!(matches!(
             runtime
                 .dispatch_invoke(destination, "PasteSpecial", &[])
@@ -97461,6 +97491,13 @@ mod tests {
                 .dispatch_get(application, "CutCopyMode", &[])
                 .expect("Application.CutCopyMode after PasteSpecial")
         ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(destination_search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after PasteSpecial")
+                .code,
+            OmErrorCode::InvalidState
+        );
 
         let pasted_value = expect_object_handle(
             runtime
@@ -99267,6 +99304,9 @@ mod tests {
             f64::from(super::XL_CUT)
         );
 
+        runtime
+            .dispatch_invoke(source, "Find", &[OmValue::Text("42".to_string())])
+            .expect("Range.Find before destination cut");
         assert!(matches!(
             runtime
                 .dispatch_invoke(source, "Cut", &[OmValue::Object(destination)])
@@ -99278,6 +99318,13 @@ mod tests {
                 .dispatch_get(application, "CutCopyMode", &[])
                 .expect("Application.CutCopyMode after destination cut")
         ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(source, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after destination cut")
+                .code,
+            OmErrorCode::InvalidState
+        );
 
         let a1 = expect_object_handle(
             runtime
@@ -99490,6 +99537,11 @@ mod tests {
                 .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("C3".to_string())])
                 .expect("Range(C3)"),
         );
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:D3".to_string())])
+                .expect("Range(A1:D3)"),
+        );
 
         runtime
             .dispatch_invoke(source, "Cut", &[])
@@ -99502,6 +99554,9 @@ mod tests {
             ),
             f64::from(super::XL_CUT)
         );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("42".to_string())])
+            .expect("Range.Find before cut PasteSpecial");
         assert!(matches!(
             runtime
                 .dispatch_invoke(
@@ -99517,6 +99572,13 @@ mod tests {
                 .expect("Range.PasteSpecial cut clipboard"),
             OmValue::Empty
         ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after cut PasteSpecial")
+                .code,
+            OmErrorCode::InvalidState
+        );
 
         let source_a1 = expect_object_handle(
             runtime
