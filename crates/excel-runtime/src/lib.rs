@@ -127004,20 +127004,69 @@ mod tests {
                 .expect("DataLabels.Item(3)"),
         );
 
-        runtime
-            .dispatch_set(second_label, "ShowValue", OmValue::Bool(false), &[])
-            .expect("DataLabel.ShowValue = false");
-        runtime
-            .dispatch_set(second_label, "ShowCategoryName", OmValue::Bool(true), &[])
-            .expect("DataLabel.ShowCategoryName = true");
-        runtime
-            .dispatch_set(
-                second_label,
-                "Separator",
-                OmValue::Text(" | ".to_string()),
-                &[],
-            )
-            .expect("DataLabel.Separator = pipe");
+        for (member, value) in [
+            ("ShowValue", OmValue::Bool(false)),
+            ("ShowCategoryName", OmValue::Bool(true)),
+            ("Separator", OmValue::Text(" | ".to_string())),
+        ] {
+            let search_range = expect_object_handle(
+                runtime
+                    .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                    .unwrap_or_else(|error| {
+                        panic!(
+                            "Worksheet.Range(A1:B3) before DataLabels.Propagate setup {member}: {error:?}"
+                        )
+                    }),
+            );
+            runtime
+                .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+                .unwrap_or_else(|error| {
+                    panic!("Range.Find before DataLabels.Propagate setup {member}: {error:?}")
+                });
+            runtime
+                .dispatch_invoke(search_range, "Copy", &[])
+                .unwrap_or_else(|error| {
+                    panic!("Range.Copy before DataLabels.Propagate setup {member}: {error:?}")
+                });
+            assert_eq!(
+                expect_number(
+                    runtime
+                        .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                        .unwrap_or_else(|error| {
+                            panic!(
+                                "Application.CutCopyMode before DataLabels.Propagate setup {member}: {error:?}"
+                            )
+                        })
+                ),
+                f64::from(super::XL_COPY)
+            );
+            runtime
+                .dispatch_set(second_label, member, value, &[])
+                .unwrap_or_else(|error| {
+                    panic!("DataLabels.Propagate setup {member} failed: {error:?}")
+                });
+            assert!(!expect_bool(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .unwrap_or_else(|error| {
+                        panic!(
+                            "Application.CutCopyMode after DataLabels.Propagate setup {member}: {error:?}"
+                        )
+                    })
+            ));
+            assert_eq!(
+                runtime
+                    .dispatch_invoke(search_range, "FindNext", &[])
+                    .err()
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "Range.FindNext should require a new Find after DataLabels.Propagate setup {member}"
+                        )
+                    })
+                    .code,
+                OmErrorCode::InvalidState
+            );
+        }
         assert_eq!(
             runtime
                 .dispatch_invoke(data_labels, "Propagate", &[])
