@@ -116825,51 +116825,49 @@ mod tests {
                     .expect("ChartGroup bubble flag"),
                 OmValue::Bool(true)
             );
-            let search_range = if member == "ShowNegativeBubbles" {
-                let search_range = expect_object_handle(
+            let search_range = expect_object_handle(
+                runtime
+                    .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                    .unwrap_or_else(|error| {
+                        panic!("Worksheet.Range(A1:B3) before ChartGroup.{member}: {error:?}")
+                    }),
+            );
+            runtime
+                .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+                .unwrap_or_else(|error| panic!("Range.Find before ChartGroup.{member}: {error:?}"));
+            runtime
+                .dispatch_invoke(search_range, "Copy", &[])
+                .unwrap_or_else(|error| panic!("Range.Copy before ChartGroup.{member}: {error:?}"));
+            assert_eq!(
+                expect_number(
                     runtime
-                        .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
-                        .expect("Worksheet.Range(A1:B3) before ChartGroup.ShowNegativeBubbles"),
-                );
-                runtime
-                    .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
-                    .expect("Range.Find before ChartGroup.ShowNegativeBubbles");
-                runtime
-                    .dispatch_invoke(search_range, "Copy", &[])
-                    .expect("Range.Copy before ChartGroup.ShowNegativeBubbles");
-                assert_eq!(
-                    expect_number(
-                        runtime
-                            .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
-                            .expect(
-                                "Application.CutCopyMode before ChartGroup.ShowNegativeBubbles"
-                            )
-                    ),
-                    f64::from(super::XL_COPY)
-                );
-                Some(search_range)
-            } else {
-                None
-            };
+                        .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                        .unwrap_or_else(|error| {
+                            panic!("Application.CutCopyMode before ChartGroup.{member}: {error:?}")
+                        })
+                ),
+                f64::from(super::XL_COPY)
+            );
             runtime
                 .dispatch_set(chart_group, member, OmValue::Bool(false), &[])
                 .expect("set ChartGroup bubble flag");
-            if let Some(search_range) = search_range {
-                assert!(!expect_bool(
-                    runtime
-                        .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
-                        .expect("Application.CutCopyMode after ChartGroup.ShowNegativeBubbles")
-                ));
-                assert_eq!(
-                    runtime
-                        .dispatch_invoke(search_range, "FindNext", &[])
-                        .expect_err(
-                            "Range.FindNext should require a new Find after ChartGroup.ShowNegativeBubbles",
-                        )
-                        .code,
-                    OmErrorCode::InvalidState
-                );
-            }
+            assert!(!expect_bool(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .unwrap_or_else(|error| {
+                        panic!("Application.CutCopyMode after ChartGroup.{member}: {error:?}")
+                    })
+            ));
+            assert_eq!(
+                runtime
+                    .dispatch_invoke(search_range, "FindNext", &[])
+                    .err()
+                    .unwrap_or_else(|| {
+                        panic!("Range.FindNext should require a new Find after ChartGroup.{member}")
+                    })
+                    .code,
+                OmErrorCode::InvalidState
+            );
             assert_eq!(
                 runtime
                     .dispatch_get(chart_group, member, &[])
