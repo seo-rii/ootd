@@ -115119,6 +115119,59 @@ mod tests {
             2
         );
 
+        let single_search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before ChartObject.PrintObject"),
+        );
+        runtime
+            .dispatch_invoke(
+                single_search_range,
+                "Find",
+                &[OmValue::Text("1".to_string())],
+            )
+            .expect("Range.Find before ChartObject.PrintObject");
+        runtime
+            .dispatch_invoke(single_search_range, "Copy", &[])
+            .expect("Range.Copy before ChartObject.PrintObject");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before ChartObject.PrintObject")
+            ),
+            f64::from(super::XL_COPY)
+        );
+        runtime
+            .dispatch_set(chart_object, "PrintObject", OmValue::Bool(true), &[])
+            .expect("set ChartObject.PrintObject true");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after ChartObject.PrintObject")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(single_search_range, "FindNext", &[])
+                .expect_err(
+                    "Range.FindNext should require a new Find after ChartObject.PrintObject"
+                )
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_object, "PrintObject", &[])
+                .expect("ChartObject.PrintObject after single true"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(second_chart_object, "PrintObject", &[])
+                .expect("second ChartObject.PrintObject after single true"),
+            OmValue::Bool(false)
+        );
+
         let invalid_print_object = runtime
             .dispatch_set(
                 chart_object,
