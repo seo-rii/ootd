@@ -126274,9 +126274,42 @@ mod tests {
             assert_eq!(chart_model.series[0].point_data_labels.len(), 1);
         }
 
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before Series.HasDataLabels false"),
+        );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before Series.HasDataLabels false");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Series.HasDataLabels false");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Series.HasDataLabels false")
+            ),
+            f64::from(super::XL_COPY)
+        );
         runtime
             .dispatch_set(series, "HasDataLabels", OmValue::Bool(false), &[])
             .expect("Series.HasDataLabels = false");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Series.HasDataLabels false")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err(
+                    "Range.FindNext should require a new Find after Series.HasDataLabels false",
+                )
+                .code,
+            OmErrorCode::InvalidState
+        );
         assert_eq!(
             runtime
                 .dispatch_get(series, "HasDataLabels", &[])
