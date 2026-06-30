@@ -67530,6 +67530,41 @@ mod tests {
             assert!(matches!(member.support, office_idl::SupportState::Stub));
             assert!(matches!(member.access, office_idl::AccessMode::Readwrite));
         }
+        for (surface_name, member_names) in [
+            (
+                "CategoryCollection",
+                &["Count", "Item", "Creator", "Application", "Parent"][..],
+            ),
+            (
+                "ChartCategory",
+                &[
+                    "Name",
+                    "Index",
+                    "IsFiltered",
+                    "Creator",
+                    "Application",
+                    "Parent",
+                ][..],
+            ),
+        ] {
+            let surface = runtime
+                .dispatch_registry()
+                .focus_surfaces
+                .iter()
+                .find(|surface| surface.name == surface_name)
+                .unwrap_or_else(|| panic!("{surface_name} focus surface"));
+            for member_name in member_names {
+                let member = surface
+                    .members
+                    .iter()
+                    .find(|member| member.name == *member_name)
+                    .unwrap_or_else(|| panic!("{surface_name}.{member_name} focus member"));
+                assert!(matches!(member.support, office_idl::SupportState::Stub));
+                if member.member_kind == office_idl::MemberKind::Property {
+                    assert!(matches!(member.access, office_idl::AccessMode::Read));
+                }
+            }
+        }
         let shape_range = runtime
             .dispatch_registry()
             .focus_surfaces
