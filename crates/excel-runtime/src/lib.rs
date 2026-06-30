@@ -127698,6 +127698,95 @@ mod tests {
     }
 
     #[test]
+    fn chart_clear_to_match_color_style_preserves_chart_support_parts() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_support_parts_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart support parts");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        runtime
+            .dispatch_set(workbook.0, "Saved", OmValue::Bool(true), &[])
+            .expect("reset Workbook.Saved before ClearToMatchColorStyle");
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart, "ClearToMatchColorStyle", &[])
+                .expect("Chart.ClearToMatchColorStyle"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved after ClearToMatchColorStyle"),
+            OmValue::Bool(false)
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after ClearToMatchColorStyle");
+        let saved_package =
+            OpcPackage::from_bytes(&saved).expect("saved ClearToMatchColorStyle package");
+        let chart_rels = String::from_utf8(
+            saved_package
+                .part("xl/charts/_rels/chart1.xml.rels")
+                .expect("saved chart relationships")
+                .bytes
+                .clone(),
+        )
+        .expect("chart rels utf8");
+        assert!(chart_rels.contains(
+            r#"Type="http://schemas.microsoft.com/office/2011/relationships/chartStyle""#
+        ));
+        assert!(chart_rels.contains(
+            r#"Type="http://schemas.microsoft.com/office/2011/relationships/chartColorStyle""#
+        ));
+        assert!(
+            saved_package
+                .part("xl/charts/style1.xml")
+                .map(|part| String::from_utf8_lossy(&part.bytes).contains(r#"id="404""#))
+                .unwrap_or(false),
+            "chart style support part should survive ClearToMatchColorStyle"
+        );
+        assert!(
+            saved_package
+                .part("xl/charts/colors1.xml")
+                .map(|part| String::from_utf8_lossy(&part.bytes).contains(r#"id="404""#))
+                .unwrap_or(false),
+            "chart color support part should survive ClearToMatchColorStyle"
+        );
+    }
+
+    #[test]
     fn chartobject_duplicate_materializes_chart_support_parts_stably_across_repeated_saves() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
