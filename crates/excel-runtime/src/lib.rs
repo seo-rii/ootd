@@ -8181,6 +8181,9 @@ impl ExcelRuntime {
                             legend.position = Some(position);
                             chart.dirty = true;
                             runtime.dirty = true;
+                            self.find_state = None;
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
                         }
                         Ok(())
                     }
@@ -8217,6 +8220,9 @@ impl ExcelRuntime {
                             legend.include_in_layout = Some(include_in_layout);
                             chart.dirty = true;
                             runtime.dirty = true;
+                            self.find_state = None;
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
                         }
                         Ok(())
                     }
@@ -118386,6 +118392,25 @@ mod tests {
                 .expect("Legend.IncludeInLayout default"),
             OmValue::Bool(true)
         );
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before Legend.Position"),
+        );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before Legend.Position");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Legend.Position");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Legend.Position")
+            ),
+            f64::from(super::XL_COPY)
+        );
         runtime
             .dispatch_set(
                 legend,
@@ -118394,9 +118419,49 @@ mod tests {
                 &[],
             )
             .expect("set loaded Legend.Position");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Legend.Position")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after Legend.Position")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before Legend.IncludeInLayout");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Legend.IncludeInLayout");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Legend.IncludeInLayout")
+            ),
+            f64::from(super::XL_COPY)
+        );
         runtime
             .dispatch_set(legend, "IncludeInLayout", OmValue::Bool(false), &[])
             .expect("set loaded Legend.IncludeInLayout");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Legend.IncludeInLayout")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err(
+                    "Range.FindNext should require a new Find after Legend.IncludeInLayout",
+                )
+                .code,
+            OmErrorCode::InvalidState
+        );
         runtime
             .dispatch_set(chart, "PlotVisibleOnly", OmValue::Bool(false), &[])
             .expect("set loaded Chart.PlotVisibleOnly");
