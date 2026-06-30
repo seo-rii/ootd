@@ -123535,12 +123535,51 @@ mod tests {
                 .expect("DataLabels.ShowValue after Series.ApplyDataLabels"),
             OmValue::Bool(false)
         );
-        runtime
-            .dispatch_set(data_labels, "ShowValue", OmValue::Bool(true), &[])
-            .expect("DataLabels.ShowValue = true");
-        runtime
-            .dispatch_set(data_labels, "HasLeaderLines", OmValue::Bool(true), &[])
-            .expect("DataLabels.HasLeaderLines = true");
+        for member in ["ShowValue", "HasLeaderLines"] {
+            let search_range = expect_object_handle(
+                runtime
+                    .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                    .unwrap_or_else(|error| {
+                        panic!("Worksheet.Range(A1:B3) before DataLabels.{member}: {error:?}")
+                    }),
+            );
+            runtime
+                .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+                .unwrap_or_else(|error| panic!("Range.Find before DataLabels.{member}: {error:?}"));
+            runtime
+                .dispatch_invoke(search_range, "Copy", &[])
+                .unwrap_or_else(|error| panic!("Range.Copy before DataLabels.{member}: {error:?}"));
+            assert_eq!(
+                expect_number(
+                    runtime
+                        .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                        .unwrap_or_else(|error| {
+                            panic!("Application.CutCopyMode before DataLabels.{member}: {error:?}")
+                        })
+                ),
+                f64::from(super::XL_COPY)
+            );
+            runtime
+                .dispatch_set(data_labels, member, OmValue::Bool(true), &[])
+                .unwrap_or_else(|error| panic!("DataLabels.{member} = true: {error:?}"));
+            assert!(!expect_bool(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .unwrap_or_else(|error| {
+                        panic!("Application.CutCopyMode after DataLabels.{member}: {error:?}")
+                    })
+            ));
+            assert_eq!(
+                runtime
+                    .dispatch_invoke(search_range, "FindNext", &[])
+                    .err()
+                    .unwrap_or_else(|| {
+                        panic!("Range.FindNext should require a new Find after DataLabels.{member}")
+                    })
+                    .code,
+                OmErrorCode::InvalidState
+            );
+        }
         let search_range = expect_object_handle(
             runtime
                 .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
