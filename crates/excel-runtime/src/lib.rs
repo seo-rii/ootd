@@ -11577,6 +11577,8 @@ impl ExcelRuntime {
                         };
                         if changed {
                             self.find_state = None;
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
                         }
                         Ok(OmValue::Empty)
                     }
@@ -11736,6 +11738,8 @@ impl ExcelRuntime {
                         };
                         if changed {
                             self.find_state = None;
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
                         }
                         Ok(OmValue::Empty)
                     }
@@ -91292,6 +91296,11 @@ mod tests {
                 .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
                 .expect("ActiveSheet"),
         );
+        let a1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1".to_string())])
+                .expect("Range(A1)"),
+        );
         let b1 = expect_object_handle(
             runtime
                 .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B1".to_string())])
@@ -91326,6 +91335,17 @@ mod tests {
                 &[],
             )
             .expect("B2:B4.Value");
+        runtime
+            .dispatch_invoke(a1, "Copy", &[])
+            .expect("A1.Copy clipboard before Delete");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Delete")
+            ),
+            f64::from(super::XL_COPY)
+        );
 
         assert!(matches!(
             runtime
@@ -91336,6 +91356,11 @@ mod tests {
                 )
                 .expect("B1.Delete(xlShiftToLeft)"),
             OmValue::Empty
+        ));
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Delete")
         ));
         assert_eq!(
             expect_text(
@@ -91463,6 +91488,11 @@ mod tests {
                 .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B1".to_string())])
                 .expect("Range(B1)"),
         );
+        let a1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1".to_string())])
+                .expect("Range(A1)"),
+        );
         let c1 = expect_object_handle(
             runtime
                 .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("C1".to_string())])
@@ -91472,6 +91502,17 @@ mod tests {
             runtime
                 .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("D1".to_string())])
                 .expect("Range(D1)"),
+        );
+        runtime
+            .dispatch_invoke(a1, "Copy", &[])
+            .expect("A1.Copy clipboard before Insert");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Insert")
+            ),
+            f64::from(super::XL_COPY)
         );
 
         assert!(matches!(
@@ -91483,6 +91524,11 @@ mod tests {
                 )
                 .expect("B1.Insert(xlShiftToRight)"),
             OmValue::Empty
+        ));
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Insert")
         ));
         assert_eq!(
             runtime
