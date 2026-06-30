@@ -133347,6 +133347,20 @@ mod tests {
                 .expect("Chart.ChartTitle before SetElement"),
         );
         runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before Chart.SetElement title");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Chart.SetElement title");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Chart.SetElement title")
+            ),
+            f64::from(super::XL_COPY)
+        );
+        runtime
             .dispatch_invoke(
                 chart,
                 "SetElement",
@@ -133355,6 +133369,18 @@ mod tests {
                 ))],
             )
             .expect("Chart.SetElement msoElementChartTitleNone");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Chart.SetElement title")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after Chart.SetElement title")
+                .code,
+            OmErrorCode::InvalidState
+        );
         assert_eq!(
             runtime
                 .dispatch_get(chart, "HasTitle", &[])
