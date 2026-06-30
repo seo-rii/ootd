@@ -113251,9 +113251,44 @@ mod tests {
         assert!(saved_shape_range_drawing.contains("RefreshAllCharts"));
         assert!(saved_shape_range_drawing.contains("RefreshSecondChart"));
 
+        let delegated_search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before ShapeRange.Visible"),
+        );
+        runtime
+            .dispatch_invoke(
+                delegated_search_range,
+                "Find",
+                &[OmValue::Text("1".to_string())],
+            )
+            .expect("Range.Find before ShapeRange.Visible");
+        runtime
+            .dispatch_invoke(delegated_search_range, "Copy", &[])
+            .expect("Range.Copy before ShapeRange.Visible");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before ShapeRange.Visible")
+            ),
+            f64::from(super::XL_COPY)
+        );
         runtime
             .dispatch_set(shape_range, "Visible", OmValue::Bool(false), &[])
             .expect("set ShapeRange.Visible false");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after ShapeRange.Visible")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(delegated_search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after ShapeRange.Visible")
+                .code,
+            OmErrorCode::InvalidState
+        );
         assert_eq!(
             runtime
                 .dispatch_get(chart_object, "Visible", &[])
