@@ -113724,9 +113724,43 @@ mod tests {
                 .expect("second ChartObject.Top before increment"),
         );
 
+        let move_search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before ShapeRange.IncrementLeft"),
+        );
+        runtime
+            .dispatch_invoke(move_search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before ShapeRange.IncrementLeft");
+        runtime
+            .dispatch_invoke(move_search_range, "Copy", &[])
+            .expect("Range.Copy before ShapeRange.IncrementLeft");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before ShapeRange.IncrementLeft")
+            ),
+            f64::from(super::XL_COPY)
+        );
         runtime
             .dispatch_invoke(shape_range, "IncrementLeft", &[OmValue::Number(12.5)])
             .expect("ShapeRange.IncrementLeft");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after ShapeRange.IncrementLeft")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(move_search_range, "FindNext", &[])
+                .expect_err(
+                    "Range.FindNext should require a new Find after ShapeRange.IncrementLeft",
+                )
+                .code,
+            OmErrorCode::InvalidState
+        );
+
         runtime
             .dispatch_invoke(shape_range, "IncrementTop", &[OmValue::Number(-5.0)])
             .expect("ShapeRange.IncrementTop");
