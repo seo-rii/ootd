@@ -4321,6 +4321,9 @@ impl ExcelRuntime {
                                 }
                             }
                             runtime.dirty = true;
+                            self.find_state = None;
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
                         }
                         Ok(())
                     }
@@ -4344,6 +4347,9 @@ impl ExcelRuntime {
                             .set_hidden_by_id(name_id, !visible)?
                         {
                             runtime.dirty = true;
+                            self.find_state = None;
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
                         }
                         Ok(())
                     }
@@ -4416,6 +4422,9 @@ impl ExcelRuntime {
                                 }
                             }
                             runtime.dirty = true;
+                            self.find_state = None;
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
                         }
                         Ok(())
                     }
@@ -20544,6 +20553,9 @@ impl ExcelRuntime {
                         }
                     }
                     runtime.dirty = true;
+                    self.find_state = None;
+                    self.cut_copy_mode = None;
+                    self.clipboard = None;
                     name_id
                 };
                 Ok(OmValue::Object(
@@ -20698,6 +20710,9 @@ impl ExcelRuntime {
                     }
                 }
                 runtime.dirty = true;
+                self.find_state = None;
+                self.cut_copy_mode = None;
+                self.clipboard = None;
                 Ok(OmValue::Empty)
             }
             _ => Err(OmError::unsupported(format!(
@@ -70826,9 +70841,40 @@ mod tests {
             assert_eq!(quoted_range.areas()[0].rect.col_last, 2);
         }
 
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before Name.Delete"),
+        );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before Name.Delete");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Name.Delete");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Name.Delete")
+            ),
+            f64::from(super::XL_COPY)
+        );
         runtime
             .dispatch_invoke(name, "Delete", &[])
             .expect("Name.Delete");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Name.Delete")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after Name.Delete")
+                .code,
+            OmErrorCode::InvalidState
+        );
 
         assert_eq!(
             runtime
@@ -71029,6 +71075,25 @@ mod tests {
                 .dispatch_get(workbook.0, "Names", &[])
                 .expect("Workbook.Names"),
         );
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before Names.Add"),
+        );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before Names.Add");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Names.Add");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Names.Add")
+            ),
+            f64::from(super::XL_COPY)
+        );
         runtime
             .dispatch_invoke(
                 workbook_names,
@@ -71039,6 +71104,18 @@ mod tests {
                 ],
             )
             .expect("Workbook.Names.Add SeriesValues");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Names.Add")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after Names.Add")
+                .code,
+            OmErrorCode::InvalidState
+        );
         let worksheet_names = expect_object_handle(
             runtime
                 .dispatch_get(worksheet, "Names", &[])
@@ -71364,6 +71441,11 @@ mod tests {
     fn name_visible_setter_updates_hidden_metadata() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime.create_workbook().expect("workbook");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
 
         let names = expect_object_handle(
             runtime
@@ -71388,9 +71470,40 @@ mod tests {
                 .expect("Name.Visible before set")
         ));
 
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before Name.Visible"),
+        );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before Name.Visible");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Name.Visible");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Name.Visible")
+            ),
+            f64::from(super::XL_COPY)
+        );
         runtime
             .dispatch_set(name, "Visible", OmValue::Bool(false), &[])
             .expect("Name.Visible false");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Name.Visible")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after Name.Visible")
+                .code,
+            OmErrorCode::InvalidState
+        );
         assert!(!expect_bool(
             runtime
                 .dispatch_get(name, "Visible", &[])
@@ -71469,6 +71582,11 @@ mod tests {
     fn name_refers_to_setters_update_source_and_range() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime.create_workbook().expect("workbook");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
 
         let names = expect_object_handle(
             runtime
@@ -71491,6 +71609,25 @@ mod tests {
         runtime
             .dispatch_set(workbook.0, "Saved", OmValue::Bool(true), &[])
             .expect("clear dirty state before RefersTo set");
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before Name.RefersTo"),
+        );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before Name.RefersTo");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Name.RefersTo");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Name.RefersTo")
+            ),
+            f64::from(super::XL_COPY)
+        );
         runtime
             .dispatch_set(
                 name,
@@ -71499,6 +71636,18 @@ mod tests {
                 &[],
             )
             .expect("Name.RefersTo set");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Name.RefersTo")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after Name.RefersTo")
+                .code,
+            OmErrorCode::InvalidState
+        );
         assert_eq!(
             expect_text(
                 runtime
