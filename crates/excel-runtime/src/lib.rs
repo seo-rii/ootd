@@ -125376,6 +125376,43 @@ mod tests {
                 .expect("first DataLabel.ShowValue after second label set"),
             OmValue::Bool(true)
         );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before DataLabel.NumberFormatLinked");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before DataLabel.NumberFormatLinked");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before DataLabel.NumberFormatLinked")
+            ),
+            f64::from(super::XL_COPY)
+        );
+        runtime
+            .dispatch_set(second_label, "NumberFormatLinked", OmValue::Bool(true), &[])
+            .expect("DataLabel.NumberFormatLinked = true");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after DataLabel.NumberFormatLinked")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err(
+                    "Range.FindNext should require a new Find after DataLabel.NumberFormatLinked",
+                )
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(second_label, "NumberFormatLinked", &[])
+                .expect("DataLabel.NumberFormatLinked after set"),
+            OmValue::Bool(true)
+        );
         assert_eq!(
             runtime
                 .dispatch_set(
@@ -125439,7 +125476,7 @@ mod tests {
             second_point_labels.number_format.as_deref(),
             Some("#,##0.00")
         );
-        assert_eq!(second_point_labels.number_format_linked, Some(false));
+        assert_eq!(second_point_labels.number_format_linked, Some(true));
         assert_eq!(
             second_point_labels.position,
             Some(ChartDataLabelPosition::Center)
@@ -125574,7 +125611,7 @@ mod tests {
         )
         .expect("saved chart xml utf8");
         assert!(saved_chart_xml.contains(
-            r##"<c:dLbl><c:idx val="1"/><c:numFmt formatCode="#,##0.00" sourceLinked="0"/><c:dLblPos val="ctr"/><c:showLeaderLines val="1"/><c:showCatName val="1"/><c:showVal val="0"/><c:separator> * </c:separator></c:dLbl>"##
+            r##"<c:dLbl><c:idx val="1"/><c:numFmt formatCode="#,##0.00" sourceLinked="1"/><c:dLblPos val="ctr"/><c:showLeaderLines val="1"/><c:showCatName val="1"/><c:showVal val="0"/><c:separator> * </c:separator></c:dLbl>"##
         ));
         assert!(saved_chart_xml.contains(
             r#"<c:dLbl><c:idx val="2"/><c:showLegendKey val="0"/><c:showLeaderLines val="0"/><c:showSerName val="0"/><c:showCatName val="0"/><c:showVal val="0"/><c:showPercent val="0"/><c:showBubbleSize val="0"/></c:dLbl>"#
@@ -125673,7 +125710,7 @@ mod tests {
             reopened_runtime
                 .dispatch_get(reopened_second_label, "NumberFormatLinked", &[])
                 .expect("reopened DataLabel.NumberFormatLinked"),
-            OmValue::Bool(false)
+            OmValue::Bool(true)
         );
         assert_eq!(
             expect_number(
