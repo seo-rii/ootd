@@ -120858,9 +120858,42 @@ mod tests {
                 .code,
             OmErrorCode::TypeMismatch
         );
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before Chart.ShowDataLabelsOverMaximum true"),
+        );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before Chart.ShowDataLabelsOverMaximum true");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Chart.ShowDataLabelsOverMaximum true");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Chart.ShowDataLabelsOverMaximum true")
+            ),
+            f64::from(super::XL_COPY)
+        );
         runtime
             .dispatch_set(chart, "ShowDataLabelsOverMaximum", OmValue::Bool(true), &[])
             .expect("set Chart.ShowDataLabelsOverMaximum true");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Chart.ShowDataLabelsOverMaximum true")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err(
+                    "Range.FindNext should require a new Find after Chart.ShowDataLabelsOverMaximum true",
+                )
+                .code,
+            OmErrorCode::InvalidState
+        );
         assert_eq!(
             runtime
                 .dispatch_get(chart, "ShowDataLabelsOverMaximum", &[])
@@ -120924,6 +120957,35 @@ mod tests {
                 .expect("reopened Chart.ShowDataLabelsOverMaximum after true"),
             OmValue::Bool(true)
         );
+        let reopened_search_range = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(
+                    reopened_worksheet,
+                    "Range",
+                    &[OmValue::Text("A1:B3".to_string())],
+                )
+                .expect(
+                    "reopened Worksheet.Range(A1:B3) before Chart.ShowDataLabelsOverMaximum false",
+                ),
+        );
+        reopened_runtime
+            .dispatch_invoke(
+                reopened_search_range,
+                "Find",
+                &[OmValue::Text("1".to_string())],
+            )
+            .expect("Range.Find before Chart.ShowDataLabelsOverMaximum false");
+        reopened_runtime
+            .dispatch_invoke(reopened_search_range, "Copy", &[])
+            .expect("Range.Copy before Chart.ShowDataLabelsOverMaximum false");
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Chart.ShowDataLabelsOverMaximum false")
+            ),
+            f64::from(super::XL_COPY)
+        );
         reopened_runtime
             .dispatch_set(
                 reopened_chart,
@@ -120932,6 +120994,20 @@ mod tests {
                 &[],
             )
             .expect("set Chart.ShowDataLabelsOverMaximum false");
+        assert!(!expect_bool(
+            reopened_runtime
+                .dispatch_get(reopened_runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Chart.ShowDataLabelsOverMaximum false")
+        ));
+        assert_eq!(
+            reopened_runtime
+                .dispatch_invoke(reopened_search_range, "FindNext", &[])
+                .expect_err(
+                    "Range.FindNext should require a new Find after Chart.ShowDataLabelsOverMaximum false",
+                )
+                .code,
+            OmErrorCode::InvalidState
+        );
 
         let disabled_saved = reopened_runtime
             .save_workbook(
