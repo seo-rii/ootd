@@ -30145,6 +30145,9 @@ impl ExcelRuntime {
                     }
                 }
             }
+            self.find_state = None;
+            self.cut_copy_mode = None;
+            self.clipboard = None;
 
             let copied_name = {
                 let worksheets = &self
@@ -157737,10 +157740,42 @@ mod tests {
                 .dispatch_get(workbook.0, "Worksheets", &[])
                 .expect("Workbook.Worksheets"),
         );
+        let application = runtime.root_application();
         let sheet1 = expect_object_handle(
             runtime
                 .dispatch_invoke(worksheets, "Item", &[OmValue::Number(1.0)])
                 .expect("Worksheets.Item(1)"),
+        );
+        let source_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(sheet1, "Range", &[OmValue::Text("A1".to_string())])
+                .expect("Sheet1.Range(A1) before embedded chart Worksheet.Copy"),
+        );
+        runtime
+            .dispatch_set(
+                source_range,
+                "Value",
+                OmValue::Text("embedded copy needle".to_string()),
+                &[],
+            )
+            .expect("seed Range.Find value before embedded chart Worksheet.Copy");
+        runtime
+            .dispatch_invoke(source_range, "Copy", &[])
+            .expect("Range.Copy before embedded chart Worksheet.Copy");
+        runtime
+            .dispatch_invoke(
+                source_range,
+                "Find",
+                &[OmValue::Text("embedded copy needle".to_string())],
+            )
+            .expect("Range.Find before embedded chart Worksheet.Copy");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(application, "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before embedded chart Worksheet.Copy")
+            ),
+            f64::from(super::XL_COPY)
         );
 
         assert!(matches!(
@@ -157749,6 +157784,20 @@ mod tests {
                 .expect("Worksheet.Copy After:=1 on embedded chart sheet"),
             OmValue::Empty
         ));
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(application, "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after embedded chart Worksheet.Copy")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(source_range, "FindNext", &[])
+                .expect_err(
+                    "Range.FindNext should require a new Find after embedded chart Worksheet.Copy",
+                )
+                .code,
+            OmErrorCode::InvalidState
+        );
 
         let saved = runtime
             .save_workbook(
