@@ -5239,6 +5239,9 @@ impl ExcelRuntime {
                         if changed {
                             chart.dirty = true;
                             runtime.dirty = true;
+                            self.find_state = None;
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
                         }
                         Ok(())
                     }
@@ -6857,6 +6860,9 @@ impl ExcelRuntime {
                             axis.tick_label_position = Some(tick_label_position);
                             chart.dirty = true;
                             runtime.dirty = true;
+                            self.find_state = None;
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
                         }
                         Ok(())
                     }
@@ -115462,6 +115468,25 @@ mod tests {
                 &[],
             )
             .expect("set ChartGroup.AxisGroup xlPrimary");
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before ChartGroup.AxisGroup"),
+        );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before ChartGroup.AxisGroup");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before ChartGroup.AxisGroup");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before ChartGroup.AxisGroup")
+            ),
+            f64::from(super::XL_COPY)
+        );
         runtime
             .dispatch_set(
                 chart_group,
@@ -115470,6 +115495,18 @@ mod tests {
                 &[],
             )
             .expect("set ChartGroup.AxisGroup xlSecondary");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after ChartGroup.AxisGroup")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after ChartGroup.AxisGroup")
+                .code,
+            OmErrorCode::InvalidState
+        );
         assert_eq!(
             expect_number(
                 runtime
@@ -116464,9 +116501,42 @@ mod tests {
                 .code,
             OmErrorCode::TypeMismatch
         );
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before ChartGroup.HasRadarAxisLabels"),
+        );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before ChartGroup.HasRadarAxisLabels");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before ChartGroup.HasRadarAxisLabels");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before ChartGroup.HasRadarAxisLabels")
+            ),
+            f64::from(super::XL_COPY)
+        );
         runtime
             .dispatch_set(chart_group, "HasRadarAxisLabels", OmValue::Bool(false), &[])
             .expect("set ChartGroup.HasRadarAxisLabels false");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after ChartGroup.HasRadarAxisLabels")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err(
+                    "Range.FindNext should require a new Find after ChartGroup.HasRadarAxisLabels"
+                )
+                .code,
+            OmErrorCode::InvalidState
+        );
         assert!(!expect_bool(
             runtime
                 .dispatch_get(chart_group, "HasRadarAxisLabels", &[])
