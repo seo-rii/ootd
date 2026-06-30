@@ -116835,64 +116835,49 @@ mod tests {
                     .expect("ChartGroup numeric setting"),
                 OmValue::Number(loaded)
             );
-            let search_range = if matches!(member, "BubbleScale" | "SecondPlotSize") {
-                let search_range = expect_object_handle(
-                    runtime
-                        .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
-                        .unwrap_or_else(|error| {
-                            panic!("Worksheet.Range(A1:B3) before ChartGroup.{member}: {error:?}")
-                        }),
-                );
+            let search_range = expect_object_handle(
                 runtime
-                    .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+                    .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
                     .unwrap_or_else(|error| {
-                        panic!("Range.Find before ChartGroup.{member}: {error:?}")
-                    });
-                runtime
-                    .dispatch_invoke(search_range, "Copy", &[])
-                    .unwrap_or_else(|error| {
-                        panic!("Range.Copy before ChartGroup.{member}: {error:?}")
-                    });
-                assert_eq!(
-                    expect_number(
-                        runtime
-                            .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
-                            .unwrap_or_else(|error| {
-                                panic!(
-                                    "Application.CutCopyMode before ChartGroup.{member}: {error:?}"
-                                )
-                            })
-                    ),
-                    f64::from(super::XL_COPY)
-                );
-                Some(search_range)
-            } else {
-                None
-            };
+                        panic!("Worksheet.Range(A1:B3) before ChartGroup.{member}: {error:?}")
+                    }),
+            );
             runtime
-                .dispatch_set(chart_group, member, OmValue::Number(updated), &[])
-                .expect("set ChartGroup numeric setting");
-            if let Some(search_range) = search_range {
-                assert!(!expect_bool(
+                .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+                .unwrap_or_else(|error| panic!("Range.Find before ChartGroup.{member}: {error:?}"));
+            runtime
+                .dispatch_invoke(search_range, "Copy", &[])
+                .unwrap_or_else(|error| panic!("Range.Copy before ChartGroup.{member}: {error:?}"));
+            assert_eq!(
+                expect_number(
                     runtime
                         .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
                         .unwrap_or_else(|error| {
-                            panic!("Application.CutCopyMode after ChartGroup.{member}: {error:?}")
+                            panic!("Application.CutCopyMode before ChartGroup.{member}: {error:?}")
                         })
-                ));
-                assert_eq!(
-                    runtime
-                        .dispatch_invoke(search_range, "FindNext", &[])
-                        .err()
-                        .unwrap_or_else(|| {
-                            panic!(
-                                "Range.FindNext should require a new Find after ChartGroup.{member}"
-                            )
-                        })
-                        .code,
-                    OmErrorCode::InvalidState
-                );
-            }
+                ),
+                f64::from(super::XL_COPY)
+            );
+            runtime
+                .dispatch_set(chart_group, member, OmValue::Number(updated), &[])
+                .expect("set ChartGroup numeric setting");
+            assert!(!expect_bool(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .unwrap_or_else(|error| {
+                        panic!("Application.CutCopyMode after ChartGroup.{member}: {error:?}")
+                    })
+            ));
+            assert_eq!(
+                runtime
+                    .dispatch_invoke(search_range, "FindNext", &[])
+                    .err()
+                    .unwrap_or_else(|| {
+                        panic!("Range.FindNext should require a new Find after ChartGroup.{member}")
+                    })
+                    .code,
+                OmErrorCode::InvalidState
+            );
             assert_eq!(
                 runtime
                     .dispatch_get(chart_group, member, &[])
