@@ -7615,6 +7615,9 @@ impl ExcelRuntime {
                                 chart.style = Some(chart_style);
                                 chart.dirty = true;
                                 runtime.dirty = true;
+                                self.find_state = None;
+                                self.cut_copy_mode = None;
+                                self.clipboard = None;
                             }
                         }
                         Ok(())
@@ -7739,6 +7742,9 @@ impl ExcelRuntime {
                             chart.view_3d_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
+                            self.find_state = None;
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
                         }
                         Ok(())
                     }
@@ -7771,6 +7777,9 @@ impl ExcelRuntime {
                             chart.gap_depth = Some(value);
                             chart.dirty = true;
                             runtime.dirty = true;
+                            self.find_state = None;
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
                         }
                         Ok(())
                     }
@@ -7802,6 +7811,9 @@ impl ExcelRuntime {
                             chart.chart_type = chart_type;
                             chart.dirty = true;
                             runtime.dirty = true;
+                            self.find_state = None;
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
                         }
                         Ok(())
                     }
@@ -7834,6 +7846,9 @@ impl ExcelRuntime {
                             chart.view_3d_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
+                            self.find_state = None;
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
                         }
                         Ok(())
                     }
@@ -7869,6 +7884,9 @@ impl ExcelRuntime {
                                 chart.display_blanks_as = Some(display_blanks_as);
                                 chart.dirty = true;
                                 runtime.dirty = true;
+                                self.find_state = None;
+                                self.cut_copy_mode = None;
+                                self.clipboard = None;
                             }
                         }
                         Ok(())
@@ -7894,6 +7912,9 @@ impl ExcelRuntime {
                                 chart.plot_visible_only = Some(plot_visible_only);
                                 chart.dirty = true;
                                 runtime.dirty = true;
+                                self.find_state = None;
+                                self.cut_copy_mode = None;
+                                self.clipboard = None;
                             }
                         }
                         Ok(())
@@ -7919,6 +7940,9 @@ impl ExcelRuntime {
                                 chart.show_data_labels_over_maximum = Some(show_data_labels);
                                 chart.dirty = true;
                                 runtime.dirty = true;
+                                self.find_state = None;
+                                self.cut_copy_mode = None;
+                                self.clipboard = None;
                             }
                         }
                         Ok(())
@@ -8109,6 +8133,9 @@ impl ExcelRuntime {
                             title.text = text;
                             chart.dirty = true;
                             runtime.dirty = true;
+                            self.find_state = None;
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
                         }
                         Ok(())
                     }
@@ -118376,6 +118403,29 @@ mod tests {
                 .dispatch_get(chart, "ChartTitle", &[])
                 .expect("Chart.ChartTitle"),
         );
+        let chart_content_search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before ChartTitle.Text"),
+        );
+        runtime
+            .dispatch_invoke(
+                chart_content_search_range,
+                "Find",
+                &[OmValue::Text("1".to_string())],
+            )
+            .expect("Range.Find before ChartTitle.Text");
+        runtime
+            .dispatch_invoke(chart_content_search_range, "Copy", &[])
+            .expect("Range.Copy before ChartTitle.Text");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before ChartTitle.Text")
+            ),
+            f64::from(super::XL_COPY)
+        );
         runtime
             .dispatch_set(
                 chart_title,
@@ -118384,6 +118434,18 @@ mod tests {
                 &[],
             )
             .expect("set loaded ChartTitle.Text");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after ChartTitle.Text")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart_content_search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after ChartTitle.Text")
+                .code,
+            OmErrorCode::InvalidState
+        );
         let legend = expect_object_handle(
             runtime
                 .dispatch_get(chart, "Legend", &[])
@@ -118494,8 +118556,38 @@ mod tests {
             )
             .expect("set loaded Chart.DisplayBlanksAs");
         runtime
+            .dispatch_invoke(
+                chart_content_search_range,
+                "Find",
+                &[OmValue::Text("1".to_string())],
+            )
+            .expect("Range.Find before Chart.ChartStyle");
+        runtime
+            .dispatch_invoke(chart_content_search_range, "Copy", &[])
+            .expect("Range.Copy before Chart.ChartStyle");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Chart.ChartStyle")
+            ),
+            f64::from(super::XL_COPY)
+        );
+        runtime
             .dispatch_set(chart, "ChartStyle", OmValue::Number(8.0), &[])
             .expect("set loaded Chart.ChartStyle");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Chart.ChartStyle")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart_content_search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after Chart.ChartStyle")
+                .code,
+            OmErrorCode::InvalidState
+        );
         assert_eq!(
             runtime
                 .dispatch_set(chart, "PlotVisibleOnly", OmValue::Number(0.0), &[])
