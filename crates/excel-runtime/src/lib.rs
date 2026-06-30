@@ -16775,6 +16775,9 @@ impl ExcelRuntime {
                     if changed {
                         chart.dirty = true;
                         runtime.dirty = true;
+                        self.find_state = None;
+                        self.cut_copy_mode = None;
+                        self.clipboard = None;
                     }
                     Ok(OmValue::Empty)
                 }
@@ -16865,6 +16868,9 @@ impl ExcelRuntime {
                     if changed {
                         chart.dirty = true;
                         runtime.dirty = true;
+                        self.find_state = None;
+                        self.cut_copy_mode = None;
+                        self.clipboard = None;
                     }
                     Ok(OmValue::Empty)
                 }
@@ -16918,6 +16924,9 @@ impl ExcelRuntime {
                             series.point_data_labels.clear();
                             chart.dirty = true;
                             runtime.dirty = true;
+                            self.find_state = None;
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
                         }
                     } else {
                         let point_index = u32::try_from(index - 1).map_err(|_| {
@@ -16945,6 +16954,9 @@ impl ExcelRuntime {
                         if changed {
                             chart.dirty = true;
                             runtime.dirty = true;
+                            self.find_state = None;
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
                         }
                     }
                     Ok(OmValue::Empty)
@@ -16992,6 +17004,9 @@ impl ExcelRuntime {
                         series.point_data_labels.insert(point_index, replacement);
                         chart.dirty = true;
                         runtime.dirty = true;
+                        self.find_state = None;
+                        self.cut_copy_mode = None;
+                        self.clipboard = None;
                     }
                     Ok(OmValue::Empty)
                 }
@@ -17073,6 +17088,9 @@ impl ExcelRuntime {
                     if changed {
                         chart.dirty = true;
                         runtime.dirty = true;
+                        self.find_state = None;
+                        self.cut_copy_mode = None;
+                        self.clipboard = None;
                     }
                     Ok(OmValue::Empty)
                 }
@@ -121016,11 +121034,44 @@ mod tests {
                 &[],
             )
             .expect("DataLabel.Position point override");
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before DataLabels.ClearFormats"),
+        );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before DataLabels.ClearFormats");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before DataLabels.ClearFormats");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before DataLabels.ClearFormats")
+            ),
+            f64::from(super::XL_COPY)
+        );
         assert_eq!(
             runtime
                 .dispatch_invoke(data_labels, "ClearFormats", &[])
                 .expect("DataLabels.ClearFormats"),
             OmValue::Empty
+        );
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after DataLabels.ClearFormats")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err(
+                    "Range.FindNext should require a new Find after DataLabels.ClearFormats"
+                )
+                .code,
+            OmErrorCode::InvalidState
         );
         assert_eq!(
             runtime
@@ -122651,9 +122702,40 @@ mod tests {
             ),
             "Embedded Revenue Chart"
         );
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before DataLabel.Delete"),
+        );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before DataLabel.Delete");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before DataLabel.Delete");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before DataLabel.Delete")
+            ),
+            f64::from(super::XL_COPY)
+        );
         runtime
             .dispatch_invoke(third_label, "Delete", &[])
             .expect("DataLabel.Delete");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after DataLabel.Delete")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after DataLabel.Delete")
+                .code,
+            OmErrorCode::InvalidState
+        );
         assert_eq!(
             runtime
                 .dispatch_get(third_point, "HasDataLabel", &[])
@@ -122928,12 +123010,43 @@ mod tests {
                 &[],
             )
             .expect("DataLabel.Position = center");
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before DataLabel.ClearFormats"),
+        );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before DataLabel.ClearFormats");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before DataLabel.ClearFormats");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before DataLabel.ClearFormats")
+            ),
+            f64::from(super::XL_COPY)
+        );
 
         assert_eq!(
             runtime
                 .dispatch_invoke(second_label, "ClearFormats", &[])
                 .expect("DataLabel.ClearFormats"),
             OmValue::Empty
+        );
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after DataLabel.ClearFormats")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after DataLabel.ClearFormats")
+                .code,
+            OmErrorCode::InvalidState
         );
         assert_eq!(
             runtime
@@ -123234,9 +123347,40 @@ mod tests {
         runtime
             .dispatch_set(second_label, "ShowCategoryName", OmValue::Bool(true), &[])
             .expect("DataLabel.ShowCategoryName = true again");
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before DataLabels.Delete"),
+        );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before DataLabels.Delete");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before DataLabels.Delete");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before DataLabels.Delete")
+            ),
+            f64::from(super::XL_COPY)
+        );
         runtime
             .dispatch_invoke(data_labels, "Delete", &[])
             .expect("DataLabels.Delete");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after DataLabels.Delete")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after DataLabels.Delete")
+                .code,
+            OmErrorCode::InvalidState
+        );
         assert_eq!(
             runtime
                 .dispatch_get(series, "HasDataLabels", &[])
@@ -123602,9 +123746,42 @@ mod tests {
             OmErrorCode::TypeMismatch
         );
 
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before DataLabels.Propagate(2)"),
+        );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before DataLabels.Propagate(2)");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before DataLabels.Propagate(2)");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before DataLabels.Propagate(2)")
+            ),
+            f64::from(super::XL_COPY)
+        );
         runtime
             .dispatch_invoke(data_labels, "Propagate", &[OmValue::Number(2.0)])
             .expect("DataLabels.Propagate(2)");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after DataLabels.Propagate(2)")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err(
+                    "Range.FindNext should require a new Find after DataLabels.Propagate(2)"
+                )
+                .code,
+            OmErrorCode::InvalidState
+        );
         for label in [first_label, second_label, third_label] {
             assert_eq!(
                 runtime
@@ -123632,8 +123809,36 @@ mod tests {
         }
 
         runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before DataLabels.Propagate(0)");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before DataLabels.Propagate(0)");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before DataLabels.Propagate(0)")
+            ),
+            f64::from(super::XL_COPY)
+        );
+        runtime
             .dispatch_invoke(data_labels, "Propagate", &[OmValue::Number(0.0)])
             .expect("DataLabels.Propagate(0)");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after DataLabels.Propagate(0)")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err(
+                    "Range.FindNext should require a new Find after DataLabels.Propagate(0)"
+                )
+                .code,
+            OmErrorCode::InvalidState
+        );
         assert_eq!(
             runtime
                 .dispatch_get(first_label, "ShowValue", &[])
