@@ -4495,6 +4495,11 @@ impl ExcelRuntime {
                         if workbook_dirty {
                             runtime.dirty = true;
                         }
+                        if workbook_dirty {
+                            self.find_state = None;
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
+                        }
                         if found {
                             Ok(())
                         } else {
@@ -4682,6 +4687,11 @@ impl ExcelRuntime {
                         }
                         if workbook_dirty {
                             runtime.dirty = true;
+                        }
+                        if workbook_dirty {
+                            self.find_state = None;
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
                         }
                         if found {
                             Ok(())
@@ -114305,9 +114315,40 @@ mod tests {
                 .dispatch_get(workbook.0, "Saved", &[])
                 .expect("Workbook.Saved after Chart.Name set")
         ));
+        let range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3)"),
+        );
+        runtime
+            .dispatch_invoke(range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before ChartObject.Left set");
+        runtime
+            .dispatch_invoke(range, "Copy", &[])
+            .expect("Range.Copy before ChartObject.Left set");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before ChartObject.Left set")
+            ),
+            f64::from(super::XL_COPY)
+        );
         runtime
             .dispatch_set(chart_object, "Left", OmValue::Number(8.0), &[])
             .expect("set ChartObject.Left");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after ChartObject.Left set")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after ChartObject.Left set")
+                .code,
+            OmErrorCode::InvalidState
+        );
         runtime
             .dispatch_set(chart_object, "Top", OmValue::Number(9.0), &[])
             .expect("set ChartObject.Top");
