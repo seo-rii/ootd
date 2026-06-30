@@ -17456,6 +17456,7 @@ impl ExcelRuntime {
                             | "Top"
                             | "Width"
                             | "Height"
+                            | "RoundedCorners"
                             | "Creator"
                             | "Application"
                             | "Parent"
@@ -67403,6 +67404,25 @@ mod tests {
             assert!(matches!(member.support, office_idl::SupportState::Stub));
             assert!(matches!(member.access, office_idl::AccessMode::Readwrite));
         }
+        let chart_area = runtime
+            .dispatch_registry()
+            .focus_surfaces
+            .iter()
+            .find(|surface| surface.name == "ChartArea")
+            .expect("ChartArea focus surface");
+        let rounded_corners = chart_area
+            .members
+            .iter()
+            .find(|member| member.name == "RoundedCorners")
+            .expect("ChartArea.RoundedCorners focus member");
+        assert!(matches!(
+            rounded_corners.support,
+            office_idl::SupportState::Stub
+        ));
+        assert!(matches!(
+            rounded_corners.access,
+            office_idl::AccessMode::Readwrite
+        ));
         let shape_range = runtime
             .dispatch_registry()
             .focus_surfaces
