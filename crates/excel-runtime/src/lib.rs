@@ -126947,9 +126947,42 @@ mod tests {
                 .expect("SeriesCollection.Item(1)"),
         );
 
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before Propagate setup Series.HasDataLabels"),
+        );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before Propagate setup Series.HasDataLabels");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Propagate setup Series.HasDataLabels");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Propagate setup Series.HasDataLabels")
+            ),
+            f64::from(super::XL_COPY)
+        );
         runtime
             .dispatch_set(series, "HasDataLabels", OmValue::Bool(true), &[])
             .expect("Series.HasDataLabels = true");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Propagate setup Series.HasDataLabels")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err(
+                    "Range.FindNext should require a new Find after Propagate setup Series.HasDataLabels",
+                )
+                .code,
+            OmErrorCode::InvalidState
+        );
         let data_labels = expect_object_handle(
             runtime
                 .dispatch_get(series, "DataLabels", &[])
