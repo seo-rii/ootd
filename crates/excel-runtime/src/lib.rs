@@ -17367,7 +17367,8 @@ impl ExcelRuntime {
                     )
                     | (
                         "Chart",
-                        "ChartType"
+                        "Name"
+                            | "ChartType"
                             | "ChartStyle"
                             | "Index"
                             | "BarShape"
@@ -17386,6 +17387,7 @@ impl ExcelRuntime {
                             | "ProtectData"
                             | "ProtectFormatting"
                             | "ProtectSelection"
+                            | "ProtectionMode"
                             | "ChartArea"
                             | "PlotArea"
                             | "HasTitle"
@@ -67267,6 +67269,29 @@ mod tests {
             .find(|member| member.name == "Location")
             .expect("Chart.Location focus member");
         assert!(matches!(location.support, office_idl::SupportState::Stub));
+        let chart_name = chart
+            .members
+            .iter()
+            .find(|member| member.name == "Name")
+            .expect("Chart.Name focus member");
+        assert!(matches!(chart_name.support, office_idl::SupportState::Stub));
+        assert!(matches!(
+            chart_name.access,
+            office_idl::AccessMode::Readwrite
+        ));
+        let protection_mode = chart
+            .members
+            .iter()
+            .find(|member| member.name == "ProtectionMode")
+            .expect("Chart.ProtectionMode focus member");
+        assert!(matches!(
+            protection_mode.support,
+            office_idl::SupportState::Stub
+        ));
+        assert!(matches!(
+            protection_mode.access,
+            office_idl::AccessMode::Read
+        ));
         let chart_object = runtime
             .dispatch_registry()
             .focus_surfaces

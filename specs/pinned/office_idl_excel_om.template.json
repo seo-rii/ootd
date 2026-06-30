@@ -8259,6 +8259,33 @@
       },
       "members": [
         {
+          "name": "Name",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "Name"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "string",
+                "aliasOf": "BSTR"
+              }
+            }
+          },
+          "access": "readwrite",
+          "returnType": {
+            "kind": "primitive",
+            "name": "string",
+            "aliasOf": "BSTR"
+          }
+        },
+        {
           "name": "ChartType",
           "memberKind": "property",
           "support": "stub",
@@ -8755,6 +8782,33 @@
                   "kind": "property_get",
                   "sourceInterface": "Chart",
                   "sourceMember": "ProtectSelection"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "bool",
+                "aliasOf": "VARIANT_BOOL"
+              }
+            }
+          },
+          "access": "read",
+          "returnType": {
+            "kind": "primitive",
+            "name": "bool",
+            "aliasOf": "VARIANT_BOOL"
+          }
+        },
+        {
+          "name": "ProtectionMode",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Chart",
+                  "sourceMember": "ProtectionMode"
                 }
               ],
               "typeInfo": {
