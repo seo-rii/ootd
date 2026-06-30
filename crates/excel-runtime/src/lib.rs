@@ -67625,7 +67625,23 @@ mod tests {
             .iter()
             .find(|surface| surface.name == "Series")
             .expect("Series focus surface");
-        for member_name in ["BarShape", "Smooth", "MarkerStyle", "MarkerSize"] {
+        for member_name in [
+            "Name",
+            "ChartType",
+            "Values",
+            "XValues",
+            "BubbleSizes",
+            "BarShape",
+            "Smooth",
+            "MarkerStyle",
+            "MarkerSize",
+            "Formula",
+            "AxisGroup",
+            "HasDataLabels",
+            "HasLeaderLines",
+            "PlotOrder",
+            "InvertIfNegative",
+        ] {
             let member = series
                 .members
                 .iter()
@@ -67633,6 +67649,113 @@ mod tests {
                 .unwrap_or_else(|| panic!("Series.{member_name} focus member"));
             assert!(matches!(member.support, office_idl::SupportState::Stub));
             assert!(matches!(member.access, office_idl::AccessMode::Readwrite));
+        }
+        for (surface_name, member_names) in [
+            (
+                "SeriesCollection",
+                &["Count", "Creator", "Application", "Parent"][..],
+            ),
+            (
+                "Series",
+                &[
+                    "Format",
+                    "DataLabels",
+                    "Points",
+                    "Creator",
+                    "Application",
+                    "Parent",
+                ][..],
+            ),
+            (
+                "DataLabels",
+                &[
+                    "Name",
+                    "Format",
+                    "Count",
+                    "Creator",
+                    "Application",
+                    "Parent",
+                ][..],
+            ),
+            (
+                "DataLabel",
+                &[
+                    "Name",
+                    "Format",
+                    "Index",
+                    "Creator",
+                    "Application",
+                    "Parent",
+                ][..],
+            ),
+            ("Points", &["Count", "Creator", "Application", "Parent"][..]),
+            (
+                "Point",
+                &[
+                    "Name",
+                    "Format",
+                    "Index",
+                    "DataLabel",
+                    "Creator",
+                    "Application",
+                    "Parent",
+                ][..],
+            ),
+        ] {
+            let surface = runtime
+                .dispatch_registry()
+                .focus_surfaces
+                .iter()
+                .find(|surface| surface.name == surface_name)
+                .unwrap_or_else(|| panic!("{surface_name} focus surface"));
+            for member_name in member_names {
+                let member = surface
+                    .members
+                    .iter()
+                    .find(|member| member.name == *member_name)
+                    .unwrap_or_else(|| panic!("{surface_name}.{member_name} focus member"));
+                assert!(matches!(member.support, office_idl::SupportState::Stub));
+                assert!(matches!(member.access, office_idl::AccessMode::Read));
+            }
+        }
+        for (surface_name, member_names) in [
+            ("SeriesCollection", &["Item", "NewSeries", "Add"][..]),
+            (
+                "Series",
+                &[
+                    "Select",
+                    "ApplyDataLabels",
+                    "ClearFormats",
+                    "Copy",
+                    "Paste",
+                    "Delete",
+                ][..],
+            ),
+            (
+                "DataLabels",
+                &["Item", "Delete", "Propagate", "Select", "ClearFormats"][..],
+            ),
+            ("DataLabel", &["Delete", "Select", "ClearFormats"][..]),
+            ("Points", &["Item"][..]),
+            (
+                "Point",
+                &["ApplyDataLabels", "Copy", "Select", "ClearFormats"][..],
+            ),
+        ] {
+            let surface = runtime
+                .dispatch_registry()
+                .focus_surfaces
+                .iter()
+                .find(|surface| surface.name == surface_name)
+                .unwrap_or_else(|| panic!("{surface_name} focus surface"));
+            for member_name in member_names {
+                let member = surface
+                    .members
+                    .iter()
+                    .find(|member| member.name == *member_name)
+                    .unwrap_or_else(|| panic!("{surface_name}.{member_name} focus member"));
+                assert!(matches!(member.support, office_idl::SupportState::Stub));
+            }
         }
         for (surface_name, member_names) in [
             (
