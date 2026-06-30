@@ -145159,14 +145159,32 @@ mod tests {
                 .dispatch_get(chart, "SeriesCollection", &[])
                 .expect("Chart.SeriesCollection"),
         );
-        runtime
-            .dispatch_invoke(series_collection, "NewSeries", &[])
-            .expect("SeriesCollection.NewSeries first");
+        let first_series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "NewSeries", &[])
+                .expect("SeriesCollection.NewSeries first"),
+        );
         let second_series = expect_object_handle(
             runtime
                 .dispatch_invoke(series_collection, "NewSeries", &[])
                 .expect("SeriesCollection.NewSeries second"),
         );
+        runtime
+            .dispatch_set(
+                first_series,
+                "Name",
+                OmValue::Text("Primary Axis Series".to_string()),
+                &[],
+            )
+            .expect("set first Series.Name");
+        runtime
+            .dispatch_set(
+                second_series,
+                "Name",
+                OmValue::Text("Secondary Axis Series".to_string()),
+                &[],
+            )
+            .expect("set second Series.Name");
         runtime
             .dispatch_set(
                 second_series,
@@ -145240,14 +145258,42 @@ mod tests {
             ),
             1.0
         );
+        let primary_group_series_by_name = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    primary_group_series_collection,
+                    "Item",
+                    &[OmValue::Text("Primary Axis Series".to_string())],
+                )
+                .expect("primary ChartGroup.SeriesCollection.Item by name"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(primary_group_series_by_name, "AxisGroup", &[])
+                    .expect("primary group named Series.AxisGroup")
+            ),
+            f64::from(super::XL_PRIMARY)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    primary_group_series_collection,
+                    "Item",
+                    &[OmValue::Text("Secondary Axis Series".to_string())],
+                )
+                .expect_err("primary ChartGroup.SeriesCollection should not find secondary name")
+                .code,
+            OmErrorCode::NotFound
+        );
         let secondary_group_series = expect_object_handle(
             runtime
                 .dispatch_invoke(
                     secondary_group_series_collection,
                     "Item",
-                    &[OmValue::Number(1.0)],
+                    &[OmValue::Text("Secondary Axis Series".to_string())],
                 )
-                .expect("secondary ChartGroup.SeriesCollection.Item(1)"),
+                .expect("secondary ChartGroup.SeriesCollection.Item by name"),
         );
         assert_eq!(
             expect_number(
@@ -145278,10 +145324,8 @@ mod tests {
         )
         .expect("saved chart xml utf8");
         assert!(saved_chart_xml.contains(r#"</c:barChart><c:barChart>"#));
-        assert!(saved_chart_xml.contains(
-            r#"<c:ser><c:idx val="0"/><c:order val="0"/></c:ser><c:axId val="10"/><c:axId val="20"/></c:barChart>"#
-        ));
-        assert!(saved_chart_xml.contains(r#"<c:ser><c:idx val="1"/><c:order val="1"/></c:ser>"#));
+        assert!(saved_chart_xml.contains(r#"<c:axId val="10"/><c:axId val="20"/></c:barChart>"#));
+        assert!(saved_chart_xml.contains(r#"<c:idx val="1"/><c:order val="1"/>"#));
         assert!(saved_chart_xml.contains(r#"<c:axId val="10"/><c:axId val="50"/></c:barChart>"#));
 
         let mut reopened_runtime = ExcelRuntime::new();
