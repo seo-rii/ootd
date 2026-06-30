@@ -7461,6 +7461,11 @@ impl ExcelRuntime {
                             if workbook_dirty {
                                 runtime.dirty = true;
                             }
+                            if found && workbook_dirty {
+                                self.find_state = None;
+                                self.cut_copy_mode = None;
+                                self.clipboard = None;
+                            }
                             return if found {
                                 Ok(())
                             } else {
@@ -27738,6 +27743,9 @@ impl ExcelRuntime {
                             )?;
                             runtime.dirty = true;
                         }
+                        self.find_state = None;
+                        self.cut_copy_mode = None;
+                        self.clipboard = None;
                         self.set_selection(workbook, active_sheet_id, Rect::single_cell(1, 1));
                         return Ok(OmValue::Empty);
                     }
@@ -28862,6 +28870,9 @@ impl ExcelRuntime {
         let sheet_id = last_sheet_id.expect("Worksheets.Add count should be positive");
 
         self.invalidate_workbook_calc_chain(workbook)?;
+        self.find_state = None;
+        self.cut_copy_mode = None;
+        self.clipboard = None;
         self.set_selection(workbook, sheet_id, Rect::single_cell(1, 1));
         Ok(self.register_worksheet_handle(workbook, sheet_id))
     }
@@ -30287,6 +30298,9 @@ impl ExcelRuntime {
             )?,
         )?;
         runtime.dirty = true;
+        self.find_state = None;
+        self.cut_copy_mode = None;
+        self.clipboard = None;
 
         Ok(())
     }
@@ -30973,6 +30987,9 @@ impl ExcelRuntime {
         if deleted_was_active {
             self.set_selection(workbook, replacement_sheet_id, Rect::single_cell(1, 1));
         }
+        self.find_state = None;
+        self.cut_copy_mode = None;
+        self.clipboard = None;
         if let Some((chart_workbook, chart_id, _)) = self.active_chart
             && chart_workbook == workbook
             && self.chart_model(workbook, chart_id).is_err()
@@ -103749,11 +103766,54 @@ mod tests {
                 .dispatch_get(application, "ActiveSheet", &[])
                 .expect("ActiveSheet before add"),
         );
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(original_sheet, "Range", &[OmValue::Text("A1".to_string())])
+                .expect("search range before Worksheets.Add"),
+        );
+        runtime
+            .dispatch_set(
+                search_range,
+                "Value",
+                OmValue::Text("add needle".to_string()),
+                &[],
+            )
+            .expect("seed Range.Find value before Worksheets.Add");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Worksheets.Add");
+        runtime
+            .dispatch_invoke(
+                search_range,
+                "Find",
+                &[OmValue::Text("add needle".to_string())],
+            )
+            .expect("Range.Find before Worksheets.Add");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(application, "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Worksheets.Add")
+            ),
+            f64::from(super::XL_COPY)
+        );
 
         let added_sheet = expect_object_handle(
             runtime
                 .dispatch_invoke(worksheets, "Add", &[])
                 .expect("Worksheets.Add"),
+        );
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(application, "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Worksheets.Add")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after Worksheets.Add")
+                .code,
+            OmErrorCode::InvalidState
         );
 
         assert_eq!(
@@ -115291,6 +115351,20 @@ mod tests {
             OmValue::Bool(false)
         );
         runtime
+            .dispatch_invoke(visible_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before Chart.Name set");
+        runtime
+            .dispatch_invoke(visible_range, "Copy", &[])
+            .expect("Range.Copy before Chart.Name set");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Chart.Name set")
+            ),
+            f64::from(super::XL_COPY)
+        );
+        runtime
             .dispatch_set(
                 chart_for_name,
                 "Name",
@@ -115298,6 +115372,18 @@ mod tests {
                 &[],
             )
             .expect("set embedded Chart.Name");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Chart.Name set")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(visible_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after Chart.Name set")
+                .code,
+            OmErrorCode::InvalidState
+        );
         assert_eq!(
             expect_text(
                 runtime
@@ -155630,7 +155716,7 @@ mod tests {
                 .dispatch_get(workbook.0, "Worksheets", &[])
                 .expect("Workbook.Worksheets"),
         );
-        let _sheet2 = expect_object_handle(
+        let sheet2 = expect_object_handle(
             runtime
                 .dispatch_invoke(worksheets, "Add", &[])
                 .expect("Worksheets.Add Sheet2"),
@@ -155670,12 +155756,55 @@ mod tests {
         runtime
             .dispatch_set(application, "DisplayAlerts", OmValue::Bool(false), &[])
             .expect("Application.DisplayAlerts = false");
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(sheet2, "Range", &[OmValue::Text("A1".to_string())])
+                .expect("Sheet2.Range(A1) before Worksheet.Delete"),
+        );
+        runtime
+            .dispatch_set(
+                search_range,
+                "Value",
+                OmValue::Text("delete needle".to_string()),
+                &[],
+            )
+            .expect("seed Range.Find value before Worksheet.Delete");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Worksheet.Delete");
+        runtime
+            .dispatch_invoke(
+                search_range,
+                "Find",
+                &[OmValue::Text("delete needle".to_string())],
+            )
+            .expect("Range.Find before Worksheet.Delete");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(application, "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Worksheet.Delete")
+            ),
+            f64::from(super::XL_COPY)
+        );
 
         assert!(expect_bool(
             runtime
                 .dispatch_invoke(sheet3, "Delete", &[])
                 .expect("Worksheet.Delete with DisplayAlerts=false")
         ));
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(application, "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Worksheet.Delete")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after Worksheet.Delete")
+                .code,
+            OmErrorCode::InvalidState
+        );
         assert_eq!(
             expect_number(
                 runtime
@@ -155993,6 +156122,37 @@ mod tests {
                 .dispatch_invoke(worksheets, "Item", &[OmValue::Text("sheet2".to_string())])
                 .expect("Worksheets.Item(Sheet2)"),
         );
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(sheet3, "Range", &[OmValue::Text("A1".to_string())])
+                .expect("Sheet3.Range(A1) before Worksheet.Move"),
+        );
+        runtime
+            .dispatch_set(
+                search_range,
+                "Value",
+                OmValue::Text("move needle".to_string()),
+                &[],
+            )
+            .expect("seed Range.Find value before Worksheet.Move");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Worksheet.Move");
+        runtime
+            .dispatch_invoke(
+                search_range,
+                "Find",
+                &[OmValue::Text("move needle".to_string())],
+            )
+            .expect("Range.Find before Worksheet.Move");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(application, "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Worksheet.Move")
+            ),
+            f64::from(super::XL_COPY)
+        );
 
         assert!(matches!(
             runtime
@@ -156000,6 +156160,18 @@ mod tests {
                 .expect("Worksheet.Move Before:=\"Sheet3\""),
             OmValue::Empty
         ));
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(application, "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Worksheet.Move")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after Worksheet.Move")
+                .code,
+            OmErrorCode::InvalidState
+        );
         assert_eq!(
             expect_number(
                 runtime
