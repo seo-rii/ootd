@@ -126054,30 +126054,72 @@ mod tests {
                 OmErrorCode::InvalidState
             );
         }
-        runtime
-            .dispatch_set(
-                second_label,
-                "Separator",
-                OmValue::Text(" * ".to_string()),
-                &[],
-            )
-            .expect("DataLabel.Separator = star");
-        runtime
-            .dispatch_set(
-                second_label,
-                "NumberFormat",
-                OmValue::Text("#,##0.00".to_string()),
-                &[],
-            )
-            .expect("DataLabel.NumberFormat = number");
-        runtime
-            .dispatch_set(
-                second_label,
+        for (member, value) in [
+            ("Separator", OmValue::Text(" * ".to_string())),
+            ("NumberFormat", OmValue::Text("#,##0.00".to_string())),
+            (
                 "Position",
                 OmValue::Number(f64::from(super::XL_LABEL_POSITION_CENTER)),
-                &[],
-            )
-            .expect("DataLabel.Position = center");
+            ),
+        ] {
+            let search_range = expect_object_handle(
+                runtime
+                    .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                    .unwrap_or_else(|error| {
+                        panic!(
+                            "Worksheet.Range(A1:B3) before DataLabel.ClearFormats setup {member}: {error:?}"
+                        )
+                    }),
+            );
+            runtime
+                .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+                .unwrap_or_else(|error| {
+                    panic!("Range.Find before DataLabel.ClearFormats setup {member}: {error:?}")
+                });
+            runtime
+                .dispatch_invoke(search_range, "Copy", &[])
+                .unwrap_or_else(|error| {
+                    panic!("Range.Copy before DataLabel.ClearFormats setup {member}: {error:?}")
+                });
+            assert_eq!(
+                expect_number(
+                    runtime
+                        .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                        .unwrap_or_else(|error| {
+                            panic!(
+                                "Application.CutCopyMode before DataLabel.ClearFormats setup {member}: {error:?}"
+                            )
+                        })
+                ),
+                f64::from(super::XL_COPY)
+            );
+            runtime
+                .dispatch_set(second_label, member, value, &[])
+                .unwrap_or_else(|error| {
+                    panic!("DataLabel.ClearFormats setup {member} failed: {error:?}")
+                });
+            assert!(!expect_bool(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .unwrap_or_else(|error| {
+                        panic!(
+                            "Application.CutCopyMode after DataLabel.ClearFormats setup {member}: {error:?}"
+                        )
+                    })
+            ));
+            assert_eq!(
+                runtime
+                    .dispatch_invoke(search_range, "FindNext", &[])
+                    .err()
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "Range.FindNext should require a new Find after DataLabel.ClearFormats setup {member}"
+                        )
+                    })
+                    .code,
+                OmErrorCode::InvalidState
+            );
+        }
         let search_range = expect_object_handle(
             runtime
                 .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
