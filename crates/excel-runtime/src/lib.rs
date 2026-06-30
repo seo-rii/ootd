@@ -67853,6 +67853,23 @@ mod tests {
             .iter()
             .find(|surface| surface.name == "ChartGroup")
             .expect("ChartGroup focus surface");
+        let chart_groups = runtime
+            .dispatch_registry()
+            .focus_surfaces
+            .iter()
+            .find(|surface| surface.name == "ChartGroups")
+            .expect("ChartGroups focus surface");
+        for member_name in ["Count", "Item", "Creator", "Application", "Parent"] {
+            let member = chart_groups
+                .members
+                .iter()
+                .find(|member| member.name == member_name)
+                .unwrap_or_else(|| panic!("ChartGroups.{member_name} focus member"));
+            assert!(matches!(member.support, office_idl::SupportState::Stub));
+            if member.member_kind == office_idl::MemberKind::Property {
+                assert!(matches!(member.access, office_idl::AccessMode::Read));
+            }
+        }
         for member_name in [
             "ChartType",
             "AxisGroup",
@@ -67882,6 +67899,60 @@ mod tests {
                 .unwrap_or_else(|| panic!("ChartGroup.{member_name} focus member"));
             assert!(matches!(member.support, office_idl::SupportState::Stub));
             assert!(matches!(member.access, office_idl::AccessMode::Readwrite));
+        }
+        for member_name in [
+            "Index",
+            "SeriesLines",
+            "DropLines",
+            "HiLoLines",
+            "UpBars",
+            "DownBars",
+            "RadarAxisLabels",
+            "SeriesCollection",
+            "CategoryCollection",
+            "FullCategoryCollection",
+            "Creator",
+            "Application",
+            "Parent",
+        ] {
+            let member = chart_group
+                .members
+                .iter()
+                .find(|member| member.name == member_name)
+                .unwrap_or_else(|| panic!("ChartGroup.{member_name} focus member"));
+            assert!(matches!(member.support, office_idl::SupportState::Stub));
+            assert!(matches!(member.access, office_idl::AccessMode::Read));
+        }
+        for surface_name in [
+            "SeriesLines",
+            "DropLines",
+            "HiLoLines",
+            "UpBars",
+            "DownBars",
+        ] {
+            let surface = runtime
+                .dispatch_registry()
+                .focus_surfaces
+                .iter()
+                .find(|surface| surface.name == surface_name)
+                .unwrap_or_else(|| panic!("{surface_name} focus surface"));
+            for member_name in ["Name", "Format", "Creator", "Application", "Parent"] {
+                let member = surface
+                    .members
+                    .iter()
+                    .find(|member| member.name == member_name)
+                    .unwrap_or_else(|| panic!("{surface_name}.{member_name} focus member"));
+                assert!(matches!(member.support, office_idl::SupportState::Stub));
+                assert!(matches!(member.access, office_idl::AccessMode::Read));
+            }
+            for member_name in ["Select", "Delete", "ClearFormats"] {
+                let member = surface
+                    .members
+                    .iter()
+                    .find(|member| member.name == member_name)
+                    .unwrap_or_else(|| panic!("{surface_name}.{member_name} focus member"));
+                assert!(matches!(member.support, office_idl::SupportState::Stub));
+            }
         }
         for (surface_name, member_names) in [
             (
