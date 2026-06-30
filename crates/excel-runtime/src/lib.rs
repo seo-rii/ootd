@@ -67409,6 +67409,7 @@ mod tests {
                 "TickLabels",
                 &["NumberFormat", "NumberFormatLocal", "NumberFormatLinked"][..],
             ),
+            ("ChartTitle", &["Text", "Caption"][..]),
             ("AxisTitle", &["Text", "Caption"][..]),
             ("DisplayUnitLabel", &["Text", "Caption"][..]),
         ] {
