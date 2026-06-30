@@ -29286,6 +29286,9 @@ impl ExcelRuntime {
                     }
                     runtime.dirty = true;
                 }
+                self.find_state = None;
+                self.cut_copy_mode = None;
+                self.clipboard = None;
 
                 let copied_name = {
                     let worksheets = &self
@@ -29426,6 +29429,9 @@ impl ExcelRuntime {
                 }
                 runtime.dirty = true;
             }
+            self.find_state = None;
+            self.cut_copy_mode = None;
+            self.clipboard = None;
 
             let copied_name = {
                 let worksheets = &self
@@ -157015,6 +157021,20 @@ mod tests {
                 &[],
             )
             .expect("Sheet2.Range(C3).Value");
+        runtime
+            .dispatch_invoke(source_range, "Copy", &[])
+            .expect("Range.Copy before Worksheet.Copy");
+        runtime
+            .dispatch_invoke(source_range, "Find", &[OmValue::Text("copied".to_string())])
+            .expect("Range.Find before Worksheet.Copy");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(application, "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Worksheet.Copy")
+            ),
+            f64::from(super::XL_COPY)
+        );
 
         assert!(matches!(
             runtime
@@ -157022,6 +157042,18 @@ mod tests {
                 .expect("Worksheet.Copy After:=2"),
             OmValue::Empty
         ));
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(application, "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Worksheet.Copy")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(source_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after Worksheet.Copy")
+                .code,
+            OmErrorCode::InvalidState
+        );
         assert_eq!(
             expect_number(
                 runtime
