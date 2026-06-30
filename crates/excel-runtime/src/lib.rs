@@ -10270,6 +10270,9 @@ impl ExcelRuntime {
                                 ));
                             }
                             runtime.loaded.state.clear_range_contents(&range_ref)?;
+                            self.find_state = None;
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
                             return Ok(OmValue::Empty);
                         }
                         "Clear" => {
@@ -10300,6 +10303,9 @@ impl ExcelRuntime {
                                     }
                                 }
                             }
+                            self.find_state = None;
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
                             return Ok(OmValue::Empty);
                         }
                         "ClearFormats" => {
@@ -10341,6 +10347,9 @@ impl ExcelRuntime {
                                     }
                                 }
                             }
+                            self.find_state = None;
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
                             return Ok(OmValue::Empty);
                         }
                         _ => {}
@@ -13160,6 +13169,9 @@ impl ExcelRuntime {
                             ));
                         }
                         runtime.loaded.state.clear_range_contents(&range)?;
+                        self.find_state = None;
+                        self.cut_copy_mode = None;
+                        self.clipboard = None;
                         Ok(OmValue::Empty)
                     }
                     "Clear" => {
@@ -13187,6 +13199,9 @@ impl ExcelRuntime {
                                 }
                             }
                         }
+                        self.find_state = None;
+                        self.cut_copy_mode = None;
+                        self.clipboard = None;
                         Ok(OmValue::Empty)
                     }
                     "ClearFormats" => {
@@ -13224,6 +13239,9 @@ impl ExcelRuntime {
                                 }
                             }
                         }
+                        self.find_state = None;
+                        self.cut_copy_mode = None;
+                        self.clipboard = None;
                         Ok(OmValue::Empty)
                     }
                     _ => Err(OmError::unsupported(format!(
@@ -96467,6 +96485,33 @@ mod tests {
                 .dispatch_invoke(range, "Item", &[OmValue::Number(1.0), OmValue::Number(2.0)])
                 .expect("Range(A1:C1).Item(1, 2)"),
         );
+        let clipboard_source = expect_object_handle(
+            runtime
+                .dispatch_invoke(range, "Item", &[OmValue::Number(1.0), OmValue::Number(3.0)])
+                .expect("Range(A1:C1).Item(1, 3)"),
+        );
+        runtime
+            .dispatch_set(
+                clipboard_source,
+                "Value2",
+                OmValue::Text("needle".to_string()),
+                &[],
+            )
+            .expect("C1.Value2");
+        runtime
+            .dispatch_invoke(range, "Find", &[OmValue::Text("needle".to_string())])
+            .expect("Range.Find before ClearContents");
+        runtime
+            .dispatch_invoke(clipboard_source, "Copy", &[])
+            .expect("C1.Copy clipboard before ClearContents");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(application, "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before ClearContents")
+            ),
+            f64::from(super::XL_COPY)
+        );
 
         assert!(matches!(
             runtime
@@ -96474,6 +96519,18 @@ mod tests {
                 .expect("Range.ClearContents"),
             OmValue::Empty
         ));
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(application, "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after ClearContents")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after ClearContents")
+                .code,
+            OmErrorCode::InvalidState
+        );
 
         let selection = expect_object_handle(
             runtime
