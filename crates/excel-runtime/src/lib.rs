@@ -116950,78 +116950,89 @@ mod tests {
                 .expect_err("ChartGroup bubble flag rejects non-bool");
             assert_eq!(invalid_bubble_flag.code, OmErrorCode::TypeMismatch);
         }
-        assert_eq!(
-            runtime
-                .dispatch_get(chart_group, "SizeRepresents", &[])
-                .expect("ChartGroup.SizeRepresents"),
-            OmValue::Number(f64::from(super::XL_SIZE_IS_WIDTH))
-        );
-        runtime
-            .dispatch_set(
-                chart_group,
+        for (member, loaded, updated, invalid, invalid_code) in [
+            (
                 "SizeRepresents",
+                OmValue::Number(f64::from(super::XL_SIZE_IS_WIDTH)),
                 OmValue::Number(f64::from(super::XL_SIZE_IS_AREA)),
-                &[],
-            )
-            .expect("set ChartGroup.SizeRepresents");
-        assert_eq!(
-            runtime
-                .dispatch_get(chart_group, "SizeRepresents", &[])
-                .expect("ChartGroup.SizeRepresents after set"),
-            OmValue::Number(f64::from(super::XL_SIZE_IS_AREA))
-        );
-        let invalid_size_represents = runtime
-            .dispatch_set(chart_group, "SizeRepresents", OmValue::Number(99.0), &[])
-            .expect_err("ChartGroup.SizeRepresents rejects unsupported constants");
-        assert_eq!(invalid_size_represents.code, OmErrorCode::InvalidArgument);
-        assert_eq!(
-            runtime
-                .dispatch_get(chart_group, "SplitType", &[])
-                .expect("ChartGroup.SplitType"),
-            OmValue::Number(f64::from(super::XL_SPLIT_BY_VALUE))
-        );
-        runtime
-            .dispatch_set(
-                chart_group,
+                OmValue::Number(99.0),
+                OmErrorCode::InvalidArgument,
+            ),
+            (
                 "SplitType",
+                OmValue::Number(f64::from(super::XL_SPLIT_BY_VALUE)),
                 OmValue::Number(f64::from(super::XL_SPLIT_BY_PERCENT_VALUE)),
-                &[],
-            )
-            .expect("set ChartGroup.SplitType");
-        assert_eq!(
-            runtime
-                .dispatch_get(chart_group, "SplitType", &[])
-                .expect("ChartGroup.SplitType after set"),
-            OmValue::Number(f64::from(super::XL_SPLIT_BY_PERCENT_VALUE))
-        );
-        let invalid_split_type = runtime
-            .dispatch_set(chart_group, "SplitType", OmValue::Number(99.0), &[])
-            .expect_err("ChartGroup.SplitType rejects unsupported constants");
-        assert_eq!(invalid_split_type.code, OmErrorCode::InvalidArgument);
-        assert_eq!(
-            runtime
-                .dispatch_get(chart_group, "SplitValue", &[])
-                .expect("ChartGroup.SplitValue"),
-            OmValue::Number(10.0)
-        );
-        runtime
-            .dispatch_set(chart_group, "SplitValue", OmValue::Number(15.5), &[])
-            .expect("set ChartGroup.SplitValue");
-        assert_eq!(
-            runtime
-                .dispatch_get(chart_group, "SplitValue", &[])
-                .expect("ChartGroup.SplitValue after set"),
-            OmValue::Number(15.5)
-        );
-        let invalid_split_value = runtime
-            .dispatch_set(
-                chart_group,
+                OmValue::Number(99.0),
+                OmErrorCode::InvalidArgument,
+            ),
+            (
                 "SplitValue",
+                OmValue::Number(10.0),
+                OmValue::Number(15.5),
                 OmValue::Text("bad".to_string()),
-                &[],
-            )
-            .expect_err("ChartGroup.SplitValue rejects non-number");
-        assert_eq!(invalid_split_value.code, OmErrorCode::TypeMismatch);
+                OmErrorCode::TypeMismatch,
+            ),
+        ] {
+            assert_eq!(
+                runtime
+                    .dispatch_get(chart_group, member, &[])
+                    .unwrap_or_else(|error| panic!("ChartGroup.{member}: {error:?}")),
+                loaded
+            );
+            let search_range = expect_object_handle(
+                runtime
+                    .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                    .unwrap_or_else(|error| {
+                        panic!("Worksheet.Range(A1:B3) before ChartGroup.{member}: {error:?}")
+                    }),
+            );
+            runtime
+                .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+                .unwrap_or_else(|error| panic!("Range.Find before ChartGroup.{member}: {error:?}"));
+            runtime
+                .dispatch_invoke(search_range, "Copy", &[])
+                .unwrap_or_else(|error| panic!("Range.Copy before ChartGroup.{member}: {error:?}"));
+            assert_eq!(
+                expect_number(
+                    runtime
+                        .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                        .unwrap_or_else(|error| {
+                            panic!("Application.CutCopyMode before ChartGroup.{member}: {error:?}")
+                        })
+                ),
+                f64::from(super::XL_COPY)
+            );
+            runtime
+                .dispatch_set(chart_group, member, updated.clone(), &[])
+                .unwrap_or_else(|error| panic!("set ChartGroup.{member}: {error:?}"));
+            assert!(!expect_bool(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .unwrap_or_else(|error| {
+                        panic!("Application.CutCopyMode after ChartGroup.{member}: {error:?}")
+                    })
+            ));
+            assert_eq!(
+                runtime
+                    .dispatch_invoke(search_range, "FindNext", &[])
+                    .err()
+                    .unwrap_or_else(|| {
+                        panic!("Range.FindNext should require a new Find after ChartGroup.{member}")
+                    })
+                    .code,
+                OmErrorCode::InvalidState
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(chart_group, member, &[])
+                    .unwrap_or_else(|error| panic!("ChartGroup.{member} after set: {error:?}")),
+                updated
+            );
+            match runtime.dispatch_set(chart_group, member, invalid, &[]) {
+                Ok(()) => panic!("ChartGroup.{member} should reject invalid value"),
+                Err(error) => assert_eq!(error.code, invalid_code),
+            }
+        }
         for member in [
             "HasSeriesLines",
             "HasDropLines",
