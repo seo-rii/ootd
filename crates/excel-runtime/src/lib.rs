@@ -118366,6 +118366,57 @@ mod tests {
             .dispatch_set(chart_group, "HasSeriesLines", OmValue::Bool(true), &[])
             .expect("restore ChartGroup.HasSeriesLines true");
 
+        let drop_lines_search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before ChartGroup.HasDropLines"),
+        );
+        runtime
+            .dispatch_invoke(
+                drop_lines_search_range,
+                "Find",
+                &[OmValue::Text("1".to_string())],
+            )
+            .expect("Range.Find before ChartGroup.HasDropLines");
+        runtime
+            .dispatch_invoke(drop_lines_search_range, "Copy", &[])
+            .expect("Range.Copy before ChartGroup.HasDropLines");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before ChartGroup.HasDropLines")
+            ),
+            f64::from(super::XL_COPY)
+        );
+        runtime
+            .dispatch_set(chart_group, "HasDropLines", OmValue::Bool(false), &[])
+            .expect("set ChartGroup.HasDropLines false");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after ChartGroup.HasDropLines")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(drop_lines_search_range, "FindNext", &[])
+                .expect_err(
+                    "Range.FindNext should require a new Find after ChartGroup.HasDropLines",
+                )
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_group, "DropLines", &[])
+                .expect_err("ChartGroup.DropLines should be unavailable when hidden")
+                .code,
+            OmErrorCode::NotFound
+        );
+        runtime
+            .dispatch_set(chart_group, "HasDropLines", OmValue::Bool(true), &[])
+            .expect("restore ChartGroup.HasDropLines true");
+
         let mut line_objects = Vec::new();
         for (member, display_name, flag_member) in [
             ("SeriesLines", "Series Lines", "HasSeriesLines"),
