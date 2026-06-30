@@ -146024,6 +146024,203 @@ mod tests {
     }
 
     #[test]
+    fn chart_group_series_delete_updates_filtered_collections() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    chart_objects,
+                    "Add",
+                    &[
+                        OmValue::Number(12.0),
+                        OmValue::Number(18.0),
+                        OmValue::Number(240.0),
+                        OmValue::Number(160.0),
+                    ],
+                )
+                .expect("ChartObjects.Add"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection"),
+        );
+        runtime
+            .dispatch_invoke(series_collection, "NewSeries", &[])
+            .expect("SeriesCollection.NewSeries primary");
+        let first_secondary_series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "NewSeries", &[])
+                .expect("SeriesCollection.NewSeries first secondary"),
+        );
+        runtime
+            .dispatch_set(
+                first_secondary_series,
+                "AxisGroup",
+                OmValue::Number(f64::from(super::XL_SECONDARY)),
+                &[],
+            )
+            .expect("set first secondary Series.AxisGroup");
+        let chart_groups = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartGroups", &[])
+                .expect("Chart.ChartGroups"),
+        );
+        let secondary_group = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_groups, "Item", &[OmValue::Number(2.0)])
+                .expect("ChartGroups.Item(2)"),
+        );
+        let secondary_group_series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(secondary_group, "SeriesCollection", &[])
+                .expect("secondary ChartGroup.SeriesCollection"),
+        );
+        let deleted_secondary_series = expect_object_handle(
+            runtime
+                .dispatch_invoke(secondary_group_series_collection, "NewSeries", &[])
+                .expect("secondary ChartGroup.SeriesCollection.NewSeries"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(secondary_group_series_collection, "Count", &[])
+                    .expect("secondary ChartGroup.SeriesCollection.Count before delete")
+            ),
+            2.0
+        );
+        runtime
+            .dispatch_invoke(deleted_secondary_series, "Delete", &[])
+            .expect("secondary Series.Delete");
+        assert_eq!(
+            runtime
+                .dispatch_get(deleted_secondary_series, "AxisGroup", &[])
+                .expect_err("deleted secondary series handle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(secondary_group_series_collection, "Count", &[])
+                    .expect("secondary ChartGroup.SeriesCollection.Count after delete")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(series_collection, "Count", &[])
+                    .expect("full SeriesCollection.Count after secondary delete")
+            ),
+            2.0
+        );
+        let remaining_secondary_series = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    secondary_group_series_collection,
+                    "Item",
+                    &[OmValue::Number(1.0)],
+                )
+                .expect("remaining secondary ChartGroup.SeriesCollection.Item(1)"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(remaining_secondary_series, "AxisGroup", &[])
+                    .expect("remaining secondary Series.AxisGroup")
+            ),
+            f64::from(super::XL_SECONDARY)
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after secondary Series.Delete");
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after secondary Series.Delete");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        let reopened_chart_groups = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "ChartGroups", &[])
+                .expect("reopened Chart.ChartGroups"),
+        );
+        let reopened_secondary_group = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_groups, "Item", &[OmValue::Number(2.0)])
+                .expect("reopened ChartGroups.Item(2)"),
+        );
+        let reopened_secondary_group_series_collection = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_secondary_group, "SeriesCollection", &[])
+                .expect("reopened secondary ChartGroup.SeriesCollection"),
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_secondary_group_series_collection, "Count", &[])
+                    .expect("reopened secondary ChartGroup.SeriesCollection.Count")
+            ),
+            1.0
+        );
+    }
+
+    #[test]
     fn loaded_chart_series_axis_group_follows_chart_group_axis_refs() {
         let mut package = OpcPackage::from_bytes(&synthetic_workbook_with_embedded_chart_bytes())
             .expect("embedded chart package");
