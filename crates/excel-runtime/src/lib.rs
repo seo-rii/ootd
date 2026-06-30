@@ -10910,6 +10910,11 @@ impl ExcelRuntime {
                                 }
                             }
                         }
+                        if replaced_any {
+                            self.find_state = None;
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
+                        }
                         Ok(OmValue::Bool(replaced_any))
                     }
                     "Sort" => {
@@ -12936,6 +12941,9 @@ impl ExcelRuntime {
                                 }
                             }
                         }
+                        self.find_state = None;
+                        self.cut_copy_mode = None;
+                        self.clipboard = None;
                         Ok(OmValue::Empty)
                     }
                     "FillRight" => {
@@ -13002,6 +13010,9 @@ impl ExcelRuntime {
                                 }
                             }
                         }
+                        self.find_state = None;
+                        self.cut_copy_mode = None;
+                        self.clipboard = None;
                         Ok(OmValue::Empty)
                     }
                     "FillUp" => {
@@ -13068,6 +13079,9 @@ impl ExcelRuntime {
                                 }
                             }
                         }
+                        self.find_state = None;
+                        self.cut_copy_mode = None;
+                        self.clipboard = None;
                         Ok(OmValue::Empty)
                     }
                     "FillLeft" => {
@@ -13134,6 +13148,9 @@ impl ExcelRuntime {
                                 }
                             }
                         }
+                        self.find_state = None;
+                        self.cut_copy_mode = None;
+                        self.clipboard = None;
                         Ok(OmValue::Empty)
                     }
                     "Select" => {
@@ -92510,6 +92527,20 @@ mod tests {
                 &[],
             )
             .expect("A1:B2.Value2");
+        runtime
+            .dispatch_invoke(target, "Find", &[OmValue::Text("cat".to_string())])
+            .expect("Range.Find before Replace");
+        runtime
+            .dispatch_invoke(target, "Copy", &[])
+            .expect("Range.Copy clipboard before Replace");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Replace")
+            ),
+            f64::from(super::XL_COPY)
+        );
 
         assert!(expect_bool(
             runtime
@@ -92523,6 +92554,18 @@ mod tests {
                 )
                 .expect("Range.Replace cat"),
         ));
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Replace")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(target, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after Replace")
+                .code,
+            OmErrorCode::InvalidState
+        );
         let a1 = expect_object_handle(
             runtime
                 .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1".to_string())])
@@ -99706,12 +99749,43 @@ mod tests {
                 .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:B3".to_string())])
                 .expect("Range(A1:B3)"),
         );
+        let a1_source = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1".to_string())])
+                .expect("Range(A1)"),
+        );
+        runtime
+            .dispatch_invoke(fill_down_range, "Find", &[OmValue::Text("42".to_string())])
+            .expect("Range.Find before FillDown");
+        runtime
+            .dispatch_invoke(a1_source, "Copy", &[])
+            .expect("A1.Copy clipboard before FillDown");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before FillDown")
+            ),
+            f64::from(super::XL_COPY)
+        );
         assert!(matches!(
             runtime
                 .dispatch_invoke(fill_down_range, "FillDown", &[])
                 .expect("Range.FillDown"),
             OmValue::Empty
         ));
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after FillDown")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(fill_down_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after FillDown")
+                .code,
+            OmErrorCode::InvalidState
+        );
 
         let a3 = expect_object_handle(
             runtime
