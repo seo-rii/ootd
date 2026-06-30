@@ -6893,6 +6893,9 @@ impl ExcelRuntime {
                             chart.vary_by_categories = Some(vary_by_categories);
                             chart.dirty = true;
                             runtime.dirty = true;
+                            self.find_state = None;
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
                         }
                         Ok(())
                     }
@@ -6910,6 +6913,7 @@ impl ExcelRuntime {
                             _ => unreachable!(),
                         };
                         let mut removed_lines = false;
+                        let mut changed = false;
                         {
                             let runtime = self.runtime_workbook_mut(workbook)?;
                             if runtime.read_only {
@@ -6934,6 +6938,7 @@ impl ExcelRuntime {
                                 *target = Some(enabled);
                                 chart.dirty = true;
                                 runtime.dirty = true;
+                                changed = true;
                                 removed_lines = !enabled;
                             }
                         }
@@ -6944,6 +6949,11 @@ impl ExcelRuntime {
                                 group_index,
                                 line_kind,
                             );
+                        }
+                        if changed {
+                            self.find_state = None;
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
                         }
                         Ok(())
                     }
@@ -6979,6 +6989,9 @@ impl ExcelRuntime {
                             *target = Some(enabled);
                             chart.dirty = true;
                             runtime.dirty = true;
+                            self.find_state = None;
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
                         }
                         Ok(())
                     }
@@ -7093,6 +7106,9 @@ impl ExcelRuntime {
                         if changed {
                             chart.dirty = true;
                             runtime.dirty = true;
+                            self.find_state = None;
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
                         }
                         Ok(())
                     }
@@ -7128,6 +7144,9 @@ impl ExcelRuntime {
                             chart.size_represents = Some(size_represents);
                             chart.dirty = true;
                             runtime.dirty = true;
+                            self.find_state = None;
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
                         }
                         Ok(())
                     }
@@ -7165,6 +7184,9 @@ impl ExcelRuntime {
                             chart.split_type = Some(split_type);
                             chart.dirty = true;
                             runtime.dirty = true;
+                            self.find_state = None;
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
                         }
                         Ok(())
                     }
@@ -7201,6 +7223,9 @@ impl ExcelRuntime {
                             chart.split_value = Some(split_value);
                             chart.dirty = true;
                             runtime.dirty = true;
+                            self.find_state = None;
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
                         }
                         Ok(())
                     }
@@ -115446,9 +115471,42 @@ mod tests {
                     .expect("ChartGroup line flag"),
                 OmValue::Bool(true)
             );
+            let search_range = expect_object_handle(
+                runtime
+                    .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                    .expect("Worksheet.Range(A1:B3) before ChartGroup line flag"),
+            );
+            runtime
+                .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+                .expect("Range.Find before ChartGroup line flag");
+            runtime
+                .dispatch_invoke(search_range, "Copy", &[])
+                .expect("Range.Copy before ChartGroup line flag");
+            assert_eq!(
+                expect_number(
+                    runtime
+                        .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                        .expect("Application.CutCopyMode before ChartGroup line flag")
+                ),
+                f64::from(super::XL_COPY)
+            );
             runtime
                 .dispatch_set(chart_group, member, OmValue::Bool(false), &[])
                 .expect("set ChartGroup line flag false");
+            assert!(!expect_bool(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode after ChartGroup line flag")
+            ));
+            assert_eq!(
+                runtime
+                    .dispatch_invoke(search_range, "FindNext", &[])
+                    .expect_err(
+                        "Range.FindNext should require a new Find after ChartGroup line flag"
+                    )
+                    .code,
+                OmErrorCode::InvalidState
+            );
             assert_eq!(
                 runtime
                     .dispatch_get(chart_group, member, &[])
@@ -115853,9 +115911,42 @@ mod tests {
                 .expect("ChartGroup.VaryByCategories before set"),
             OmValue::Bool(true)
         );
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before ChartGroup.VaryByCategories"),
+        );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before ChartGroup.VaryByCategories");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before ChartGroup.VaryByCategories");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before ChartGroup.VaryByCategories")
+            ),
+            f64::from(super::XL_COPY)
+        );
         runtime
             .dispatch_set(chart_group, "VaryByCategories", OmValue::Bool(false), &[])
             .expect("set ChartGroup.VaryByCategories false");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after ChartGroup.VaryByCategories")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err(
+                    "Range.FindNext should require a new Find after ChartGroup.VaryByCategories"
+                )
+                .code,
+            OmErrorCode::InvalidState
+        );
 
         let saved = runtime
             .save_workbook(
@@ -116129,9 +116220,40 @@ mod tests {
         runtime
             .dispatch_set(chart_group, "GapWidth", OmValue::Number(250.0), &[])
             .expect("set ChartGroup.GapWidth");
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before ChartGroup.Overlap"),
+        );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before ChartGroup.Overlap");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before ChartGroup.Overlap");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before ChartGroup.Overlap")
+            ),
+            f64::from(super::XL_COPY)
+        );
         runtime
             .dispatch_set(chart_group, "Overlap", OmValue::Number(-25.0), &[])
             .expect("set ChartGroup.Overlap");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after ChartGroup.Overlap")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after ChartGroup.Overlap")
+                .code,
+            OmErrorCode::InvalidState
+        );
         runtime
             .dispatch_set(chart_group, "FirstSliceAngle", OmValue::Number(90.0), &[])
             .expect("set ChartGroup.FirstSliceAngle");
@@ -116310,9 +116432,42 @@ mod tests {
                     .expect("ChartGroup bubble flag before set"),
                 OmValue::Bool(true)
             );
+            let search_range = expect_object_handle(
+                runtime
+                    .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                    .expect("Worksheet.Range(A1:B3) before ChartGroup bubble flag"),
+            );
+            runtime
+                .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+                .expect("Range.Find before ChartGroup bubble flag");
+            runtime
+                .dispatch_invoke(search_range, "Copy", &[])
+                .expect("Range.Copy before ChartGroup bubble flag");
+            assert_eq!(
+                expect_number(
+                    runtime
+                        .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                        .expect("Application.CutCopyMode before ChartGroup bubble flag")
+                ),
+                f64::from(super::XL_COPY)
+            );
             runtime
                 .dispatch_set(chart_group, member, OmValue::Bool(false), &[])
                 .expect("set ChartGroup bubble flag false");
+            assert!(!expect_bool(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode after ChartGroup bubble flag")
+            ));
+            assert_eq!(
+                runtime
+                    .dispatch_invoke(search_range, "FindNext", &[])
+                    .expect_err(
+                        "Range.FindNext should require a new Find after ChartGroup bubble flag"
+                    )
+                    .code,
+                OmErrorCode::InvalidState
+            );
         }
 
         let saved = runtime
