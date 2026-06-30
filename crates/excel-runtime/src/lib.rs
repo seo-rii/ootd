@@ -146106,6 +146106,57 @@ mod tests {
             ),
             f64::from(super::XL_SECONDARY)
         );
+        let chart_groups = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartGroups", &[])
+                .expect("Chart.ChartGroups"),
+        );
+        let secondary_group = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_groups, "Item", &[OmValue::Number(2.0)])
+                .expect("ChartGroups.Item(2)"),
+        );
+        let secondary_group_series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(secondary_group, "SeriesCollection", &[])
+                .expect("secondary ChartGroup.SeriesCollection"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(secondary_group_series_collection, "Count", &[])
+                    .expect("secondary ChartGroup.SeriesCollection.Count")
+            ),
+            1.0
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    secondary_group_series_collection,
+                    "Item",
+                    &[OmValue::Text("Sheet1!$C$1".to_string())],
+                )
+                .expect_err("secondary ChartGroup.SeriesCollection should not find primary name")
+                .code,
+            OmErrorCode::NotFound
+        );
+        let secondary_group_series_by_name = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    secondary_group_series_collection,
+                    "Item",
+                    &[OmValue::Text("Sheet1!$D$1".to_string())],
+                )
+                .expect("secondary ChartGroup.SeriesCollection.Item by name"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(secondary_group_series_by_name, "AxisGroup", &[])
+                    .expect("secondary group named Series.AxisGroup")
+            ),
+            f64::from(super::XL_SECONDARY)
+        );
         assert_eq!(
             runtime
                 .dispatch_get(
