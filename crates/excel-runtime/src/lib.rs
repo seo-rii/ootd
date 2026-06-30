@@ -16339,6 +16339,9 @@ impl ExcelRuntime {
                             chart.rounded_corners = None;
                             chart.dirty = true;
                             runtime.dirty = true;
+                            self.find_state = None;
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
                         }
                         Ok(OmValue::Empty)
                     }
@@ -16364,6 +16367,9 @@ impl ExcelRuntime {
                             runtime.dirty = true;
                         }
                         self.stale_series_handles_for_chart(workbook, chart_id);
+                        self.find_state = None;
+                        self.cut_copy_mode = None;
+                        self.clipboard = None;
                         Ok(OmValue::Empty)
                     }
                     "Select" => {
@@ -16413,6 +16419,9 @@ impl ExcelRuntime {
                             runtime.dirty = true;
                         }
                         self.stale_series_handles_for_chart(workbook, chart_id);
+                        self.find_state = None;
+                        self.cut_copy_mode = None;
+                        self.clipboard = None;
                         Ok(OmValue::Empty)
                     }
                     "ClearFormats" => {
@@ -16498,6 +16507,9 @@ impl ExcelRuntime {
                             runtime.dirty = true;
                         }
                         self.stale_axis_handles_for_chart(workbook, chart_id);
+                        self.find_state = None;
+                        self.cut_copy_mode = None;
+                        self.clipboard = None;
                         Ok(OmValue::Empty)
                     }
                     _ => Err(OmError::unsupported(format!(
@@ -16557,6 +16569,9 @@ impl ExcelRuntime {
                             runtime.dirty = true;
                         }
                         self.stale_chart_title_handles_for_chart(workbook, chart_id);
+                        self.find_state = None;
+                        self.cut_copy_mode = None;
+                        self.clipboard = None;
                         Ok(OmValue::Empty)
                     }
                     _ => Err(OmError::unsupported(format!(
@@ -16622,6 +16637,9 @@ impl ExcelRuntime {
                             runtime.dirty = true;
                         }
                         self.stale_legend_handles_for_chart(workbook, chart_id);
+                        self.find_state = None;
+                        self.cut_copy_mode = None;
+                        self.clipboard = None;
                         Ok(OmValue::Empty)
                     }
                     _ => Err(OmError::unsupported(format!(
@@ -16682,6 +16700,9 @@ impl ExcelRuntime {
                             runtime.dirty = true;
                         }
                         self.stale_data_table_handles_for_chart(workbook, chart_id);
+                        self.find_state = None;
+                        self.cut_copy_mode = None;
+                        self.clipboard = None;
                         Ok(OmValue::Empty)
                     }
                     _ => Err(OmError::unsupported(format!(
@@ -17125,6 +17146,9 @@ impl ExcelRuntime {
                             runtime.dirty = true;
                         }
                         self.stale_gridline_handles_for_axis(workbook, chart_id, axis_index, major);
+                        self.find_state = None;
+                        self.cut_copy_mode = None;
+                        self.clipboard = None;
                         Ok(OmValue::Empty)
                     }
                     _ => Err(OmError::unsupported(format!(
@@ -17192,6 +17216,9 @@ impl ExcelRuntime {
                             runtime.dirty = true;
                         }
                         self.stale_axis_title_handles_for_axis(workbook, chart_id, axis_index);
+                        self.find_state = None;
+                        self.cut_copy_mode = None;
+                        self.clipboard = None;
                         Ok(OmValue::Empty)
                     }
                     _ => Err(OmError::unsupported(format!(
@@ -17266,6 +17293,9 @@ impl ExcelRuntime {
                         self.stale_display_unit_label_handles_for_axis(
                             workbook, chart_id, axis_index,
                         );
+                        self.find_state = None;
+                        self.cut_copy_mode = None;
+                        self.clipboard = None;
                         Ok(OmValue::Empty)
                     }
                     _ => Err(OmError::unsupported(format!(
@@ -120621,10 +120651,49 @@ mod tests {
                 .expect("reopened Adjustments.Count"),
             OmValue::Number(0.0)
         );
+        let reopened_search_range = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(
+                    reopened_worksheet,
+                    "Range",
+                    &[OmValue::Text("A1:B3".to_string())],
+                )
+                .expect("reopened Worksheet.Range(A1:B3) before DataTable.Delete"),
+        );
+        reopened_runtime
+            .dispatch_invoke(
+                reopened_search_range,
+                "Find",
+                &[OmValue::Text("1".to_string())],
+            )
+            .expect("Range.Find before DataTable.Delete");
+        reopened_runtime
+            .dispatch_invoke(reopened_search_range, "Copy", &[])
+            .expect("Range.Copy before DataTable.Delete");
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before DataTable.Delete")
+            ),
+            f64::from(super::XL_COPY)
+        );
 
         reopened_runtime
             .dispatch_invoke(reopened_data_table, "Delete", &[])
             .expect("DataTable.Delete");
+        assert!(!expect_bool(
+            reopened_runtime
+                .dispatch_get(reopened_runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after DataTable.Delete")
+        ));
+        assert_eq!(
+            reopened_runtime
+                .dispatch_invoke(reopened_search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after DataTable.Delete")
+                .code,
+            OmErrorCode::InvalidState
+        );
         assert_eq!(
             reopened_runtime
                 .dispatch_get(reopened_chart, "HasDataTable", &[])
@@ -128117,11 +128186,42 @@ mod tests {
                 .code,
             OmErrorCode::InvalidArgument
         );
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before ChartArea.ClearFormats"),
+        );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before ChartArea.ClearFormats");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before ChartArea.ClearFormats");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before ChartArea.ClearFormats")
+            ),
+            f64::from(super::XL_COPY)
+        );
         assert_eq!(
             runtime
                 .dispatch_invoke(chart_area, "ClearFormats", &[])
                 .expect("ChartArea.ClearFormats"),
             OmValue::Empty
+        );
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after ChartArea.ClearFormats")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after ChartArea.ClearFormats")
+                .code,
+            OmErrorCode::InvalidState
         );
         assert_eq!(
             runtime
@@ -137668,9 +137768,40 @@ mod tests {
         runtime
             .dispatch_invoke(major_gridlines, "Select", &[])
             .expect("MajorGridlines.Select");
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before MajorGridlines.Delete"),
+        );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before MajorGridlines.Delete");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before MajorGridlines.Delete");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before MajorGridlines.Delete")
+            ),
+            f64::from(super::XL_COPY)
+        );
         runtime
             .dispatch_invoke(major_gridlines, "Delete", &[])
             .expect("MajorGridlines.Delete");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after MajorGridlines.Delete")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after MajorGridlines.Delete")
+                .code,
+            OmErrorCode::InvalidState
+        );
         assert_eq!(
             runtime
                 .dispatch_get(major_gridlines, "Name", &[])
@@ -140802,9 +140933,50 @@ mod tests {
             ),
             "Custom Units"
         );
+        let final_search_range = expect_object_handle(
+            final_runtime
+                .dispatch_invoke(
+                    final_worksheet,
+                    "Range",
+                    &[OmValue::Text("A1:B3".to_string())],
+                )
+                .expect("final Worksheet.Range(A1:B3) before DisplayUnitLabel.Delete"),
+        );
+        final_runtime
+            .dispatch_invoke(
+                final_search_range,
+                "Find",
+                &[OmValue::Text("1".to_string())],
+            )
+            .expect("Range.Find before DisplayUnitLabel.Delete");
+        final_runtime
+            .dispatch_invoke(final_search_range, "Copy", &[])
+            .expect("Range.Copy before DisplayUnitLabel.Delete");
+        assert_eq!(
+            expect_number(
+                final_runtime
+                    .dispatch_get(final_runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before DisplayUnitLabel.Delete")
+            ),
+            f64::from(super::XL_COPY)
+        );
         final_runtime
             .dispatch_invoke(final_display_unit_label, "Delete", &[])
             .expect("DisplayUnitLabel.Delete");
+        assert!(!expect_bool(
+            final_runtime
+                .dispatch_get(final_runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after DisplayUnitLabel.Delete")
+        ));
+        assert_eq!(
+            final_runtime
+                .dispatch_invoke(final_search_range, "FindNext", &[])
+                .expect_err(
+                    "Range.FindNext should require a new Find after DisplayUnitLabel.Delete"
+                )
+                .code,
+            OmErrorCode::InvalidState
+        );
         assert!(!expect_bool(
             final_runtime
                 .dispatch_get(final_value_axis, "HasDisplayUnitLabel", &[])
@@ -140970,10 +141142,41 @@ mod tests {
                 .dispatch_get(category_axis, "AxisTitle", &[])
                 .expect("duplicate Axis.AxisTitle"),
         );
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before display child deletes"),
+        );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before AxisTitle.Delete");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before AxisTitle.Delete");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before AxisTitle.Delete")
+            ),
+            f64::from(super::XL_COPY)
+        );
 
         runtime
             .dispatch_invoke(axis_title, "Delete", &[])
             .expect("AxisTitle.Delete");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after AxisTitle.Delete")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after AxisTitle.Delete")
+                .code,
+            OmErrorCode::InvalidState
+        );
         assert_eq!(
             runtime
                 .dispatch_get(axis_title, "Text", &[])
@@ -140995,8 +141198,34 @@ mod tests {
             OmValue::Bool(false)
         );
         runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before ChartTitle.Delete");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before ChartTitle.Delete");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before ChartTitle.Delete")
+            ),
+            f64::from(super::XL_COPY)
+        );
+        runtime
             .dispatch_invoke(chart_title, "Delete", &[])
             .expect("ChartTitle.Delete");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after ChartTitle.Delete")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after ChartTitle.Delete")
+                .code,
+            OmErrorCode::InvalidState
+        );
         assert_eq!(
             runtime
                 .dispatch_get(chart_title, "Text", &[])
@@ -141018,8 +141247,34 @@ mod tests {
             OmValue::Bool(false)
         );
         runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before Legend.Delete");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Legend.Delete");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Legend.Delete")
+            ),
+            f64::from(super::XL_COPY)
+        );
+        runtime
             .dispatch_invoke(legend, "Delete", &[])
             .expect("Legend.Delete");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Legend.Delete")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after Legend.Delete")
+                .code,
+            OmErrorCode::InvalidState
+        );
         assert_eq!(
             runtime
                 .dispatch_get(legend, "Position", &[])
@@ -144416,10 +144671,41 @@ mod tests {
                 .code,
             OmErrorCode::InvalidArgument
         );
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before Axis.Delete"),
+        );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before Axis.Delete");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Axis.Delete");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Axis.Delete")
+            ),
+            f64::from(super::XL_COPY)
+        );
 
         runtime
             .dispatch_invoke(value_axis, "Delete", &[])
             .expect("Axis.Delete");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Axis.Delete")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after Axis.Delete")
+                .code,
+            OmErrorCode::InvalidState
+        );
         assert_eq!(
             runtime
                 .dispatch_get(value_axis, "Type", &[])
