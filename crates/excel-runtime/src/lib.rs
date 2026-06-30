@@ -68182,6 +68182,85 @@ mod tests {
     }
 
     #[test]
+    fn pinned_chart_members_pass_runtime_focus_gate() {
+        let runtime = ExcelRuntime::new();
+        let document = office_idl::OfficeIdlDocument::from_json_str(super::PINNED_OM_TEMPLATE_JSON)
+            .expect("pinned OM template");
+        let chart_surfaces = [
+            "ChartObjects",
+            "ChartObject",
+            "Chart",
+            "ChartArea",
+            "PlotArea",
+            "ChartTitle",
+            "Legend",
+            "DataTable",
+            "ChartFormat",
+            "Adjustments",
+            "FillFormat",
+            "GlowFormat",
+            "LineFormat",
+            "PictureFormat",
+            "ShadowFormat",
+            "SoftEdgeFormat",
+            "TextFrame2",
+            "ThreeDFormat",
+            "ChartGroups",
+            "ChartGroup",
+            "CategoryCollection",
+            "ChartCategory",
+            "SeriesLines",
+            "DropLines",
+            "HiLoLines",
+            "UpBars",
+            "DownBars",
+            "Axes",
+            "Axis",
+            "TickLabels",
+            "Gridlines",
+            "DisplayUnitLabel",
+            "AxisTitle",
+            "SeriesCollection",
+            "Series",
+            "DataLabels",
+            "DataLabel",
+            "Points",
+            "Point",
+        ];
+
+        for surface_name in chart_surfaces {
+            let interface = document
+                .interfaces
+                .iter()
+                .find(|interface| interface.name == surface_name)
+                .unwrap_or_else(|| panic!("{surface_name} pinned interface"));
+            for member in &interface.members {
+                if matches!(member.support, office_idl::SupportState::Unsupported) {
+                    continue;
+                }
+                runtime
+                    .focus_member_supported(surface_name, &member.name, false)
+                    .unwrap_or_else(|error| {
+                        panic!("{surface_name}.{} read gate failed: {error:?}", member.name)
+                    });
+                if matches!(
+                    member.access,
+                    office_idl::AccessMode::Write | office_idl::AccessMode::Readwrite
+                ) {
+                    runtime
+                        .focus_member_supported(surface_name, &member.name, true)
+                        .unwrap_or_else(|error| {
+                            panic!(
+                                "{surface_name}.{} write gate failed: {error:?}",
+                                member.name
+                            )
+                        });
+                }
+            }
+        }
+    }
+
+    #[test]
     fn opens_and_saves_detected_format() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
