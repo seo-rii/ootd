@@ -154238,10 +154238,34 @@ mod tests {
         assert_eq!(
             expect_object_handle(
                 runtime
+                    .dispatch_get(workbooks, "Parent", &[])
+                    .expect("Workbooks.Parent")
+            ),
+            application
+        );
+        assert_eq!(
+            expect_object_handle(
+                runtime
                     .dispatch_get(worksheets, "Application", &[])
                     .expect("Worksheets.Application")
             ),
             application
+        );
+        assert_eq!(
+            expect_object_handle(
+                runtime
+                    .dispatch_get(worksheets, "Parent", &[])
+                    .expect("Worksheets.Parent")
+            ),
+            workbook.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(worksheets, "Creator", &[])
+                    .expect("Worksheets.Creator")
+            ),
+            f64::from(super::XL_CREATOR_CODE)
         );
         assert_eq!(
             expect_object_handle(
