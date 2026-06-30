@@ -9208,6 +9208,9 @@ impl ExcelRuntime {
                             axis.reverse_plot_order = Some(reverse_plot_order);
                             chart.dirty = true;
                             runtime.dirty = true;
+                            self.find_state = None;
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
                         }
                         Ok(())
                     }
@@ -9254,6 +9257,9 @@ impl ExcelRuntime {
                             axis.log_base = next_log_base;
                             chart.dirty = true;
                             runtime.dirty = true;
+                            self.find_state = None;
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
                         }
                         Ok(())
                     }
@@ -9300,6 +9306,9 @@ impl ExcelRuntime {
                             axis.log_base = Some(number);
                             chart.dirty = true;
                             runtime.dirty = true;
+                            self.find_state = None;
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
                         }
                         Ok(())
                     }
@@ -9352,6 +9361,9 @@ impl ExcelRuntime {
                             axis.crosses_at = next_crosses_at;
                             chart.dirty = true;
                             runtime.dirty = true;
+                            self.find_state = None;
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
                         }
                         Ok(())
                     }
@@ -9393,6 +9405,9 @@ impl ExcelRuntime {
                             axis.crosses_at = Some(number);
                             chart.dirty = true;
                             runtime.dirty = true;
+                            self.find_state = None;
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
                         }
                         Ok(())
                     }
@@ -9450,6 +9465,9 @@ impl ExcelRuntime {
                         if changed {
                             chart.dirty = true;
                             runtime.dirty = true;
+                            self.find_state = None;
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
                         }
                         Ok(())
                     }
@@ -9518,6 +9536,9 @@ impl ExcelRuntime {
                         if changed {
                             chart.dirty = true;
                             runtime.dirty = true;
+                            self.find_state = None;
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
                         }
                         Ok(())
                     }
@@ -9563,6 +9584,9 @@ impl ExcelRuntime {
                             *target = Some(spacing);
                             chart.dirty = true;
                             runtime.dirty = true;
+                            self.find_state = None;
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
                         }
                         Ok(())
                     }
@@ -9607,6 +9631,9 @@ impl ExcelRuntime {
                             axis.tick_label_spacing = next;
                             chart.dirty = true;
                             runtime.dirty = true;
+                            self.find_state = None;
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
                         }
                         Ok(())
                     }
@@ -9663,6 +9690,9 @@ impl ExcelRuntime {
                         if changed {
                             chart.dirty = true;
                             runtime.dirty = true;
+                            self.find_state = None;
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
                         }
                         Ok(())
                     }
@@ -9722,6 +9752,9 @@ impl ExcelRuntime {
                             axis.tick_label_number_format_linked = Some(false);
                             chart.dirty = true;
                             runtime.dirty = true;
+                            self.find_state = None;
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
                         }
                         Ok(())
                     }
@@ -9767,6 +9800,9 @@ impl ExcelRuntime {
                             axis.tick_label_number_format = next_format;
                             chart.dirty = true;
                             runtime.dirty = true;
+                            self.find_state = None;
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
                         }
                         Ok(())
                     }
@@ -9820,6 +9856,9 @@ impl ExcelRuntime {
                             title.text = text;
                             chart.dirty = true;
                             runtime.dirty = true;
+                            self.find_state = None;
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
                         }
                         Ok(())
                     }
@@ -9880,6 +9919,9 @@ impl ExcelRuntime {
                             axis.display_unit_label = next_label;
                             chart.dirty = true;
                             runtime.dirty = true;
+                            self.find_state = None;
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
                         }
                         Ok(())
                     }
@@ -134406,6 +134448,25 @@ mod tests {
                 .expect("AxisTitle.Format.Parent.Name"),
             OmValue::Text("Axis Title".to_string())
         );
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before AxisTitle.Text"),
+        );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before AxisTitle.Text");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before AxisTitle.Text");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before AxisTitle.Text")
+            ),
+            f64::from(super::XL_COPY)
+        );
         runtime
             .dispatch_set(
                 axis_title,
@@ -134414,6 +134475,18 @@ mod tests {
                 &[],
             )
             .expect("set loaded AxisTitle.Text");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after AxisTitle.Text")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after AxisTitle.Text")
+                .code,
+            OmErrorCode::InvalidState
+        );
 
         let saved = runtime
             .save_workbook(
@@ -139483,12 +139556,71 @@ mod tests {
                 .expect("Axis.MinorUnitIsAuto before set")
         ));
 
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before Axis.MinimumScale"),
+        );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before Axis.MinimumScale");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Axis.MinimumScale");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Axis.MinimumScale")
+            ),
+            f64::from(super::XL_COPY)
+        );
         runtime
             .dispatch_set(value_axis, "MinimumScale", OmValue::Number(10.0), &[])
             .expect("set Axis.MinimumScale");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Axis.MinimumScale")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after Axis.MinimumScale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before Axis.MaximumScaleIsAuto");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Axis.MaximumScaleIsAuto");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Axis.MaximumScaleIsAuto")
+            ),
+            f64::from(super::XL_COPY)
+        );
         runtime
             .dispatch_set(value_axis, "MaximumScaleIsAuto", OmValue::Bool(true), &[])
             .expect("set Axis.MaximumScaleIsAuto");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Axis.MaximumScaleIsAuto")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err(
+                    "Range.FindNext should require a new Find after Axis.MaximumScaleIsAuto",
+                )
+                .code,
+            OmErrorCode::InvalidState
+        );
         runtime
             .dispatch_set(value_axis, "MajorUnit", OmValue::Number(20.0), &[])
             .expect("set Axis.MajorUnit");
@@ -139771,9 +139903,40 @@ mod tests {
             OmErrorCode::InvalidArgument
         );
 
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before Axis.LogBase"),
+        );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before Axis.LogBase");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Axis.LogBase");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Axis.LogBase")
+            ),
+            f64::from(super::XL_COPY)
+        );
         runtime
             .dispatch_set(value_axis, "LogBase", OmValue::Number(2.0), &[])
             .expect("set Axis.LogBase");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Axis.LogBase")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after Axis.LogBase")
+                .code,
+            OmErrorCode::InvalidState
+        );
         let saved = runtime
             .save_workbook(
                 workbook,
@@ -139852,6 +140015,33 @@ mod tests {
             2.0
         );
 
+        let reopened_search_range = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(
+                    reopened_worksheet,
+                    "Range",
+                    &[OmValue::Text("A1:B3".to_string())],
+                )
+                .expect("reopened Worksheet.Range(A1:B3) before Axis.ScaleType"),
+        );
+        reopened_runtime
+            .dispatch_invoke(
+                reopened_search_range,
+                "Find",
+                &[OmValue::Text("1".to_string())],
+            )
+            .expect("Range.Find before Axis.ScaleType");
+        reopened_runtime
+            .dispatch_invoke(reopened_search_range, "Copy", &[])
+            .expect("Range.Copy before Axis.ScaleType");
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Axis.ScaleType")
+            ),
+            f64::from(super::XL_COPY)
+        );
         reopened_runtime
             .dispatch_set(
                 reopened_value_axis,
@@ -139860,6 +140050,18 @@ mod tests {
                 &[],
             )
             .expect("set Axis.ScaleType linear");
+        assert!(!expect_bool(
+            reopened_runtime
+                .dispatch_get(reopened_runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Axis.ScaleType")
+        ));
+        assert_eq!(
+            reopened_runtime
+                .dispatch_invoke(reopened_search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after Axis.ScaleType")
+                .code,
+            OmErrorCode::InvalidState
+        );
         let linear_saved = reopened_runtime
             .save_workbook(
                 reopened_workbook,
@@ -140091,6 +140293,25 @@ mod tests {
             f64::from(super::XL_TICK_LABEL_POSITION_NEXT_TO_AXIS)
         );
 
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before Axis.MajorTickMark"),
+        );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before Axis.MajorTickMark");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Axis.MajorTickMark");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Axis.MajorTickMark")
+            ),
+            f64::from(super::XL_COPY)
+        );
         runtime
             .dispatch_set(
                 value_axis,
@@ -140099,6 +140320,18 @@ mod tests {
                 &[],
             )
             .expect("set Axis.MajorTickMark");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Axis.MajorTickMark")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after Axis.MajorTickMark")
+                .code,
+            OmErrorCode::InvalidState
+        );
         runtime
             .dispatch_set(
                 value_axis,
@@ -140116,8 +140349,34 @@ mod tests {
             )
             .expect("set Axis.TickLabelPosition");
         runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before Axis.TickLabelSpacing");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Axis.TickLabelSpacing");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Axis.TickLabelSpacing")
+            ),
+            f64::from(super::XL_COPY)
+        );
+        runtime
             .dispatch_set(category_axis, "TickLabelSpacing", OmValue::Number(4.0), &[])
             .expect("set Axis.TickLabelSpacing");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Axis.TickLabelSpacing")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after Axis.TickLabelSpacing")
+                .code,
+            OmErrorCode::InvalidState
+        );
         runtime
             .dispatch_set(category_axis, "TickMarkSpacing", OmValue::Number(5.0), &[])
             .expect("set Axis.TickMarkSpacing");
@@ -140308,6 +140567,33 @@ mod tests {
             f64::from(super::XL_TICK_LABEL_POSITION_HIGH)
         );
 
+        let reopened_search_range = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(
+                    reopened_worksheet,
+                    "Range",
+                    &[OmValue::Text("A1:B3".to_string())],
+                )
+                .expect("reopened Worksheet.Range(A1:B3) before Axis.TickLabelSpacingIsAuto"),
+        );
+        reopened_runtime
+            .dispatch_invoke(
+                reopened_search_range,
+                "Find",
+                &[OmValue::Text("1".to_string())],
+            )
+            .expect("Range.Find before Axis.TickLabelSpacingIsAuto");
+        reopened_runtime
+            .dispatch_invoke(reopened_search_range, "Copy", &[])
+            .expect("Range.Copy before Axis.TickLabelSpacingIsAuto");
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Axis.TickLabelSpacingIsAuto")
+            ),
+            f64::from(super::XL_COPY)
+        );
         reopened_runtime
             .dispatch_set(
                 reopened_category_axis,
@@ -140316,6 +140602,20 @@ mod tests {
                 &[],
             )
             .expect("set Axis.TickLabelSpacingIsAuto");
+        assert!(!expect_bool(
+            reopened_runtime
+                .dispatch_get(reopened_runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Axis.TickLabelSpacingIsAuto")
+        ));
+        assert_eq!(
+            reopened_runtime
+                .dispatch_invoke(reopened_search_range, "FindNext", &[])
+                .expect_err(
+                    "Range.FindNext should require a new Find after Axis.TickLabelSpacingIsAuto",
+                )
+                .code,
+            OmErrorCode::InvalidState
+        );
         let auto_saved = reopened_runtime
             .save_workbook(
                 reopened_workbook,
@@ -140440,6 +140740,25 @@ mod tests {
             .dispatch_invoke(tick_labels, "Select", &[])
             .expect("TickLabels.Select");
 
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before TickLabels.NumberFormat"),
+        );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before TickLabels.NumberFormat");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before TickLabels.NumberFormat");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before TickLabels.NumberFormat")
+            ),
+            f64::from(super::XL_COPY)
+        );
         runtime
             .dispatch_set(
                 tick_labels,
@@ -140448,6 +140767,20 @@ mod tests {
                 &[],
             )
             .expect("set TickLabels.NumberFormat");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after TickLabels.NumberFormat")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err(
+                    "Range.FindNext should require a new Find after TickLabels.NumberFormat",
+                )
+                .code,
+            OmErrorCode::InvalidState
+        );
         assert_eq!(
             expect_text(
                 runtime
@@ -140696,9 +141029,40 @@ mod tests {
                 .expect("Axis.ReversePlotOrder before set")
         ));
 
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before Axis.ReversePlotOrder"),
+        );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before Axis.ReversePlotOrder");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Axis.ReversePlotOrder");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Axis.ReversePlotOrder")
+            ),
+            f64::from(super::XL_COPY)
+        );
         runtime
             .dispatch_set(value_axis, "ReversePlotOrder", OmValue::Bool(false), &[])
             .expect("set Axis.ReversePlotOrder false");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Axis.ReversePlotOrder")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after Axis.ReversePlotOrder",)
+                .code,
+            OmErrorCode::InvalidState
+        );
         assert_eq!(
             runtime
                 .dispatch_set(value_axis, "ReversePlotOrder", OmValue::Number(1.0), &[])
@@ -140882,9 +141246,40 @@ mod tests {
                 .code,
             OmErrorCode::Unsupported
         );
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before Axis.CrossesAt"),
+        );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before Axis.CrossesAt");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Axis.CrossesAt");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Axis.CrossesAt")
+            ),
+            f64::from(super::XL_COPY)
+        );
         runtime
             .dispatch_set(value_axis, "CrossesAt", OmValue::Number(12.5), &[])
             .expect("set Axis.CrossesAt");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Axis.CrossesAt")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after Axis.CrossesAt")
+                .code,
+            OmErrorCode::InvalidState
+        );
         assert_eq!(
             expect_number(
                 runtime
@@ -142469,6 +142864,24 @@ mod tests {
             "250"
         );
         reopened_runtime
+            .dispatch_invoke(
+                reopened_search_range,
+                "Find",
+                &[OmValue::Text("1".to_string())],
+            )
+            .expect("Range.Find before DisplayUnitLabel.Text");
+        reopened_runtime
+            .dispatch_invoke(reopened_search_range, "Copy", &[])
+            .expect("Range.Copy before DisplayUnitLabel.Text");
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before DisplayUnitLabel.Text")
+            ),
+            f64::from(super::XL_COPY)
+        );
+        reopened_runtime
             .dispatch_set(
                 custom_display_unit_label,
                 "Text",
@@ -142476,6 +142889,18 @@ mod tests {
                 &[],
             )
             .expect("set DisplayUnitLabel.Text");
+        assert!(!expect_bool(
+            reopened_runtime
+                .dispatch_get(reopened_runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after DisplayUnitLabel.Text")
+        ));
+        assert_eq!(
+            reopened_runtime
+                .dispatch_invoke(reopened_search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after DisplayUnitLabel.Text",)
+                .code,
+            OmErrorCode::InvalidState
+        );
         let saved_custom = reopened_runtime
             .save_workbook(
                 reopened_workbook,
