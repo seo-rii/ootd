@@ -67347,35 +67347,115 @@ mod tests {
             .iter()
             .find(|surface| surface.name == "Chart")
             .expect("Chart focus surface");
-        let location = chart
-            .members
-            .iter()
-            .find(|member| member.name == "Location")
-            .expect("Chart.Location focus member");
-        assert!(matches!(location.support, office_idl::SupportState::Stub));
-        let chart_name = chart
-            .members
-            .iter()
-            .find(|member| member.name == "Name")
-            .expect("Chart.Name focus member");
-        assert!(matches!(chart_name.support, office_idl::SupportState::Stub));
-        assert!(matches!(
-            chart_name.access,
-            office_idl::AccessMode::Readwrite
-        ));
-        let protection_mode = chart
-            .members
-            .iter()
-            .find(|member| member.name == "ProtectionMode")
-            .expect("Chart.ProtectionMode focus member");
-        assert!(matches!(
-            protection_mode.support,
-            office_idl::SupportState::Stub
-        ));
-        assert!(matches!(
-            protection_mode.access,
-            office_idl::AccessMode::Read
-        ));
+        for member_name in [
+            "Name",
+            "ChartType",
+            "ChartStyle",
+            "BarShape",
+            "Elevation",
+            "HeightPercent",
+            "Rotation",
+            "DepthPercent",
+            "GapDepth",
+            "Perspective",
+            "RightAngleAxes",
+            "DisplayBlanksAs",
+            "PlotVisibleOnly",
+            "ShowDataLabelsOverMaximum",
+            "HasTitle",
+            "HasDataTable",
+            "HasAxis",
+            "HasLegend",
+            "Visible",
+        ] {
+            let member = chart
+                .members
+                .iter()
+                .find(|member| member.name == member_name)
+                .unwrap_or_else(|| panic!("Chart.{member_name} focus member"));
+            assert!(matches!(member.support, office_idl::SupportState::Stub));
+            assert!(matches!(member.access, office_idl::AccessMode::Readwrite));
+        }
+        for member_name in [
+            "Index",
+            "ProtectContents",
+            "ProtectDrawingObjects",
+            "ProtectData",
+            "ProtectFormatting",
+            "ProtectSelection",
+            "ProtectionMode",
+            "ChartArea",
+            "PlotArea",
+            "ChartTitle",
+            "DataTable",
+            "Legend",
+            "ChartGroups",
+            "AreaGroups",
+            "BarGroups",
+            "ColumnGroups",
+            "DoughnutGroups",
+            "LineGroups",
+            "PieGroups",
+            "RadarGroups",
+            "SurfaceGroups",
+            "XYGroups",
+            "Axes",
+            "SeriesCollection",
+            "FullSeriesCollection",
+            "ChartObjects",
+            "Creator",
+            "Application",
+            "Parent",
+            "Next",
+            "Previous",
+        ] {
+            let member = chart
+                .members
+                .iter()
+                .find(|member| member.name == member_name)
+                .unwrap_or_else(|| panic!("Chart.{member_name} focus member"));
+            assert!(matches!(member.support, office_idl::SupportState::Stub));
+            assert!(matches!(member.access, office_idl::AccessMode::Read));
+        }
+        for member_name in [
+            "Activate",
+            "Select",
+            "Copy",
+            "Move",
+            "Protect",
+            "Unprotect",
+            "Refresh",
+            "CheckSpelling",
+            "Deselect",
+            "ClearToMatchColorStyle",
+            "ClearToMatchStyle",
+            "ApplyLayout",
+            "ApplyCustomType",
+            "SetSourceData",
+            "Location",
+            "ChartWizard",
+            "ApplyDataLabels",
+            "ApplyChartTemplate",
+            "SaveChartTemplate",
+            "SetDefaultChart",
+            "SetBackgroundPicture",
+            "Paste",
+            "Evaluate",
+            "CopyPicture",
+            "SetElement",
+            "Export",
+            "ExportAsFixedFormat",
+            "PrintPreview",
+            "PrintOut",
+            "Delete",
+        ] {
+            let member = chart
+                .members
+                .iter()
+                .find(|member| member.name == member_name)
+                .unwrap_or_else(|| panic!("Chart.{member_name} focus member"));
+            assert!(matches!(member.support, office_idl::SupportState::Stub));
+        }
         let chart_object = runtime
             .dispatch_registry()
             .focus_surfaces
@@ -67388,13 +67468,94 @@ mod tests {
             .iter()
             .find(|surface| surface.name == "ChartObjects")
             .expect("ChartObjects focus surface");
-        for member_name in ["BringToFront", "SendToBack"] {
+        for member_name in [
+            "Left",
+            "Top",
+            "Width",
+            "Height",
+            "Placement",
+            "Visible",
+            "ProtectChartObject",
+            "PrintObject",
+            "Locked",
+            "RoundedCorners",
+        ] {
             let member = chart_objects
                 .members
                 .iter()
                 .find(|member| member.name == member_name)
                 .unwrap_or_else(|| panic!("ChartObjects.{member_name} focus member"));
             assert!(matches!(member.support, office_idl::SupportState::Stub));
+            assert!(matches!(member.access, office_idl::AccessMode::Readwrite));
+        }
+        for member_name in ["Count", "Creator", "Application", "Parent", "ShapeRange"] {
+            let member = chart_objects
+                .members
+                .iter()
+                .find(|member| member.name == member_name)
+                .unwrap_or_else(|| panic!("ChartObjects.{member_name} focus member"));
+            assert!(matches!(member.support, office_idl::SupportState::Stub));
+            assert!(matches!(member.access, office_idl::AccessMode::Read));
+        }
+        for member_name in [
+            "Item",
+            "Add",
+            "Select",
+            "Copy",
+            "BringToFront",
+            "Cut",
+            "Duplicate",
+            "CopyPicture",
+            "Delete",
+            "SendToBack",
+        ] {
+            let member = chart_objects
+                .members
+                .iter()
+                .find(|member| member.name == member_name)
+                .unwrap_or_else(|| panic!("ChartObjects.{member_name} focus member"));
+            assert!(matches!(member.support, office_idl::SupportState::Stub));
+        }
+        for member_name in [
+            "Placement",
+            "Left",
+            "Top",
+            "Width",
+            "Height",
+            "Visible",
+            "OnAction",
+            "PrintObject",
+            "Locked",
+            "ProtectChartObject",
+            "RoundedCorners",
+        ] {
+            let member = chart_object
+                .members
+                .iter()
+                .find(|member| member.name == member_name)
+                .unwrap_or_else(|| panic!("ChartObject.{member_name} focus member"));
+            assert!(matches!(member.support, office_idl::SupportState::Stub));
+            assert!(matches!(member.access, office_idl::AccessMode::Readwrite));
+        }
+        for member_name in [
+            "Name",
+            "Chart",
+            "Index",
+            "ZOrder",
+            "ShapeRange",
+            "TopLeftCell",
+            "BottomRightCell",
+            "Creator",
+            "Application",
+            "Parent",
+        ] {
+            let member = chart_object
+                .members
+                .iter()
+                .find(|member| member.name == member_name)
+                .unwrap_or_else(|| panic!("ChartObject.{member_name} focus member"));
+            assert!(matches!(member.support, office_idl::SupportState::Stub));
+            assert!(matches!(member.access, office_idl::AccessMode::Read));
         }
         for member_name in [
             "IncrementLeft",
@@ -67412,6 +67573,15 @@ mod tests {
             );
         }
         for member_name in [
+            "Activate",
+            "Select",
+            "BringToFront",
+            "Copy",
+            "Cut",
+            "Duplicate",
+            "CopyPicture",
+            "Delete",
+            "SendToBack",
             "IncrementLeft",
             "IncrementTop",
             "IncrementRotation",
