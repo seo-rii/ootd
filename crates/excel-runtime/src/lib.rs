@@ -8802,6 +8802,9 @@ impl ExcelRuntime {
                             value_axis.axis_between_categories = Some(axis_between_categories);
                             chart.dirty = true;
                             runtime.dirty = true;
+                            self.find_state = None;
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
                         }
                         Ok(())
                     }
@@ -8878,6 +8881,9 @@ impl ExcelRuntime {
                         if changed {
                             chart.dirty = true;
                             runtime.dirty = true;
+                            self.find_state = None;
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
                         }
                         Ok(())
                     }
@@ -9118,6 +9124,9 @@ impl ExcelRuntime {
                             *target = Some(time_unit);
                             chart.dirty = true;
                             runtime.dirty = true;
+                            self.find_state = None;
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
                         }
                         Ok(())
                     }
@@ -9162,6 +9171,9 @@ impl ExcelRuntime {
                             axis.base_unit = next;
                             chart.dirty = true;
                             runtime.dirty = true;
+                            self.find_state = None;
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
                         }
                         Ok(())
                     }
@@ -141171,6 +141183,25 @@ mod tests {
             OmErrorCode::Unsupported
         );
 
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before Axis.AxisBetweenCategories"),
+        );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before Axis.AxisBetweenCategories");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Axis.AxisBetweenCategories");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Axis.AxisBetweenCategories")
+            ),
+            f64::from(super::XL_COPY)
+        );
         runtime
             .dispatch_set(
                 category_axis,
@@ -141179,6 +141210,20 @@ mod tests {
                 &[],
             )
             .expect("set Axis.AxisBetweenCategories");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Axis.AxisBetweenCategories")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err(
+                    "Range.FindNext should require a new Find after Axis.AxisBetweenCategories",
+                )
+                .code,
+            OmErrorCode::InvalidState
+        );
         assert_eq!(
             runtime
                 .dispatch_set(
@@ -141383,6 +141428,25 @@ mod tests {
             OmErrorCode::Unsupported
         );
 
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before Axis.BaseUnit"),
+        );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before Axis.BaseUnit");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Axis.BaseUnit");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Axis.BaseUnit")
+            ),
+            f64::from(super::XL_COPY)
+        );
         runtime
             .dispatch_set(
                 category_axis,
@@ -141391,6 +141455,18 @@ mod tests {
                 &[],
             )
             .expect("set Axis.BaseUnit");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Axis.BaseUnit")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after Axis.BaseUnit")
+                .code,
+            OmErrorCode::InvalidState
+        );
         runtime
             .dispatch_set(
                 category_axis,
@@ -141538,6 +141614,33 @@ mod tests {
             f64::from(super::XL_DAYS)
         );
 
+        let reopened_search_range = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(
+                    reopened_worksheet,
+                    "Range",
+                    &[OmValue::Text("A1:B3".to_string())],
+                )
+                .expect("reopened Worksheet.Range(A1:B3) before Axis.BaseUnitIsAuto"),
+        );
+        reopened_runtime
+            .dispatch_invoke(
+                reopened_search_range,
+                "Find",
+                &[OmValue::Text("1".to_string())],
+            )
+            .expect("Range.Find before Axis.BaseUnitIsAuto");
+        reopened_runtime
+            .dispatch_invoke(reopened_search_range, "Copy", &[])
+            .expect("Range.Copy before Axis.BaseUnitIsAuto");
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Axis.BaseUnitIsAuto")
+            ),
+            f64::from(super::XL_COPY)
+        );
         reopened_runtime
             .dispatch_set(
                 reopened_category_axis,
@@ -141546,6 +141649,18 @@ mod tests {
                 &[],
             )
             .expect("set Axis.BaseUnitIsAuto");
+        assert!(!expect_bool(
+            reopened_runtime
+                .dispatch_get(reopened_runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Axis.BaseUnitIsAuto")
+        ));
+        assert_eq!(
+            reopened_runtime
+                .dispatch_invoke(reopened_search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after Axis.BaseUnitIsAuto")
+                .code,
+            OmErrorCode::InvalidState
+        );
         assert!(expect_bool(
             reopened_runtime
                 .dispatch_get(reopened_category_axis, "BaseUnitIsAuto", &[])
@@ -141659,6 +141774,25 @@ mod tests {
                 .code,
             OmErrorCode::Unsupported
         );
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before Axis.CategoryType"),
+        );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before Axis.CategoryType");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Axis.CategoryType");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Axis.CategoryType")
+            ),
+            f64::from(super::XL_COPY)
+        );
         runtime
             .dispatch_set(
                 category_axis,
@@ -141667,6 +141801,18 @@ mod tests {
                 &[],
             )
             .expect("set Axis.CategoryType to time scale");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Axis.CategoryType")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after Axis.CategoryType")
+                .code,
+            OmErrorCode::InvalidState
+        );
         assert_eq!(
             runtime
                 .dispatch_set(
