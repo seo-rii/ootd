@@ -151367,70 +151367,63 @@ mod tests {
             runtime
                 .dispatch_set(workbook.0, "Saved", OmValue::Bool(true), &[])
                 .expect("reset Saved before secondary ChartGroup setter");
-            let search_range = if matches!(member, "SizeRepresents" | "SplitType" | "SplitValue") {
-                let search_range = expect_object_handle(
+            let search_range = expect_object_handle(
+                runtime
+                    .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                    .unwrap_or_else(|error| {
+                        panic!(
+                            "Worksheet.Range(A1:B3) before secondary ChartGroup.{member}: {error:?}"
+                        )
+                    }),
+            );
+            runtime
+                .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+                .unwrap_or_else(|error| {
+                    panic!("Range.Find before secondary ChartGroup.{member}: {error:?}")
+                });
+            runtime
+                .dispatch_invoke(search_range, "Copy", &[])
+                .unwrap_or_else(|error| {
+                    panic!("Range.Copy before secondary ChartGroup.{member}: {error:?}")
+                });
+            assert_eq!(
+                expect_number(
                     runtime
-                        .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                        .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
                         .unwrap_or_else(|error| {
                             panic!(
-                                "Worksheet.Range(A1:B3) before secondary ChartGroup.{member}: {error:?}"
+                                "Application.CutCopyMode before secondary ChartGroup.{member}: {error:?}"
                             )
-                        }),
-                );
-                runtime
-                    .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
-                    .unwrap_or_else(|error| {
-                        panic!("Range.Find before secondary ChartGroup.{member}: {error:?}")
-                    });
-                runtime
-                    .dispatch_invoke(search_range, "Copy", &[])
-                    .unwrap_or_else(|error| {
-                        panic!("Range.Copy before secondary ChartGroup.{member}: {error:?}")
-                    });
-                assert_eq!(
-                    expect_number(
-                        runtime
-                            .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
-                            .unwrap_or_else(|error| {
-                                panic!(
-                                    "Application.CutCopyMode before secondary ChartGroup.{member}: {error:?}"
-                                )
-                            })
-                    ),
-                    f64::from(super::XL_COPY)
-                );
-                Some(search_range)
-            } else {
-                None
-            };
+                        })
+                ),
+                f64::from(super::XL_COPY)
+            );
             runtime
                 .dispatch_set(secondary_group, member, value.clone(), &[])
                 .unwrap_or_else(|error| {
                     panic!("secondary ChartGroup.{member} setter failed: {error:?}")
                 });
-            if let Some(search_range) = search_range {
-                assert!(!expect_bool(
-                    runtime
-                        .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
-                        .unwrap_or_else(|error| {
-                            panic!(
-                                "Application.CutCopyMode after secondary ChartGroup.{member}: {error:?}"
-                            )
-                        })
-                ));
-                assert_eq!(
-                    runtime
-                        .dispatch_invoke(search_range, "FindNext", &[])
-                        .err()
-                        .unwrap_or_else(|| {
-                            panic!(
-                                "Range.FindNext should require a new Find after secondary ChartGroup.{member}"
-                            )
-                        })
-                        .code,
-                    OmErrorCode::InvalidState
-                );
-            }
+            assert!(!expect_bool(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .unwrap_or_else(|error| {
+                        panic!(
+                            "Application.CutCopyMode after secondary ChartGroup.{member}: {error:?}"
+                        )
+                    })
+            ));
+            assert_eq!(
+                runtime
+                    .dispatch_invoke(search_range, "FindNext", &[])
+                    .err()
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "Range.FindNext should require a new Find after secondary ChartGroup.{member}"
+                        )
+                    })
+                    .code,
+                OmErrorCode::InvalidState
+            );
             assert_eq!(
                 runtime
                     .dispatch_get(workbook.0, "Saved", &[])
