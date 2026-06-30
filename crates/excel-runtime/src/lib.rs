@@ -4754,6 +4754,11 @@ impl ExcelRuntime {
                         if workbook_dirty {
                             runtime.dirty = true;
                         }
+                        if workbook_dirty {
+                            self.find_state = None;
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
+                        }
                         if found {
                             Ok(())
                         } else {
@@ -4805,6 +4810,11 @@ impl ExcelRuntime {
                         if workbook_dirty {
                             runtime.dirty = true;
                         }
+                        if workbook_dirty {
+                            self.find_state = None;
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
+                        }
                         if found {
                             Ok(())
                         } else {
@@ -4837,10 +4847,16 @@ impl ExcelRuntime {
                                 .ok_or_else(|| {
                                     OmError::new(OmErrorCode::NotFound, "chart not found")
                                 })?;
-                        if chart.rounded_corners != Some(rounded_corners) {
+                        let changed = chart.rounded_corners != Some(rounded_corners);
+                        if changed {
                             chart.rounded_corners = Some(rounded_corners);
                             chart.dirty = true;
                             runtime.dirty = true;
+                        }
+                        if changed {
+                            self.find_state = None;
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
                         }
                         Ok(())
                     }
@@ -4894,6 +4910,11 @@ impl ExcelRuntime {
                         }
                         if workbook_dirty {
                             runtime.dirty = true;
+                        }
+                        if workbook_dirty {
+                            self.find_state = None;
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
                         }
                         if found {
                             Ok(())
@@ -4992,6 +5013,11 @@ impl ExcelRuntime {
                     if workbook_dirty {
                         runtime.dirty = true;
                     }
+                    if workbook_dirty {
+                        self.find_state = None;
+                        self.cut_copy_mode = None;
+                        self.clipboard = None;
+                    }
                     return Ok(());
                 }
                 if member == "Rotation" {
@@ -5051,6 +5077,11 @@ impl ExcelRuntime {
                     }
                     if workbook_dirty {
                         runtime.dirty = true;
+                    }
+                    if workbook_dirty {
+                        self.find_state = None;
+                        self.cut_copy_mode = None;
+                        self.clipboard = None;
                     }
                     return Ok(());
                 }
@@ -114244,9 +114275,40 @@ mod tests {
                 .expect("ChartObject.Visible after Chart.Visible false"),
             OmValue::Bool(false)
         );
+        let visible_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before Chart.Visible set"),
+        );
+        runtime
+            .dispatch_invoke(visible_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before Chart.Visible set");
+        runtime
+            .dispatch_invoke(visible_range, "Copy", &[])
+            .expect("Range.Copy before Chart.Visible set");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Chart.Visible set")
+            ),
+            f64::from(super::XL_COPY)
+        );
         runtime
             .dispatch_set(chart_for_name, "Visible", OmValue::Bool(true), &[])
             .expect("set embedded Chart.Visible true");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Chart.Visible set")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(visible_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after Chart.Visible set")
+                .code,
+            OmErrorCode::InvalidState
+        );
         assert_eq!(
             runtime
                 .dispatch_get(chart_for_name, "Visible", &[])
