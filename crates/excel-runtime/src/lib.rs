@@ -150801,9 +150801,46 @@ mod tests {
         runtime
             .dispatch_set(workbook.0, "Saved", OmValue::Bool(true), &[])
             .expect("reset Saved before secondary SeriesLines.ClearFormats");
+        let clear_formats_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before SeriesLines.ClearFormats"),
+        );
+        runtime
+            .dispatch_invoke(
+                clear_formats_range,
+                "Find",
+                &[OmValue::Text("1".to_string())],
+            )
+            .expect("Range.Find before SeriesLines.ClearFormats");
+        runtime
+            .dispatch_invoke(clear_formats_range, "Copy", &[])
+            .expect("Range.Copy before SeriesLines.ClearFormats");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before SeriesLines.ClearFormats")
+            ),
+            f64::from(super::XL_COPY)
+        );
         runtime
             .dispatch_invoke(secondary_series_lines, "ClearFormats", &[])
             .expect("secondary ChartGroup.SeriesLines.ClearFormats");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after SeriesLines.ClearFormats")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(clear_formats_range, "FindNext", &[])
+                .expect_err(
+                    "Range.FindNext should require a new Find after SeriesLines.ClearFormats"
+                )
+                .code,
+            OmErrorCode::InvalidState
+        );
         assert_eq!(
             runtime
                 .dispatch_get(workbook.0, "Saved", &[])
