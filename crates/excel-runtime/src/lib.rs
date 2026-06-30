@@ -14882,6 +14882,9 @@ impl ExcelRuntime {
                             chart.dirty = true;
                             runtime.dirty = true;
                         }
+                        self.cut_copy_mode = None;
+                        self.clipboard = None;
+                        self.find_state = None;
                         self.stale_series_handles_for_chart(workbook, chart_id);
                         let chart = self.register_chart_handle(workbook, chart_id);
                         let OmValue::Object(series_collection) =
@@ -131387,6 +131390,9 @@ mod tests {
         runtime
             .dispatch_invoke(source, "Copy", &[])
             .expect("Range.Copy before Chart.Paste values");
+        runtime
+            .dispatch_invoke(source, "Find", &[OmValue::Text("10".to_string())])
+            .expect("Range.Find before Chart.Paste values");
         assert_eq!(
             runtime
                 .dispatch_invoke(
@@ -131402,6 +131408,13 @@ mod tests {
                 .dispatch_get(application, "CutCopyMode", &[])
                 .expect("Application.CutCopyMode after Chart.Paste values"),
             OmValue::Bool(false)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(source, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after Chart.Paste values")
+                .code,
+            OmErrorCode::InvalidState
         );
         let series_collection = expect_object_handle(
             runtime
