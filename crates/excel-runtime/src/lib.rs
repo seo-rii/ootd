@@ -67481,6 +67481,61 @@ mod tests {
                 .unwrap_or_else(|| panic!("Gridlines.{member_name} focus member"));
             assert!(matches!(member.support, office_idl::SupportState::Stub));
         }
+        let chart_format = runtime
+            .dispatch_registry()
+            .focus_surfaces
+            .iter()
+            .find(|surface| surface.name == "ChartFormat")
+            .expect("ChartFormat focus surface");
+        for member_name in [
+            "Creator",
+            "Application",
+            "Adjustments",
+            "AutoShapeType",
+            "Parent",
+            "Fill",
+            "Glow",
+            "Line",
+            "PictureFormat",
+            "Shadow",
+            "SoftEdge",
+            "TextFrame2",
+            "ThreeD",
+        ] {
+            let member = chart_format
+                .members
+                .iter()
+                .find(|member| member.name == member_name)
+                .unwrap_or_else(|| panic!("ChartFormat.{member_name} focus member"));
+            assert!(matches!(member.support, office_idl::SupportState::Stub));
+            assert!(matches!(member.access, office_idl::AccessMode::Read));
+        }
+        for surface_name in [
+            "FillFormat",
+            "GlowFormat",
+            "LineFormat",
+            "PictureFormat",
+            "ShadowFormat",
+            "SoftEdgeFormat",
+            "TextFrame2",
+            "ThreeDFormat",
+        ] {
+            let surface = runtime
+                .dispatch_registry()
+                .focus_surfaces
+                .iter()
+                .find(|surface| surface.name == surface_name)
+                .unwrap_or_else(|| panic!("{surface_name} focus surface"));
+            for member_name in ["Creator", "Application", "Parent"] {
+                let member = surface
+                    .members
+                    .iter()
+                    .find(|member| member.name == member_name)
+                    .unwrap_or_else(|| panic!("{surface_name}.{member_name} focus member"));
+                assert!(matches!(member.support, office_idl::SupportState::Stub));
+                assert!(matches!(member.access, office_idl::AccessMode::Read));
+            }
+        }
         let series = runtime
             .dispatch_registry()
             .focus_surfaces
