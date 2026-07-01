@@ -134550,12 +134550,37 @@ mod tests {
                 vec![OmValue::Missing, OmValue::Missing, OmValue::Missing],
             ),
         ] {
+            runtime
+                .dispatch_set(
+                    runtime.root_application(),
+                    "CutCopyMode",
+                    OmValue::Bool(false),
+                    &[],
+                )
+                .unwrap_or_else(|error| {
+                    panic!("reset Application.CutCopyMode before Chart.{member}: {error:?}")
+                });
             assert_eq!(
                 runtime
                     .dispatch_invoke(handle, member, &args)
                     .unwrap_or_else(|error| panic!("{member}: {error:?}")),
                 OmValue::Empty,
                 "{member} should be allowed for read-only workbooks"
+            );
+            assert_eq!(
+                expect_number(
+                    runtime
+                        .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                        .unwrap_or_else(|error| {
+                            panic!("Application.CutCopyMode after Chart.{member}: {error:?}")
+                        })
+                ),
+                f64::from(super::XL_COPY),
+                "{member} should set headless copy mode"
+            );
+            assert!(
+                runtime.clipboard.is_none(),
+                "{member} should not populate a Range clipboard payload"
             );
             assert_eq!(
                 runtime
