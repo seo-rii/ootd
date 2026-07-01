@@ -113461,6 +113461,29 @@ mod tests {
                 .expect("ChartObjects.Add third chart"),
         );
 
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before ShapeRange.ZOrder"),
+        );
+        runtime
+            .dispatch_invoke(
+                search_range,
+                "Find",
+                &[OmValue::Text("zorder needle".to_string())],
+            )
+            .expect("Range.Find before ShapeRange.ZOrder");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before ShapeRange.ZOrder");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before ShapeRange.ZOrder")
+            ),
+            f64::from(super::XL_COPY)
+        );
         runtime
             .dispatch_invoke(
                 first_shape_range,
@@ -113468,6 +113491,18 @@ mod tests {
                 &[OmValue::Number(f64::from(super::MSO_BRING_FORWARD))],
             )
             .expect("ShapeRange.ZOrder msoBringForward");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after ShapeRange.ZOrder")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after ShapeRange.ZOrder")
+                .code,
+            OmErrorCode::InvalidState
+        );
         assert_eq!(
             expect_number(
                 runtime
@@ -113636,11 +113671,43 @@ mod tests {
         );
         runtime
             .dispatch_invoke(
+                search_range,
+                "Find",
+                &[OmValue::Text("zorder needle".to_string())],
+            )
+            .expect("Range.Find before multi ShapeRange.ZOrder");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before multi ShapeRange.ZOrder");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before multi ShapeRange.ZOrder")
+            ),
+            f64::from(super::XL_COPY)
+        );
+        runtime
+            .dispatch_invoke(
                 selected_shapes,
                 "ZOrder",
                 &[OmValue::Number(f64::from(super::MSO_BRING_TO_FRONT))],
             )
             .expect("multi ShapeRange.ZOrder msoBringToFront");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after multi ShapeRange.ZOrder")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err(
+                    "Range.FindNext should require a new Find after multi ShapeRange.ZOrder"
+                )
+                .code,
+            OmErrorCode::InvalidState
+        );
         assert_eq!(
             expect_number(
                 runtime
