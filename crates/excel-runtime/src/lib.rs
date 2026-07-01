@@ -121199,27 +121199,59 @@ mod tests {
                 .expect("Chart.RightAngleAxes default"),
             OmValue::Bool(true)
         );
-        runtime
-            .dispatch_set(chart, "Elevation", OmValue::Number(34.0), &[])
-            .expect("set Chart.Elevation");
-        runtime
-            .dispatch_set(chart, "HeightPercent", OmValue::Number(180.0), &[])
-            .expect("set Chart.HeightPercent");
-        runtime
-            .dispatch_set(chart, "Rotation", OmValue::Number(30.6), &[])
-            .expect("set Chart.Rotation with rounding");
-        runtime
-            .dispatch_set(chart, "DepthPercent", OmValue::Number(250.0), &[])
-            .expect("set Chart.DepthPercent");
-        runtime
-            .dispatch_set(chart, "GapDepth", OmValue::Number(300.0), &[])
-            .expect("set Chart.GapDepth");
-        runtime
-            .dispatch_set(chart, "Perspective", OmValue::Number(70.0), &[])
-            .expect("set Chart.Perspective");
-        runtime
-            .dispatch_set(chart, "RightAngleAxes", OmValue::Bool(false), &[])
-            .expect("set Chart.RightAngleAxes");
+        for (member, value) in [
+            ("Elevation", OmValue::Number(34.0)),
+            ("HeightPercent", OmValue::Number(180.0)),
+            ("Rotation", OmValue::Number(30.6)),
+            ("DepthPercent", OmValue::Number(250.0)),
+            ("GapDepth", OmValue::Number(300.0)),
+            ("Perspective", OmValue::Number(70.0)),
+            ("RightAngleAxes", OmValue::Bool(false)),
+        ] {
+            let search_range = expect_object_handle(
+                runtime
+                    .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                    .unwrap_or_else(|error| {
+                        panic!("Worksheet.Range(A1:B3) before Chart.{member}: {error:?}")
+                    }),
+            );
+            runtime
+                .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+                .unwrap_or_else(|error| panic!("Range.Find before Chart.{member}: {error:?}"));
+            runtime
+                .dispatch_invoke(search_range, "Copy", &[])
+                .unwrap_or_else(|error| panic!("Range.Copy before Chart.{member}: {error:?}"));
+            assert_eq!(
+                expect_number(
+                    runtime
+                        .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                        .unwrap_or_else(|error| {
+                            panic!("Application.CutCopyMode before Chart.{member}: {error:?}")
+                        })
+                ),
+                f64::from(super::XL_COPY)
+            );
+            runtime
+                .dispatch_set(chart, member, value, &[])
+                .unwrap_or_else(|error| panic!("set Chart.{member}: {error:?}"));
+            assert!(!expect_bool(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .unwrap_or_else(|error| {
+                        panic!("Application.CutCopyMode after Chart.{member}: {error:?}")
+                    })
+            ));
+            assert_eq!(
+                runtime
+                    .dispatch_invoke(search_range, "FindNext", &[])
+                    .err()
+                    .unwrap_or_else(|| {
+                        panic!("Range.FindNext should require a new Find after Chart.{member}")
+                    })
+                    .code,
+                OmErrorCode::InvalidState
+            );
+        }
         assert_eq!(
             expect_number(
                 runtime
