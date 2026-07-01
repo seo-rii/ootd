@@ -135670,6 +135670,20 @@ mod tests {
                 .expect("Chart.Axes(xlValue) before SetElement"),
         );
         runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before Chart.SetElement value axis title");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Chart.SetElement value axis title");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Chart.SetElement value axis title")
+            ),
+            f64::from(super::XL_COPY)
+        );
+        runtime
             .dispatch_invoke(
                 chart,
                 "SetElement",
@@ -135678,11 +135692,41 @@ mod tests {
                 ))],
             )
             .expect("Chart.SetElement msoElementPrimaryValueAxisTitleVertical");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Chart.SetElement value axis title")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err(
+                    "Range.FindNext should require a new Find after Chart.SetElement value axis title"
+                )
+                .code,
+            OmErrorCode::InvalidState
+        );
         assert_eq!(
             runtime
                 .dispatch_get(value_axis, "HasTitle", &[])
                 .expect("Value Axis.HasTitle after SetElement"),
             OmValue::Bool(true)
+        );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before Chart.SetElement value axis title none");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Chart.SetElement value axis title none");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect(
+                        "Application.CutCopyMode before Chart.SetElement value axis title none"
+                    )
+            ),
+            f64::from(super::XL_COPY)
         );
         runtime
             .dispatch_invoke(
@@ -135693,6 +135737,20 @@ mod tests {
                 ))],
             )
             .expect("Chart.SetElement msoElementPrimaryValueAxisTitleNone");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Chart.SetElement value axis title none")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err(
+                    "Range.FindNext should require a new Find after Chart.SetElement value axis title none"
+                )
+                .code,
+            OmErrorCode::InvalidState
+        );
         assert_eq!(
             runtime
                 .dispatch_get(value_axis, "HasTitle", &[])
@@ -135700,6 +135758,20 @@ mod tests {
             OmValue::Bool(false)
         );
 
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before Chart.SetElement value gridlines");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Chart.SetElement value gridlines");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Chart.SetElement value gridlines")
+            ),
+            f64::from(super::XL_COPY)
+        );
         runtime
             .dispatch_invoke(
                 chart,
@@ -135709,6 +135781,20 @@ mod tests {
                 ))],
             )
             .expect("Chart.SetElement msoElementPrimaryValueGridLinesMinorMajor");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Chart.SetElement value gridlines")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err(
+                    "Range.FindNext should require a new Find after Chart.SetElement value gridlines"
+                )
+                .code,
+            OmErrorCode::InvalidState
+        );
         assert_eq!(
             runtime
                 .dispatch_get(value_axis, "HasMajorGridlines", &[])
@@ -135722,6 +135808,20 @@ mod tests {
             OmValue::Bool(true)
         );
         runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before Chart.SetElement value gridlines none");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Chart.SetElement value gridlines none");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Chart.SetElement value gridlines none")
+            ),
+            f64::from(super::XL_COPY)
+        );
+        runtime
             .dispatch_invoke(
                 chart,
                 "SetElement",
@@ -135730,6 +135830,20 @@ mod tests {
                 ))],
             )
             .expect("Chart.SetElement msoElementPrimaryValueGridLinesNone");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Chart.SetElement value gridlines none")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err(
+                    "Range.FindNext should require a new Find after Chart.SetElement value gridlines none"
+                )
+                .code,
+            OmErrorCode::InvalidState
+        );
         assert_eq!(
             runtime
                 .dispatch_get(value_axis, "HasMajorGridlines", &[])
@@ -135743,6 +135857,20 @@ mod tests {
             OmValue::Bool(false)
         );
         runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before Chart.SetElement value axis millions");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Chart.SetElement value axis millions");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Chart.SetElement value axis millions")
+            ),
+            f64::from(super::XL_COPY)
+        );
+        runtime
             .dispatch_invoke(
                 chart,
                 "SetElement",
@@ -135751,6 +135879,20 @@ mod tests {
                 ))],
             )
             .expect("Chart.SetElement msoElementPrimaryValueAxisMillions");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Chart.SetElement value axis millions")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err(
+                    "Range.FindNext should require a new Find after Chart.SetElement value axis millions"
+                )
+                .code,
+            OmErrorCode::InvalidState
+        );
         assert_eq!(
             expect_number(
                 runtime
@@ -135758,6 +135900,20 @@ mod tests {
                     .expect("Value Axis.DisplayUnit after SetElement")
             ),
             f64::from(super::XL_MILLIONS)
+        );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before Chart.SetElement value axis log scale");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Chart.SetElement value axis log scale");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Chart.SetElement value axis log scale")
+            ),
+            f64::from(super::XL_COPY)
         );
         runtime
             .dispatch_invoke(
@@ -135768,6 +135924,20 @@ mod tests {
                 ))],
             )
             .expect("Chart.SetElement msoElementPrimaryValueAxisLogScale");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Chart.SetElement value axis log scale")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err(
+                    "Range.FindNext should require a new Find after Chart.SetElement value axis log scale"
+                )
+                .code,
+            OmErrorCode::InvalidState
+        );
         assert_eq!(
             expect_number(
                 runtime
