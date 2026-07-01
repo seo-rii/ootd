@@ -150457,11 +150457,48 @@ mod tests {
                 .code,
             OmErrorCode::InvalidArgument
         );
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before selected ChartObjects.BringToFront"),
+        );
+        runtime
+            .dispatch_invoke(
+                search_range,
+                "Find",
+                &[OmValue::Text("zorder needle".to_string())],
+            )
+            .expect("Range.Find before selected ChartObjects.BringToFront");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before selected ChartObjects.BringToFront");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before selected ChartObjects.BringToFront")
+            ),
+            f64::from(super::XL_COPY)
+        );
         assert_eq!(
             runtime
                 .dispatch_invoke(selected_chart_objects, "BringToFront", &[])
                 .expect("selected ChartObjects.BringToFront"),
             OmValue::Empty
+        );
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after selected ChartObjects.BringToFront")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err(
+                    "Range.FindNext should require a new Find after selected ChartObjects.BringToFront"
+                )
+                .code,
+            OmErrorCode::InvalidState
         );
         let front_chart_object = expect_object_handle(
             runtime
@@ -150476,11 +150513,43 @@ mod tests {
             ),
             "Z Ten Chart"
         );
+        runtime
+            .dispatch_invoke(
+                search_range,
+                "Find",
+                &[OmValue::Text("zorder needle".to_string())],
+            )
+            .expect("Range.Find before selected ChartObjects.SendToBack");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before selected ChartObjects.SendToBack");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before selected ChartObjects.SendToBack")
+            ),
+            f64::from(super::XL_COPY)
+        );
         assert_eq!(
             runtime
                 .dispatch_invoke(selected_chart_objects, "SendToBack", &[])
                 .expect("selected ChartObjects.SendToBack"),
             OmValue::Empty
+        );
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after selected ChartObjects.SendToBack")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err(
+                    "Range.FindNext should require a new Find after selected ChartObjects.SendToBack"
+                )
+                .code,
+            OmErrorCode::InvalidState
         );
         let back_chart_object = expect_object_handle(
             runtime
