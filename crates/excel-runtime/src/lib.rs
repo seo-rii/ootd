@@ -133264,6 +133264,9 @@ mod tests {
         runtime
             .dispatch_invoke(source, "Copy", &[])
             .expect("Range.Copy before Chart.Paste values and number formats");
+        runtime
+            .dispatch_invoke(source, "Find", &[OmValue::Text("10".to_string())])
+            .expect("Range.Find before Chart.Paste values and number formats");
         assert_eq!(
             runtime
                 .dispatch_invoke(
@@ -133275,6 +133278,21 @@ mod tests {
                 )
                 .expect("Chart.Paste xlPasteValuesAndNumberFormats"),
             OmValue::Empty
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(application, "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Chart.Paste values and number formats"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(source, "FindNext", &[])
+                .expect_err(
+                    "Range.FindNext should require a new Find after Chart.Paste values and number formats"
+                )
+                .code,
+            OmErrorCode::InvalidState
         );
         let series_collection = expect_object_handle(
             runtime
