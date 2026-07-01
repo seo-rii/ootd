@@ -116268,8 +116268,34 @@ mod tests {
             .dispatch_set(chart_object, "Width", OmValue::Number(120.0), &[])
             .expect("set ChartObject.Width");
         runtime
+            .dispatch_invoke(range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before ChartObject.Height set");
+        runtime
+            .dispatch_invoke(range, "Copy", &[])
+            .expect("Range.Copy before ChartObject.Height set");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before ChartObject.Height set")
+            ),
+            f64::from(super::XL_COPY)
+        );
+        runtime
             .dispatch_set(chart_object, "Height", OmValue::Number(70.0), &[])
             .expect("set ChartObject.Height");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after ChartObject.Height set")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after ChartObject.Height set")
+                .code,
+            OmErrorCode::InvalidState
+        );
         assert_eq!(
             runtime
                 .dispatch_invoke(chart_object, "IncrementLeft", &[OmValue::Number(4.0)])
