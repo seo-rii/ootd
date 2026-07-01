@@ -133186,6 +133186,9 @@ mod tests {
         runtime
             .dispatch_invoke(source, "Copy", &[])
             .expect("Range.Copy before Chart.Paste formats");
+        runtime
+            .dispatch_invoke(source, "Find", &[OmValue::Text("10".to_string())])
+            .expect("Range.Find before Chart.Paste formats");
         assert_eq!(
             runtime
                 .dispatch_invoke(
@@ -133201,6 +133204,13 @@ mod tests {
                 .dispatch_get(application, "CutCopyMode", &[])
                 .expect("Application.CutCopyMode after Chart.Paste formats"),
             OmValue::Bool(false)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(source, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after Chart.Paste formats")
+                .code,
+            OmErrorCode::InvalidState
         );
 
         runtime
