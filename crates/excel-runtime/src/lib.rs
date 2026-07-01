@@ -136240,6 +136240,22 @@ mod tests {
         );
 
         runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before Chart.SetElement secondary category axis show");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Chart.SetElement secondary category axis show");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect(
+                        "Application.CutCopyMode before Chart.SetElement secondary category axis show",
+                    )
+            ),
+            f64::from(super::XL_COPY)
+        );
+        runtime
             .dispatch_invoke(
                 chart,
                 "SetElement",
@@ -136248,6 +136264,22 @@ mod tests {
                 ))],
             )
             .expect("Chart.SetElement msoElementSecondaryCategoryAxisShow");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect(
+                    "Application.CutCopyMode after Chart.SetElement secondary category axis show"
+                )
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err(
+                    "Range.FindNext should require a new Find after Chart.SetElement secondary category axis show"
+                )
+                .code,
+            OmErrorCode::InvalidState
+        );
         let secondary_category_axis = expect_object_handle(
             runtime
                 .dispatch_get(
@@ -136261,6 +136293,22 @@ mod tests {
                 .expect("Chart.Axes(xlCategory, xlSecondary) after SetElement show"),
         );
         runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before Chart.SetElement secondary category gridlines");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Chart.SetElement secondary category gridlines");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect(
+                        "Application.CutCopyMode before Chart.SetElement secondary category gridlines",
+                    )
+            ),
+            f64::from(super::XL_COPY)
+        );
+        runtime
             .dispatch_invoke(
                 chart,
                 "SetElement",
@@ -136269,6 +136317,22 @@ mod tests {
                 ))],
             )
             .expect("Chart.SetElement msoElementSecondaryCategoryGridLinesMajor");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect(
+                    "Application.CutCopyMode after Chart.SetElement secondary category gridlines",
+                )
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err(
+                    "Range.FindNext should require a new Find after Chart.SetElement secondary category gridlines"
+                )
+                .code,
+            OmErrorCode::InvalidState
+        );
         assert_eq!(
             runtime
                 .dispatch_get(secondary_category_axis, "HasMajorGridlines", &[])
@@ -136282,6 +136346,22 @@ mod tests {
             OmValue::Bool(false)
         );
         runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before Chart.SetElement secondary category labels");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Chart.SetElement secondary category labels");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect(
+                        "Application.CutCopyMode before Chart.SetElement secondary category labels",
+                    )
+            ),
+            f64::from(super::XL_COPY)
+        );
+        runtime
             .dispatch_invoke(
                 chart,
                 "SetElement",
@@ -136290,6 +136370,20 @@ mod tests {
                 ))],
             )
             .expect("Chart.SetElement msoElementSecondaryCategoryAxisWithoutLabels");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Chart.SetElement secondary category labels")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err(
+                    "Range.FindNext should require a new Find after Chart.SetElement secondary category labels"
+                )
+                .code,
+            OmErrorCode::InvalidState
+        );
         assert_eq!(
             expect_number(
                 runtime
@@ -136297,6 +136391,22 @@ mod tests {
                     .expect("Secondary Category Axis.TickLabelPosition after SetElement")
             ),
             f64::from(super::XL_TICK_LABEL_POSITION_NONE)
+        );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before Chart.SetElement secondary category reverse");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Chart.SetElement secondary category reverse");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect(
+                        "Application.CutCopyMode before Chart.SetElement secondary category reverse",
+                    )
+            ),
+            f64::from(super::XL_COPY)
         );
         runtime
             .dispatch_invoke(
@@ -136307,11 +136417,43 @@ mod tests {
                 ))],
             )
             .expect("Chart.SetElement msoElementSecondaryCategoryAxisReverse");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect(
+                    "Application.CutCopyMode after Chart.SetElement secondary category reverse"
+                )
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err(
+                    "Range.FindNext should require a new Find after Chart.SetElement secondary category reverse"
+                )
+                .code,
+            OmErrorCode::InvalidState
+        );
         assert_eq!(
             runtime
                 .dispatch_get(secondary_category_axis, "ReversePlotOrder", &[])
                 .expect("Secondary Category Axis.ReversePlotOrder after SetElement"),
             OmValue::Bool(true)
+        );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before Chart.SetElement secondary category axis billions");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Chart.SetElement secondary category axis billions");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect(
+                        "Application.CutCopyMode before Chart.SetElement secondary category axis billions",
+                    )
+            ),
+            f64::from(super::XL_COPY)
         );
         runtime
             .dispatch_invoke(
@@ -136322,6 +136464,22 @@ mod tests {
                 ))],
             )
             .expect("Chart.SetElement msoElementSecondaryCategoryAxisBillions");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect(
+                    "Application.CutCopyMode after Chart.SetElement secondary category axis billions",
+                )
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err(
+                    "Range.FindNext should require a new Find after Chart.SetElement secondary category axis billions"
+                )
+                .code,
+            OmErrorCode::InvalidState
+        );
         assert_eq!(
             expect_number(
                 runtime
@@ -136329,6 +136487,22 @@ mod tests {
                     .expect("Secondary Category Axis.DisplayUnit after SetElement")
             ),
             f64::from(super::XL_THOUSAND_MILLIONS)
+        );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before Chart.SetElement secondary category axis log scale");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Chart.SetElement secondary category axis log scale");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect(
+                        "Application.CutCopyMode before Chart.SetElement secondary category axis log scale",
+                    )
+            ),
+            f64::from(super::XL_COPY)
         );
         runtime
             .dispatch_invoke(
@@ -136339,6 +136513,22 @@ mod tests {
                 ))],
             )
             .expect("Chart.SetElement msoElementSecondaryCategoryAxisLogScale");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect(
+                    "Application.CutCopyMode after Chart.SetElement secondary category axis log scale",
+                )
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err(
+                    "Range.FindNext should require a new Find after Chart.SetElement secondary category axis log scale"
+                )
+                .code,
+            OmErrorCode::InvalidState
+        );
         assert_eq!(
             expect_number(
                 runtime
@@ -136346,6 +136536,22 @@ mod tests {
                     .expect("Secondary Category Axis.ScaleType after SetElement")
             ),
             f64::from(super::XL_SCALE_LOGARITHMIC)
+        );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before Chart.SetElement secondary category axis title");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Chart.SetElement secondary category axis title");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect(
+                        "Application.CutCopyMode before Chart.SetElement secondary category axis title",
+                    )
+            ),
+            f64::from(super::XL_COPY)
         );
         runtime
             .dispatch_invoke(
@@ -136356,11 +136562,43 @@ mod tests {
                 ))],
             )
             .expect("Chart.SetElement msoElementSecondaryCategoryAxisTitleHorizontal");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect(
+                    "Application.CutCopyMode after Chart.SetElement secondary category axis title",
+                )
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err(
+                    "Range.FindNext should require a new Find after Chart.SetElement secondary category axis title"
+                )
+                .code,
+            OmErrorCode::InvalidState
+        );
         assert_eq!(
             runtime
                 .dispatch_get(secondary_category_axis, "HasTitle", &[])
                 .expect("Secondary Category Axis.HasTitle after SetElement title"),
             OmValue::Bool(true)
+        );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before Chart.SetElement secondary category axis none");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Chart.SetElement secondary category axis none");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect(
+                        "Application.CutCopyMode before Chart.SetElement secondary category axis none",
+                    )
+            ),
+            f64::from(super::XL_COPY)
         );
         runtime
             .dispatch_invoke(
@@ -136371,6 +136609,22 @@ mod tests {
                 ))],
             )
             .expect("Chart.SetElement msoElementSecondaryCategoryAxisNone");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect(
+                    "Application.CutCopyMode after Chart.SetElement secondary category axis none",
+                )
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err(
+                    "Range.FindNext should require a new Find after Chart.SetElement secondary category axis none"
+                )
+                .code,
+            OmErrorCode::InvalidState
+        );
         assert_eq!(
             runtime
                 .dispatch_get(
