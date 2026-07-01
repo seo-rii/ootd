@@ -114213,6 +114213,20 @@ mod tests {
                 .expect("ShapeRange.Height before ScaleHeight"),
         );
         runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before ShapeRange.ScaleHeight");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before ShapeRange.ScaleHeight");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before ShapeRange.ScaleHeight")
+            ),
+            f64::from(super::XL_COPY)
+        );
+        runtime
             .dispatch_invoke(
                 shape_range,
                 "ScaleHeight",
@@ -114223,6 +114237,18 @@ mod tests {
                 ],
             )
             .expect("ShapeRange.ScaleHeight from middle");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after ShapeRange.ScaleHeight")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after ShapeRange.ScaleHeight")
+                .code,
+            OmErrorCode::InvalidState
+        );
         assert_close(
             expect_number(
                 runtime
