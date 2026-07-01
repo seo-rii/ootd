@@ -16774,6 +16774,16 @@ impl ExcelRuntime {
                 chart_object_parent,
             } => {
                 match member {
+                    "Copy" => {
+                        if !args.is_empty() {
+                            return Err(OmError::invalid_argument(
+                                "PlotArea.Copy does not accept arguments",
+                            ));
+                        }
+                        self.chart_model(workbook, chart_id)?;
+                        self.set_headless_copy_mode();
+                        Ok(OmValue::Empty)
+                    }
                     "Clear" | "ClearContents" => {
                         if !args.is_empty() {
                             return Err(OmError::invalid_argument(format!(
@@ -128965,6 +128975,7 @@ mod tests {
                 ],
             ),
             (chart_area, "Copy", Vec::new()),
+            (plot_area, "Copy", Vec::new()),
             (chart, "Copy", Vec::new()),
             (
                 chart,
@@ -129319,6 +129330,13 @@ mod tests {
             runtime
                 .dispatch_invoke(chart_area, "Copy", &[OmValue::Missing])
                 .expect_err("ChartArea.Copy rejects arguments")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(plot_area, "Copy", &[OmValue::Missing])
+                .expect_err("PlotArea.Copy rejects arguments")
                 .code,
             OmErrorCode::InvalidArgument
         );
