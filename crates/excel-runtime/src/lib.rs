@@ -133155,11 +133155,32 @@ mod tests {
             runtime
                 .dispatch_invoke(source, "Copy", &[])
                 .unwrap_or_else(|_| panic!("Range.Copy before Chart.Paste {label}"));
+            runtime
+                .dispatch_invoke(source, "Find", &[OmValue::Text("10".to_string())])
+                .unwrap_or_else(|_| panic!("Range.Find before Chart.Paste {label}"));
             assert_eq!(
                 runtime
                     .dispatch_invoke(chart, "Paste", &[OmValue::Number(f64::from(paste_type))],)
                     .unwrap_or_else(|_| panic!("Chart.Paste {label}")),
                 OmValue::Empty
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(application, "CutCopyMode", &[])
+                    .unwrap_or_else(|_| {
+                        panic!("Application.CutCopyMode after Chart.Paste {label}")
+                    }),
+                OmValue::Bool(false)
+            );
+            assert_eq!(
+                match runtime.dispatch_invoke(source, "FindNext", &[]) {
+                    Ok(_) => {
+                        panic!("Range.FindNext should require a new Find after Chart.Paste {label}")
+                    }
+                    Err(error) => error,
+                }
+                .code,
+                OmErrorCode::InvalidState
             );
             let series_collection = expect_object_handle(
                 runtime
@@ -133334,6 +133355,16 @@ mod tests {
                         panic!("Application.CutCopyMode after Chart.Paste {label}")
                     }),
                 OmValue::Bool(false)
+            );
+            assert_eq!(
+                match runtime.dispatch_invoke(source, "FindNext", &[]) {
+                    Ok(_) => {
+                        panic!("Range.FindNext should require a new Find after Chart.Paste {label}")
+                    }
+                    Err(error) => error,
+                }
+                .code,
+                OmErrorCode::InvalidState
             );
             let series_collection = expect_object_handle(
                 runtime
