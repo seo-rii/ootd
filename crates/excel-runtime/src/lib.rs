@@ -150911,9 +150911,46 @@ mod tests {
             OmErrorCode::InvalidArgument
         );
 
+        let visible_search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before selected ShapeRange.Visible"),
+        );
+        runtime
+            .dispatch_invoke(
+                visible_search_range,
+                "Find",
+                &[OmValue::Text("1".to_string())],
+            )
+            .expect("Range.Find before selected ShapeRange.Visible");
+        runtime
+            .dispatch_invoke(visible_search_range, "Copy", &[])
+            .expect("Range.Copy before selected ShapeRange.Visible");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before selected ShapeRange.Visible")
+            ),
+            f64::from(super::XL_COPY)
+        );
         runtime
             .dispatch_set(selected_shape_range, "Visible", OmValue::Bool(false), &[])
             .expect("selected ShapeRange.Visible = False");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after selected ShapeRange.Visible")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(visible_search_range, "FindNext", &[])
+                .expect_err(
+                    "Range.FindNext should require a new Find after selected ShapeRange.Visible"
+                )
+                .code,
+            OmErrorCode::InvalidState
+        );
         assert_eq!(
             runtime
                 .dispatch_get(lower_z_chart, "Visible", &[])
@@ -150931,6 +150968,69 @@ mod tests {
                 .dispatch_get(later_z_chart, "Visible", &[])
                 .expect("selected later z-order ChartObject.Visible"),
             OmValue::Bool(false)
+        );
+
+        let lock_search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before selected ShapeRange.LockAspectRatio"),
+        );
+        runtime
+            .dispatch_invoke(lock_search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before selected ShapeRange.LockAspectRatio");
+        runtime
+            .dispatch_invoke(lock_search_range, "Copy", &[])
+            .expect("Range.Copy before selected ShapeRange.LockAspectRatio");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before selected ShapeRange.LockAspectRatio")
+            ),
+            f64::from(super::XL_COPY)
+        );
+        runtime
+            .dispatch_set(
+                selected_shape_range,
+                "LockAspectRatio",
+                OmValue::Number(f64::from(super::MSO_TRUE)),
+                &[],
+            )
+            .expect("selected ShapeRange.LockAspectRatio = True");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after selected ShapeRange.LockAspectRatio")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(lock_search_range, "FindNext", &[])
+                .expect_err(
+                    "Range.FindNext should require a new Find after selected ShapeRange.LockAspectRatio"
+                )
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(selected_shape_range, "LockAspectRatio", &[])
+                    .expect("selected ShapeRange.LockAspectRatio after set")
+            ),
+            f64::from(super::MSO_TRUE)
+        );
+        let lower_z_shape_range = expect_object_handle(
+            runtime
+                .dispatch_get(lower_z_chart, "ShapeRange", &[])
+                .expect("unselected lower z-order ChartObject.ShapeRange"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(lower_z_shape_range, "LockAspectRatio", &[])
+                    .expect("unselected lower z-order ShapeRange.LockAspectRatio")
+            ),
+            f64::from(super::MSO_FALSE)
         );
 
         let worksheet_selected_shape_range = expect_object_handle(
