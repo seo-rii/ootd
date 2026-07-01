@@ -137024,15 +137024,47 @@ mod tests {
             OmValue::Bool(true)
         );
 
-        runtime
-            .dispatch_invoke(
-                chart,
-                "SetElement",
-                &[OmValue::Number(f64::from(
-                    super::MSO_ELEMENT_SERIES_AXIS_SHOW,
-                ))],
-            )
-            .expect("Chart.SetElement msoElementSeriesAxisShow");
+        macro_rules! assert_set_element_resets_transient_state {
+            ($element:expr, $label:literal) => {{
+                runtime
+                    .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+                    .expect(concat!("Range.Find before ", $label));
+                runtime
+                    .dispatch_invoke(search_range, "Copy", &[])
+                    .expect(concat!("Range.Copy before ", $label));
+                assert_eq!(
+                    expect_number(
+                        runtime
+                            .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                            .expect(concat!("Application.CutCopyMode before ", $label))
+                    ),
+                    f64::from(super::XL_COPY)
+                );
+                runtime
+                    .dispatch_invoke(chart, "SetElement", &[OmValue::Number(f64::from($element))])
+                    .expect(concat!("Chart.SetElement ", $label));
+                assert!(!expect_bool(
+                    runtime
+                        .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                        .expect(concat!("Application.CutCopyMode after ", $label))
+                ));
+                assert_eq!(
+                    runtime
+                        .dispatch_invoke(search_range, "FindNext", &[])
+                        .expect_err(concat!(
+                            "Range.FindNext should require a new Find after ",
+                            $label
+                        ))
+                        .code,
+                    OmErrorCode::InvalidState
+                );
+            }};
+        }
+
+        assert_set_element_resets_transient_state!(
+            super::MSO_ELEMENT_SERIES_AXIS_SHOW,
+            "Chart.SetElement series axis show"
+        );
         assert_eq!(
             runtime
                 .dispatch_get(
@@ -137052,15 +137084,10 @@ mod tests {
                 )
                 .expect("Chart.Axes(xlSeriesAxis) after SetElement show"),
         );
-        runtime
-            .dispatch_invoke(
-                chart,
-                "SetElement",
-                &[OmValue::Number(f64::from(
-                    super::MSO_ELEMENT_SERIES_AXIS_TITLE_VERTICAL,
-                ))],
-            )
-            .expect("Chart.SetElement msoElementSeriesAxisTitleVertical");
+        assert_set_element_resets_transient_state!(
+            super::MSO_ELEMENT_SERIES_AXIS_TITLE_VERTICAL,
+            "Chart.SetElement series axis title vertical"
+        );
         assert_eq!(
             runtime
                 .dispatch_get(series_axis, "HasTitle", &[])
@@ -137072,15 +137099,10 @@ mod tests {
                 .dispatch_get(series_axis, "AxisTitle", &[])
                 .expect("Series Axis.AxisTitle after SetElement title"),
         );
-        runtime
-            .dispatch_invoke(
-                chart,
-                "SetElement",
-                &[OmValue::Number(f64::from(
-                    super::MSO_ELEMENT_SERIES_AXIS_TITLE_NONE,
-                ))],
-            )
-            .expect("Chart.SetElement msoElementSeriesAxisTitleNone");
+        assert_set_element_resets_transient_state!(
+            super::MSO_ELEMENT_SERIES_AXIS_TITLE_NONE,
+            "Chart.SetElement series axis title none"
+        );
         assert_eq!(
             runtime
                 .dispatch_get(series_axis, "HasTitle", &[])
@@ -137094,15 +137116,10 @@ mod tests {
                 .code,
             OmErrorCode::InvalidState
         );
-        runtime
-            .dispatch_invoke(
-                chart,
-                "SetElement",
-                &[OmValue::Number(f64::from(
-                    super::MSO_ELEMENT_SERIES_AXIS_GRIDLINES_MINOR_MAJOR,
-                ))],
-            )
-            .expect("Chart.SetElement msoElementSeriesAxisGridLinesMinorMajor");
+        assert_set_element_resets_transient_state!(
+            super::MSO_ELEMENT_SERIES_AXIS_GRIDLINES_MINOR_MAJOR,
+            "Chart.SetElement series axis gridlines minor major"
+        );
         assert_eq!(
             runtime
                 .dispatch_get(series_axis, "HasMajorGridlines", &[])
@@ -137115,15 +137132,10 @@ mod tests {
                 .expect("Series Axis.HasMinorGridlines after SetElement"),
             OmValue::Bool(true)
         );
-        runtime
-            .dispatch_invoke(
-                chart,
-                "SetElement",
-                &[OmValue::Number(f64::from(
-                    super::MSO_ELEMENT_SERIES_AXIS_WITHOUT_LABELING,
-                ))],
-            )
-            .expect("Chart.SetElement msoElementSeriesAxisWithoutLabeling");
+        assert_set_element_resets_transient_state!(
+            super::MSO_ELEMENT_SERIES_AXIS_WITHOUT_LABELING,
+            "Chart.SetElement series axis without labeling"
+        );
         assert_eq!(
             expect_number(
                 runtime
@@ -137132,30 +137144,20 @@ mod tests {
             ),
             f64::from(super::XL_TICK_LABEL_POSITION_NONE)
         );
-        runtime
-            .dispatch_invoke(
-                chart,
-                "SetElement",
-                &[OmValue::Number(f64::from(
-                    super::MSO_ELEMENT_SERIES_AXIS_REVERSE,
-                ))],
-            )
-            .expect("Chart.SetElement msoElementSeriesAxisReverse");
+        assert_set_element_resets_transient_state!(
+            super::MSO_ELEMENT_SERIES_AXIS_REVERSE,
+            "Chart.SetElement series axis reverse"
+        );
         assert_eq!(
             runtime
                 .dispatch_get(series_axis, "ReversePlotOrder", &[])
                 .expect("Series Axis.ReversePlotOrder after SetElement"),
             OmValue::Bool(true)
         );
-        runtime
-            .dispatch_invoke(
-                chart,
-                "SetElement",
-                &[OmValue::Number(f64::from(
-                    super::MSO_ELEMENT_SERIES_AXIS_NONE,
-                ))],
-            )
-            .expect("Chart.SetElement msoElementSeriesAxisNone");
+        assert_set_element_resets_transient_state!(
+            super::MSO_ELEMENT_SERIES_AXIS_NONE,
+            "Chart.SetElement series axis none"
+        );
         assert_eq!(
             runtime
                 .dispatch_get(
