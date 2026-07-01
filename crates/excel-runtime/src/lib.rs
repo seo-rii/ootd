@@ -5061,6 +5061,82 @@ impl ExcelRuntime {
                     }
                     return Ok(());
                 }
+                if member == "LockAspectRatio" {
+                    if !args.is_empty() {
+                        return Err(OmError::invalid_argument(
+                            "ShapeRange.LockAspectRatio does not accept index arguments",
+                        ));
+                    }
+                    let enabled = match value {
+                        OmValue::Bool(enabled) => enabled,
+                        OmValue::Number(number)
+                            if number.is_finite()
+                                && number.fract() == 0.0
+                                && (number as i32 == MSO_TRUE || number as i32 == MSO_FALSE) =>
+                        {
+                            number as i32 == MSO_TRUE
+                        }
+                        OmValue::Number(_) => {
+                            return Err(OmError::invalid_argument(
+                                "ShapeRange.LockAspectRatio expects msoTrue or msoFalse",
+                            ));
+                        }
+                        _ => {
+                            return Err(OmError::type_mismatch(
+                                "ShapeRange.LockAspectRatio expects a boolean or MsoTriState value",
+                            ));
+                        }
+                    };
+                    let chart_object_ids = self
+                        .shape_range_chart_object_entries(workbook, &source)?
+                        .into_iter()
+                        .map(|(chart_object_id, _)| chart_object_id)
+                        .collect::<Vec<_>>();
+                    if chart_object_ids.is_empty() {
+                        return Err(OmError::new(
+                            OmErrorCode::NotFound,
+                            "chart object not found",
+                        ));
+                    }
+                    let runtime = self.runtime_workbook_mut(workbook)?;
+                    if runtime.read_only {
+                        return Err(OmError::new(
+                            OmErrorCode::InvalidState,
+                            "cannot modify a read-only workbook",
+                        ));
+                    }
+                    let mut workbook_dirty = false;
+                    for drawing in runtime.loaded.state.drawings.values_mut() {
+                        for object in &mut drawing.objects {
+                            let DrawingObjectModel::ChartFrame(chart_object) = object else {
+                                continue;
+                            };
+                            if !chart_object_ids.contains(&chart_object.id) {
+                                continue;
+                            }
+                            let updated_frame_properties = set_graphic_frame_lock_aspect_ratio_xml(
+                                chart_object.non_visual_frame_properties_xml.as_deref(),
+                                enabled,
+                            )?;
+                            if chart_object.non_visual_frame_properties_xml
+                                != updated_frame_properties
+                            {
+                                chart_object.non_visual_frame_properties_xml =
+                                    updated_frame_properties;
+                                chart_object.dirty = true;
+                                drawing.dirty = true;
+                                workbook_dirty = true;
+                            }
+                        }
+                    }
+                    if workbook_dirty {
+                        runtime.dirty = true;
+                        self.find_state = None;
+                        self.cut_copy_mode = None;
+                        self.clipboard = None;
+                    }
+                    return Ok(());
+                }
                 if member == "Rotation" {
                     if !args.is_empty() {
                         return Err(OmError::invalid_argument(
@@ -35303,6 +35379,153 @@ fn graphic_frame_lock_aspect_ratio(raw_xml: Option<&str>) -> OmResult<bool> {
         }
         buffer.clear();
     }
+}
+
+fn rewrite_graphic_frame_lock_aspect_ratio_attr(
+    element: &BytesStart<'_>,
+    decoder: quick_xml::encoding::Decoder,
+    enabled: bool,
+) -> OmResult<BytesStart<'static>> {
+    let mut rewritten =
+        BytesStart::new(String::from_utf8_lossy(element.name().as_ref()).into_owned());
+    for attr in element.attributes() {
+        let attr = attr.map_err(runtime_xml_error)?;
+        if xml_local_name(attr.key.as_ref()) == b"noChangeAspect" {
+            continue;
+        }
+        let key = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
+        let value = attr
+            .decode_and_unescape_value(decoder)
+            .map_err(runtime_xml_error)?
+            .into_owned();
+        rewritten.push_attribute((key.as_str(), value.as_str()));
+    }
+    if enabled {
+        rewritten.push_attribute(("noChangeAspect", "1"));
+    }
+    Ok(rewritten)
+}
+
+fn default_graphic_frame_lock_aspect_ratio_xml(enabled: bool) -> Option<String> {
+    enabled.then(|| {
+        r#"<xdr:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect="1"/></xdr:cNvGraphicFramePr>"#
+            .to_string()
+    })
+}
+
+fn set_graphic_frame_lock_aspect_ratio_xml(
+    raw_xml: Option<&str>,
+    enabled: bool,
+) -> OmResult<Option<String>> {
+    let Some(raw_xml) = raw_xml else {
+        return Ok(default_graphic_frame_lock_aspect_ratio_xml(enabled));
+    };
+    let mut reader = Reader::from_reader(Cursor::new(raw_xml.as_bytes()));
+    reader.config_mut().trim_text(false);
+    let mut writer = Writer::new(Cursor::new(Vec::new()));
+    let mut buffer = Vec::new();
+    let mut saw_frame_properties = false;
+    let mut saw_locks = false;
+    loop {
+        match reader.read_event_into(&mut buffer) {
+            Ok(Event::Start(element)) => {
+                let local_name = xml_local_name(element.name().as_ref()).to_vec();
+                if local_name == b"cNvGraphicFramePr" {
+                    saw_frame_properties = true;
+                }
+                if local_name == b"graphicFrameLocks" {
+                    saw_locks = true;
+                    let rewritten = rewrite_graphic_frame_lock_aspect_ratio_attr(
+                        &element,
+                        reader.decoder(),
+                        enabled,
+                    )?;
+                    writer
+                        .write_event(Event::Start(rewritten))
+                        .map_err(runtime_xml_error)?;
+                } else {
+                    writer
+                        .write_event(Event::Start(element.into_owned()))
+                        .map_err(runtime_xml_error)?;
+                }
+            }
+            Ok(Event::Empty(element)) => {
+                let local_name = xml_local_name(element.name().as_ref()).to_vec();
+                if local_name == b"cNvGraphicFramePr" {
+                    saw_frame_properties = true;
+                    if enabled {
+                        let start = element.into_owned();
+                        let end = BytesEnd::new(
+                            String::from_utf8_lossy(start.name().as_ref()).into_owned(),
+                        );
+                        writer
+                            .write_event(Event::Start(start))
+                            .map_err(runtime_xml_error)?;
+                        let mut locks = BytesStart::new("a:graphicFrameLocks");
+                        locks.push_attribute(("noChangeAspect", "1"));
+                        writer
+                            .write_event(Event::Empty(locks))
+                            .map_err(runtime_xml_error)?;
+                        writer
+                            .write_event(Event::End(end))
+                            .map_err(runtime_xml_error)?;
+                    } else {
+                        writer
+                            .write_event(Event::Empty(element.into_owned()))
+                            .map_err(runtime_xml_error)?;
+                    }
+                } else if local_name == b"graphicFrameLocks" {
+                    saw_locks = true;
+                    let rewritten = rewrite_graphic_frame_lock_aspect_ratio_attr(
+                        &element,
+                        reader.decoder(),
+                        enabled,
+                    )?;
+                    writer
+                        .write_event(Event::Empty(rewritten))
+                        .map_err(runtime_xml_error)?;
+                } else {
+                    writer
+                        .write_event(Event::Empty(element.into_owned()))
+                        .map_err(runtime_xml_error)?;
+                }
+            }
+            Ok(Event::End(element)) => {
+                if xml_local_name(element.name().as_ref()) == b"cNvGraphicFramePr" {
+                    if !saw_locks && enabled {
+                        let mut locks = BytesStart::new("a:graphicFrameLocks");
+                        locks.push_attribute(("noChangeAspect", "1"));
+                        writer
+                            .write_event(Event::Empty(locks))
+                            .map_err(runtime_xml_error)?;
+                    }
+                    writer
+                        .write_event(Event::End(element.into_owned()))
+                        .map_err(runtime_xml_error)?;
+                } else {
+                    writer
+                        .write_event(Event::End(element.into_owned()))
+                        .map_err(runtime_xml_error)?;
+                }
+            }
+            Ok(Event::Eof) => break,
+            Ok(event) => writer
+                .write_event(event.into_owned())
+                .map_err(runtime_xml_error)?,
+            Err(error) => return Err(runtime_xml_error(error)),
+        }
+        buffer.clear();
+    }
+    if !saw_frame_properties {
+        return Ok(if enabled {
+            default_graphic_frame_lock_aspect_ratio_xml(enabled)
+        } else {
+            Some(raw_xml.to_string())
+        });
+    }
+    String::from_utf8(writer.into_inner().into_inner())
+        .map(Some)
+        .map_err(runtime_xml_error)
 }
 
 fn om_value_is_omitted(value: &OmValue) -> bool {
@@ -68785,6 +69008,19 @@ mod tests {
             .iter()
             .find(|surface| surface.name == "ShapeRange")
             .expect("ShapeRange focus surface");
+        let lock_aspect_ratio = shape_range
+            .members
+            .iter()
+            .find(|member| member.name == "LockAspectRatio")
+            .expect("ShapeRange.LockAspectRatio focus member");
+        assert!(matches!(
+            lock_aspect_ratio.support,
+            office_idl::SupportState::Stub
+        ));
+        assert!(matches!(
+            lock_aspect_ratio.access,
+            office_idl::AccessMode::Readwrite
+        ));
         for member_name in [
             "IncrementLeft",
             "IncrementTop",
@@ -113184,13 +113420,78 @@ mod tests {
                 .code,
             OmErrorCode::InvalidArgument
         );
-        let lock_error = runtime
-            .dispatch_set(shape_range, "LockAspectRatio", OmValue::Bool(false), &[])
-            .expect_err("ShapeRange.LockAspectRatio should be read-only");
-        assert_eq!(lock_error.code, OmErrorCode::Unsupported);
-        assert!(
-            lock_error.message.contains("pinned OM registry"),
-            "{lock_error:?}"
+        let lock_search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before ShapeRange.LockAspectRatio"),
+        );
+        runtime
+            .dispatch_invoke(lock_search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before ShapeRange.LockAspectRatio");
+        runtime
+            .dispatch_invoke(lock_search_range, "Copy", &[])
+            .expect("Range.Copy before ShapeRange.LockAspectRatio");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before ShapeRange.LockAspectRatio")
+            ),
+            f64::from(super::XL_COPY)
+        );
+        runtime
+            .dispatch_set(
+                shape_range,
+                "LockAspectRatio",
+                OmValue::Number(f64::from(super::MSO_FALSE)),
+                &[],
+            )
+            .expect("set ShapeRange.LockAspectRatio false");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after ShapeRange.LockAspectRatio")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(lock_search_range, "FindNext", &[])
+                .expect_err(
+                    "Range.FindNext should require a new Find after ShapeRange.LockAspectRatio"
+                )
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(shape_range, "LockAspectRatio", &[])
+                    .expect("ShapeRange.LockAspectRatio after set")
+            ),
+            f64::from(super::MSO_FALSE)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(
+                    shape_range,
+                    "LockAspectRatio",
+                    OmValue::Text("false".to_string()),
+                    &[],
+                )
+                .expect_err("ShapeRange.LockAspectRatio rejects text")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(
+                    shape_range,
+                    "LockAspectRatio",
+                    OmValue::Number(f64::from(super::MSO_SHAPE_MIXED)),
+                    &[],
+                )
+                .expect_err("ShapeRange.LockAspectRatio rejects mixed tri-state")
+                .code,
+            OmErrorCode::InvalidArgument
         );
         assert_eq!(
             runtime
@@ -113266,9 +113567,9 @@ mod tests {
             expect_number(
                 runtime
                     .dispatch_get(shape_range, "LockAspectRatio", &[])
-                    .expect("ShapeRange.LockAspectRatio after rejected set")
+                    .expect("ShapeRange.LockAspectRatio after set")
             ),
-            f64::from(super::MSO_SHAPE_MIXED)
+            f64::from(super::MSO_FALSE)
         );
         assert_eq!(
             expect_text(
@@ -113348,7 +113649,7 @@ mod tests {
         .expect("saved ShapeRange drawing XML utf8");
         assert!(saved_shape_range_drawing.contains(r#"descr="Revenue charts""#));
         assert!(saved_shape_range_drawing.contains(r#"title="Revenue chart title""#));
-        assert!(saved_shape_range_drawing.contains(r#"noChangeAspect="1""#));
+        assert!(saved_shape_range_drawing.contains(r#"<a:graphicFrameLocks noGrp="1"/>"#));
         assert!(saved_shape_range_drawing.contains(r#"rot="2715000""#));
         assert!(saved_shape_range_drawing.contains(r#"flipH="1""#));
         assert!(saved_shape_range_drawing.contains(r#"flipV="1""#));
@@ -129459,6 +129760,14 @@ mod tests {
                 &[],
             )
             .expect("setup ShapeRange.OnAction");
+        setup_runtime
+            .dispatch_set(
+                setup_shape_range,
+                "LockAspectRatio",
+                OmValue::Number(f64::from(super::MSO_TRUE)),
+                &[],
+            )
+            .expect("setup ShapeRange.LockAspectRatio");
         let saved = setup_runtime
             .save_workbook(
                 setup_workbook,
@@ -129504,6 +129813,10 @@ mod tests {
             ("AlternativeText", OmValue::Text("Changed alt".to_string())),
             ("Title", OmValue::Text("Changed title".to_string())),
             ("OnAction", OmValue::Text("ChangedMacro".to_string())),
+            (
+                "LockAspectRatio",
+                OmValue::Number(f64::from(super::MSO_FALSE)),
+            ),
         ] {
             let error = match runtime.dispatch_set(shape_range, member, value, &[]) {
                 Ok(()) => panic!("ShapeRange.{member} should reject read-only workbooks"),
@@ -129561,6 +129874,14 @@ mod tests {
                 .dispatch_get(shape_range, "OnAction", &[])
                 .expect("ShapeRange.OnAction after rejected setters"),
             OmValue::Text("OriginalMacro".to_string())
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(shape_range, "LockAspectRatio", &[])
+                    .expect("ShapeRange.LockAspectRatio after rejected setters")
+            ),
+            f64::from(super::MSO_TRUE)
         );
     }
 

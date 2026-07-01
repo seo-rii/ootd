@@ -1620,12 +1620,18 @@ impl XlsxCodec {
             let mut active_chart_object_index = None::<usize>;
             let mut active_anchor_depth = 0usize;
             let mut replaced_anchor_depth = 0usize;
+            let mut replaced_chart_object_subtree_depth = 0usize;
             let mut active_marker = None::<ActiveMarker>;
             let mut active_marker_field = None::<ActiveMarkerField>;
 
             loop {
                 match reader.read_event_into(&mut buffer) {
                     Ok(Event::Start(element)) => {
+                        if replaced_chart_object_subtree_depth > 0 {
+                            replaced_chart_object_subtree_depth += 1;
+                            buffer.clear();
+                            continue;
+                        }
                         if replaced_anchor_depth > 0 {
                             replaced_anchor_depth += 1;
                             buffer.clear();
@@ -1740,7 +1746,22 @@ impl XlsxCodec {
                             }
                             if let Some(chart_object_index) = active_chart_object_index {
                                 let chart_object = dirty_chart_objects[chart_object_index];
-                                if let Some(rewritten) = rewrite_chart_object_element(
+                                if local_name == b"cNvGraphicFramePr" {
+                                    if let Some(non_visual_frame_properties_xml) =
+                                        chart_object.non_visual_frame_properties_xml.as_deref()
+                                    {
+                                        writer
+                                            .get_mut()
+                                            .write_all(non_visual_frame_properties_xml.as_bytes())
+                                            .map_err(io_error)?;
+                                        replaced_chart_object_subtree_depth = 1;
+                                        active_anchor_depth = active_anchor_depth.saturating_sub(1);
+                                    } else {
+                                        writer
+                                            .write_event(Event::Start(element.into_owned()))
+                                            .map_err(xml_error)?;
+                                    }
+                                } else if let Some(rewritten) = rewrite_chart_object_element(
                                     &element,
                                     reader.decoder(),
                                     chart_object,
@@ -1761,6 +1782,10 @@ impl XlsxCodec {
                         }
                     }
                     Ok(Event::Empty(element)) => {
+                        if replaced_chart_object_subtree_depth > 0 {
+                            buffer.clear();
+                            continue;
+                        }
                         if replaced_anchor_depth > 0 {
                             buffer.clear();
                             continue;
@@ -1781,7 +1806,20 @@ impl XlsxCodec {
                         }
                         if let Some(chart_object_index) = active_chart_object_index {
                             let chart_object = dirty_chart_objects[chart_object_index];
-                            if let Some(rewritten) = rewrite_chart_object_element(
+                            if local_name == b"cNvGraphicFramePr" {
+                                if let Some(non_visual_frame_properties_xml) =
+                                    chart_object.non_visual_frame_properties_xml.as_deref()
+                                {
+                                    writer
+                                        .get_mut()
+                                        .write_all(non_visual_frame_properties_xml.as_bytes())
+                                        .map_err(io_error)?;
+                                } else {
+                                    writer
+                                        .write_event(Event::Empty(element.into_owned()))
+                                        .map_err(xml_error)?;
+                                }
+                            } else if let Some(rewritten) = rewrite_chart_object_element(
                                 &element,
                                 reader.decoder(),
                                 chart_object,
@@ -1801,6 +1839,10 @@ impl XlsxCodec {
                         }
                     }
                     Ok(Event::Text(text)) => {
+                        if replaced_chart_object_subtree_depth > 0 {
+                            buffer.clear();
+                            continue;
+                        }
                         if replaced_anchor_depth > 0 {
                             buffer.clear();
                             continue;
@@ -1868,6 +1910,15 @@ impl XlsxCodec {
                         }
                     }
                     Ok(Event::End(element)) => {
+                        if replaced_chart_object_subtree_depth > 0 {
+                            if replaced_chart_object_subtree_depth == 1 {
+                                replaced_chart_object_subtree_depth = 0;
+                            } else {
+                                replaced_chart_object_subtree_depth -= 1;
+                            }
+                            buffer.clear();
+                            continue;
+                        }
                         if replaced_anchor_depth > 0 {
                             if replaced_anchor_depth == 1 {
                                 replaced_anchor_depth = 0;

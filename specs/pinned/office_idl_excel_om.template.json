@@ -21313,7 +21313,7 @@
             "name": "i32",
             "aliasOf": "Int32"
           },
-          "access": "read"
+          "access": "readwrite"
         },
         {
           "name": "Rotation",
