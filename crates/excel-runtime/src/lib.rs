@@ -18099,6 +18099,7 @@ impl ExcelRuntime {
                             | "Application"
                             | "Parent"
                             | "Select"
+                            | "Copy"
                             | "Clear"
                             | "ClearFormats"
                             | "ClearContents"
@@ -68125,7 +68126,7 @@ mod tests {
             (
                 "PlotArea",
                 &["Name", "Format", "Creator", "Application", "Parent"][..],
-                &["Select", "Clear", "ClearFormats", "ClearContents"][..],
+                &["Select", "Copy", "Clear", "ClearFormats", "ClearContents"][..],
             ),
             (
                 "ChartTitle",

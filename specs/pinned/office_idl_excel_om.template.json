@@ -11394,6 +11394,22 @@
           }
         },
         {
+          "name": "Copy",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "PlotArea",
+                  "sourceMember": "Copy"
+                }
+              ]
+            }
+          }
+        },
+        {
           "name": "Clear",
           "memberKind": "method",
           "support": "stub",
