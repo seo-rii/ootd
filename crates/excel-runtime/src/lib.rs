@@ -134528,10 +134528,16 @@ mod tests {
                 .dispatch_get(chart, "ChartArea", &[])
                 .expect("Chart.ChartArea"),
         );
+        let shape_range = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "ShapeRange", &[])
+                .expect("ChartObject.ShapeRange"),
+        );
 
         for (handle, member, args) in [
             (chart_object, "Copy", Vec::new()),
             (chart_objects, "Copy", Vec::new()),
+            (shape_range, "Copy", Vec::new()),
             (chart, "Copy", Vec::new()),
             (chart_area, "Copy", Vec::new()),
             (
@@ -134541,6 +134547,11 @@ mod tests {
             ),
             (
                 chart_objects,
+                "CopyPicture",
+                vec![OmValue::Missing, OmValue::Missing],
+            ),
+            (
+                shape_range,
                 "CopyPicture",
                 vec![OmValue::Missing, OmValue::Missing],
             ),
