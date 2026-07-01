@@ -135035,6 +135035,22 @@ mod tests {
         );
 
         runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before Chart.SetElement data table with legend keys");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Chart.SetElement data table with legend keys");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect(
+                        "Application.CutCopyMode before Chart.SetElement data table with legend keys",
+                    )
+            ),
+            f64::from(super::XL_COPY)
+        );
+        runtime
             .dispatch_invoke(
                 chart,
                 "SetElement",
@@ -135043,6 +135059,22 @@ mod tests {
                 ))],
             )
             .expect("Chart.SetElement msoElementDataTableWithLegendKeys");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect(
+                    "Application.CutCopyMode after Chart.SetElement data table with legend keys",
+                )
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err(
+                    "Range.FindNext should require a new Find after Chart.SetElement data table with legend keys"
+                )
+                .code,
+            OmErrorCode::InvalidState
+        );
         assert_eq!(
             runtime
                 .dispatch_get(chart, "HasDataTable", &[])
@@ -135061,6 +135093,20 @@ mod tests {
             OmValue::Bool(true)
         );
         runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before Chart.SetElement data table show");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Chart.SetElement data table show");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Chart.SetElement data table show")
+            ),
+            f64::from(super::XL_COPY)
+        );
+        runtime
             .dispatch_invoke(
                 chart,
                 "SetElement",
@@ -135069,11 +135115,39 @@ mod tests {
                 ))],
             )
             .expect("Chart.SetElement msoElementDataTableShow");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Chart.SetElement data table show")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err(
+                    "Range.FindNext should require a new Find after Chart.SetElement data table show"
+                )
+                .code,
+            OmErrorCode::InvalidState
+        );
         assert_eq!(
             runtime
                 .dispatch_get(data_table, "ShowLegendKey", &[])
                 .expect("DataTable.ShowLegendKey after SetElement data table show"),
             OmValue::Bool(false)
+        );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before Chart.SetElement data table none");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Chart.SetElement data table none");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Chart.SetElement data table none")
+            ),
+            f64::from(super::XL_COPY)
         );
         runtime
             .dispatch_invoke(
@@ -135084,6 +135158,20 @@ mod tests {
                 ))],
             )
             .expect("Chart.SetElement msoElementDataTableNone");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Chart.SetElement data table none")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err(
+                    "Range.FindNext should require a new Find after Chart.SetElement data table none"
+                )
+                .code,
+            OmErrorCode::InvalidState
+        );
         assert_eq!(
             runtime
                 .dispatch_get(chart, "HasDataTable", &[])
