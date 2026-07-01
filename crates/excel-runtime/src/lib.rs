@@ -134888,6 +134888,20 @@ mod tests {
                 .code,
             OmErrorCode::InvalidState
         );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before Chart.ApplyChartTemplate");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before Chart.ApplyChartTemplate");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before Chart.ApplyChartTemplate")
+            ),
+            f64::from(super::XL_COPY)
+        );
         assert_eq!(
             runtime
                 .dispatch_invoke(
@@ -134897,6 +134911,20 @@ mod tests {
                 )
                 .expect("Chart.ApplyChartTemplate"),
             OmValue::Empty
+        );
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after Chart.ApplyChartTemplate")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err(
+                    "Range.FindNext should require a new Find after Chart.ApplyChartTemplate"
+                )
+                .code,
+            OmErrorCode::InvalidState
         );
         assert_eq!(
             runtime
