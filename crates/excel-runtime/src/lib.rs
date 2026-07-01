@@ -110090,6 +110090,41 @@ mod tests {
                 .expect("read-only Charts.Item(1)"),
         );
 
+        runtime
+            .dispatch_set(application, "CutCopyMode", OmValue::Bool(false), &[])
+            .expect("reset Application.CutCopyMode before read-only chart sheet CopyPicture");
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    chart,
+                    "CopyPicture",
+                    &[OmValue::Missing, OmValue::Missing, OmValue::Missing],
+                )
+                .expect("read-only chart sheet Chart.CopyPicture"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(application, "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode after read-only chart sheet CopyPicture")
+            ),
+            f64::from(super::XL_COPY)
+        );
+        assert!(
+            runtime.clipboard.is_none(),
+            "Chart.CopyPicture should not populate a Range clipboard payload"
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved after read-only chart sheet CopyPicture"),
+            OmValue::Bool(true)
+        );
+        runtime
+            .dispatch_set(application, "CutCopyMode", OmValue::Bool(false), &[])
+            .expect("reset Application.CutCopyMode before read-only chart sheet Copy");
+
         assert_eq!(
             runtime
                 .dispatch_invoke(chart, "Copy", &[])
