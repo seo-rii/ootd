@@ -114808,6 +114808,29 @@ mod tests {
                 .expect("default ChartObjects.RoundedCorners"),
             OmValue::Bool(false)
         );
+        let single_search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before ChartObject.RoundedCorners"),
+        );
+        runtime
+            .dispatch_invoke(
+                single_search_range,
+                "Find",
+                &[OmValue::Text("1".to_string())],
+            )
+            .expect("Range.Find before ChartObject.RoundedCorners");
+        runtime
+            .dispatch_invoke(single_search_range, "Copy", &[])
+            .expect("Range.Copy before ChartObject.RoundedCorners");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before ChartObject.RoundedCorners")
+            ),
+            f64::from(super::XL_COPY)
+        );
         runtime
             .dispatch_set(
                 first_chart_object,
@@ -114816,6 +114839,20 @@ mod tests {
                 &[],
             )
             .expect("set first ChartObject.RoundedCorners");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after ChartObject.RoundedCorners")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(single_search_range, "FindNext", &[])
+                .expect_err(
+                    "Range.FindNext should require a new Find after ChartObject.RoundedCorners",
+                )
+                .code,
+            OmErrorCode::InvalidState
+        );
         assert_eq!(
             runtime
                 .dispatch_get(chart_objects, "RoundedCorners", &[])
