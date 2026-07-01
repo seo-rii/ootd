@@ -114319,6 +114319,20 @@ mod tests {
                 .dispatch_get(first_chart_object, "Width", &[])
                 .expect("ChartObject.Width before single ShapeRange ScaleWidth"),
         );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before ChartObject.ScaleWidth");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before ChartObject.ScaleWidth");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before ChartObject.ScaleWidth")
+            ),
+            f64::from(super::XL_COPY)
+        );
         assert_eq!(
             runtime
                 .dispatch_invoke(
@@ -114332,6 +114346,18 @@ mod tests {
                 )
                 .expect("ChartObject.ScaleWidth from top-left"),
             OmValue::Empty
+        );
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after ChartObject.ScaleWidth")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after ChartObject.ScaleWidth")
+                .code,
+            OmErrorCode::InvalidState
         );
         assert_close(
             expect_number(
