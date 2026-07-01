@@ -113972,6 +113972,20 @@ mod tests {
         runtime
             .dispatch_invoke(second_shape, "IncrementTop", &[OmValue::Number(2.0)])
             .expect("single ShapeRange.IncrementTop");
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before ChartObject.IncrementRotation");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before ChartObject.IncrementRotation");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before ChartObject.IncrementRotation")
+            ),
+            f64::from(super::XL_COPY)
+        );
         assert_eq!(
             runtime
                 .dispatch_invoke(
@@ -113981,6 +113995,20 @@ mod tests {
                 )
                 .expect("ChartObject.IncrementRotation"),
             OmValue::Empty
+        );
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after ChartObject.IncrementRotation")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err(
+                    "Range.FindNext should require a new Find after ChartObject.IncrementRotation",
+                )
+                .code,
+            OmErrorCode::InvalidState
         );
         assert_eq!(
             expect_number(
