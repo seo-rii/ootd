@@ -15517,16 +15517,21 @@ impl ExcelRuntime {
                             | MSO_ELEMENT_CHART_FLOOR_SHOW
                     );
                     if valid_unimplemented_element {
-                        let runtime = self.runtime_workbook_mut(workbook)?;
-                        if runtime.read_only {
-                            return Err(OmError::new(
-                                OmErrorCode::InvalidState,
-                                "cannot modify a read-only workbook",
-                            ));
+                        {
+                            let runtime = self.runtime_workbook_mut(workbook)?;
+                            if runtime.read_only {
+                                return Err(OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "cannot modify a read-only workbook",
+                                ));
+                            }
+                            runtime.loaded.state.charts.get(&chart_id).ok_or_else(|| {
+                                OmError::new(OmErrorCode::NotFound, "chart not found")
+                            })?;
                         }
-                        runtime.loaded.state.charts.get(&chart_id).ok_or_else(|| {
-                            OmError::new(OmErrorCode::NotFound, "chart not found")
-                        })?;
+                        self.find_state = None;
+                        self.cut_copy_mode = None;
+                        self.clipboard = None;
                         return Ok(OmValue::Empty);
                     }
                     let changed_title_or_legend = matches!(
@@ -137479,6 +137484,20 @@ mod tests {
             ),
             f64::from(super::XL_LEGEND_POSITION_BOTTOM)
         );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before valid unimplemented Chart.SetElement");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before valid unimplemented Chart.SetElement");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before valid unimplemented Chart.SetElement",)
+            ),
+            f64::from(super::XL_COPY)
+        );
         assert_eq!(
             runtime
                 .dispatch_invoke(
@@ -137490,6 +137509,20 @@ mod tests {
                 )
                 .expect("Chart.SetElement unsupported but valid MsoChartElementType"),
             OmValue::Empty
+        );
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after valid unimplemented Chart.SetElement")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err(
+                    "Range.FindNext should require a new Find after valid unimplemented Chart.SetElement"
+                )
+                .code,
+            OmErrorCode::InvalidState
         );
         assert_eq!(
             runtime
