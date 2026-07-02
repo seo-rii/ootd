@@ -839,6 +839,11 @@ enum BorderParent {
         chart_id: ChartId,
         chart_object_parent: Option<ChartObjectsParent>,
     },
+    LegendKey {
+        chart_id: ChartId,
+        entry_index: usize,
+        chart_object_parent: Option<ChartObjectsParent>,
+    },
     Axis {
         chart_id: ChartId,
         axis_index: usize,
@@ -867,6 +872,23 @@ enum BorderParent {
     LeaderLines {
         chart_id: ChartId,
         series_index: usize,
+        chart_object_parent: Option<ChartObjectsParent>,
+    },
+    DataLabels {
+        chart_id: ChartId,
+        series_index: usize,
+        chart_object_parent: Option<ChartObjectsParent>,
+    },
+    DataLabel {
+        chart_id: ChartId,
+        series_index: usize,
+        point_index: usize,
+        chart_object_parent: Option<ChartObjectsParent>,
+    },
+    Point {
+        chart_id: ChartId,
+        series_index: usize,
+        point_index: usize,
         chart_object_parent: Option<ChartObjectsParent>,
     },
     ChartGroupLines {
@@ -17620,6 +17642,7 @@ impl ExcelRuntime {
                         self.cut_copy_mode = None;
                         self.clipboard = None;
                     }
+                    self.stale_data_labels_handles_for_series(workbook, chart_id, series_index);
                     Ok(OmValue::Empty)
                 }
                 "Select" => {
@@ -17939,6 +17962,12 @@ impl ExcelRuntime {
                         self.cut_copy_mode = None;
                         self.clipboard = None;
                     }
+                    self.stale_data_label_handles_for_point(
+                        workbook,
+                        chart_id,
+                        series_index,
+                        point_index as usize,
+                    );
                     Ok(OmValue::Empty)
                 }
                 "Select" => {
@@ -18758,6 +18787,7 @@ impl ExcelRuntime {
                     | (
                         "LegendKey",
                         "Format"
+                            | "Border"
                             | "Left"
                             | "Top"
                             | "Width"
@@ -19173,12 +19203,19 @@ impl ExcelRuntime {
                     )
                     | (
                         "LeaderLines",
-                        "Format" | "Creator" | "Application" | "Parent" | "Select" | "Delete"
+                        "Format"
+                            | "Border"
+                            | "Creator"
+                            | "Application"
+                            | "Parent"
+                            | "Select"
+                            | "Delete"
                     )
                     | (
                         "DataLabels",
                         "Name"
                             | "Format"
+                            | "Border"
                             | "Count"
                             | "Item"
                             | "Type"
@@ -19208,6 +19245,7 @@ impl ExcelRuntime {
                         "DataLabel",
                         "Name"
                             | "Format"
+                            | "Border"
                             | "Index"
                             | "Type"
                             | "ShowLegendKey"
@@ -19239,6 +19277,7 @@ impl ExcelRuntime {
                         "Point",
                         "Name"
                             | "Format"
+                            | "Border"
                             | "Index"
                             | "Explosion"
                             | "HasDataLabel"
@@ -24497,6 +24536,19 @@ impl ExcelRuntime {
                     chart_object_parent,
                 })
             }
+            BorderParent::LegendKey {
+                chart_id,
+                entry_index,
+                chart_object_parent,
+            } => {
+                self.validate_legend_entry_index(workbook, chart_id, entry_index)?;
+                Ok(RuntimeObjectKind::LegendKey {
+                    workbook,
+                    chart_id,
+                    entry_index,
+                    chart_object_parent,
+                })
+            }
             BorderParent::Axis {
                 chart_id,
                 axis_index,
@@ -24592,6 +24644,19 @@ impl ExcelRuntime {
                     chart_object_parent,
                 })
             }
+            BorderParent::DataLabels {
+                chart_id,
+                series_index,
+                chart_object_parent,
+            } => {
+                self.series_model(workbook, chart_id, series_index)?;
+                Ok(RuntimeObjectKind::DataLabels {
+                    workbook,
+                    chart_id,
+                    series_index,
+                    chart_object_parent,
+                })
+            }
             BorderParent::LeaderLines {
                 chart_id,
                 series_index,
@@ -24607,6 +24672,36 @@ impl ExcelRuntime {
                     workbook,
                     chart_id,
                     series_index,
+                    chart_object_parent,
+                })
+            }
+            BorderParent::DataLabel {
+                chart_id,
+                series_index,
+                point_index,
+                chart_object_parent,
+            } => {
+                self.validate_data_label_index(workbook, chart_id, series_index, point_index)?;
+                Ok(RuntimeObjectKind::DataLabel {
+                    workbook,
+                    chart_id,
+                    series_index,
+                    point_index,
+                    chart_object_parent,
+                })
+            }
+            BorderParent::Point {
+                chart_id,
+                series_index,
+                point_index,
+                chart_object_parent,
+            } => {
+                self.validate_point_index(workbook, chart_id, series_index, point_index)?;
+                Ok(RuntimeObjectKind::Point {
+                    workbook,
+                    chart_id,
+                    series_index,
+                    point_index,
                     chart_object_parent,
                 })
             }
@@ -24897,6 +24992,16 @@ impl ExcelRuntime {
                 RuntimeObjectKind::ChartFormat {
                     workbook,
                     parent: ChartFormatParent::LegendKey {
+                        chart_id,
+                        entry_index,
+                        chart_object_parent,
+                    },
+                },
+            ))),
+            "Border" => Ok(OmValue::Object(self.register_object(
+                RuntimeObjectKind::Border {
+                    workbook,
+                    parent: BorderParent::LegendKey {
                         chart_id,
                         entry_index,
                         chart_object_parent,
@@ -27601,6 +27706,19 @@ impl ExcelRuntime {
                     },
                 )))
             }
+            "Border" => {
+                self.series_model(workbook, chart_id, series_index)?;
+                Ok(OmValue::Object(self.register_object(
+                    RuntimeObjectKind::Border {
+                        workbook,
+                        parent: BorderParent::DataLabels {
+                            chart_id,
+                            series_index,
+                            chart_object_parent,
+                        },
+                    },
+                )))
+            }
             "Count" => {
                 let chart = self.chart_model(workbook, chart_id)?;
                 if chart.series.get(series_index).is_none() {
@@ -27799,6 +27917,17 @@ impl ExcelRuntime {
                 RuntimeObjectKind::ChartFormat {
                     workbook,
                     parent: ChartFormatParent::DataLabel {
+                        chart_id,
+                        series_index,
+                        point_index,
+                        chart_object_parent,
+                    },
+                },
+            ))),
+            "Border" => Ok(OmValue::Object(self.register_object(
+                RuntimeObjectKind::Border {
+                    workbook,
+                    parent: BorderParent::DataLabel {
                         chart_id,
                         series_index,
                         point_index,
@@ -28043,6 +28172,17 @@ impl ExcelRuntime {
                 RuntimeObjectKind::ChartFormat {
                     workbook,
                     parent: ChartFormatParent::Point {
+                        chart_id,
+                        series_index,
+                        point_index,
+                        chart_object_parent,
+                    },
+                },
+            ))),
+            "Border" => Ok(OmValue::Object(self.register_object(
+                RuntimeObjectKind::Border {
+                    workbook,
+                    parent: BorderParent::Point {
                         chart_id,
                         series_index,
                         point_index,
@@ -35180,6 +35320,10 @@ impl ExcelRuntime {
                             chart_id: object_chart_id,
                             ..
                         }
+                        | BorderParent::LegendKey {
+                            chart_id: object_chart_id,
+                            ..
+                        }
                         | BorderParent::DataTable {
                             chart_id: object_chart_id,
                             ..
@@ -35201,6 +35345,18 @@ impl ExcelRuntime {
                             ..
                         }
                         | BorderParent::LeaderLines {
+                            chart_id: object_chart_id,
+                            ..
+                        }
+                        | BorderParent::DataLabels {
+                            chart_id: object_chart_id,
+                            ..
+                        }
+                        | BorderParent::DataLabel {
+                            chart_id: object_chart_id,
+                            ..
+                        }
+                        | BorderParent::Point {
                             chart_id: object_chart_id,
                             ..
                         }
@@ -35850,6 +36006,10 @@ impl ExcelRuntime {
                         BorderParent::Legend {
                             chart_id: object_chart_id,
                             ..
+                        }
+                        | BorderParent::LegendKey {
+                            chart_id: object_chart_id,
+                            ..
                         },
                 } if *object_workbook == workbook && *object_chart_id == chart_id => {
                     Some(object_id)
@@ -35914,6 +36074,184 @@ impl ExcelRuntime {
                             ..
                         },
                 } if *object_workbook == workbook && *object_chart_id == chart_id => {
+                    Some(object_id)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        for object_id in stale_object_ids {
+            self.objects.remove(&object_id);
+            self.stale_objects.insert(object_id);
+        }
+    }
+
+    fn stale_data_labels_handles_for_series(
+        &mut self,
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        series_index: usize,
+    ) {
+        let stale_object_ids = self
+            .objects
+            .iter()
+            .filter_map(|(&object_id, object)| match object {
+                RuntimeObjectKind::DataLabels {
+                    workbook: object_workbook,
+                    chart_id: object_chart_id,
+                    series_index: object_series_index,
+                    ..
+                }
+                | RuntimeObjectKind::DataLabel {
+                    workbook: object_workbook,
+                    chart_id: object_chart_id,
+                    series_index: object_series_index,
+                    ..
+                }
+                | RuntimeObjectKind::ChartFormat {
+                    workbook: object_workbook,
+                    parent:
+                        ChartFormatParent::DataLabels {
+                            chart_id: object_chart_id,
+                            series_index: object_series_index,
+                            ..
+                        }
+                        | ChartFormatParent::DataLabel {
+                            chart_id: object_chart_id,
+                            series_index: object_series_index,
+                            ..
+                        },
+                }
+                | RuntimeObjectKind::Adjustments {
+                    workbook: object_workbook,
+                    parent:
+                        ChartFormatParent::DataLabels {
+                            chart_id: object_chart_id,
+                            series_index: object_series_index,
+                            ..
+                        }
+                        | ChartFormatParent::DataLabel {
+                            chart_id: object_chart_id,
+                            series_index: object_series_index,
+                            ..
+                        },
+                }
+                | RuntimeObjectKind::ChartFormatChild {
+                    workbook: object_workbook,
+                    parent:
+                        ChartFormatParent::DataLabels {
+                            chart_id: object_chart_id,
+                            series_index: object_series_index,
+                            ..
+                        }
+                        | ChartFormatParent::DataLabel {
+                            chart_id: object_chart_id,
+                            series_index: object_series_index,
+                            ..
+                        },
+                    ..
+                } if *object_workbook == workbook
+                    && *object_chart_id == chart_id
+                    && *object_series_index == series_index =>
+                {
+                    Some(object_id)
+                }
+                RuntimeObjectKind::Border {
+                    workbook: object_workbook,
+                    parent:
+                        BorderParent::DataLabels {
+                            chart_id: object_chart_id,
+                            series_index: object_series_index,
+                            ..
+                        }
+                        | BorderParent::DataLabel {
+                            chart_id: object_chart_id,
+                            series_index: object_series_index,
+                            ..
+                        },
+                } if *object_workbook == workbook
+                    && *object_chart_id == chart_id
+                    && *object_series_index == series_index =>
+                {
+                    Some(object_id)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        for object_id in stale_object_ids {
+            self.objects.remove(&object_id);
+            self.stale_objects.insert(object_id);
+        }
+    }
+
+    fn stale_data_label_handles_for_point(
+        &mut self,
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        series_index: usize,
+        point_index: usize,
+    ) {
+        let stale_object_ids = self
+            .objects
+            .iter()
+            .filter_map(|(&object_id, object)| match object {
+                RuntimeObjectKind::DataLabel {
+                    workbook: object_workbook,
+                    chart_id: object_chart_id,
+                    series_index: object_series_index,
+                    point_index: object_point_index,
+                    ..
+                }
+                | RuntimeObjectKind::ChartFormat {
+                    workbook: object_workbook,
+                    parent:
+                        ChartFormatParent::DataLabel {
+                            chart_id: object_chart_id,
+                            series_index: object_series_index,
+                            point_index: object_point_index,
+                            ..
+                        },
+                }
+                | RuntimeObjectKind::Adjustments {
+                    workbook: object_workbook,
+                    parent:
+                        ChartFormatParent::DataLabel {
+                            chart_id: object_chart_id,
+                            series_index: object_series_index,
+                            point_index: object_point_index,
+                            ..
+                        },
+                }
+                | RuntimeObjectKind::ChartFormatChild {
+                    workbook: object_workbook,
+                    parent:
+                        ChartFormatParent::DataLabel {
+                            chart_id: object_chart_id,
+                            series_index: object_series_index,
+                            point_index: object_point_index,
+                            ..
+                        },
+                    ..
+                } if *object_workbook == workbook
+                    && *object_chart_id == chart_id
+                    && *object_series_index == series_index
+                    && *object_point_index == point_index =>
+                {
+                    Some(object_id)
+                }
+                RuntimeObjectKind::Border {
+                    workbook: object_workbook,
+                    parent:
+                        BorderParent::DataLabel {
+                            chart_id: object_chart_id,
+                            series_index: object_series_index,
+                            point_index: object_point_index,
+                            ..
+                        },
+                } if *object_workbook == workbook
+                    && *object_chart_id == chart_id
+                    && *object_series_index == series_index
+                    && *object_point_index == point_index =>
+                {
                     Some(object_id)
                 }
                 _ => None,
@@ -36027,6 +36365,28 @@ impl ExcelRuntime {
                             ..
                         },
                     ..
+                } if *object_workbook == workbook && *object_chart_id == chart_id => {
+                    Some(object_id)
+                }
+                RuntimeObjectKind::Border {
+                    workbook: object_workbook,
+                    parent:
+                        BorderParent::LeaderLines {
+                            chart_id: object_chart_id,
+                            ..
+                        }
+                        | BorderParent::DataLabels {
+                            chart_id: object_chart_id,
+                            ..
+                        }
+                        | BorderParent::DataLabel {
+                            chart_id: object_chart_id,
+                            ..
+                        }
+                        | BorderParent::Point {
+                            chart_id: object_chart_id,
+                            ..
+                        },
                 } if *object_workbook == workbook && *object_chart_id == chart_id => {
                     Some(object_id)
                 }
@@ -70107,6 +70467,7 @@ mod tests {
                 "LegendKey",
                 &[
                     "Format",
+                    "Border",
                     "Left",
                     "Top",
                     "Width",
@@ -70988,6 +71349,7 @@ mod tests {
                 &[
                     "Name",
                     "Format",
+                    "Border",
                     "Count",
                     "Orientation",
                     "ReadingOrder",
@@ -71001,6 +71363,7 @@ mod tests {
                 &[
                     "Name",
                     "Format",
+                    "Border",
                     "Index",
                     "Orientation",
                     "ReadingOrder",
@@ -71015,6 +71378,7 @@ mod tests {
                 &[
                     "Name",
                     "Format",
+                    "Border",
                     "Index",
                     "DataLabel",
                     "Creator",
@@ -128552,6 +128916,11 @@ mod tests {
                 .dispatch_get(data_labels, "Item", &[OmValue::Number(3.0)])
                 .expect("DataLabels.Item property args"),
         );
+        let third_label_border = expect_object_handle(
+            runtime
+                .dispatch_get(third_label, "Border", &[])
+                .expect("DataLabel.Border"),
+        );
         let first_point_label = expect_object_handle(
             runtime
                 .dispatch_get(first_point, "DataLabel", &[])
@@ -128950,8 +129319,16 @@ mod tests {
         assert_eq!(
             runtime
                 .dispatch_get(third_label, "ShowValue", &[])
-                .expect("third DataLabel.ShowValue after Delete"),
-            OmValue::Bool(false)
+                .expect_err("third DataLabel handle should be stale after Delete")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(third_label_border, "LineStyle", &[])
+                .expect_err("third DataLabel.Border should be stale after Delete")
+                .code,
+            OmErrorCode::InvalidState
         );
 
         assert_eq!(
@@ -128977,7 +129354,7 @@ mod tests {
         );
         assert_eq!(
             runtime
-                .dispatch_invoke(third_label, "Delete", &[OmValue::Bool(true)])
+                .dispatch_invoke(second_label, "Delete", &[OmValue::Bool(true)])
                 .expect_err("DataLabel.Delete rejects arguments")
                 .code,
             OmErrorCode::InvalidArgument
@@ -129739,6 +130116,11 @@ mod tests {
                 .dispatch_get(series, "DataLabels", &[])
                 .expect("Series.DataLabels again"),
         );
+        let data_labels_border = expect_object_handle(
+            runtime
+                .dispatch_get(data_labels, "Border", &[])
+                .expect("DataLabels.Border"),
+        );
         let second_label = expect_object_handle(
             runtime
                 .dispatch_invoke(data_labels, "Item", &[OmValue::Number(2.0)])
@@ -129795,37 +130177,44 @@ mod tests {
         assert_eq!(
             runtime
                 .dispatch_invoke(data_labels, "Delete", &[])
-                .expect_err("DataLabels.Delete rejects absent labels after Delete")
+                .expect_err("DataLabels handle should be stale after Delete")
                 .code,
-            OmErrorCode::NotFound
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(data_labels_border, "LineStyle", &[])
+                .expect_err("DataLabels.Border should be stale after Delete")
+                .code,
+            OmErrorCode::InvalidState
         );
         assert_eq!(
             runtime
                 .dispatch_invoke(data_labels, "Select", &[])
-                .expect_err("DataLabels.Select rejects absent labels after Delete")
+                .expect_err("DataLabels.Select should be stale after Delete")
                 .code,
-            OmErrorCode::NotFound
+            OmErrorCode::InvalidState
         );
         assert_eq!(
             runtime
                 .dispatch_invoke(data_labels, "ClearFormats", &[])
-                .expect_err("DataLabels.ClearFormats rejects absent labels after Delete")
+                .expect_err("DataLabels.ClearFormats should be stale after Delete")
                 .code,
-            OmErrorCode::NotFound
+            OmErrorCode::InvalidState
         );
         assert_eq!(
             runtime
                 .dispatch_invoke(data_labels, "Propagate", &[OmValue::Number(0.0)])
-                .expect_err("DataLabels.Propagate(0) rejects absent labels after Delete")
+                .expect_err("DataLabels.Propagate(0) should be stale after Delete")
                 .code,
-            OmErrorCode::NotFound
+            OmErrorCode::InvalidState
         );
         assert_eq!(
             runtime
                 .dispatch_invoke(data_labels, "Propagate", &[OmValue::Number(1.0)])
-                .expect_err("DataLabels.Propagate(1) rejects absent labels after Delete")
+                .expect_err("DataLabels.Propagate(1) should be stale after Delete")
                 .code,
-            OmErrorCode::NotFound
+            OmErrorCode::InvalidState
         );
 
         let saved = runtime
@@ -131974,6 +132363,56 @@ mod tests {
                         panic!("{surface}.Border.Parent.Name failed: {error:?}")
                     }),
                 OmValue::Text(parent_name.to_string())
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(workbook.0, "Saved", &[])
+                    .expect("Workbook.Saved after Border getter"),
+                OmValue::Bool(true)
+            );
+        }
+
+        for (handle, surface, parent_member, expected_parent_value) in [
+            (
+                first_legend_key,
+                "LegendKey",
+                "Creator",
+                OmValue::Number(f64::from(super::XL_CREATOR_CODE)),
+            ),
+            (data_labels, "DataLabels", "Count", OmValue::Number(3.0)),
+            (data_label, "DataLabel", "Index", OmValue::Number(1.0)),
+            (point, "Point", "Index", OmValue::Number(1.0)),
+        ] {
+            let border = expect_object_handle(
+                runtime
+                    .dispatch_get(handle, "Border", &[])
+                    .unwrap_or_else(|error| panic!("{surface}.Border failed: {error:?}")),
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(handle, "Border", &[OmValue::Missing])
+                    .expect_err("Border getter rejects arguments")
+                    .code,
+                OmErrorCode::InvalidArgument
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(border, "LineStyle", &[])
+                    .unwrap_or_else(|error| panic!("{surface}.Border.LineStyle failed: {error:?}")),
+                OmValue::Number(f64::from(super::XL_CONTINUOUS))
+            );
+            let border_parent = expect_object_handle(
+                runtime
+                    .dispatch_get(border, "Parent", &[])
+                    .unwrap_or_else(|error| panic!("{surface}.Border.Parent failed: {error:?}")),
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(border_parent, parent_member, &[])
+                    .unwrap_or_else(|error| {
+                        panic!("{surface}.Border.Parent.{parent_member} failed: {error:?}")
+                    }),
+                expected_parent_value
             );
             assert_eq!(
                 runtime
