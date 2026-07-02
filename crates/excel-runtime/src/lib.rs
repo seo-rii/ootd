@@ -25365,6 +25365,8 @@ impl ExcelRuntime {
 
         match member {
             "Name" => Ok(OmValue::Text("Tick Labels".to_string())),
+            "AutoScaleFont" => Ok(OmValue::Bool(true)),
+            "Depth" => Ok(OmValue::Number(1.0)),
             "Format" => Ok(OmValue::Object(self.register_object(
                 RuntimeObjectKind::ChartFormat {
                     workbook,
@@ -25380,9 +25382,11 @@ impl ExcelRuntime {
                     .clone()
                     .unwrap_or_else(|| "General".to_string()),
             )),
+            "MultiLevel" => Ok(OmValue::Bool(true)),
             "NumberFormatLinked" => Ok(OmValue::Bool(
                 axis.tick_label_number_format_linked.unwrap_or(true),
             )),
+            "Offset" => Ok(OmValue::Number(100.0)),
             "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
             "Application" => Ok(OmValue::Object(self.root_application())),
             "Parent" => Ok(OmValue::Object(self.register_object(
@@ -68923,6 +68927,31 @@ mod tests {
                 .find(|member| member.name == member_name)
                 .unwrap_or_else(|| panic!("Axis.{member_name} focus member"));
             assert!(matches!(member.support, office_idl::SupportState::Stub));
+        }
+        let tick_labels = runtime
+            .dispatch_registry()
+            .focus_surfaces
+            .iter()
+            .find(|surface| surface.name == "TickLabels")
+            .expect("TickLabels focus surface");
+        for member_name in [
+            "Name",
+            "AutoScaleFont",
+            "Depth",
+            "Format",
+            "MultiLevel",
+            "Offset",
+            "Creator",
+            "Application",
+            "Parent",
+        ] {
+            let member = tick_labels
+                .members
+                .iter()
+                .find(|member| member.name == member_name)
+                .unwrap_or_else(|| panic!("TickLabels.{member_name} focus member"));
+            assert!(matches!(member.support, office_idl::SupportState::Stub));
+            assert!(matches!(member.access, office_idl::AccessMode::Read));
         }
         let gridlines = runtime
             .dispatch_registry()
@@ -129732,6 +129761,33 @@ mod tests {
                     OmErrorCode::InvalidArgument
                 );
             }
+        }
+
+        for (member, expected) in [
+            ("AutoScaleFont", OmValue::Bool(true)),
+            ("Depth", OmValue::Number(1.0)),
+            ("MultiLevel", OmValue::Bool(true)),
+            ("Offset", OmValue::Number(100.0)),
+        ] {
+            assert_eq!(
+                runtime
+                    .dispatch_get(tick_labels, member, &[])
+                    .unwrap_or_else(|error| panic!("TickLabels.{member} failed: {error:?}")),
+                expected
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(tick_labels, member, &[OmValue::Missing])
+                    .expect_err("TickLabels scalar getter rejects arguments")
+                    .code,
+                OmErrorCode::InvalidArgument
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(workbook.0, "Saved", &[])
+                    .expect("Workbook.Saved after TickLabels scalar getter"),
+                OmValue::Bool(true)
+            );
         }
 
         for (handle, member, args) in [

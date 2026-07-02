@@ -148,8 +148,8 @@ fn loads_office_idl_excel_om_template_and_summarizes_surface() {
     assert_eq!(summary.enum_count, 8);
     assert_eq!(summary.interface_count, 50);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 840);
-    assert_eq!(summary.stub_member_count, 840);
+    assert_eq!(summary.member_count, 844);
+    assert_eq!(summary.stub_member_count, 844);
     assert_eq!(
         document.interfaces[0].members[0]
             .metadata
@@ -1884,7 +1884,7 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
     assert_eq!(down_bars.member_count, 9);
     assert_eq!(axes.member_count, 5);
     assert_eq!(axis.member_count, 44);
-    assert_eq!(tick_labels.member_count, 9);
+    assert_eq!(tick_labels.member_count, 13);
     assert_eq!(gridlines.member_count, 7);
     assert_eq!(display_unit_label.member_count, 13);
     assert_eq!(axis_title.member_count, 13);
@@ -2976,8 +2976,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(coverage.library, "Excel");
     assert_eq!(coverage.version, "16.0");
-    assert_eq!(coverage.member_count, 840);
-    assert_eq!(coverage.support_counts.stub, 840);
+    assert_eq!(coverage.member_count, 844);
+    assert_eq!(coverage.support_counts.stub, 844);
     assert!(coverage.missing_focus_surfaces.is_empty());
 
     let application_coverage = coverage
@@ -4183,16 +4183,20 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         ]
     );
 
-    assert_eq!(tick_labels_coverage.member_count, 9);
-    assert_eq!(tick_labels_coverage.support_counts.stub, 9);
+    assert_eq!(tick_labels_coverage.member_count, 13);
+    assert_eq!(tick_labels_coverage.support_counts.stub, 13);
     assert_eq!(
         tick_labels_coverage.stub_members,
         vec![
             "Name".to_string(),
+            "AutoScaleFont".to_string(),
+            "Depth".to_string(),
             "Format".to_string(),
             "NumberFormat".to_string(),
             "NumberFormatLocal".to_string(),
+            "MultiLevel".to_string(),
             "NumberFormatLinked".to_string(),
+            "Offset".to_string(),
             "Creator".to_string(),
             "Application".to_string(),
             "Parent".to_string(),
