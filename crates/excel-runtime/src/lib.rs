@@ -2819,6 +2819,14 @@ impl ExcelRuntime {
                     "HasText" if matches!(kind, ChartFormatChildKind::TextFrame2) => {
                         Ok(OmValue::Number(f64::from(MSO_FALSE)))
                     }
+                    "Radius"
+                        if matches!(
+                            kind,
+                            ChartFormatChildKind::Glow | ChartFormatChildKind::SoftEdge
+                        ) =>
+                    {
+                        Ok(OmValue::Number(0.0))
+                    }
                     _ => Err(OmError::unsupported(format!(
                         "{surface}.{member} is not implemented"
                     ))),
@@ -18185,14 +18193,20 @@ impl ExcelRuntime {
                         "FillFormat",
                         "Creator" | "Application" | "Parent" | "Visible" | "Transparency"
                     )
-                    | ("GlowFormat", "Creator" | "Application" | "Parent")
+                    | (
+                        "GlowFormat",
+                        "Creator" | "Application" | "Parent" | "Radius"
+                    )
                     | (
                         "LineFormat",
                         "Creator" | "Application" | "Parent" | "Visible" | "Transparency"
                     )
                     | ("PictureFormat", "Creator" | "Application" | "Parent")
                     | ("ShadowFormat", "Creator" | "Application" | "Parent")
-                    | ("SoftEdgeFormat", "Creator" | "Application" | "Parent")
+                    | (
+                        "SoftEdgeFormat",
+                        "Creator" | "Application" | "Parent" | "Radius"
+                    )
                     | (
                         "TextFrame2",
                         "Creator" | "Application" | "Parent" | "HasText"
@@ -68723,6 +68737,15 @@ mod tests {
                     .iter()
                     .find(|member| member.name == "HasText")
                     .unwrap_or_else(|| panic!("{surface_name}.HasText focus member"));
+                assert!(matches!(member.support, office_idl::SupportState::Stub));
+                assert!(matches!(member.access, office_idl::AccessMode::Read));
+            }
+            if matches!(surface_name, "GlowFormat" | "SoftEdgeFormat") {
+                let member = surface
+                    .members
+                    .iter()
+                    .find(|member| member.name == "Radius")
+                    .unwrap_or_else(|| panic!("{surface_name}.Radius focus member"));
                 assert!(matches!(member.support, office_idl::SupportState::Stub));
                 assert!(matches!(member.access, office_idl::AccessMode::Read));
             }
@@ -129485,6 +129508,23 @@ mod tests {
                         runtime
                             .dispatch_get(format_child, "HasText", &[OmValue::Missing])
                             .expect_err("TextFrame2.HasText rejects arguments")
+                            .code,
+                        OmErrorCode::InvalidArgument
+                    );
+                }
+                if matches!(child_surface, "GlowFormat" | "SoftEdgeFormat") {
+                    assert_eq!(
+                        runtime
+                            .dispatch_get(format_child, "Radius", &[])
+                            .unwrap_or_else(|error| {
+                                panic!("{child_surface}.Radius failed: {error:?}")
+                            }),
+                        OmValue::Number(0.0)
+                    );
+                    assert_eq!(
+                        runtime
+                            .dispatch_get(format_child, "Radius", &[OmValue::Missing])
+                            .expect_err("format child Radius rejects arguments")
                             .code,
                         OmErrorCode::InvalidArgument
                     );
