@@ -286,6 +286,32 @@
           }
         },
         {
+          "name": "WorksheetFunction",
+          "memberKind": "property",
+          "returnType": {
+            "kind": "interface",
+            "name": "WorksheetFunction",
+            "aliasOf": "Excel.WorksheetFunction"
+          },
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Application",
+                  "sourceMember": "WorksheetFunction"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "WorksheetFunction",
+                "aliasOf": "Excel.WorksheetFunction"
+              }
+            }
+          }
+        },
+        {
           "name": "ActiveWorkbook",
           "memberKind": "property",
           "returnType": {
@@ -4193,6 +4219,96 @@
               "optional": true
             }
           ]
+        }
+      ]
+    },
+    {
+      "name": "WorksheetFunction",
+      "kind": "dispatch",
+      "metadata": {
+        "iid": "{00024413-0000-0000-C000-000000000046}",
+        "sourceInherits": [
+          "IDispatch"
+        ]
+      },
+      "members": [
+        {
+          "name": "Application",
+          "memberKind": "property",
+          "returnType": {
+            "kind": "interface",
+            "name": "Application",
+            "aliasOf": "Excel.Application"
+          },
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "WorksheetFunction",
+                  "sourceMember": "Application"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Application",
+                "aliasOf": "Excel.Application"
+              }
+            }
+          }
+        },
+        {
+          "name": "Creator",
+          "memberKind": "property",
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "Int32"
+          },
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "WorksheetFunction",
+                  "sourceMember": "Creator"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "Int32"
+              }
+            }
+          }
+        },
+        {
+          "name": "Parent",
+          "memberKind": "property",
+          "returnType": {
+            "kind": "interface",
+            "name": "Application",
+            "aliasOf": "Excel.Application"
+          },
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "WorksheetFunction",
+                  "sourceMember": "Parent"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Application",
+                "aliasOf": "Excel.Application"
+              }
+            }
+          }
         }
       ]
     },

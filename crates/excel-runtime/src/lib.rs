@@ -71783,6 +71783,7 @@ mod tests {
             "ChartObjects",
             "ChartObject",
             "Chart",
+            "WorksheetFunction",
             "Sheets",
             "Charts",
             "ChartArea",
