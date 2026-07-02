@@ -87906,6 +87906,18 @@ mod tests {
                 runtime
                     .dispatch_invoke(
                         worksheet_function,
+                        "CountBlank",
+                        &[OmValue::Object(first_source)]
+                    )
+                    .expect("WorksheetFunction.CountBlank")
+            ),
+            0.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
                         "AverageA",
                         &[
                             OmValue::Number(1.0),
@@ -87948,6 +87960,87 @@ mod tests {
                     .expect("WorksheetFunction.MinA")
             ),
             1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "CountIfs",
+                        &[
+                            OmValue::Object(paired_x_source),
+                            OmValue::Text(">2".to_string()),
+                            OmValue::Object(paired_y_source),
+                            OmValue::Text(">4".to_string()),
+                        ],
+                    )
+                    .expect("WorksheetFunction.CountIfs")
+            ),
+            2.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "SumIfs",
+                        &[
+                            OmValue::Object(paired_y_source),
+                            OmValue::Object(paired_x_source),
+                            OmValue::Text(">2".to_string()),
+                        ],
+                    )
+                    .expect("WorksheetFunction.SumIfs")
+            ),
+            14.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "AverageIfs",
+                        &[
+                            OmValue::Object(paired_y_source),
+                            OmValue::Object(paired_x_source),
+                            OmValue::Text(">2".to_string()),
+                        ],
+                    )
+                    .expect("WorksheetFunction.AverageIfs")
+            ),
+            7.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "MinIfs",
+                        &[
+                            OmValue::Object(paired_y_source),
+                            OmValue::Object(paired_x_source),
+                            OmValue::Text(">2".to_string()),
+                        ],
+                    )
+                    .expect("WorksheetFunction.MinIfs")
+            ),
+            6.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "MaxIfs",
+                        &[
+                            OmValue::Object(paired_y_source),
+                            OmValue::Object(paired_x_source),
+                            OmValue::Text(">2".to_string()),
+                        ],
+                    )
+                    .expect("WorksheetFunction.MaxIfs")
+            ),
+            8.0
         );
         assert_eq!(
             expect_number(
