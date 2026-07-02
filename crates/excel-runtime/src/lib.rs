@@ -24219,6 +24219,31 @@ impl ExcelRuntime {
             self.focus_member_supported(surface, member, false)?;
         }
         match member {
+            "Copy" => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(format!(
+                        "{surface}.Copy does not accept arguments"
+                    )));
+                }
+                let chart = self.chart_model(workbook, chart_id)?;
+                chart_group_axis_group(chart, group_index)?;
+                let exists = match kind {
+                    ChartGroupLineKind::SeriesLines => chart.has_series_lines,
+                    ChartGroupLineKind::DropLines => chart.has_drop_lines,
+                    ChartGroupLineKind::HiLoLines => chart.has_hi_lo_lines,
+                    ChartGroupLineKind::UpBars | ChartGroupLineKind::DownBars => {
+                        chart.has_up_down_bars
+                    }
+                };
+                if exists != Some(true) {
+                    return Err(OmError::new(
+                        OmErrorCode::NotFound,
+                        format!("{surface} not found"),
+                    ));
+                }
+                self.set_headless_copy_mode();
+                Ok(OmValue::Empty)
+            }
             "Select" => {
                 if !args.is_empty() {
                     return Err(OmError::invalid_argument(format!(
@@ -128888,6 +128913,41 @@ mod tests {
                 .dispatch_get(chart, "Legend", &[])
                 .expect("Chart.Legend"),
         );
+        let chart_groups = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartGroups", &[])
+                .expect("Chart.ChartGroups"),
+        );
+        let chart_group = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_groups, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartGroups.Item(1)"),
+        );
+        let series_lines = expect_object_handle(
+            runtime
+                .dispatch_get(chart_group, "SeriesLines", &[])
+                .expect("ChartGroup.SeriesLines"),
+        );
+        let drop_lines = expect_object_handle(
+            runtime
+                .dispatch_get(chart_group, "DropLines", &[])
+                .expect("ChartGroup.DropLines"),
+        );
+        let hi_lo_lines = expect_object_handle(
+            runtime
+                .dispatch_get(chart_group, "HiLoLines", &[])
+                .expect("ChartGroup.HiLoLines"),
+        );
+        let up_bars = expect_object_handle(
+            runtime
+                .dispatch_get(chart_group, "UpBars", &[])
+                .expect("ChartGroup.UpBars"),
+        );
+        let down_bars = expect_object_handle(
+            runtime
+                .dispatch_get(chart_group, "DownBars", &[])
+                .expect("ChartGroup.DownBars"),
+        );
         let axes = expect_object_handle(
             runtime
                 .dispatch_get(chart, "Axes", &[])
@@ -128989,6 +129049,11 @@ mod tests {
             ),
             (series, "Copy", Vec::new()),
             (point, "Copy", Vec::new()),
+            (series_lines, "Copy", Vec::new()),
+            (drop_lines, "Copy", Vec::new()),
+            (hi_lo_lines, "Copy", Vec::new()),
+            (up_bars, "Copy", Vec::new()),
+            (down_bars, "Copy", Vec::new()),
         ] {
             runtime
                 .dispatch_set(application, "CutCopyMode", OmValue::Bool(false), &[])
@@ -129341,6 +129406,22 @@ mod tests {
                 .code,
             OmErrorCode::InvalidArgument
         );
+        for (handle, surface) in [
+            (series_lines, "SeriesLines"),
+            (drop_lines, "DropLines"),
+            (hi_lo_lines, "HiLoLines"),
+            (up_bars, "UpBars"),
+            (down_bars, "DownBars"),
+        ] {
+            assert_eq!(
+                runtime
+                    .dispatch_invoke(handle, "Copy", &[OmValue::Missing])
+                    .expect_err("line object Copy should reject arguments")
+                    .code,
+                OmErrorCode::InvalidArgument,
+                "{surface}.Copy argument validation"
+            );
+        }
         assert_eq!(
             runtime
                 .dispatch_invoke(
