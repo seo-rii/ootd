@@ -828,6 +828,12 @@ enum BorderParent {
         series_index: usize,
         chart_object_parent: Option<ChartObjectsParent>,
     },
+    ChartGroupLines {
+        chart_id: ChartId,
+        group_index: usize,
+        kind: ChartGroupLineKind,
+        chart_object_parent: Option<ChartObjectsParent>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24387,6 +24393,35 @@ impl ExcelRuntime {
                     chart_object_parent,
                 })
             }
+            BorderParent::ChartGroupLines {
+                chart_id,
+                group_index,
+                kind,
+                chart_object_parent,
+            } => {
+                let chart = self.chart_group_model(workbook, chart_id, group_index)?;
+                let has_lines = match kind {
+                    ChartGroupLineKind::SeriesLines => chart.has_series_lines,
+                    ChartGroupLineKind::DropLines => chart.has_drop_lines,
+                    ChartGroupLineKind::HiLoLines => chart.has_hi_lo_lines,
+                    ChartGroupLineKind::UpBars | ChartGroupLineKind::DownBars => {
+                        chart.has_up_down_bars
+                    }
+                };
+                if has_lines != Some(true) {
+                    return Err(OmError::new(
+                        OmErrorCode::NotFound,
+                        format!("{} not found", kind.display_name()),
+                    ));
+                }
+                Ok(RuntimeObjectKind::ChartGroupLines {
+                    workbook,
+                    chart_id,
+                    group_index,
+                    kind,
+                    chart_object_parent,
+                })
+            }
         }
     }
 
@@ -25180,6 +25215,17 @@ impl ExcelRuntime {
                 RuntimeObjectKind::ChartFormat {
                     workbook,
                     parent: ChartFormatParent::ChartGroupLines {
+                        chart_id,
+                        group_index,
+                        kind,
+                        chart_object_parent,
+                    },
+                },
+            ))),
+            "Border" => Ok(OmValue::Object(self.register_object(
+                RuntimeObjectKind::Border {
+                    workbook,
+                    parent: BorderParent::ChartGroupLines {
                         chart_id,
                         group_index,
                         kind,
@@ -35127,6 +35173,27 @@ impl ExcelRuntime {
                             ..
                         },
                     ..
+                } if *object_workbook == workbook
+                    && *object_chart_id == chart_id
+                    && *object_group_index == group_index
+                    && (*object_kind == kind
+                        || matches!(
+                            (kind, *object_kind),
+                            (ChartGroupLineKind::UpBars, ChartGroupLineKind::DownBars)
+                                | (ChartGroupLineKind::DownBars, ChartGroupLineKind::UpBars)
+                        )) =>
+                {
+                    Some(object_id)
+                }
+                RuntimeObjectKind::Border {
+                    workbook: object_workbook,
+                    parent:
+                        BorderParent::ChartGroupLines {
+                            chart_id: object_chart_id,
+                            group_index: object_group_index,
+                            kind: object_kind,
+                            ..
+                        },
                 } if *object_workbook == workbook
                     && *object_chart_id == chart_id
                     && *object_group_index == group_index
@@ -69943,6 +70010,13 @@ mod tests {
                 .find(|member| member.name == "Copy")
                 .unwrap_or_else(|| panic!("{surface_name}.Copy focus member"));
             assert!(matches!(copy.support, office_idl::SupportState::Stub));
+            let border = surface
+                .members
+                .iter()
+                .find(|member| member.name == "Border")
+                .unwrap_or_else(|| panic!("{surface_name}.Border focus member"));
+            assert!(matches!(border.support, office_idl::SupportState::Stub));
+            assert!(matches!(border.access, office_idl::AccessMode::Read));
         }
         let axis = runtime
             .dispatch_registry()
@@ -157410,6 +157484,28 @@ mod tests {
                 .dispatch_get(secondary_series_lines, "Format", &[])
                 .expect("secondary ChartGroup.SeriesLines.Format"),
         );
+        let secondary_series_lines_border = expect_object_handle(
+            runtime
+                .dispatch_get(secondary_series_lines, "Border", &[])
+                .expect("secondary ChartGroup.SeriesLines.Border"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(secondary_series_lines_border, "LineStyle", &[])
+                .expect("secondary SeriesLines.Border.LineStyle"),
+            OmValue::Number(f64::from(super::XL_CONTINUOUS))
+        );
+        let secondary_series_lines_border_parent = expect_object_handle(
+            runtime
+                .dispatch_get(secondary_series_lines_border, "Parent", &[])
+                .expect("secondary SeriesLines.Border.Parent"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(secondary_series_lines_border_parent, "Name", &[])
+                .expect("secondary SeriesLines.Border.Parent.Name"),
+            OmValue::Text("Series Lines".to_string())
+        );
         runtime
             .dispatch_set(workbook.0, "Saved", OmValue::Bool(true), &[])
             .expect("reset Saved before secondary SeriesLines.ClearFormats");
@@ -157480,6 +157576,13 @@ mod tests {
             runtime
                 .dispatch_get(secondary_series_lines_format, "Creator", &[])
                 .expect_err("secondary SeriesLines.Format handle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(secondary_series_lines_border, "Creator", &[])
+                .expect_err("secondary SeriesLines.Border handle should be stale")
                 .code,
             OmErrorCode::InvalidState
         );

@@ -148,8 +148,8 @@ fn loads_office_idl_excel_om_template_and_summarizes_surface() {
     assert_eq!(summary.enum_count, 8);
     assert_eq!(summary.interface_count, 55);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 899);
-    assert_eq!(summary.stub_member_count, 899);
+    assert_eq!(summary.member_count, 904);
+    assert_eq!(summary.stub_member_count, 904);
     assert_eq!(
         document.interfaces[0].members[0]
             .metadata
@@ -1915,11 +1915,11 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
     assert_eq!(chart_group.member_count, 33);
     assert_eq!(category_collection.member_count, 5);
     assert_eq!(chart_category.member_count, 6);
-    assert_eq!(series_lines.member_count, 9);
-    assert_eq!(drop_lines.member_count, 9);
-    assert_eq!(hi_lo_lines.member_count, 9);
-    assert_eq!(up_bars.member_count, 9);
-    assert_eq!(down_bars.member_count, 9);
+    assert_eq!(series_lines.member_count, 10);
+    assert_eq!(drop_lines.member_count, 10);
+    assert_eq!(hi_lo_lines.member_count, 10);
+    assert_eq!(up_bars.member_count, 10);
+    assert_eq!(down_bars.member_count, 10);
     assert_eq!(axes.member_count, 5);
     assert_eq!(axis.member_count, 44);
     assert_eq!(tick_labels.member_count, 16);
@@ -3016,8 +3016,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(coverage.library, "Excel");
     assert_eq!(coverage.version, "16.0");
-    assert_eq!(coverage.member_count, 899);
-    assert_eq!(coverage.support_counts.stub, 899);
+    assert_eq!(coverage.member_count, 904);
+    assert_eq!(coverage.support_counts.stub, 904);
     assert!(coverage.missing_focus_surfaces.is_empty());
 
     let application_coverage = coverage
@@ -4216,13 +4216,14 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         up_bars_coverage,
         down_bars_coverage,
     ] {
-        assert_eq!(coverage_entry.member_count, 9);
-        assert_eq!(coverage_entry.support_counts.stub, 9);
+        assert_eq!(coverage_entry.member_count, 10);
+        assert_eq!(coverage_entry.support_counts.stub, 10);
         assert_eq!(
             coverage_entry.stub_members,
             vec![
                 "Name".to_string(),
                 "Format".to_string(),
+                "Border".to_string(),
                 "Creator".to_string(),
                 "Application".to_string(),
                 "Parent".to_string(),
