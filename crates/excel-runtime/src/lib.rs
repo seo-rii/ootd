@@ -88086,6 +88086,110 @@ mod tests {
                 runtime
                     .dispatch_invoke(
                         worksheet_function,
+                        "MRound",
+                        &[OmValue::Number(10.0), OmValue::Number(3.0)],
+                    )
+                    .expect("WorksheetFunction.MRound")
+            ),
+            9.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "Quotient",
+                        &[OmValue::Number(-7.0), OmValue::Number(3.0)],
+                    )
+                    .expect("WorksheetFunction.Quotient")
+            ),
+            -2.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "Ceiling",
+                        &[OmValue::Number(2.5), OmValue::Number(1.0)],
+                    )
+                    .expect("WorksheetFunction.Ceiling")
+            ),
+            3.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "Floor",
+                        &[OmValue::Number(3.7), OmValue::Number(2.0)],
+                    )
+                    .expect("WorksheetFunction.Floor")
+            ),
+            2.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(worksheet_function, "Ceiling_Math", &[OmValue::Number(4.3)])
+                    .expect("WorksheetFunction.Ceiling_Math")
+            ),
+            5.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "Floor_Math",
+                        &[OmValue::Number(-4.3), OmValue::Number(2.0), OmValue::Number(1.0)],
+                    )
+                    .expect("WorksheetFunction.Floor_Math")
+            ),
+            -4.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "Ceiling_Precise",
+                        &[OmValue::Number(-4.3), OmValue::Number(-2.0)],
+                    )
+                    .expect("WorksheetFunction.Ceiling_Precise")
+            ),
+            -4.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "Floor_Precise",
+                        &[OmValue::Number(-3.2), OmValue::Number(-1.0)],
+                    )
+                    .expect("WorksheetFunction.Floor_Precise")
+            ),
+            -4.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "Iso_Ceiling",
+                        &[OmValue::Number(-4.3), OmValue::Number(2.0)],
+                    )
+                    .expect("WorksheetFunction.Iso_Ceiling")
+            ),
+            -4.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
                         "SumIf",
                         &[
                             OmValue::Object(first_source),
