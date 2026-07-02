@@ -91279,6 +91279,112 @@ mod tests {
         assert_eq!(
             expect_number(
                 runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "AmorDegrc",
+                        &[
+                            OmValue::Number(2400.0),
+                            OmValue::Number(39679.0),
+                            OmValue::Number(39813.0),
+                            OmValue::Number(300.0),
+                            OmValue::Number(1.0),
+                            OmValue::Number(0.15),
+                            OmValue::Number(1.0),
+                        ],
+                    )
+                    .expect("WorksheetFunction.AmorDegrc")
+            ),
+            776.0
+        );
+        let amor_linc = expect_number(
+            runtime
+                .dispatch_invoke(
+                    worksheet_function,
+                    "AmorLinc",
+                    &[
+                        OmValue::Number(2400.0),
+                        OmValue::Number(39679.0),
+                        OmValue::Number(39813.0),
+                        OmValue::Number(300.0),
+                        OmValue::Number(0.0),
+                        OmValue::Number(0.15),
+                        OmValue::Number(1.0),
+                    ],
+                )
+                .expect("WorksheetFunction.AmorLinc"),
+        );
+        assert!((amor_linc - 2400.0 * 0.15 * 134.0 / 366.0).abs() < 1e-8);
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(worksheet_function, "Acot", &[OmValue::Number(2.0)])
+                    .expect("WorksheetFunction.Acot")
+            ),
+            (1.0_f64 / 2.0).atan()
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(worksheet_function, "Acoth", &[OmValue::Number(6.0)])
+                    .expect("WorksheetFunction.Acoth")
+            ),
+            0.5 * (7.0_f64 / 5.0).ln()
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(worksheet_function, "Coth", &[OmValue::Number(2.0)])
+                    .expect("WorksheetFunction.Coth")
+            ),
+            1.0 / 2.0_f64.tanh()
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(worksheet_function, "Csch", &[OmValue::Number(1.5)])
+                    .expect("WorksheetFunction.Csch")
+            ),
+            1.0 / 1.5_f64.sinh()
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "Delta",
+                        &[OmValue::Number(5.0), OmValue::Number(5.0)],
+                    )
+                    .expect("WorksheetFunction.Delta")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "GeStep",
+                        &[OmValue::Number(5.0), OmValue::Number(4.0)],
+                    )
+                    .expect("WorksheetFunction.GeStep")
+            ),
+            1.0
+        );
+        let gamma = expect_number(
+            runtime
+                .dispatch_invoke(worksheet_function, "Gamma", &[OmValue::Number(5.0)])
+                .expect("WorksheetFunction.Gamma"),
+        );
+        assert!((gamma - 24.0).abs() < 1e-10);
+        let gauss = expect_number(
+            runtime
+                .dispatch_invoke(worksheet_function, "Gauss", &[OmValue::Number(1.0)])
+                .expect("WorksheetFunction.Gauss"),
+        );
+        assert!((gauss - 0.3413447460685429).abs() < 1e-6);
+        assert_eq!(
+            expect_number(
+                runtime
                     .dispatch_invoke(worksheet_function, "Not", &[OmValue::Bool(false)])
                     .expect("WorksheetFunction.Not")
             ),
