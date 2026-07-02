@@ -17938,6 +17938,39 @@ impl ExcelRuntime {
                     );
                     self.dispatch_invoke(chart, "Select", &[])
                 }
+                "Delete" => {
+                    if !args.is_empty() {
+                        return Err(OmError::invalid_argument(
+                            "TickLabels.Delete does not accept arguments",
+                        ));
+                    }
+                    let runtime = self.runtime_workbook_mut(workbook)?;
+                    if runtime.read_only {
+                        return Err(OmError::new(
+                            OmErrorCode::InvalidState,
+                            "cannot modify a read-only workbook",
+                        ));
+                    }
+                    let chart = runtime
+                        .loaded
+                        .state
+                        .charts
+                        .get_mut(&chart_id)
+                        .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart not found"))?;
+                    let axis = chart
+                        .axes
+                        .get_mut(axis_index)
+                        .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "axis not found"))?;
+                    if axis.tick_label_position != Some(ChartTickLabelPosition::None) {
+                        axis.tick_label_position = Some(ChartTickLabelPosition::None);
+                        chart.dirty = true;
+                        runtime.dirty = true;
+                        self.find_state = None;
+                        self.cut_copy_mode = None;
+                        self.clipboard = None;
+                    }
+                    Ok(OmValue::Empty)
+                }
                 _ => Err(OmError::unsupported(format!(
                     "TickLabels.{member} is not implemented as a method"
                 ))),
@@ -18655,14 +18688,21 @@ impl ExcelRuntime {
                     | (
                         "TickLabels",
                         "Name"
+                            | "AutoScaleFont"
+                            | "Depth"
                             | "Format"
                             | "NumberFormat"
                             | "NumberFormatLocal"
+                            | "MultiLevel"
                             | "NumberFormatLinked"
+                            | "Offset"
+                            | "Orientation"
+                            | "ReadingOrder"
                             | "Creator"
                             | "Application"
                             | "Parent"
                             | "Select"
+                            | "Delete"
                     )
                     | (
                         "Gridlines",
@@ -68961,6 +69001,12 @@ mod tests {
             assert!(matches!(member.support, office_idl::SupportState::Stub));
             assert!(matches!(member.access, office_idl::AccessMode::Read));
         }
+        let delete = tick_labels
+            .members
+            .iter()
+            .find(|member| member.name == "Delete")
+            .expect("TickLabels.Delete focus member");
+        assert!(matches!(delete.support, office_idl::SupportState::Stub));
         let gridlines = runtime
             .dispatch_registry()
             .focus_surfaces
@@ -133357,6 +133403,14 @@ mod tests {
                 &[],
             )
             .expect("setup TickLabels.NumberFormat");
+        setup_runtime
+            .dispatch_set(
+                setup_value_axis,
+                "TickLabelPosition",
+                OmValue::Number(f64::from(super::XL_TICK_LABEL_POSITION_HIGH)),
+                &[],
+            )
+            .expect("setup Axis.TickLabelPosition");
         let saved = setup_runtime
             .save_workbook(
                 setup_workbook,
@@ -133430,6 +133484,19 @@ mod tests {
                 "TickLabels.{member}: {error:?}"
             );
         }
+        let error = match runtime.dispatch_invoke(tick_labels, "Delete", &[]) {
+            Ok(_) => panic!("TickLabels.Delete should reject read-only workbooks"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            error.code,
+            OmErrorCode::InvalidState,
+            "TickLabels.Delete: {error:?}"
+        );
+        assert!(
+            error.message.contains("read-only"),
+            "TickLabels.Delete: {error:?}"
+        );
 
         assert_eq!(
             runtime
@@ -133442,6 +133509,180 @@ mod tests {
                 .dispatch_get(tick_labels, "NumberFormatLinked", &[])
                 .expect("TickLabels.NumberFormatLinked after rejected setters"),
             OmValue::Bool(false)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(value_axis, "TickLabelPosition", &[])
+                .expect("Axis.TickLabelPosition after rejected TickLabels.Delete"),
+            OmValue::Number(f64::from(super::XL_TICK_LABEL_POSITION_HIGH))
+        );
+    }
+
+    #[test]
+    fn tick_labels_delete_hides_axis_labels_and_roundtrips() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let value_axis = expect_object_handle(
+            runtime
+                .dispatch_get(
+                    chart,
+                    "Axes",
+                    &[OmValue::Number(f64::from(super::XL_VALUE))],
+                )
+                .expect("Chart.Axes(xlValue)"),
+        );
+        runtime
+            .dispatch_set(
+                value_axis,
+                "TickLabelPosition",
+                OmValue::Number(f64::from(super::XL_TICK_LABEL_POSITION_HIGH)),
+                &[],
+            )
+            .expect("set Axis.TickLabelPosition high");
+        let tick_labels = expect_object_handle(
+            runtime
+                .dispatch_get(value_axis, "TickLabels", &[])
+                .expect("Axis.TickLabels"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(tick_labels, "Delete", &[OmValue::Missing])
+                .expect_err("TickLabels.Delete rejects arguments")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before TickLabels.Delete"),
+        );
+        runtime
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before TickLabels.Delete");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before TickLabels.Delete");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                    .expect("Application.CutCopyMode before TickLabels.Delete")
+            ),
+            f64::from(super::XL_COPY)
+        );
+        runtime
+            .dispatch_invoke(tick_labels, "Delete", &[])
+            .expect("TickLabels.Delete");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after TickLabels.Delete")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after TickLabels.Delete")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(value_axis, "TickLabelPosition", &[])
+                .expect("Axis.TickLabelPosition after TickLabels.Delete"),
+            OmValue::Number(f64::from(super::XL_TICK_LABEL_POSITION_NONE))
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after TickLabels.Delete");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = std::str::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(saved_chart_xml.contains(r#"<c:tickLblPos val="none"/>"#));
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after TickLabels.Delete");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        let reopened_value_axis = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(
+                    reopened_chart,
+                    "Axes",
+                    &[OmValue::Number(f64::from(super::XL_VALUE))],
+                )
+                .expect("reopened Chart.Axes(xlValue)"),
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_value_axis, "TickLabelPosition", &[])
+                .expect("reopened Axis.TickLabelPosition"),
+            OmValue::Number(f64::from(super::XL_TICK_LABEL_POSITION_NONE))
         );
     }
 

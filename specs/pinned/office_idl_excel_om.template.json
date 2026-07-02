@@ -20095,6 +20095,22 @@
               ]
             }
           }
+        },
+        {
+          "name": "Delete",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "TickLabels",
+                  "sourceMember": "Delete"
+                }
+              ]
+            }
+          }
         }
       ]
     },
