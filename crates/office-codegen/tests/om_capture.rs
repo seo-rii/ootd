@@ -148,8 +148,8 @@ fn loads_office_idl_excel_om_template_and_summarizes_surface() {
     assert_eq!(summary.enum_count, 8);
     assert_eq!(summary.interface_count, 58);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 1365);
-    assert_eq!(summary.stub_member_count, 1365);
+    assert_eq!(summary.member_count, 1470);
+    assert_eq!(summary.stub_member_count, 1470);
     assert_eq!(
         document.interfaces[0].members[0]
             .metadata
@@ -1905,7 +1905,7 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         .expect("Point");
 
     assert_eq!(application.member_count, 44);
-    assert_eq!(worksheet_function.member_count, 421);
+    assert_eq!(worksheet_function.member_count, 526);
     assert_eq!(workbooks.member_count, 7);
     assert_eq!(workbook.member_count, 26);
     assert_eq!(worksheets.member_count, 13);
@@ -3044,8 +3044,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(coverage.library, "Excel");
     assert_eq!(coverage.version, "16.0");
-    assert_eq!(coverage.member_count, 1365);
-    assert_eq!(coverage.support_counts.stub, 1365);
+    assert_eq!(coverage.member_count, 1470);
+    assert_eq!(coverage.support_counts.stub, 1470);
     assert!(coverage.missing_focus_surfaces.is_empty());
 
     let application_coverage = coverage
@@ -3391,8 +3391,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         ]
     );
 
-    assert_eq!(worksheet_function_coverage.member_count, 421);
-    assert_eq!(worksheet_function_coverage.support_counts.stub, 421);
+    assert_eq!(worksheet_function_coverage.member_count, 526);
+    assert_eq!(worksheet_function_coverage.support_counts.stub, 526);
     assert_eq!(
         worksheet_function_coverage.stub_members,
         vec![
@@ -3817,6 +3817,111 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
             "VLookup".to_string(),
             "WebService".to_string(),
             "XLookup".to_string(),
+            "Arabic".to_string(),
+            "Bin2Dec".to_string(),
+            "Decimal".to_string(),
+            "Hex2Dec".to_string(),
+            "Oct2Dec".to_string(),
+            "Convert".to_string(),
+            "EuroConvert".to_string(),
+            "ImAbs".to_string(),
+            "Imaginary".to_string(),
+            "ImArgument".to_string(),
+            "ImReal".to_string(),
+            "Code".to_string(),
+            "Unicode".to_string(),
+            "LenB".to_string(),
+            "FindB".to_string(),
+            "SearchB".to_string(),
+            "RegexTest".to_string(),
+            "Areas".to_string(),
+            "Column".to_string(),
+            "Columns".to_string(),
+            "Cols".to_string(),
+            "Row".to_string(),
+            "Rows".to_string(),
+            "Sheet".to_string(),
+            "Sheets".to_string(),
+            "IsFormula".to_string(),
+            "IsErr".to_string(),
+            "Na".to_string(),
+            "IsOmitted".to_string(),
+            "Match".to_string(),
+            "XMatch".to_string(),
+            "ChooseCols".to_string(),
+            "ChooseRows".to_string(),
+            "Drop".to_string(),
+            "Expand".to_string(),
+            "Filter".to_string(),
+            "HStack".to_string(),
+            "Sort".to_string(),
+            "SortBy".to_string(),
+            "Take".to_string(),
+            "ToCol".to_string(),
+            "ToRow".to_string(),
+            "Transpose".to_string(),
+            "Unique".to_string(),
+            "VStack".to_string(),
+            "WrapCols".to_string(),
+            "WrapRows".to_string(),
+            "ByCol".to_string(),
+            "ByRow".to_string(),
+            "Map".to_string(),
+            "PercentOf".to_string(),
+            "Sequence".to_string(),
+            "RandArray".to_string(),
+            "Aggregate".to_string(),
+            "Subtotal".to_string(),
+            "SumProduct".to_string(),
+            "SumX2MY2".to_string(),
+            "SumX2PY2".to_string(),
+            "SumXMY2".to_string(),
+            "Seriessum".to_string(),
+            "Frequency".to_string(),
+            "MDeterm".to_string(),
+            "MInverse".to_string(),
+            "MMult".to_string(),
+            "MUnit".to_string(),
+            "Growth".to_string(),
+            "LinEst".to_string(),
+            "LogEst".to_string(),
+            "Trend".to_string(),
+            "Mode_Mult".to_string(),
+            "Mode_Sngl".to_string(),
+            "Forecast_Linear".to_string(),
+            "Forecast_Ets".to_string(),
+            "Forecast_Ets_ConfInt".to_string(),
+            "Forecast_Ets_Seasonality".to_string(),
+            "Forecast_Ets_Stat".to_string(),
+            "ChiTest".to_string(),
+            "FTest".to_string(),
+            "TTest".to_string(),
+            "ZTest".to_string(),
+            "DAverage".to_string(),
+            "DCount".to_string(),
+            "DCountA".to_string(),
+            "DMax".to_string(),
+            "DMin".to_string(),
+            "DProduct".to_string(),
+            "DStDev".to_string(),
+            "DStDevP".to_string(),
+            "DSum".to_string(),
+            "DVar".to_string(),
+            "DVarP".to_string(),
+            "DollarDe".to_string(),
+            "DollarFr".to_string(),
+            "IsPmt".to_string(),
+            "CubeSetCount".to_string(),
+            "CubeValue".to_string(),
+            "Call".to_string(),
+            "Register_ID".to_string(),
+            "RTD".to_string(),
+            "FieldValue".to_string(),
+            "GroupBy".to_string(),
+            "PivotBy".to_string(),
+            "Py".to_string(),
+            "Copilot".to_string(),
+            "StockHistory".to_string(),
         ]
     );
 

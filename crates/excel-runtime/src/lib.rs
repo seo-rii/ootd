@@ -88293,6 +88293,88 @@ mod tests {
                 expected
             );
         }
+        for (member, args, expected) in [
+            ("Arabic", vec![OmValue::Text("XIV".to_string())], 14.0),
+            ("Bin2Dec", vec![OmValue::Text("1010".to_string())], 10.0),
+            (
+                "Decimal",
+                vec![OmValue::Text("FF".to_string()), OmValue::Number(16.0)],
+                255.0,
+            ),
+            ("Hex2Dec", vec![OmValue::Text("F".to_string())], 15.0),
+            ("Oct2Dec", vec![OmValue::Text("10".to_string())], 8.0),
+            ("ImAbs", vec![OmValue::Text("3+4i".to_string())], 5.0),
+            ("Imaginary", vec![OmValue::Text("3+4i".to_string())], 4.0),
+            ("ImReal", vec![OmValue::Text("3+4i".to_string())], 3.0),
+            ("Code", vec![OmValue::Text("A".to_string())], 65.0),
+            ("Unicode", vec![OmValue::Text("A".to_string())], 65.0),
+            ("LenB", vec![OmValue::Text("AB".to_string())], 2.0),
+            ("Areas", vec![OmValue::Object(first_source)], 1.0),
+            ("Column", vec![OmValue::Object(first_source)], 1.0),
+            ("Columns", vec![OmValue::Object(first_source)], 1.0),
+            ("Row", vec![OmValue::Object(first_source)], 1.0),
+            ("Rows", vec![OmValue::Object(first_source)], 3.0),
+            ("Sheet", vec![OmValue::Object(first_source)], 1.0),
+            (
+                "Match",
+                vec![
+                    OmValue::Number(3.0),
+                    OmValue::Object(paired_x_source),
+                    OmValue::Number(0.0),
+                ],
+                3.0,
+            ),
+            (
+                "XMatch",
+                vec![
+                    OmValue::Number(3.0),
+                    OmValue::Object(paired_x_source),
+                    OmValue::Number(0.0),
+                ],
+                3.0,
+            ),
+            (
+                "SumProduct",
+                vec![
+                    OmValue::Object(paired_x_source),
+                    OmValue::Object(paired_y_source),
+                ],
+                60.0,
+            ),
+            (
+                "SumX2MY2",
+                vec![
+                    OmValue::Object(paired_x_source),
+                    OmValue::Object(paired_y_source),
+                ],
+                -90.0,
+            ),
+            (
+                "SumX2PY2",
+                vec![
+                    OmValue::Object(paired_x_source),
+                    OmValue::Object(paired_y_source),
+                ],
+                150.0,
+            ),
+            (
+                "SumXMY2",
+                vec![
+                    OmValue::Object(paired_x_source),
+                    OmValue::Object(paired_y_source),
+                ],
+                30.0,
+            ),
+        ] {
+            assert_eq!(
+                expect_number(
+                    runtime
+                        .dispatch_invoke(worksheet_function, member, &args)
+                        .expect("WorksheetFunction extended parser-backed numeric dispatch")
+                ),
+                expected
+            );
+        }
         assert_eq!(
             expect_number(
                 runtime
