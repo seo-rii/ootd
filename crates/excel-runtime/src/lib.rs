@@ -87632,6 +87632,141 @@ mod tests {
         assert_eq!(
             expect_number(
                 runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "Median",
+                        &[
+                            OmValue::Number(1.0),
+                            OmValue::Number(2.0),
+                            OmValue::Number(4.0),
+                        ],
+                    )
+                    .expect("WorksheetFunction.Median")
+            ),
+            2.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "Mode",
+                        &[
+                            OmValue::Number(1.0),
+                            OmValue::Number(2.0),
+                            OmValue::Number(2.0),
+                            OmValue::Number(3.0),
+                        ],
+                    )
+                    .expect("WorksheetFunction.Mode")
+            ),
+            2.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "Var",
+                        &[
+                            OmValue::Number(1.0),
+                            OmValue::Number(2.0),
+                            OmValue::Number(3.0),
+                        ],
+                    )
+                    .expect("WorksheetFunction.Var")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "StDev",
+                        &[
+                            OmValue::Number(1.0),
+                            OmValue::Number(2.0),
+                            OmValue::Number(3.0),
+                        ],
+                    )
+                    .expect("WorksheetFunction.StDev")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "GeoMean",
+                        &[OmValue::Number(4.0), OmValue::Number(9.0)],
+                    )
+                    .expect("WorksheetFunction.GeoMean")
+            ),
+            6.0
+        );
+        let har_mean = expect_number(
+            runtime
+                .dispatch_invoke(
+                    worksheet_function,
+                    "HarMean",
+                    &[OmValue::Number(4.0), OmValue::Number(9.0)],
+                )
+                .expect("WorksheetFunction.HarMean"),
+        );
+        assert!((har_mean - (72.0 / 13.0)).abs() < 1e-12);
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "Percentile",
+                        &[OmValue::Object(first_source), OmValue::Number(0.5)],
+                    )
+                    .expect("WorksheetFunction.Percentile")
+            ),
+            5.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "Quartile",
+                        &[OmValue::Object(first_source), OmValue::Number(2.0)],
+                    )
+                    .expect("WorksheetFunction.Quartile")
+            ),
+            5.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "PercentRank",
+                        &[OmValue::Object(first_source), OmValue::Number(5.0)],
+                    )
+                    .expect("WorksheetFunction.PercentRank")
+            ),
+            0.5
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "Rank",
+                        &[OmValue::Number(6.0), OmValue::Object(first_source)],
+                    )
+                    .expect("WorksheetFunction.Rank")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
                     .dispatch_invoke(worksheet_function, "Min", &[OmValue::Object(first_source)])
                     .expect("WorksheetFunction.Min")
             ),
