@@ -88338,6 +88338,134 @@ mod tests {
                 runtime
                     .dispatch_invoke(
                         worksheet_function,
+                        "Percentile_Inc",
+                        &[OmValue::Object(paired_x_source), OmValue::Number(0.5)],
+                    )
+                    .expect("WorksheetFunction.Percentile_Inc")
+            ),
+            2.5
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "Percentile_Exc",
+                        &[OmValue::Object(paired_x_source), OmValue::Number(0.5)],
+                    )
+                    .expect("WorksheetFunction.Percentile_Exc")
+            ),
+            2.5
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "Quartile_Inc",
+                        &[OmValue::Object(paired_x_source), OmValue::Number(2.0)],
+                    )
+                    .expect("WorksheetFunction.Quartile_Inc")
+            ),
+            2.5
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "Quartile_Exc",
+                        &[OmValue::Object(paired_x_source), OmValue::Number(2.0)],
+                    )
+                    .expect("WorksheetFunction.Quartile_Exc")
+            ),
+            2.5
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "PercentRank_Inc",
+                        &[OmValue::Object(paired_x_source), OmValue::Number(2.5)],
+                    )
+                    .expect("WorksheetFunction.PercentRank_Inc")
+            ),
+            0.5
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "PercentRank_Exc",
+                        &[OmValue::Object(paired_x_source), OmValue::Number(2.5)],
+                    )
+                    .expect("WorksheetFunction.PercentRank_Exc")
+            ),
+            0.5
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "Rank_Avg",
+                        &[
+                            OmValue::Number(2.0),
+                            OmValue::Object(paired_x_source),
+                            OmValue::Number(0.0),
+                        ],
+                    )
+                    .expect("WorksheetFunction.Rank_Avg")
+            ),
+            3.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "Rank_Eq",
+                        &[
+                            OmValue::Number(2.0),
+                            OmValue::Object(paired_x_source),
+                            OmValue::Number(0.0),
+                        ],
+                    )
+                    .expect("WorksheetFunction.Rank_Eq")
+            ),
+            3.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "Large",
+                        &[OmValue::Object(paired_x_source), OmValue::Number(2.0)],
+                    )
+                    .expect("WorksheetFunction.Large")
+            ),
+            3.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "Small",
+                        &[OmValue::Object(paired_x_source), OmValue::Number(2.0)],
+                    )
+                    .expect("WorksheetFunction.Small")
+            ),
+            2.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
                         "Correl",
                         &[
                             OmValue::Object(paired_x_source),
