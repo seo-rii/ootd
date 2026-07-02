@@ -388,6 +388,7 @@ const MSO_FLIP_VERTICAL: i32 = 1;
 const MSO_FALSE: i32 = 0;
 const MSO_TRUE: i32 = -1;
 const MSO_PICTURE_AUTOMATIC: i32 = 1;
+const MSO_AUTO_SIZE_NONE: i32 = 0;
 const MSO_SCALE_FROM_TOP_LEFT: i32 = 0;
 const MSO_SCALE_FROM_MIDDLE: i32 = 1;
 const MSO_SCALE_FROM_BOTTOM_RIGHT: i32 = 2;
@@ -2824,10 +2825,18 @@ impl ExcelRuntime {
                     "HasText" if matches!(kind, ChartFormatChildKind::TextFrame2) => {
                         Ok(OmValue::Number(f64::from(MSO_FALSE)))
                     }
+                    "AutoSize" if matches!(kind, ChartFormatChildKind::TextFrame2) => {
+                        Ok(OmValue::Number(f64::from(MSO_AUTO_SIZE_NONE)))
+                    }
                     "MarginBottom" | "MarginLeft" | "MarginRight" | "MarginTop"
                         if matches!(kind, ChartFormatChildKind::TextFrame2) =>
                     {
                         Ok(OmValue::Number(0.0))
+                    }
+                    "NoTextRotation" | "WordWrap"
+                        if matches!(kind, ChartFormatChildKind::TextFrame2) =>
+                    {
+                        Ok(OmValue::Number(f64::from(MSO_FALSE)))
                     }
                     "Radius"
                         if matches!(
@@ -18334,11 +18343,14 @@ impl ExcelRuntime {
                         "Creator"
                             | "Application"
                             | "Parent"
+                            | "AutoSize"
                             | "HasText"
                             | "MarginBottom"
                             | "MarginLeft"
                             | "MarginRight"
                             | "MarginTop"
+                            | "NoTextRotation"
+                            | "WordWrap"
                     )
                     | (
                         "ThreeDFormat",
@@ -68867,11 +68879,14 @@ mod tests {
             }
             if surface_name == "TextFrame2" {
                 for member_name in [
+                    "AutoSize",
                     "HasText",
                     "MarginBottom",
                     "MarginLeft",
                     "MarginRight",
                     "MarginTop",
+                    "NoTextRotation",
+                    "WordWrap",
                 ] {
                     let member = surface
                         .members
@@ -129706,6 +129721,21 @@ mod tests {
                 if child_surface == "TextFrame2" {
                     assert_eq!(
                         runtime
+                            .dispatch_get(format_child, "AutoSize", &[])
+                            .unwrap_or_else(|error| {
+                                panic!("{child_surface}.AutoSize failed: {error:?}")
+                            }),
+                        OmValue::Number(f64::from(super::MSO_AUTO_SIZE_NONE))
+                    );
+                    assert_eq!(
+                        runtime
+                            .dispatch_get(format_child, "AutoSize", &[OmValue::Missing])
+                            .expect_err("TextFrame2.AutoSize rejects arguments")
+                            .code,
+                        OmErrorCode::InvalidArgument
+                    );
+                    assert_eq!(
+                        runtime
                             .dispatch_get(format_child, "HasText", &[])
                             .unwrap_or_else(|error| {
                                 panic!("{child_surface}.HasText failed: {error:?}")
@@ -129732,6 +129762,23 @@ mod tests {
                             runtime
                                 .dispatch_get(format_child, member_name, &[OmValue::Missing])
                                 .expect_err("TextFrame2 margin getter rejects arguments")
+                                .code,
+                            OmErrorCode::InvalidArgument
+                        );
+                    }
+                    for member_name in ["NoTextRotation", "WordWrap"] {
+                        assert_eq!(
+                            runtime
+                                .dispatch_get(format_child, member_name, &[])
+                                .unwrap_or_else(|error| {
+                                    panic!("{child_surface}.{member_name} failed: {error:?}")
+                                }),
+                            OmValue::Number(f64::from(super::MSO_FALSE))
+                        );
+                        assert_eq!(
+                            runtime
+                                .dispatch_get(format_child, member_name, &[OmValue::Missing])
+                                .expect_err("TextFrame2 tri-state getter rejects arguments")
                                 .code,
                             OmErrorCode::InvalidArgument
                         );
