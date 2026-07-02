@@ -2824,6 +2824,11 @@ impl ExcelRuntime {
                     "HasText" if matches!(kind, ChartFormatChildKind::TextFrame2) => {
                         Ok(OmValue::Number(f64::from(MSO_FALSE)))
                     }
+                    "MarginBottom" | "MarginLeft" | "MarginRight" | "MarginTop"
+                        if matches!(kind, ChartFormatChildKind::TextFrame2) =>
+                    {
+                        Ok(OmValue::Number(0.0))
+                    }
                     "Radius"
                         if matches!(
                             kind,
@@ -18326,7 +18331,14 @@ impl ExcelRuntime {
                     )
                     | (
                         "TextFrame2",
-                        "Creator" | "Application" | "Parent" | "HasText"
+                        "Creator"
+                            | "Application"
+                            | "Parent"
+                            | "HasText"
+                            | "MarginBottom"
+                            | "MarginLeft"
+                            | "MarginRight"
+                            | "MarginTop"
                     )
                     | (
                         "ThreeDFormat",
@@ -68854,13 +68866,21 @@ mod tests {
                 }
             }
             if surface_name == "TextFrame2" {
-                let member = surface
-                    .members
-                    .iter()
-                    .find(|member| member.name == "HasText")
-                    .unwrap_or_else(|| panic!("{surface_name}.HasText focus member"));
-                assert!(matches!(member.support, office_idl::SupportState::Stub));
-                assert!(matches!(member.access, office_idl::AccessMode::Read));
+                for member_name in [
+                    "HasText",
+                    "MarginBottom",
+                    "MarginLeft",
+                    "MarginRight",
+                    "MarginTop",
+                ] {
+                    let member = surface
+                        .members
+                        .iter()
+                        .find(|member| member.name == member_name)
+                        .unwrap_or_else(|| panic!("{surface_name}.{member_name} focus member"));
+                    assert!(matches!(member.support, office_idl::SupportState::Stub));
+                    assert!(matches!(member.access, office_idl::AccessMode::Read));
+                }
             }
             if matches!(surface_name, "GlowFormat" | "SoftEdgeFormat") {
                 let member = surface
@@ -129699,6 +129719,23 @@ mod tests {
                             .code,
                         OmErrorCode::InvalidArgument
                     );
+                    for member_name in ["MarginBottom", "MarginLeft", "MarginRight", "MarginTop"] {
+                        assert_eq!(
+                            runtime
+                                .dispatch_get(format_child, member_name, &[])
+                                .unwrap_or_else(|error| {
+                                    panic!("{child_surface}.{member_name} failed: {error:?}")
+                                }),
+                            OmValue::Number(0.0)
+                        );
+                        assert_eq!(
+                            runtime
+                                .dispatch_get(format_child, member_name, &[OmValue::Missing])
+                                .expect_err("TextFrame2 margin getter rejects arguments")
+                                .code,
+                            OmErrorCode::InvalidArgument
+                        );
+                    }
                 }
                 if matches!(child_surface, "GlowFormat" | "SoftEdgeFormat") {
                     assert_eq!(
