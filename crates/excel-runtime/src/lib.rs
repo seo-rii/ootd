@@ -87832,6 +87832,86 @@ mod tests {
         assert_eq!(
             expect_number(
                 runtime
+                    .dispatch_invoke(worksheet_function, "Sinh", &[OmValue::Number(1.0)])
+                    .expect("WorksheetFunction.Sinh")
+            ),
+            1.0_f64.sinh()
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(worksheet_function, "Cosh", &[OmValue::Number(0.0)])
+                    .expect("WorksheetFunction.Cosh")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(worksheet_function, "Tanh", &[OmValue::Number(-2.0)])
+                    .expect("WorksheetFunction.Tanh")
+            ),
+            (-2.0_f64).tanh()
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(worksheet_function, "Asinh", &[OmValue::Number(-2.5)])
+                    .expect("WorksheetFunction.Asinh")
+            ),
+            (-2.5_f64).asinh()
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(worksheet_function, "Acosh", &[OmValue::Number(10.0)])
+                    .expect("WorksheetFunction.Acosh")
+            ),
+            10.0_f64.acosh()
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(worksheet_function, "Atanh", &[OmValue::Number(-0.1)])
+                    .expect("WorksheetFunction.Atanh")
+            ),
+            (-0.1_f64).atanh()
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(worksheet_function, "Sec", &[OmValue::Number(45.0)])
+                    .expect("WorksheetFunction.Sec")
+            ),
+            1.0 / 45.0_f64.cos()
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(worksheet_function, "Csc", &[OmValue::Number(15.0)])
+                    .expect("WorksheetFunction.Csc")
+            ),
+            1.0 / 15.0_f64.sin()
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(worksheet_function, "Cot", &[OmValue::Number(30.0)])
+                    .expect("WorksheetFunction.Cot")
+            ),
+            1.0 / 30.0_f64.tan()
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(worksheet_function, "Sech", &[OmValue::Number(45.0)])
+                    .expect("WorksheetFunction.Sech")
+            ),
+            1.0 / 45.0_f64.cosh()
+        );
+        assert_eq!(
+            expect_number(
+                runtime
                     .dispatch_invoke(
                         worksheet_function,
                         "SumIf",
