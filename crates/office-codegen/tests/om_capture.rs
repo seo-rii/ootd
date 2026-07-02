@@ -148,8 +148,8 @@ fn loads_office_idl_excel_om_template_and_summarizes_surface() {
     assert_eq!(summary.enum_count, 8);
     assert_eq!(summary.interface_count, 58);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 1276);
-    assert_eq!(summary.stub_member_count, 1276);
+    assert_eq!(summary.member_count, 1330);
+    assert_eq!(summary.stub_member_count, 1330);
     assert_eq!(
         document.interfaces[0].members[0]
             .metadata
@@ -1905,7 +1905,7 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         .expect("Point");
 
     assert_eq!(application.member_count, 44);
-    assert_eq!(worksheet_function.member_count, 332);
+    assert_eq!(worksheet_function.member_count, 386);
     assert_eq!(workbooks.member_count, 7);
     assert_eq!(workbook.member_count, 26);
     assert_eq!(worksheets.member_count, 13);
@@ -3044,8 +3044,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(coverage.library, "Excel");
     assert_eq!(coverage.version, "16.0");
-    assert_eq!(coverage.member_count, 1276);
-    assert_eq!(coverage.support_counts.stub, 1276);
+    assert_eq!(coverage.member_count, 1330);
+    assert_eq!(coverage.support_counts.stub, 1330);
     assert!(coverage.missing_focus_surfaces.is_empty());
 
     let application_coverage = coverage
@@ -3391,8 +3391,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         ]
     );
 
-    assert_eq!(worksheet_function_coverage.member_count, 332);
-    assert_eq!(worksheet_function_coverage.support_counts.stub, 332);
+    assert_eq!(worksheet_function_coverage.member_count, 386);
+    assert_eq!(worksheet_function_coverage.support_counts.stub, 386);
     assert_eq!(
         worksheet_function_coverage.stub_members,
         vec![
@@ -3494,7 +3494,47 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
             "BitXor".to_string(),
             "BitLShift".to_string(),
             "BitRShift".to_string(),
+            "Base".to_string(),
+            "Dec2Bin".to_string(),
+            "Dec2Oct".to_string(),
+            "Dec2Hex".to_string(),
+            "Bin2Hex".to_string(),
+            "Bin2Oct".to_string(),
+            "Oct2Bin".to_string(),
+            "Oct2Hex".to_string(),
+            "Hex2Bin".to_string(),
+            "Hex2Oct".to_string(),
+            "Complex".to_string(),
+            "ImConjugate".to_string(),
+            "ImCos".to_string(),
+            "ImCosh".to_string(),
+            "ImCot".to_string(),
+            "ImCsc".to_string(),
+            "ImCsch".to_string(),
+            "ImDiv".to_string(),
+            "ImExp".to_string(),
+            "ImLn".to_string(),
+            "ImLog10".to_string(),
+            "ImLog2".to_string(),
+            "ImPower".to_string(),
+            "ImProduct".to_string(),
+            "ImSec".to_string(),
+            "ImSech".to_string(),
+            "ImSin".to_string(),
+            "ImSinh".to_string(),
+            "ImSqrt".to_string(),
+            "ImSub".to_string(),
+            "ImSum".to_string(),
+            "ImTan".to_string(),
             "Len".to_string(),
+            "LeftB".to_string(),
+            "RightB".to_string(),
+            "MidB".to_string(),
+            "Asc".to_string(),
+            "DBCS".to_string(),
+            "Jis".to_string(),
+            "Char".to_string(),
+            "UniChar".to_string(),
             "Left".to_string(),
             "Right".to_string(),
             "Mid".to_string(),
@@ -3508,12 +3548,26 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
             "Search".to_string(),
             "Rept".to_string(),
             "Replace".to_string(),
+            "ReplaceB".to_string(),
             "Substitute".to_string(),
             "Proper".to_string(),
             "Concatenate".to_string(),
             "Concat".to_string(),
             "TextJoin".to_string(),
+            "TextBefore".to_string(),
+            "TextAfter".to_string(),
+            "TextSplit".to_string(),
+            "T".to_string(),
+            "EncodeUrl".to_string(),
+            "ValueToText".to_string(),
+            "ArrayToText".to_string(),
             "NumberValue".to_string(),
+            "Dollar".to_string(),
+            "Fixed".to_string(),
+            "Roman".to_string(),
+            "BahtText".to_string(),
+            "Address".to_string(),
+            "FormulaText".to_string(),
             "Date".to_string(),
             "Year".to_string(),
             "Month".to_string(),

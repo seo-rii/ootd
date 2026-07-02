@@ -87618,6 +87618,19 @@ mod tests {
                 &[],
             )
             .expect("set Sheet1 paired y values");
+        let formula_text_source = expect_object_handle(
+            runtime
+                .dispatch_invoke(first_sheet, "Range", &[OmValue::Text("Z1".to_string())])
+                .expect("Sheet1.Range(Z1)"),
+        );
+        runtime
+            .dispatch_set(
+                formula_text_source,
+                "Formula",
+                OmValue::Text("=SUM(A1:A2)".to_string()),
+                &[],
+            )
+            .expect("set FORMULATEXT source formula");
         let chisq_actual_source = expect_object_handle(
             runtime
                 .dispatch_invoke(first_sheet, "Range", &[OmValue::Text("D1:D3".to_string())])
@@ -87925,6 +87938,148 @@ mod tests {
             ),
             5.0
         );
+        for (member, args, expected) in [
+            (
+                "Base",
+                vec![OmValue::Number(31.0), OmValue::Number(16.0)],
+                "1F",
+            ),
+            (
+                "Dec2Bin",
+                vec![OmValue::Number(10.0), OmValue::Number(8.0)],
+                "00001010",
+            ),
+            (
+                "Dec2Oct",
+                vec![OmValue::Number(64.0), OmValue::Number(4.0)],
+                "0100",
+            ),
+            (
+                "Dec2Hex",
+                vec![OmValue::Number(255.0), OmValue::Number(4.0)],
+                "00FF",
+            ),
+            (
+                "Bin2Hex",
+                vec![OmValue::Text("1010".to_string()), OmValue::Number(4.0)],
+                "000A",
+            ),
+            (
+                "Bin2Oct",
+                vec![OmValue::Text("1010".to_string()), OmValue::Number(4.0)],
+                "0012",
+            ),
+            (
+                "Oct2Bin",
+                vec![OmValue::Text("10".to_string()), OmValue::Number(5.0)],
+                "01000",
+            ),
+            (
+                "Oct2Hex",
+                vec![OmValue::Text("10".to_string()), OmValue::Number(3.0)],
+                "008",
+            ),
+            (
+                "Hex2Bin",
+                vec![OmValue::Text("F".to_string()), OmValue::Number(8.0)],
+                "00001111",
+            ),
+            (
+                "Hex2Oct",
+                vec![OmValue::Text("F".to_string()), OmValue::Number(4.0)],
+                "0017",
+            ),
+        ] {
+            assert_eq!(
+                expect_text(
+                    runtime
+                        .dispatch_invoke(worksheet_function, member, &args)
+                        .expect("WorksheetFunction engineering text dispatch")
+                ),
+                expected
+            );
+        }
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "Complex",
+                        &[
+                            OmValue::Number(3.0),
+                            OmValue::Number(4.0),
+                            OmValue::Text("i".to_string()),
+                        ],
+                    )
+                    .expect("WorksheetFunction.Complex")
+            ),
+            "3+4i"
+        );
+        for (member, args, expected) in [
+            (
+                "ImConjugate",
+                vec![OmValue::Text("3+4i".to_string())],
+                "3-4i",
+            ),
+            ("ImCos", vec![OmValue::Text("0".to_string())], "1"),
+            ("ImCosh", vec![OmValue::Text("0".to_string())], "1"),
+            (
+                "ImDiv",
+                vec![
+                    OmValue::Text("3+4i".to_string()),
+                    OmValue::Text("1-i".to_string()),
+                ],
+                "-0.5+3.5i",
+            ),
+            ("ImExp", vec![OmValue::Text("0".to_string())], "1"),
+            ("ImLn", vec![OmValue::Text("1".to_string())], "0"),
+            ("ImLog10", vec![OmValue::Text("1".to_string())], "0"),
+            ("ImLog2", vec![OmValue::Text("1".to_string())], "0"),
+            (
+                "ImPower",
+                vec![OmValue::Text("i".to_string()), OmValue::Number(2.0)],
+                "-1",
+            ),
+            (
+                "ImProduct",
+                vec![
+                    OmValue::Text("1+i".to_string()),
+                    OmValue::Text("1-i".to_string()),
+                ],
+                "2",
+            ),
+            ("ImSec", vec![OmValue::Text("0".to_string())], "1"),
+            ("ImSech", vec![OmValue::Text("0".to_string())], "1"),
+            ("ImSin", vec![OmValue::Text("0".to_string())], "0"),
+            ("ImSinh", vec![OmValue::Text("0".to_string())], "0"),
+            ("ImSqrt", vec![OmValue::Text("-1".to_string())], "i"),
+            (
+                "ImSub",
+                vec![
+                    OmValue::Text("5+5i".to_string()),
+                    OmValue::Text("2+i".to_string()),
+                ],
+                "3+4i",
+            ),
+            (
+                "ImSum",
+                vec![
+                    OmValue::Text("1+i".to_string()),
+                    OmValue::Text("2+3i".to_string()),
+                ],
+                "3+4i",
+            ),
+            ("ImTan", vec![OmValue::Text("0".to_string())], "0"),
+        ] {
+            assert_eq!(
+                expect_text(
+                    runtime
+                        .dispatch_invoke(worksheet_function, member, &args)
+                        .expect("WorksheetFunction complex text dispatch")
+                ),
+                expected
+            );
+        }
         assert_eq!(
             expect_number(
                 runtime
@@ -90127,6 +90282,76 @@ mod tests {
                 runtime
                     .dispatch_invoke(
                         worksheet_function,
+                        "LeftB",
+                        &[OmValue::Text("abcdef".to_string()), OmValue::Number(3.0)],
+                    )
+                    .expect("WorksheetFunction.LeftB")
+            ),
+            "abc"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "RightB",
+                        &[OmValue::Text("abcdef".to_string()), OmValue::Number(2.0)],
+                    )
+                    .expect("WorksheetFunction.RightB")
+            ),
+            "ef"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "MidB",
+                        &[
+                            OmValue::Text("abcdef".to_string()),
+                            OmValue::Number(2.0),
+                            OmValue::Number(3.0),
+                        ],
+                    )
+                    .expect("WorksheetFunction.MidB")
+            ),
+            "bcd"
+        );
+        for member in ["Asc", "DBCS", "Jis"] {
+            assert_eq!(
+                expect_text(
+                    runtime
+                        .dispatch_invoke(
+                            worksheet_function,
+                            member,
+                            &[OmValue::Text("ABC".to_string())],
+                        )
+                        .expect("WorksheetFunction unary text dispatch")
+                ),
+                "ABC"
+            );
+        }
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_invoke(worksheet_function, "Char", &[OmValue::Number(65.0)])
+                    .expect("WorksheetFunction.Char")
+            ),
+            "A"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_invoke(worksheet_function, "UniChar", &[OmValue::Number(9731.0)])
+                    .expect("WorksheetFunction.UniChar")
+            ),
+            "\u{2603}"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
                         "Left",
                         &[OmValue::Text("abcdef".to_string()), OmValue::Number(3.0)],
                     )
@@ -90302,6 +90527,23 @@ mod tests {
                 runtime
                     .dispatch_invoke(
                         worksheet_function,
+                        "ReplaceB",
+                        &[
+                            OmValue::Text("abcdef".to_string()),
+                            OmValue::Number(2.0),
+                            OmValue::Number(3.0),
+                            OmValue::Text("ZZ".to_string()),
+                        ],
+                    )
+                    .expect("WorksheetFunction.ReplaceB")
+            ),
+            "aZZef"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
                         "Substitute",
                         &[
                             OmValue::Text("one fish one fish".to_string()),
@@ -90375,6 +90617,102 @@ mod tests {
             "x-y"
         );
         assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "TextBefore",
+                        &[
+                            OmValue::Text("alpha-beta-gamma".to_string()),
+                            OmValue::Text("-".to_string()),
+                        ],
+                    )
+                    .expect("WorksheetFunction.TextBefore")
+            ),
+            "alpha"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "TextAfter",
+                        &[
+                            OmValue::Text("alpha-beta-gamma".to_string()),
+                            OmValue::Text("-".to_string()),
+                        ],
+                    )
+                    .expect("WorksheetFunction.TextAfter")
+            ),
+            "beta-gamma"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "TextSplit",
+                        &[
+                            OmValue::Text("a:b".to_string()),
+                            OmValue::Text(":".to_string())
+                        ],
+                    )
+                    .expect("WorksheetFunction.TextSplit")
+            ),
+            "a"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "T",
+                        &[OmValue::Text("text".to_string())],
+                    )
+                    .expect("WorksheetFunction.T")
+            ),
+            "text"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "EncodeUrl",
+                        &[OmValue::Text("a b?=".to_string())],
+                    )
+                    .expect("WorksheetFunction.EncodeUrl")
+            ),
+            "a%20b%3F%3D"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "ValueToText",
+                        &[
+                            OmValue::Text("a \"quote\"".to_string()),
+                            OmValue::Number(1.0)
+                        ],
+                    )
+                    .expect("WorksheetFunction.ValueToText")
+            ),
+            "\"a \"\"quote\"\"\""
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "ArrayToText",
+                        &[OmValue::Object(paired_x_source), OmValue::Number(0.0)],
+                    )
+                    .expect("WorksheetFunction.ArrayToText")
+            ),
+            "1, 2, 3, 4"
+        );
+        assert_eq!(
             expect_number(
                 runtime
                     .dispatch_invoke(
@@ -90389,6 +90727,82 @@ mod tests {
                     .expect("WorksheetFunction.NumberValue")
             ),
             2500.25
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "Dollar",
+                        &[OmValue::Number(1234.567), OmValue::Number(2.0)],
+                    )
+                    .expect("WorksheetFunction.Dollar")
+            ),
+            "$1,234.57"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "Fixed",
+                        &[
+                            OmValue::Number(1234.567),
+                            OmValue::Number(1.0),
+                            OmValue::Bool(true),
+                        ],
+                    )
+                    .expect("WorksheetFunction.Fixed")
+            ),
+            "1234.6"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "Roman",
+                        &[OmValue::Number(1999.0), OmValue::Number(0.0)],
+                    )
+                    .expect("WorksheetFunction.Roman")
+            ),
+            "MCMXCIX"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_invoke(worksheet_function, "BahtText", &[OmValue::Number(1.0)])
+                    .expect("WorksheetFunction.BahtText")
+            ),
+            "หนึ่งบาทถ้วน"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "Address",
+                        &[
+                            OmValue::Number(2.0),
+                            OmValue::Number(3.0),
+                            OmValue::Number(4.0)
+                        ],
+                    )
+                    .expect("WorksheetFunction.Address")
+            ),
+            "C2"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "FormulaText",
+                        &[OmValue::Object(formula_text_source)],
+                    )
+                    .expect("WorksheetFunction.FormulaText")
+            ),
+            "=SUM(A1:A2)"
         );
         assert_eq!(
             expect_number(
