@@ -10098,6 +10098,182 @@
           }
         },
         {
+          "name": "BesselI",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          },
+          "params": [
+            {
+              "name": "Arg1",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg2",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "WorksheetFunction",
+                  "sourceMember": "BesselI"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          }
+        },
+        {
+          "name": "BesselJ",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          },
+          "params": [
+            {
+              "name": "Arg1",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg2",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "WorksheetFunction",
+                  "sourceMember": "BesselJ"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          }
+        },
+        {
+          "name": "BesselK",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          },
+          "params": [
+            {
+              "name": "Arg1",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg2",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "WorksheetFunction",
+                  "sourceMember": "BesselK"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          }
+        },
+        {
+          "name": "BesselY",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          },
+          "params": [
+            {
+              "name": "Arg1",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg2",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "WorksheetFunction",
+                  "sourceMember": "BesselY"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          }
+        },
+        {
           "name": "Fisher",
           "memberKind": "method",
           "returnType": {
@@ -11233,6 +11409,78 @@
           }
         },
         {
+          "name": "IsEven",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          },
+          "params": [
+            {
+              "name": "Arg1",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "WorksheetFunction",
+                  "sourceMember": "IsEven"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          }
+        },
+        {
+          "name": "IsOdd",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          },
+          "params": [
+            {
+              "name": "Arg1",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "WorksheetFunction",
+                  "sourceMember": "IsOdd"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          }
+        },
+        {
           "name": "Exp",
           "memberKind": "method",
           "returnType": {
@@ -11375,6 +11623,110 @@
                   "kind": "method",
                   "sourceInterface": "WorksheetFunction",
                   "sourceMember": "Log10"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          }
+        },
+        {
+          "name": "LogNormDist",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          },
+          "params": [
+            {
+              "name": "Arg1",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg2",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg3",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "WorksheetFunction",
+                  "sourceMember": "LogNormDist"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          }
+        },
+        {
+          "name": "LogInv",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          },
+          "params": [
+            {
+              "name": "Arg1",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg2",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg3",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "WorksheetFunction",
+                  "sourceMember": "LogInv"
                 }
               ],
               "typeInfo": {
@@ -12828,6 +13180,131 @@
                   "kind": "method",
                   "sourceInterface": "WorksheetFunction",
                   "sourceMember": "Time"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          }
+        },
+        {
+          "name": "Today",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          },
+          "params": [],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "WorksheetFunction",
+                  "sourceMember": "Today"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          }
+        },
+        {
+          "name": "Now",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          },
+          "params": [],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "WorksheetFunction",
+                  "sourceMember": "Now"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          }
+        },
+        {
+          "name": "Rand",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          },
+          "params": [],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "WorksheetFunction",
+                  "sourceMember": "Rand"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          }
+        },
+        {
+          "name": "RandBetween",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          },
+          "params": [
+            {
+              "name": "Arg1",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg2",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "WorksheetFunction",
+                  "sourceMember": "RandBetween"
                 }
               ],
               "typeInfo": {
@@ -18279,6 +18756,58 @@
           }
         },
         {
+          "name": "Confidence",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          },
+          "params": [
+            {
+              "name": "Arg1",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg2",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg3",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "WorksheetFunction",
+                  "sourceMember": "Confidence"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          }
+        },
+        {
           "name": "Confidence_Norm",
           "memberKind": "method",
           "returnType": {
@@ -18432,6 +18961,66 @@
                   "kind": "method",
                   "sourceInterface": "WorksheetFunction",
                   "sourceMember": "Binom_Dist"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          }
+        },
+        {
+          "name": "BinomDist",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          },
+          "params": [
+            {
+              "name": "Arg1",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg2",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg3",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg4",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "WorksheetFunction",
+                  "sourceMember": "BinomDist"
                 }
               ],
               "typeInfo": {
@@ -18725,6 +19314,170 @@
                   "kind": "method",
                   "sourceInterface": "WorksheetFunction",
                   "sourceMember": "HypGeom_Dist"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          }
+        },
+        {
+          "name": "HypGeomDist",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          },
+          "params": [
+            {
+              "name": "Arg1",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg2",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg3",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg4",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "WorksheetFunction",
+                  "sourceMember": "HypGeomDist"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          }
+        },
+        {
+          "name": "NegBinomDist",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          },
+          "params": [
+            {
+              "name": "Arg1",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg2",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg3",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "WorksheetFunction",
+                  "sourceMember": "NegBinomDist"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          }
+        },
+        {
+          "name": "If",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          },
+          "params": [
+            {
+              "name": "Arg1",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg2",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg3",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "WorksheetFunction",
+                  "sourceMember": "If"
                 }
               ],
               "typeInfo": {
@@ -25285,6 +26038,282 @@
           }
         },
         {
+          "name": "ExponDist",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          },
+          "params": [
+            {
+              "name": "Arg1",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg2",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg3",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "WorksheetFunction",
+                  "sourceMember": "ExponDist"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          }
+        },
+        {
+          "name": "Poisson",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          },
+          "params": [
+            {
+              "name": "Arg1",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg2",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg3",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "WorksheetFunction",
+                  "sourceMember": "Poisson"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          }
+        },
+        {
+          "name": "Weibull",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          },
+          "params": [
+            {
+              "name": "Arg1",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg2",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg3",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg4",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "WorksheetFunction",
+                  "sourceMember": "Weibull"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          }
+        },
+        {
+          "name": "Poisson_Dist",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          },
+          "params": [
+            {
+              "name": "Arg1",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg2",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg3",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "WorksheetFunction",
+                  "sourceMember": "Poisson_Dist"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          }
+        },
+        {
+          "name": "Weibull_Dist",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          },
+          "params": [
+            {
+              "name": "Arg1",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg2",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg3",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg4",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "WorksheetFunction",
+                  "sourceMember": "Weibull_Dist"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          }
+        },
+        {
           "name": "Norm_Dist",
           "memberKind": "method",
           "returnType": {
@@ -25334,6 +26363,66 @@
                   "kind": "method",
                   "sourceInterface": "WorksheetFunction",
                   "sourceMember": "Norm_Dist"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          }
+        },
+        {
+          "name": "NormDist",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          },
+          "params": [
+            {
+              "name": "Arg1",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg2",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg3",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg4",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "WorksheetFunction",
+                  "sourceMember": "NormDist"
                 }
               ],
               "typeInfo": {
@@ -25441,6 +26530,58 @@
           }
         },
         {
+          "name": "NormInv",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          },
+          "params": [
+            {
+              "name": "Arg1",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg2",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg3",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "WorksheetFunction",
+                  "sourceMember": "NormInv"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          }
+        },
+        {
           "name": "Norm_S_Inv",
           "memberKind": "method",
           "returnType": {
@@ -25466,6 +26607,78 @@
                   "kind": "method",
                   "sourceInterface": "WorksheetFunction",
                   "sourceMember": "Norm_S_Inv"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          }
+        },
+        {
+          "name": "NormSDist",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          },
+          "params": [
+            {
+              "name": "Arg1",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "WorksheetFunction",
+                  "sourceMember": "NormSDist"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          }
+        },
+        {
+          "name": "NormSInv",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          },
+          "params": [
+            {
+              "name": "Arg1",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "WorksheetFunction",
+                  "sourceMember": "NormSInv"
                 }
               ],
               "typeInfo": {
@@ -25667,6 +26880,75 @@
           }
         },
         {
+          "name": "BetaDist",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          },
+          "params": [
+            {
+              "name": "Arg1",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg2",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg3",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg4",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg5",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "WorksheetFunction",
+                  "sourceMember": "BetaDist"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          }
+        },
+        {
           "name": "Beta_Inv",
           "memberKind": "method",
           "returnType": {
@@ -25726,6 +27008,76 @@
                   "kind": "method",
                   "sourceInterface": "WorksheetFunction",
                   "sourceMember": "Beta_Inv"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          }
+        },
+        {
+          "name": "BetaInv",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          },
+          "params": [
+            {
+              "name": "Arg1",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg2",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg3",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg4",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "Arg5",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "WorksheetFunction",
+                  "sourceMember": "BetaInv"
                 }
               ],
               "typeInfo": {
@@ -25797,6 +27149,66 @@
           }
         },
         {
+          "name": "GammaDist",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          },
+          "params": [
+            {
+              "name": "Arg1",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg2",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg3",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg4",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "WorksheetFunction",
+                  "sourceMember": "GammaDist"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          }
+        },
+        {
           "name": "Gamma_Inv",
           "memberKind": "method",
           "returnType": {
@@ -25838,6 +27250,58 @@
                   "kind": "method",
                   "sourceInterface": "WorksheetFunction",
                   "sourceMember": "Gamma_Inv"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          }
+        },
+        {
+          "name": "GammaInv",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          },
+          "params": [
+            {
+              "name": "Arg1",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg2",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg3",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "WorksheetFunction",
+                  "sourceMember": "GammaInv"
                 }
               ],
               "typeInfo": {
@@ -25901,6 +27365,94 @@
           }
         },
         {
+          "name": "ChiSq_Dist_RT",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          },
+          "params": [
+            {
+              "name": "Arg1",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg2",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "WorksheetFunction",
+                  "sourceMember": "ChiSq_Dist_RT"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          }
+        },
+        {
+          "name": "ChiDist",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          },
+          "params": [
+            {
+              "name": "Arg1",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg2",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "WorksheetFunction",
+                  "sourceMember": "ChiDist"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          }
+        },
+        {
           "name": "ChiSq_Inv",
           "memberKind": "method",
           "returnType": {
@@ -25934,6 +27486,94 @@
                   "kind": "method",
                   "sourceInterface": "WorksheetFunction",
                   "sourceMember": "ChiSq_Inv"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          }
+        },
+        {
+          "name": "ChiSq_Inv_RT",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          },
+          "params": [
+            {
+              "name": "Arg1",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg2",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "WorksheetFunction",
+                  "sourceMember": "ChiSq_Inv_RT"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          }
+        },
+        {
+          "name": "ChiInv",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          },
+          "params": [
+            {
+              "name": "Arg1",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg2",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "WorksheetFunction",
+                  "sourceMember": "ChiInv"
                 }
               ],
               "typeInfo": {
@@ -26005,6 +27645,110 @@
           }
         },
         {
+          "name": "F_Dist_RT",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          },
+          "params": [
+            {
+              "name": "Arg1",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg2",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg3",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "WorksheetFunction",
+                  "sourceMember": "F_Dist_RT"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          }
+        },
+        {
+          "name": "FDist",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          },
+          "params": [
+            {
+              "name": "Arg1",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg2",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg3",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "WorksheetFunction",
+                  "sourceMember": "FDist"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          }
+        },
+        {
           "name": "F_Inv",
           "memberKind": "method",
           "returnType": {
@@ -26046,6 +27790,110 @@
                   "kind": "method",
                   "sourceInterface": "WorksheetFunction",
                   "sourceMember": "F_Inv"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          }
+        },
+        {
+          "name": "F_Inv_RT",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          },
+          "params": [
+            {
+              "name": "Arg1",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg2",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg3",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "WorksheetFunction",
+                  "sourceMember": "F_Inv_RT"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          }
+        },
+        {
+          "name": "FInv",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          },
+          "params": [
+            {
+              "name": "Arg1",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg2",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg3",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "WorksheetFunction",
+                  "sourceMember": "FInv"
                 }
               ],
               "typeInfo": {
@@ -26109,6 +27957,146 @@
           }
         },
         {
+          "name": "T_Dist_RT",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          },
+          "params": [
+            {
+              "name": "Arg1",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg2",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "WorksheetFunction",
+                  "sourceMember": "T_Dist_RT"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          }
+        },
+        {
+          "name": "T_Dist_2T",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          },
+          "params": [
+            {
+              "name": "Arg1",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg2",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "WorksheetFunction",
+                  "sourceMember": "T_Dist_2T"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          }
+        },
+        {
+          "name": "TDist",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          },
+          "params": [
+            {
+              "name": "Arg1",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg2",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg3",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "WorksheetFunction",
+                  "sourceMember": "TDist"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          }
+        },
+        {
           "name": "T_Inv",
           "memberKind": "method",
           "returnType": {
@@ -26142,6 +28130,94 @@
                   "kind": "method",
                   "sourceInterface": "WorksheetFunction",
                   "sourceMember": "T_Inv"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          }
+        },
+        {
+          "name": "T_Inv_2T",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          },
+          "params": [
+            {
+              "name": "Arg1",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg2",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "WorksheetFunction",
+                  "sourceMember": "T_Inv_2T"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          }
+        },
+        {
+          "name": "TInv",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          },
+          "params": [
+            {
+              "name": "Arg1",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg2",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "WorksheetFunction",
+                  "sourceMember": "TInv"
                 }
               ],
               "typeInfo": {

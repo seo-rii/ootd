@@ -148,8 +148,8 @@ fn loads_office_idl_excel_om_template_and_summarizes_surface() {
     assert_eq!(summary.enum_count, 8);
     assert_eq!(summary.interface_count, 58);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 1233);
-    assert_eq!(summary.stub_member_count, 1233);
+    assert_eq!(summary.member_count, 1276);
+    assert_eq!(summary.stub_member_count, 1276);
     assert_eq!(
         document.interfaces[0].members[0]
             .metadata
@@ -1905,7 +1905,7 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         .expect("Point");
 
     assert_eq!(application.member_count, 44);
-    assert_eq!(worksheet_function.member_count, 289);
+    assert_eq!(worksheet_function.member_count, 332);
     assert_eq!(workbooks.member_count, 7);
     assert_eq!(workbook.member_count, 26);
     assert_eq!(worksheets.member_count, 13);
@@ -3044,8 +3044,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(coverage.library, "Excel");
     assert_eq!(coverage.version, "16.0");
-    assert_eq!(coverage.member_count, 1233);
-    assert_eq!(coverage.support_counts.stub, 1233);
+    assert_eq!(coverage.member_count, 1276);
+    assert_eq!(coverage.support_counts.stub, 1276);
     assert!(coverage.missing_focus_surfaces.is_empty());
 
     let application_coverage = coverage
@@ -3391,8 +3391,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         ]
     );
 
-    assert_eq!(worksheet_function_coverage.member_count, 289);
-    assert_eq!(worksheet_function_coverage.support_counts.stub, 289);
+    assert_eq!(worksheet_function_coverage.member_count, 332);
+    assert_eq!(worksheet_function_coverage.support_counts.stub, 332);
     assert_eq!(
         worksheet_function_coverage.stub_members,
         vec![
@@ -3449,6 +3449,10 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
             "Cot".to_string(),
             "Sech".to_string(),
             "SqrtPi".to_string(),
+            "BesselI".to_string(),
+            "BesselJ".to_string(),
+            "BesselK".to_string(),
+            "BesselY".to_string(),
             "Fisher".to_string(),
             "FisherInv".to_string(),
             "Erf".to_string(),
@@ -3476,10 +3480,14 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
             "Ceiling_Precise".to_string(),
             "Floor_Precise".to_string(),
             "Iso_Ceiling".to_string(),
+            "IsEven".to_string(),
+            "IsOdd".to_string(),
             "Exp".to_string(),
             "Ln".to_string(),
             "Log".to_string(),
             "Log10".to_string(),
+            "LogNormDist".to_string(),
+            "LogInv".to_string(),
             "Trunc".to_string(),
             "BitAnd".to_string(),
             "BitOr".to_string(),
@@ -3512,6 +3520,10 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
             "Day".to_string(),
             "Days".to_string(),
             "Time".to_string(),
+            "Today".to_string(),
+            "Now".to_string(),
+            "Rand".to_string(),
+            "RandBetween".to_string(),
             "Hour".to_string(),
             "Minute".to_string(),
             "Second".to_string(),
@@ -3604,14 +3616,19 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
             "Gauss".to_string(),
             "Phi".to_string(),
             "Standardize".to_string(),
+            "Confidence".to_string(),
             "Confidence_Norm".to_string(),
             "Confidence_T".to_string(),
             "Binom_Dist".to_string(),
+            "BinomDist".to_string(),
             "Binom_Dist_Range".to_string(),
             "Binom_Inv".to_string(),
             "CritBinom".to_string(),
             "NegBinom_Dist".to_string(),
             "HypGeom_Dist".to_string(),
+            "HypGeomDist".to_string(),
+            "NegBinomDist".to_string(),
+            "If".to_string(),
             "Not".to_string(),
             "And".to_string(),
             "Or".to_string(),
@@ -3665,22 +3682,48 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
             "Forecast".to_string(),
             "Steyx".to_string(),
             "Expon_Dist".to_string(),
+            "ExponDist".to_string(),
+            "Poisson".to_string(),
+            "Weibull".to_string(),
+            "Poisson_Dist".to_string(),
+            "Weibull_Dist".to_string(),
             "Norm_Dist".to_string(),
+            "NormDist".to_string(),
             "Norm_S_Dist".to_string(),
             "Norm_Inv".to_string(),
+            "NormInv".to_string(),
             "Norm_S_Inv".to_string(),
+            "NormSDist".to_string(),
+            "NormSInv".to_string(),
             "LogNorm_Dist".to_string(),
             "LogNorm_Inv".to_string(),
             "Beta_Dist".to_string(),
+            "BetaDist".to_string(),
             "Beta_Inv".to_string(),
+            "BetaInv".to_string(),
             "Gamma_Dist".to_string(),
+            "GammaDist".to_string(),
             "Gamma_Inv".to_string(),
+            "GammaInv".to_string(),
             "ChiSq_Dist".to_string(),
+            "ChiSq_Dist_RT".to_string(),
+            "ChiDist".to_string(),
             "ChiSq_Inv".to_string(),
+            "ChiSq_Inv_RT".to_string(),
+            "ChiInv".to_string(),
             "F_Dist".to_string(),
+            "F_Dist_RT".to_string(),
+            "FDist".to_string(),
             "F_Inv".to_string(),
+            "F_Inv_RT".to_string(),
+            "FInv".to_string(),
             "T_Dist".to_string(),
+            "T_Dist_RT".to_string(),
+            "T_Dist_2T".to_string(),
+            "TDist".to_string(),
             "T_Inv".to_string(),
+            "T_Inv_2T".to_string(),
+            "TInv".to_string(),
             "ChiSq_Test".to_string(),
             "F_Test".to_string(),
             "T_Test".to_string(),
