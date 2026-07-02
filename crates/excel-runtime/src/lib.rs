@@ -2800,6 +2800,14 @@ impl ExcelRuntime {
                     "Parent" => Ok(OmValue::Object(
                         self.register_object(RuntimeObjectKind::ChartFormat { workbook, parent }),
                     )),
+                    "Visible"
+                        if matches!(
+                            kind,
+                            ChartFormatChildKind::Fill | ChartFormatChildKind::Line
+                        ) =>
+                    {
+                        Ok(OmValue::Number(f64::from(MSO_TRUE)))
+                    }
                     _ => Err(OmError::unsupported(format!(
                         "{surface}.{member} is not implemented"
                     ))),
@@ -18162,9 +18170,15 @@ impl ExcelRuntime {
                         "Adjustments",
                         "Application" | "Count" | "Creator" | "Item" | "Parent"
                     )
-                    | ("FillFormat", "Creator" | "Application" | "Parent")
+                    | (
+                        "FillFormat",
+                        "Creator" | "Application" | "Parent" | "Visible"
+                    )
                     | ("GlowFormat", "Creator" | "Application" | "Parent")
-                    | ("LineFormat", "Creator" | "Application" | "Parent")
+                    | (
+                        "LineFormat",
+                        "Creator" | "Application" | "Parent" | "Visible"
+                    )
                     | ("PictureFormat", "Creator" | "Application" | "Parent")
                     | ("ShadowFormat", "Creator" | "Application" | "Parent")
                     | ("SoftEdgeFormat", "Creator" | "Application" | "Parent")
@@ -68675,6 +68689,15 @@ mod tests {
                     .iter()
                     .find(|member| member.name == member_name)
                     .unwrap_or_else(|| panic!("{surface_name}.{member_name} focus member"));
+                assert!(matches!(member.support, office_idl::SupportState::Stub));
+                assert!(matches!(member.access, office_idl::AccessMode::Read));
+            }
+            if matches!(surface_name, "FillFormat" | "LineFormat") {
+                let member = surface
+                    .members
+                    .iter()
+                    .find(|member| member.name == "Visible")
+                    .unwrap_or_else(|| panic!("{surface_name}.Visible focus member"));
                 assert!(matches!(member.support, office_idl::SupportState::Stub));
                 assert!(matches!(member.access, office_idl::AccessMode::Read));
             }
@@ -129392,6 +129415,23 @@ mod tests {
                         .code,
                     OmErrorCode::InvalidArgument
                 );
+                if matches!(child_surface, "FillFormat" | "LineFormat") {
+                    assert_eq!(
+                        runtime
+                            .dispatch_get(format_child, "Visible", &[])
+                            .unwrap_or_else(|error| {
+                                panic!("{child_surface}.Visible failed: {error:?}")
+                            }),
+                        OmValue::Number(f64::from(super::MSO_TRUE))
+                    );
+                    assert_eq!(
+                        runtime
+                            .dispatch_get(format_child, "Visible", &[OmValue::Missing])
+                            .expect_err("format child Visible rejects arguments")
+                            .code,
+                        OmErrorCode::InvalidArgument
+                    );
+                }
                 assert_eq!(
                     runtime
                         .dispatch_get(workbook.0, "Saved", &[])

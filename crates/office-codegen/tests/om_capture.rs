@@ -148,8 +148,8 @@ fn loads_office_idl_excel_om_template_and_summarizes_surface() {
     assert_eq!(summary.enum_count, 8);
     assert_eq!(summary.interface_count, 49);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 741);
-    assert_eq!(summary.stub_member_count, 741);
+    assert_eq!(summary.member_count, 743);
+    assert_eq!(summary.stub_member_count, 743);
     assert_eq!(
         document.interfaces[0].members[0]
             .metadata
@@ -1857,9 +1857,9 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
     assert_eq!(data_table.member_count, 10);
     assert_eq!(chart_format.member_count, 13);
     assert_eq!(adjustments.member_count, 5);
-    assert_eq!(fill_format.member_count, 3);
+    assert_eq!(fill_format.member_count, 4);
     assert_eq!(glow_format.member_count, 3);
-    assert_eq!(line_format.member_count, 3);
+    assert_eq!(line_format.member_count, 4);
     assert_eq!(picture_format.member_count, 3);
     assert_eq!(shadow_format.member_count, 3);
     assert_eq!(soft_edge_format.member_count, 3);
@@ -2968,8 +2968,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(coverage.library, "Excel");
     assert_eq!(coverage.version, "16.0");
-    assert_eq!(coverage.member_count, 741);
-    assert_eq!(coverage.support_counts.stub, 741);
+    assert_eq!(coverage.member_count, 743);
+    assert_eq!(coverage.support_counts.stub, 743);
     assert!(coverage.missing_focus_surfaces.is_empty());
 
     let application_coverage = coverage
@@ -3821,9 +3821,7 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
     );
 
     for coverage_entry in [
-        fill_format_coverage,
         glow_format_coverage,
-        line_format_coverage,
         picture_format_coverage,
         shadow_format_coverage,
         soft_edge_format_coverage,
@@ -3838,6 +3836,19 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
                 "Creator".to_string(),
                 "Application".to_string(),
                 "Parent".to_string()
+            ]
+        );
+    }
+    for coverage_entry in [fill_format_coverage, line_format_coverage] {
+        assert_eq!(coverage_entry.member_count, 4);
+        assert_eq!(coverage_entry.support_counts.stub, 4);
+        assert_eq!(
+            coverage_entry.stub_members,
+            vec![
+                "Creator".to_string(),
+                "Application".to_string(),
+                "Parent".to_string(),
+                "Visible".to_string()
             ]
         );
     }
