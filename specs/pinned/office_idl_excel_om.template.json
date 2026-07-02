@@ -22832,6 +22832,33 @@
           "access": "read"
         },
         {
+          "name": "Border",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "LeaderLines",
+                  "sourceMember": "Border"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Border",
+                "aliasOf": "Excel.Border"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "interface",
+            "name": "Border",
+            "aliasOf": "Excel.Border"
+          },
+          "access": "read"
+        },
+        {
           "name": "Creator",
           "memberKind": "property",
           "support": "stub",
@@ -22943,6 +22970,260 @@
               ]
             }
           }
+        }
+      ]
+    },
+    {
+      "name": "Border",
+      "kind": "dispatch",
+      "metadata": {
+        "sourceInherits": [
+          "IDispatch"
+        ]
+      },
+      "members": [
+        {
+          "name": "Application",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Border",
+                  "sourceMember": "Application"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Application",
+                "aliasOf": "Excel.Application"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "interface",
+            "name": "Application",
+            "aliasOf": "Excel.Application"
+          },
+          "access": "read"
+        },
+        {
+          "name": "Color",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Border",
+                  "sourceMember": "Color"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "object",
+                "aliasOf": "Object"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "primitive",
+            "name": "object",
+            "aliasOf": "Object"
+          },
+          "access": "readwrite"
+        },
+        {
+          "name": "ColorIndex",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Border",
+                  "sourceMember": "ColorIndex"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "object",
+                "aliasOf": "Object"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "primitive",
+            "name": "object",
+            "aliasOf": "Object"
+          },
+          "access": "readwrite"
+        },
+        {
+          "name": "Creator",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Border",
+                  "sourceMember": "Creator"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "Int32"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "Int32"
+          },
+          "access": "read"
+        },
+        {
+          "name": "LineStyle",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Border",
+                  "sourceMember": "LineStyle"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "object",
+                "aliasOf": "Object"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "primitive",
+            "name": "object",
+            "aliasOf": "Object"
+          },
+          "access": "readwrite"
+        },
+        {
+          "name": "Parent",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Border",
+                  "sourceMember": "Parent"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Object",
+                "aliasOf": "Object"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "interface",
+            "name": "Object",
+            "aliasOf": "Object"
+          },
+          "access": "read"
+        },
+        {
+          "name": "ThemeColor",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Border",
+                  "sourceMember": "ThemeColor"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "object",
+                "aliasOf": "Object"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "primitive",
+            "name": "object",
+            "aliasOf": "Object"
+          },
+          "access": "readwrite"
+        },
+        {
+          "name": "TintAndShade",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Border",
+                  "sourceMember": "TintAndShade"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "object",
+                "aliasOf": "Object"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "primitive",
+            "name": "object",
+            "aliasOf": "Object"
+          },
+          "access": "readwrite"
+        },
+        {
+          "name": "Weight",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Border",
+                  "sourceMember": "Weight"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "object",
+                "aliasOf": "Object"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "primitive",
+            "name": "object",
+            "aliasOf": "Object"
+          },
+          "access": "readwrite"
         }
       ]
     },

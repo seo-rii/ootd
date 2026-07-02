@@ -178,6 +178,9 @@ const XL_TICK_LABEL_POSITION_NEXT_TO_AXIS: i32 = 4;
 const XL_TICK_LABEL_POSITION_NONE: i32 = -4142;
 const XL_TICK_LABEL_ORIENTATION_AUTOMATIC: i32 = -4105;
 const XL_ORIENTATION_HORIZONTAL: i32 = -4128;
+const XL_COLOR_INDEX_AUTOMATIC: i32 = -4105;
+const XL_CONTINUOUS: i32 = 1;
+const XL_THIN: i32 = 2;
 const XL_READING_ORDER_CONTEXT: i32 = -5002;
 const XL_LABEL_POSITION_ABOVE: i32 = 0;
 const XL_LABEL_POSITION_BELOW: i32 = 1;
@@ -818,6 +821,15 @@ impl ChartGroupLineKind {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+enum BorderParent {
+    LeaderLines {
+        chart_id: ChartId,
+        series_index: usize,
+        chart_object_parent: Option<ChartObjectsParent>,
+    },
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ChartFormatChildKind {
     Fill,
@@ -998,6 +1010,10 @@ enum RuntimeObjectKind {
     PictureCrop {
         workbook: WorkbookHandle,
         parent: ChartFormatParent,
+    },
+    Border {
+        workbook: WorkbookHandle,
+        parent: BorderParent,
     },
     DataLabels {
         workbook: WorkbookHandle,
@@ -3061,6 +3077,28 @@ impl ExcelRuntime {
                     }
                     _ => Err(OmError::unsupported(format!(
                         "Crop.{member} is not implemented"
+                    ))),
+                }
+            }
+            RuntimeObjectKind::Border { workbook, parent } => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(format!(
+                        "Border.{member} does not accept arguments"
+                    )));
+                }
+                let parent_object = self.border_parent_object_kind(workbook, parent)?;
+                match member {
+                    "Application" => Ok(OmValue::Object(self.root_application())),
+                    "Color" => Ok(OmValue::Number(0.0)),
+                    "ColorIndex" => Ok(OmValue::Number(f64::from(XL_COLOR_INDEX_AUTOMATIC))),
+                    "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
+                    "LineStyle" => Ok(OmValue::Number(f64::from(XL_CONTINUOUS))),
+                    "Parent" => Ok(OmValue::Object(self.register_object(parent_object))),
+                    "ThemeColor" => Ok(OmValue::Empty),
+                    "TintAndShade" => Ok(OmValue::Number(0.0)),
+                    "Weight" => Ok(OmValue::Number(f64::from(XL_THIN))),
+                    _ => Err(OmError::unsupported(format!(
+                        "Border.{member} is not implemented"
                     ))),
                 }
             }
@@ -6722,6 +6760,7 @@ impl ExcelRuntime {
             | RuntimeObjectKind::Adjustments { .. }
             | RuntimeObjectKind::ChartFormatChild { .. }
             | RuntimeObjectKind::PictureCrop { .. }
+            | RuntimeObjectKind::Border { .. }
             | RuntimeObjectKind::Gridlines { .. }
             | RuntimeObjectKind::ChartGroups { .. }
             | RuntimeObjectKind::CategoryCollection { .. }
@@ -17467,6 +17506,9 @@ impl ExcelRuntime {
             RuntimeObjectKind::PictureCrop { .. } => Err(OmError::unsupported(format!(
                 "Crop.{member} is not implemented as a method"
             ))),
+            RuntimeObjectKind::Border { .. } => Err(OmError::unsupported(format!(
+                "Border.{member} is not implemented as a method"
+            ))),
             RuntimeObjectKind::Adjustments { workbook, parent } => {
                 self.dispatch_invoke_adjustments(workbook, parent, member, args)
             }
@@ -18289,6 +18331,7 @@ impl ExcelRuntime {
             RuntimeObjectKind::Adjustments { .. } => Some("Adjustments"),
             RuntimeObjectKind::ChartFormatChild { kind, .. } => Some(kind.surface_name()),
             RuntimeObjectKind::PictureCrop { .. } => Some("Crop"),
+            RuntimeObjectKind::Border { .. } => Some("Border"),
             RuntimeObjectKind::DataLabels { .. } => Some("DataLabels"),
             RuntimeObjectKind::LeaderLines { .. } => Some("LeaderLines"),
             RuntimeObjectKind::DataLabel { .. } => Some("DataLabel"),
@@ -24320,6 +24363,33 @@ impl ExcelRuntime {
         }
     }
 
+    fn border_parent_object_kind(
+        &self,
+        workbook: WorkbookHandle,
+        parent: BorderParent,
+    ) -> OmResult<RuntimeObjectKind> {
+        match parent {
+            BorderParent::LeaderLines {
+                chart_id,
+                series_index,
+                chart_object_parent,
+            } => {
+                if !self.leader_lines_visible(workbook, chart_id, series_index)? {
+                    return Err(OmError::new(
+                        OmErrorCode::NotFound,
+                        "leader lines not found",
+                    ));
+                }
+                Ok(RuntimeObjectKind::LeaderLines {
+                    workbook,
+                    chart_id,
+                    series_index,
+                    chart_object_parent,
+                })
+            }
+        }
+    }
+
     fn dispatch_get_legend(
         &mut self,
         workbook: WorkbookHandle,
@@ -27126,6 +27196,16 @@ impl ExcelRuntime {
                 RuntimeObjectKind::ChartFormat {
                     workbook,
                     parent: ChartFormatParent::LeaderLines {
+                        chart_id,
+                        series_index,
+                        chart_object_parent,
+                    },
+                },
+            ))),
+            "Border" => Ok(OmValue::Object(self.register_object(
+                RuntimeObjectKind::Border {
+                    workbook,
+                    parent: BorderParent::LeaderLines {
                         chart_id,
                         series_index,
                         chart_object_parent,
@@ -35111,6 +35191,20 @@ impl ExcelRuntime {
                             ..
                         },
                     ..
+                } if *object_workbook == workbook
+                    && *object_chart_id == chart_id
+                    && *object_series_index == series_index =>
+                {
+                    Some(object_id)
+                }
+                RuntimeObjectKind::Border {
+                    workbook: object_workbook,
+                    parent:
+                        BorderParent::LeaderLines {
+                            chart_id: object_chart_id,
+                            series_index: object_series_index,
+                            ..
+                        },
                 } if *object_workbook == workbook
                     && *object_chart_id == chart_id
                     && *object_series_index == series_index =>
@@ -47404,6 +47498,7 @@ fn runtime_object_owner(object: RuntimeObjectKind) -> Option<WorkbookHandle> {
         | RuntimeObjectKind::Adjustments { workbook, .. }
         | RuntimeObjectKind::ChartFormatChild { workbook, .. }
         | RuntimeObjectKind::PictureCrop { workbook, .. }
+        | RuntimeObjectKind::Border { workbook, .. }
         | RuntimeObjectKind::DataLabels { workbook, .. }
         | RuntimeObjectKind::LeaderLines { workbook, .. }
         | RuntimeObjectKind::DataLabel { workbook, .. }
@@ -70355,8 +70450,9 @@ mod tests {
             ),
             (
                 "LeaderLines",
-                &["Format", "Creator", "Application", "Parent"][..],
+                &["Format", "Border", "Creator", "Application", "Parent"][..],
             ),
+            ("Border", &["Application", "Creator", "Parent"][..]),
             (
                 "DataLabels",
                 &[
@@ -70412,6 +70508,28 @@ mod tests {
                 assert!(matches!(member.support, office_idl::SupportState::Stub));
                 assert!(matches!(member.access, office_idl::AccessMode::Read));
             }
+        }
+        let border = runtime
+            .dispatch_registry()
+            .focus_surfaces
+            .iter()
+            .find(|surface| surface.name == "Border")
+            .expect("Border focus surface");
+        for member_name in [
+            "Color",
+            "ColorIndex",
+            "LineStyle",
+            "ThemeColor",
+            "TintAndShade",
+            "Weight",
+        ] {
+            let member = border
+                .members
+                .iter()
+                .find(|member| member.name == member_name)
+                .unwrap_or_else(|| panic!("Border.{member_name} focus member"));
+            assert!(matches!(member.support, office_idl::SupportState::Stub));
+            assert!(matches!(member.access, office_idl::AccessMode::Readwrite));
         }
         for (surface_name, member_names) in [
             ("SeriesCollection", &["Item", "NewSeries", "Add"][..]),
@@ -129453,6 +129571,30 @@ mod tests {
                 .dispatch_get(leader_lines, "Format", &[])
                 .expect("LeaderLines.Format"),
         );
+        let leader_border = expect_object_handle(
+            runtime
+                .dispatch_get(leader_lines, "Border", &[])
+                .expect("LeaderLines.Border"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(leader_border, "LineStyle", &[])
+                .expect("LeaderLines.Border.LineStyle"),
+            OmValue::Number(f64::from(super::XL_CONTINUOUS))
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(leader_border, "Weight", &[])
+                .expect("LeaderLines.Border.Weight"),
+            OmValue::Number(f64::from(super::XL_THIN))
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(leader_border, "Weight", OmValue::Number(4.0), &[])
+                .expect_err("LeaderLines.Border.Weight setter unsupported")
+                .code,
+            OmErrorCode::Unsupported
+        );
         assert_eq!(
             runtime
                 .dispatch_get(leader_lines, "Creator", &[])
@@ -129479,6 +129621,17 @@ mod tests {
             runtime
                 .dispatch_get(format_parent, "Creator", &[])
                 .expect("LeaderLines.Format.Parent.Creator"),
+            OmValue::Number(f64::from(super::XL_CREATOR_CODE))
+        );
+        let border_parent = expect_object_handle(
+            runtime
+                .dispatch_get(leader_border, "Parent", &[])
+                .expect("LeaderLines.Border.Parent"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(border_parent, "Creator", &[])
+                .expect("LeaderLines.Border.Parent.Creator"),
             OmValue::Number(f64::from(super::XL_CREATOR_CODE))
         );
         runtime
@@ -129510,6 +129663,13 @@ mod tests {
             runtime
                 .dispatch_get(leader_format, "Creator", &[])
                 .expect_err("LeaderLines.Format handle is stale after Delete")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(leader_border, "Creator", &[])
+                .expect_err("LeaderLines.Border handle is stale after Delete")
                 .code,
             OmErrorCode::InvalidState
         );

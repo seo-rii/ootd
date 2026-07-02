@@ -146,10 +146,10 @@ fn loads_office_idl_excel_om_template_and_summarizes_surface() {
         Some("Microsoft.Office.Interop.Excel")
     );
     assert_eq!(summary.enum_count, 8);
-    assert_eq!(summary.interface_count, 54);
+    assert_eq!(summary.interface_count, 55);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 889);
-    assert_eq!(summary.stub_member_count, 889);
+    assert_eq!(summary.member_count, 899);
+    assert_eq!(summary.stub_member_count, 899);
     assert_eq!(
         document.interfaces[0].members[0]
             .metadata
@@ -1220,6 +1220,7 @@ fn builds_coverage_report_for_each_support_state_bucket() {
             "SeriesCollection".to_string(),
             "Series".to_string(),
             "LeaderLines".to_string(),
+            "Border".to_string(),
             "DataLabels".to_string(),
             "DataLabel".to_string(),
             "Points".to_string(),
@@ -1387,6 +1388,7 @@ fn builds_focus_surface_registry_from_json_wrapper() {
             "SeriesCollection".to_string(),
             "Series".to_string(),
             "LeaderLines".to_string(),
+            "Border".to_string(),
             "DataLabels".to_string(),
             "DataLabel".to_string(),
             "Points".to_string(),
@@ -1427,7 +1429,7 @@ fn builds_coverage_report_from_path_wrapper() {
 
     assert_eq!(report_from_path, report_from_json);
     assert_eq!(report_from_path.support_counts.partial, 1);
-    assert_eq!(report_from_path.missing_focus_surfaces.len(), 53);
+    assert_eq!(report_from_path.missing_focus_surfaces.len(), 54);
 
     fs::remove_file(&path).expect("remove temp document");
 }
@@ -1598,7 +1600,7 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(registry.library, "Excel");
     assert_eq!(registry.version, "16.0");
-    assert_eq!(registry.focus_surfaces.len(), 54);
+    assert_eq!(registry.focus_surfaces.len(), 55);
     assert!(registry.missing_focus_surfaces.is_empty());
 
     let application = registry
@@ -1851,6 +1853,11 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         .iter()
         .find(|entry| entry.name == "LeaderLines")
         .expect("LeaderLines");
+    let border = registry
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "Border")
+        .expect("Border");
     let data_labels = registry
         .focus_surfaces
         .iter()
@@ -1921,7 +1928,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
     assert_eq!(axis_title.member_count, 15);
     assert_eq!(series_collection.member_count, 7);
     assert_eq!(series.member_count, 28);
-    assert_eq!(leader_lines.member_count, 6);
+    assert_eq!(leader_lines.member_count, 7);
+    assert_eq!(border.member_count, 9);
     assert_eq!(data_labels.member_count, 26);
     assert_eq!(data_label.member_count, 24);
     assert_eq!(points.member_count, 5);
@@ -3008,8 +3016,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(coverage.library, "Excel");
     assert_eq!(coverage.version, "16.0");
-    assert_eq!(coverage.member_count, 889);
-    assert_eq!(coverage.support_counts.stub, 889);
+    assert_eq!(coverage.member_count, 899);
+    assert_eq!(coverage.support_counts.stub, 899);
     assert!(coverage.missing_focus_surfaces.is_empty());
 
     let application_coverage = coverage
@@ -3262,6 +3270,11 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         .iter()
         .find(|entry| entry.name == "LeaderLines")
         .expect("LeaderLines coverage");
+    let border_coverage = coverage
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "Border")
+        .expect("Border coverage");
     let data_labels_coverage = coverage
         .focus_surfaces
         .iter()
@@ -4401,17 +4414,34 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         ]
     );
 
-    assert_eq!(leader_lines_coverage.member_count, 6);
-    assert_eq!(leader_lines_coverage.support_counts.stub, 6);
+    assert_eq!(leader_lines_coverage.member_count, 7);
+    assert_eq!(leader_lines_coverage.support_counts.stub, 7);
     assert_eq!(
         leader_lines_coverage.stub_members,
         vec![
             "Format".to_string(),
+            "Border".to_string(),
             "Creator".to_string(),
             "Application".to_string(),
             "Parent".to_string(),
             "Select".to_string(),
             "Delete".to_string()
+        ]
+    );
+    assert_eq!(border_coverage.member_count, 9);
+    assert_eq!(border_coverage.support_counts.stub, 9);
+    assert_eq!(
+        border_coverage.stub_members,
+        vec![
+            "Application".to_string(),
+            "Color".to_string(),
+            "ColorIndex".to_string(),
+            "Creator".to_string(),
+            "LineStyle".to_string(),
+            "Parent".to_string(),
+            "ThemeColor".to_string(),
+            "TintAndShade".to_string(),
+            "Weight".to_string()
         ]
     );
 
