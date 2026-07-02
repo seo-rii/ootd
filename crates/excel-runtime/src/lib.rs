@@ -828,6 +828,16 @@ enum BorderParent {
         axis_index: usize,
         chart_object_parent: Option<ChartObjectsParent>,
     },
+    DataTable {
+        chart_id: ChartId,
+        chart_object_parent: Option<ChartObjectsParent>,
+    },
+    Gridlines {
+        chart_id: ChartId,
+        axis_index: usize,
+        major: bool,
+        chart_object_parent: Option<ChartObjectsParent>,
+    },
     LeaderLines {
         chart_id: ChartId,
         series_index: usize,
@@ -18733,6 +18743,7 @@ impl ExcelRuntime {
                             | "HasBorderOutline"
                             | "ShowLegendKey"
                             | "Format"
+                            | "Border"
                             | "Creator"
                             | "Application"
                             | "Parent"
@@ -18915,6 +18926,7 @@ impl ExcelRuntime {
                         "SeriesLines",
                         "Name"
                             | "Format"
+                            | "Border"
                             | "Creator"
                             | "Application"
                             | "Parent"
@@ -19045,6 +19057,7 @@ impl ExcelRuntime {
                         "Gridlines",
                         "Name"
                             | "Format"
+                            | "Border"
                             | "Creator"
                             | "Application"
                             | "Parent"
@@ -24380,6 +24393,58 @@ impl ExcelRuntime {
         parent: BorderParent,
     ) -> OmResult<RuntimeObjectKind> {
         match parent {
+            BorderParent::Axis {
+                chart_id,
+                axis_index,
+                chart_object_parent,
+            } => {
+                self.axis_model(workbook, chart_id, axis_index)?;
+                Ok(RuntimeObjectKind::Axis {
+                    workbook,
+                    chart_id,
+                    axis_index,
+                    chart_object_parent,
+                })
+            }
+            BorderParent::DataTable {
+                chart_id,
+                chart_object_parent,
+            } => {
+                if self.chart_model(workbook, chart_id)?.data_table.is_none() {
+                    return Err(OmError::new(
+                        OmErrorCode::NotFound,
+                        "chart data table not found",
+                    ));
+                }
+                Ok(RuntimeObjectKind::DataTable {
+                    workbook,
+                    chart_id,
+                    chart_object_parent,
+                })
+            }
+            BorderParent::Gridlines {
+                chart_id,
+                axis_index,
+                major,
+                chart_object_parent,
+            } => {
+                let axis = self.axis_model(workbook, chart_id, axis_index)?;
+                let has_gridlines = if major {
+                    axis.has_major_gridlines
+                } else {
+                    axis.has_minor_gridlines
+                };
+                if has_gridlines != Some(true) {
+                    return Err(OmError::new(OmErrorCode::NotFound, "gridlines not found"));
+                }
+                Ok(RuntimeObjectKind::Gridlines {
+                    workbook,
+                    chart_id,
+                    axis_index,
+                    major,
+                    chart_object_parent,
+                })
+            }
             BorderParent::LeaderLines {
                 chart_id,
                 series_index,
@@ -24424,19 +24489,6 @@ impl ExcelRuntime {
                     chart_id,
                     group_index,
                     kind,
-                    chart_object_parent,
-                })
-            }
-            BorderParent::Axis {
-                chart_id,
-                axis_index,
-                chart_object_parent,
-            } => {
-                self.axis_model(workbook, chart_id, axis_index)?;
-                Ok(RuntimeObjectKind::Axis {
-                    workbook,
-                    chart_id,
-                    axis_index,
                     chart_object_parent,
                 })
             }
@@ -24740,6 +24792,15 @@ impl ExcelRuntime {
                 RuntimeObjectKind::ChartFormat {
                     workbook,
                     parent: ChartFormatParent::DataTable {
+                        chart_id,
+                        chart_object_parent,
+                    },
+                },
+            ))),
+            "Border" => Ok(OmValue::Object(self.register_object(
+                RuntimeObjectKind::Border {
+                    workbook,
+                    parent: BorderParent::DataTable {
                         chart_id,
                         chart_object_parent,
                     },
@@ -26297,6 +26358,17 @@ impl ExcelRuntime {
                 RuntimeObjectKind::ChartFormat {
                     workbook,
                     parent: ChartFormatParent::Gridlines {
+                        chart_id,
+                        axis_index,
+                        major,
+                        chart_object_parent,
+                    },
+                },
+            ))),
+            "Border" => Ok(OmValue::Object(self.register_object(
+                RuntimeObjectKind::Border {
+                    workbook,
+                    parent: BorderParent::Gridlines {
                         chart_id,
                         axis_index,
                         major,
@@ -34551,6 +34623,10 @@ impl ExcelRuntime {
                         BorderParent::Axis {
                             chart_id: object_chart_id,
                             ..
+                        }
+                        | BorderParent::Gridlines {
+                            chart_id: object_chart_id,
+                            ..
                         },
                 } if *object_workbook == workbook && *object_chart_id == chart_id => {
                     Some(object_id)
@@ -35154,6 +35230,22 @@ impl ExcelRuntime {
                 {
                     Some(object_id)
                 }
+                RuntimeObjectKind::Border {
+                    workbook: object_workbook,
+                    parent:
+                        BorderParent::Gridlines {
+                            chart_id: object_chart_id,
+                            axis_index: object_axis_index,
+                            major: object_major,
+                            ..
+                        },
+                } if *object_workbook == workbook
+                    && *object_chart_id == chart_id
+                    && *object_axis_index == axis_index
+                    && *object_major == major =>
+                {
+                    Some(object_id)
+                }
                 _ => None,
             })
             .collect::<Vec<_>>();
@@ -35522,6 +35614,16 @@ impl ExcelRuntime {
                             ..
                         },
                     ..
+                } if *object_workbook == workbook && *object_chart_id == chart_id => {
+                    Some(object_id)
+                }
+                RuntimeObjectKind::Border {
+                    workbook: object_workbook,
+                    parent:
+                        BorderParent::DataTable {
+                            chart_id: object_chart_id,
+                            ..
+                        },
                 } if *object_workbook == workbook && *object_chart_id == chart_id => {
                     Some(object_id)
                 }
@@ -69712,7 +69814,7 @@ mod tests {
             ),
             (
                 "DataTable",
-                &["Format", "Creator", "Application", "Parent"][..],
+                &["Format", "Border", "Creator", "Application", "Parent"][..],
                 &["Select", "Delete"][..],
             ),
             (
@@ -70189,7 +70291,14 @@ mod tests {
             .iter()
             .find(|surface| surface.name == "Gridlines")
             .expect("Gridlines focus surface");
-        for member_name in ["Name", "Format", "Creator", "Application", "Parent"] {
+        for member_name in [
+            "Name",
+            "Format",
+            "Border",
+            "Creator",
+            "Application",
+            "Parent",
+        ] {
             let member = gridlines
                 .members
                 .iter()
@@ -125585,6 +125694,11 @@ mod tests {
                 .dispatch_get(data_table, "Format", &[])
                 .expect("DataTable.Format default"),
         );
+        let data_table_border = expect_object_handle(
+            runtime
+                .dispatch_get(data_table, "Border", &[])
+                .expect("DataTable.Border default"),
+        );
         assert_eq!(
             runtime
                 .dispatch_get(data_table, "Format", &[OmValue::Missing])
@@ -125626,6 +125740,23 @@ mod tests {
             runtime
                 .dispatch_get(data_table_format_parent, "ShowLegendKey", &[])
                 .expect("ChartFormat.Parent returns DataTable"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(data_table_border, "LineStyle", &[])
+                .expect("DataTable.Border.LineStyle"),
+            OmValue::Number(f64::from(super::XL_CONTINUOUS))
+        );
+        let data_table_border_parent = expect_object_handle(
+            runtime
+                .dispatch_get(data_table_border, "Parent", &[])
+                .expect("DataTable.Border.Parent"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(data_table_border_parent, "ShowLegendKey", &[])
+                .expect("DataTable.Border.Parent returns DataTable"),
             OmValue::Bool(false)
         );
         let data_table_adjustments = expect_object_handle(
@@ -125847,6 +125978,11 @@ mod tests {
                 .dispatch_get(reopened_data_table, "Format", &[])
                 .expect("reopened DataTable.Format"),
         );
+        let reopened_data_table_border = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_data_table, "Border", &[])
+                .expect("reopened DataTable.Border"),
+        );
         let reopened_data_table_adjustments = expect_object_handle(
             reopened_runtime
                 .dispatch_get(reopened_data_table_format, "Adjustments", &[])
@@ -125889,6 +126025,17 @@ mod tests {
             reopened_runtime
                 .dispatch_get(reopened_data_table_format_parent, "ShowLegendKey", &[])
                 .expect("reopened ChartFormat.Parent returns DataTable"),
+            OmValue::Bool(true)
+        );
+        let reopened_data_table_border_parent = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_data_table_border, "Parent", &[])
+                .expect("reopened DataTable.Border.Parent"),
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_data_table_border_parent, "ShowLegendKey", &[])
+                .expect("reopened DataTable.Border.Parent returns DataTable"),
             OmValue::Bool(true)
         );
         assert_eq!(
@@ -125971,6 +126118,13 @@ mod tests {
             reopened_runtime
                 .dispatch_get(reopened_data_table_adjustments, "Count", &[])
                 .expect_err("stale Adjustments handle after DataTable.Delete")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_data_table_border, "LineStyle", &[])
+                .expect_err("stale DataTable.Border handle after DataTable.Delete")
                 .code,
             OmErrorCode::InvalidState
         );
@@ -147108,6 +147262,11 @@ mod tests {
                 .dispatch_get(major_gridlines, "Format", &[])
                 .expect("MajorGridlines.Format"),
         );
+        let major_gridlines_border = expect_object_handle(
+            runtime
+                .dispatch_get(major_gridlines, "Border", &[])
+                .expect("MajorGridlines.Border"),
+        );
         assert_eq!(
             runtime
                 .dispatch_get(major_gridlines, "Format", &[OmValue::Missing])
@@ -147136,6 +147295,23 @@ mod tests {
             runtime
                 .dispatch_get(major_gridlines_format_parent, "Name", &[])
                 .expect("MajorGridlines.Format.Parent.Name"),
+            OmValue::Text("Major Gridlines".to_string())
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(major_gridlines_border, "LineStyle", &[])
+                .expect("MajorGridlines.Border.LineStyle"),
+            OmValue::Number(f64::from(super::XL_CONTINUOUS))
+        );
+        let major_gridlines_border_parent = expect_object_handle(
+            runtime
+                .dispatch_get(major_gridlines_border, "Parent", &[])
+                .expect("MajorGridlines.Border.Parent"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(major_gridlines_border_parent, "Name", &[])
+                .expect("MajorGridlines.Border.Parent.Name"),
             OmValue::Text("Major Gridlines".to_string())
         );
         let major_gridlines_parent = expect_object_handle(
@@ -147197,6 +147373,13 @@ mod tests {
             runtime
                 .dispatch_get(major_gridlines_format, "Creator", &[])
                 .expect_err("deleted MajorGridlines.Format handle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(major_gridlines_border, "LineStyle", &[])
+                .expect_err("deleted MajorGridlines.Border handle should be stale")
                 .code,
             OmErrorCode::InvalidState
         );

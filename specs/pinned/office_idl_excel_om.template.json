@@ -13277,6 +13277,33 @@
           }
         },
         {
+          "name": "Border",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "DataTable",
+                  "sourceMember": "Border"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Border",
+                "aliasOf": "Excel.Border"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "interface",
+            "name": "Border",
+            "aliasOf": "Excel.Border"
+          },
+          "access": "read"
+        },
+        {
           "name": "Creator",
           "memberKind": "property",
           "support": "stub",
@@ -21097,6 +21124,33 @@
             "kind": "interface",
             "name": "ChartFormat",
             "aliasOf": "Excel.ChartFormat"
+          },
+          "access": "read"
+        },
+        {
+          "name": "Border",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Gridlines",
+                  "sourceMember": "Border"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Border",
+                "aliasOf": "Excel.Border"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "interface",
+            "name": "Border",
+            "aliasOf": "Excel.Border"
           },
           "access": "read"
         },
