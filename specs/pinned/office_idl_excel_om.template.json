@@ -13464,6 +13464,33 @@
             "aliasOf": "Excel.ChartFormat"
           },
           "access": "read"
+        },
+        {
+          "name": "HasText",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "TextFrame2",
+                  "sourceMember": "HasText"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "MsoTriState"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "MsoTriState"
+          },
+          "access": "read"
         }
       ]
     },

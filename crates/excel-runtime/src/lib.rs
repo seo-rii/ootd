@@ -2816,6 +2816,9 @@ impl ExcelRuntime {
                     {
                         Ok(OmValue::Number(0.0))
                     }
+                    "HasText" if matches!(kind, ChartFormatChildKind::TextFrame2) => {
+                        Ok(OmValue::Number(f64::from(MSO_FALSE)))
+                    }
                     _ => Err(OmError::unsupported(format!(
                         "{surface}.{member} is not implemented"
                     ))),
@@ -18190,7 +18193,10 @@ impl ExcelRuntime {
                     | ("PictureFormat", "Creator" | "Application" | "Parent")
                     | ("ShadowFormat", "Creator" | "Application" | "Parent")
                     | ("SoftEdgeFormat", "Creator" | "Application" | "Parent")
-                    | ("TextFrame2", "Creator" | "Application" | "Parent")
+                    | (
+                        "TextFrame2",
+                        "Creator" | "Application" | "Parent" | "HasText"
+                    )
                     | ("ThreeDFormat", "Creator" | "Application" | "Parent")
                     | (
                         "ChartGroups",
@@ -68710,6 +68716,15 @@ mod tests {
                     assert!(matches!(member.support, office_idl::SupportState::Stub));
                     assert!(matches!(member.access, office_idl::AccessMode::Read));
                 }
+            }
+            if surface_name == "TextFrame2" {
+                let member = surface
+                    .members
+                    .iter()
+                    .find(|member| member.name == "HasText")
+                    .unwrap_or_else(|| panic!("{surface_name}.HasText focus member"));
+                assert!(matches!(member.support, office_idl::SupportState::Stub));
+                assert!(matches!(member.access, office_idl::AccessMode::Read));
             }
         }
         let series = runtime
@@ -129453,6 +129468,23 @@ mod tests {
                         runtime
                             .dispatch_get(format_child, "Transparency", &[OmValue::Missing])
                             .expect_err("format child Transparency rejects arguments")
+                            .code,
+                        OmErrorCode::InvalidArgument
+                    );
+                }
+                if child_surface == "TextFrame2" {
+                    assert_eq!(
+                        runtime
+                            .dispatch_get(format_child, "HasText", &[])
+                            .unwrap_or_else(|error| {
+                                panic!("{child_surface}.HasText failed: {error:?}")
+                            }),
+                        OmValue::Number(f64::from(super::MSO_FALSE))
+                    );
+                    assert_eq!(
+                        runtime
+                            .dispatch_get(format_child, "HasText", &[OmValue::Missing])
+                            .expect_err("TextFrame2.HasText rejects arguments")
                             .code,
                         OmErrorCode::InvalidArgument
                     );
