@@ -13307,6 +13307,60 @@
             "aliasOf": "Excel.ChartFormat"
           },
           "access": "read"
+        },
+        {
+          "name": "Visible",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "ShadowFormat",
+                  "sourceMember": "Visible"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "MsoTriState"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "MsoTriState"
+          },
+          "access": "read"
+        },
+        {
+          "name": "Transparency",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "ShadowFormat",
+                  "sourceMember": "Transparency"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Single"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Single"
+          },
+          "access": "read"
         }
       ]
     },

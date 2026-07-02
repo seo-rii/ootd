@@ -2827,6 +2827,12 @@ impl ExcelRuntime {
                     {
                         Ok(OmValue::Number(0.0))
                     }
+                    "Visible" if matches!(kind, ChartFormatChildKind::Shadow) => {
+                        Ok(OmValue::Number(f64::from(MSO_FALSE)))
+                    }
+                    "Transparency" if matches!(kind, ChartFormatChildKind::Shadow) => {
+                        Ok(OmValue::Number(0.0))
+                    }
                     _ => Err(OmError::unsupported(format!(
                         "{surface}.{member} is not implemented"
                     ))),
@@ -18202,7 +18208,10 @@ impl ExcelRuntime {
                         "Creator" | "Application" | "Parent" | "Visible" | "Transparency"
                     )
                     | ("PictureFormat", "Creator" | "Application" | "Parent")
-                    | ("ShadowFormat", "Creator" | "Application" | "Parent")
+                    | (
+                        "ShadowFormat",
+                        "Creator" | "Application" | "Parent" | "Visible" | "Transparency"
+                    )
                     | (
                         "SoftEdgeFormat",
                         "Creator" | "Application" | "Parent" | "Radius"
@@ -68748,6 +68757,17 @@ mod tests {
                     .unwrap_or_else(|| panic!("{surface_name}.Radius focus member"));
                 assert!(matches!(member.support, office_idl::SupportState::Stub));
                 assert!(matches!(member.access, office_idl::AccessMode::Read));
+            }
+            if surface_name == "ShadowFormat" {
+                for member_name in ["Visible", "Transparency"] {
+                    let member = surface
+                        .members
+                        .iter()
+                        .find(|member| member.name == member_name)
+                        .unwrap_or_else(|| panic!("{surface_name}.{member_name} focus member"));
+                    assert!(matches!(member.support, office_idl::SupportState::Stub));
+                    assert!(matches!(member.access, office_idl::AccessMode::Read));
+                }
             }
         }
         let series = runtime
@@ -129525,6 +129545,38 @@ mod tests {
                         runtime
                             .dispatch_get(format_child, "Radius", &[OmValue::Missing])
                             .expect_err("format child Radius rejects arguments")
+                            .code,
+                        OmErrorCode::InvalidArgument
+                    );
+                }
+                if child_surface == "ShadowFormat" {
+                    assert_eq!(
+                        runtime
+                            .dispatch_get(format_child, "Visible", &[])
+                            .unwrap_or_else(|error| {
+                                panic!("{child_surface}.Visible failed: {error:?}")
+                            }),
+                        OmValue::Number(f64::from(super::MSO_FALSE))
+                    );
+                    assert_eq!(
+                        runtime
+                            .dispatch_get(format_child, "Visible", &[OmValue::Missing])
+                            .expect_err("ShadowFormat.Visible rejects arguments")
+                            .code,
+                        OmErrorCode::InvalidArgument
+                    );
+                    assert_eq!(
+                        runtime
+                            .dispatch_get(format_child, "Transparency", &[])
+                            .unwrap_or_else(|error| {
+                                panic!("{child_surface}.Transparency failed: {error:?}")
+                            }),
+                        OmValue::Number(0.0)
+                    );
+                    assert_eq!(
+                        runtime
+                            .dispatch_get(format_child, "Transparency", &[OmValue::Missing])
+                            .expect_err("ShadowFormat.Transparency rejects arguments")
                             .code,
                         OmErrorCode::InvalidArgument
                     );
