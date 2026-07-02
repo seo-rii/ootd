@@ -87856,6 +87856,38 @@ mod tests {
                 &[],
             )
             .expect("set Sheet1 cashflow values");
+        let rate_schedule_source = expect_object_handle(
+            runtime
+                .dispatch_invoke(first_sheet, "Range", &[OmValue::Text("O1:O2".to_string())])
+                .expect("Sheet1.Range(O1:O2)"),
+        );
+        runtime
+            .dispatch_set(
+                rate_schedule_source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(2, 1, vec![OmValue::Number(0.1), OmValue::Number(0.2)])
+                        .expect("financial rate schedule values"),
+                ),
+                &[],
+            )
+            .expect("set Sheet1 rate schedule values");
+        let cashflow_date_source = expect_object_handle(
+            runtime
+                .dispatch_invoke(first_sheet, "Range", &[OmValue::Text("P1:P2".to_string())])
+                .expect("Sheet1.Range(P1:P2)"),
+        );
+        runtime
+            .dispatch_set(
+                cashflow_date_source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(2, 1, vec![OmValue::Number(1.0), OmValue::Number(366.0)])
+                        .expect("financial cashflow date values"),
+                ),
+                &[],
+            )
+            .expect("set Sheet1 cashflow date values");
 
         assert_eq!(
             expect_number(
@@ -90525,6 +90557,158 @@ mod tests {
                 .expect("WorksheetFunction.MIRR"),
         );
         assert!((mirr - 0.2).abs() < 1e-7);
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "CumIPmt",
+                        &[
+                            OmValue::Number(1.0),
+                            OmValue::Number(2.0),
+                            OmValue::Number(75.0),
+                            OmValue::Number(1.0),
+                            OmValue::Number(2.0),
+                            OmValue::Number(0.0),
+                        ],
+                    )
+                    .expect("WorksheetFunction.CumIPmt")
+            ),
+            -125.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "CumPrinc",
+                        &[
+                            OmValue::Number(1.0),
+                            OmValue::Number(2.0),
+                            OmValue::Number(75.0),
+                            OmValue::Number(1.0),
+                            OmValue::Number(2.0),
+                            OmValue::Number(0.0),
+                        ],
+                    )
+                    .expect("WorksheetFunction.CumPrinc")
+            ),
+            -75.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "Effect",
+                        &[OmValue::Number(3.0), OmValue::Number(2.0)],
+                    )
+                    .expect("WorksheetFunction.Effect")
+            ),
+            5.25
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "Nominal",
+                        &[OmValue::Number(3.0), OmValue::Number(2.0)],
+                    )
+                    .expect("WorksheetFunction.Nominal")
+            ),
+            2.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "RRI",
+                        &[
+                            OmValue::Number(1.0),
+                            OmValue::Number(100.0),
+                            OmValue::Number(125.0),
+                        ],
+                    )
+                    .expect("WorksheetFunction.RRI")
+            ),
+            0.25
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "PDuration",
+                        &[
+                            OmValue::Number(3.0),
+                            OmValue::Number(100.0),
+                            OmValue::Number(400.0),
+                        ],
+                    )
+                    .expect("WorksheetFunction.PDuration")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "FVSchedule",
+                        &[
+                            OmValue::Number(100.0),
+                            OmValue::Object(rate_schedule_source),
+                        ],
+                    )
+                    .expect("WorksheetFunction.FVSchedule")
+            ),
+            132.0
+        );
+        let xnpv = expect_number(
+            runtime
+                .dispatch_invoke(
+                    worksheet_function,
+                    "XNPV",
+                    &[
+                        OmValue::Number(1.0),
+                        OmValue::Object(cashflow_source),
+                        OmValue::Object(cashflow_date_source),
+                    ],
+                )
+                .expect("WorksheetFunction.XNPV"),
+        );
+        assert!((xnpv + 40.0).abs() < 1e-7);
+        let xirr = expect_number(
+            runtime
+                .dispatch_invoke(
+                    worksheet_function,
+                    "XIRR",
+                    &[
+                        OmValue::Object(cashflow_source),
+                        OmValue::Object(cashflow_date_source),
+                    ],
+                )
+                .expect("WorksheetFunction.XIRR"),
+        );
+        assert!((xirr - 0.2).abs() < 1e-7);
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "SLN",
+                        &[
+                            OmValue::Number(1000.0),
+                            OmValue::Number(100.0),
+                            OmValue::Number(9.0),
+                        ],
+                    )
+                    .expect("WorksheetFunction.SLN")
+            ),
+            100.0
+        );
         assert_eq!(
             expect_number(
                 runtime
