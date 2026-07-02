@@ -13298,6 +13298,33 @@
           "access": "read"
         },
         {
+          "name": "Crop",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "PictureFormat",
+                  "sourceMember": "Crop"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Crop",
+                "aliasOf": "Excel.Crop"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "interface",
+            "name": "Crop",
+            "aliasOf": "Excel.Crop"
+          },
+          "access": "read"
+        },
+        {
           "name": "IncrementBrightness",
           "memberKind": "method",
           "support": "stub",
@@ -13508,6 +13535,314 @@
             "kind": "primitive",
             "name": "i32",
             "aliasOf": "MsoRGBType"
+          },
+          "access": "read"
+        }
+      ]
+    },
+    {
+      "name": "Crop",
+      "kind": "dispatch",
+      "metadata": {
+        "sourceInherits": [
+          "IDispatch"
+        ]
+      },
+      "members": [
+        {
+          "name": "Creator",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Crop",
+                  "sourceMember": "Creator"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "Int32"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "Int32"
+          },
+          "access": "read"
+        },
+        {
+          "name": "Application",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Crop",
+                  "sourceMember": "Application"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Application",
+                "aliasOf": "Excel.Application"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "interface",
+            "name": "Application",
+            "aliasOf": "Excel.Application"
+          },
+          "access": "read"
+        },
+        {
+          "name": "Parent",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Crop",
+                  "sourceMember": "Parent"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "PictureFormat",
+                "aliasOf": "Excel.PictureFormat"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "interface",
+            "name": "PictureFormat",
+            "aliasOf": "Excel.PictureFormat"
+          },
+          "access": "read"
+        },
+        {
+          "name": "PictureHeight",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Crop",
+                  "sourceMember": "PictureHeight"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Single"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Single"
+          },
+          "access": "read"
+        },
+        {
+          "name": "PictureOffsetX",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Crop",
+                  "sourceMember": "PictureOffsetX"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Single"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Single"
+          },
+          "access": "read"
+        },
+        {
+          "name": "PictureOffsetY",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Crop",
+                  "sourceMember": "PictureOffsetY"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Single"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Single"
+          },
+          "access": "read"
+        },
+        {
+          "name": "PictureWidth",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Crop",
+                  "sourceMember": "PictureWidth"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Single"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Single"
+          },
+          "access": "read"
+        },
+        {
+          "name": "ShapeHeight",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Crop",
+                  "sourceMember": "ShapeHeight"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Single"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Single"
+          },
+          "access": "read"
+        },
+        {
+          "name": "ShapeLeft",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Crop",
+                  "sourceMember": "ShapeLeft"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Single"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Single"
+          },
+          "access": "read"
+        },
+        {
+          "name": "ShapeTop",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Crop",
+                  "sourceMember": "ShapeTop"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Single"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Single"
+          },
+          "access": "read"
+        },
+        {
+          "name": "ShapeWidth",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Crop",
+                  "sourceMember": "ShapeWidth"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Single"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Single"
           },
           "access": "read"
         }

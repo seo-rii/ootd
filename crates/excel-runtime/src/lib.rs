@@ -950,6 +950,10 @@ enum RuntimeObjectKind {
         parent: ChartFormatParent,
         kind: ChartFormatChildKind,
     },
+    PictureCrop {
+        workbook: WorkbookHandle,
+        parent: ChartFormatParent,
+    },
     DataLabels {
         workbook: WorkbookHandle,
         chart_id: ChartId,
@@ -2848,6 +2852,11 @@ impl ExcelRuntime {
                     "ColorType" if matches!(kind, ChartFormatChildKind::PictureFormat) => {
                         Ok(OmValue::Number(f64::from(MSO_PICTURE_AUTOMATIC)))
                     }
+                    "Crop" if matches!(kind, ChartFormatChildKind::PictureFormat) => {
+                        Ok(OmValue::Object(self.register_object(
+                            RuntimeObjectKind::PictureCrop { workbook, parent },
+                        )))
+                    }
                     "CropLeft" | "CropTop" | "CropRight" | "CropBottom"
                         if matches!(kind, ChartFormatChildKind::PictureFormat) =>
                     {
@@ -2863,6 +2872,32 @@ impl ExcelRuntime {
                     }
                     _ => Err(OmError::unsupported(format!(
                         "{surface}.{member} is not implemented"
+                    ))),
+                }
+            }
+            RuntimeObjectKind::PictureCrop { workbook, parent } => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(format!(
+                        "Crop.{member} does not accept arguments"
+                    )));
+                }
+                self.chart_format_parent_object_kind(workbook, parent)?;
+                match member {
+                    "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
+                    "Application" => Ok(OmValue::Object(self.root_application())),
+                    "Parent" => Ok(OmValue::Object(self.register_object(
+                        RuntimeObjectKind::ChartFormatChild {
+                            workbook,
+                            parent,
+                            kind: ChartFormatChildKind::PictureFormat,
+                        },
+                    ))),
+                    "PictureHeight" | "PictureOffsetX" | "PictureOffsetY" | "PictureWidth"
+                    | "ShapeHeight" | "ShapeLeft" | "ShapeTop" | "ShapeWidth" => {
+                        Ok(OmValue::Number(0.0))
+                    }
+                    _ => Err(OmError::unsupported(format!(
+                        "Crop.{member} is not implemented"
                     ))),
                 }
             }
@@ -6510,6 +6545,7 @@ impl ExcelRuntime {
             | RuntimeObjectKind::ChartFormat { .. }
             | RuntimeObjectKind::Adjustments { .. }
             | RuntimeObjectKind::ChartFormatChild { .. }
+            | RuntimeObjectKind::PictureCrop { .. }
             | RuntimeObjectKind::Gridlines { .. }
             | RuntimeObjectKind::ChartGroups { .. }
             | RuntimeObjectKind::CategoryCollection { .. }
@@ -17186,6 +17222,9 @@ impl ExcelRuntime {
                     "member {member} is not implemented as a method for this format handle"
                 ))),
             },
+            RuntimeObjectKind::PictureCrop { .. } => Err(OmError::unsupported(format!(
+                "Crop.{member} is not implemented as a method"
+            ))),
             RuntimeObjectKind::Adjustments { workbook, parent } => {
                 self.dispatch_invoke_adjustments(workbook, parent, member, args)
             }
@@ -17881,6 +17920,7 @@ impl ExcelRuntime {
             RuntimeObjectKind::ChartFormat { .. } => Some("ChartFormat"),
             RuntimeObjectKind::Adjustments { .. } => Some("Adjustments"),
             RuntimeObjectKind::ChartFormatChild { kind, .. } => Some(kind.surface_name()),
+            RuntimeObjectKind::PictureCrop { .. } => Some("Crop"),
             RuntimeObjectKind::DataLabels { .. } => Some("DataLabels"),
             RuntimeObjectKind::DataLabel { .. } => Some("DataLabel"),
             RuntimeObjectKind::ChartGroups { .. } => Some("ChartGroups"),
@@ -18266,6 +18306,7 @@ impl ExcelRuntime {
                             | "Brightness"
                             | "ColorType"
                             | "Contrast"
+                            | "Crop"
                             | "IncrementBrightness"
                             | "IncrementContrast"
                             | "CropLeft"
@@ -46227,6 +46268,7 @@ fn runtime_object_owner(object: RuntimeObjectKind) -> Option<WorkbookHandle> {
         | RuntimeObjectKind::ChartFormat { workbook, .. }
         | RuntimeObjectKind::Adjustments { workbook, .. }
         | RuntimeObjectKind::ChartFormatChild { workbook, .. }
+        | RuntimeObjectKind::PictureCrop { workbook, .. }
         | RuntimeObjectKind::DataLabels { workbook, .. }
         | RuntimeObjectKind::DataLabel { workbook, .. }
         | RuntimeObjectKind::ChartGroups { workbook, .. }
@@ -68779,6 +68821,7 @@ mod tests {
             "GlowFormat",
             "LineFormat",
             "PictureFormat",
+            "Crop",
             "ShadowFormat",
             "SoftEdgeFormat",
             "TextFrame2",
@@ -68855,6 +68898,7 @@ mod tests {
                     "Brightness",
                     "ColorType",
                     "Contrast",
+                    "Crop",
                     "IncrementBrightness",
                     "IncrementContrast",
                     "CropLeft",
@@ -68863,6 +68907,26 @@ mod tests {
                     "CropBottom",
                     "TransparentBackground",
                     "TransparencyColor",
+                ] {
+                    let member = surface
+                        .members
+                        .iter()
+                        .find(|member| member.name == member_name)
+                        .unwrap_or_else(|| panic!("{surface_name}.{member_name} focus member"));
+                    assert!(matches!(member.support, office_idl::SupportState::Stub));
+                    assert!(matches!(member.access, office_idl::AccessMode::Read));
+                }
+            }
+            if surface_name == "Crop" {
+                for member_name in [
+                    "PictureHeight",
+                    "PictureOffsetX",
+                    "PictureOffsetY",
+                    "PictureWidth",
+                    "ShapeHeight",
+                    "ShapeLeft",
+                    "ShapeTop",
+                    "ShapeWidth",
                 ] {
                     let member = surface
                         .members
@@ -129718,6 +129782,67 @@ mod tests {
                     );
                 }
                 if child_surface == "PictureFormat" {
+                    let crop = expect_object_handle(
+                        runtime
+                            .dispatch_get(format_child, "Crop", &[])
+                            .unwrap_or_else(|error| {
+                                panic!("{child_surface}.Crop failed: {error:?}")
+                            }),
+                    );
+                    assert_eq!(
+                        runtime
+                            .dispatch_get(format_child, "Crop", &[OmValue::Missing])
+                            .expect_err("PictureFormat.Crop rejects arguments")
+                            .code,
+                        OmErrorCode::InvalidArgument
+                    );
+                    assert_eq!(
+                        runtime
+                            .dispatch_get(crop, "Creator", &[])
+                            .expect("Crop.Creator"),
+                        OmValue::Number(f64::from(super::XL_CREATOR_CODE))
+                    );
+                    assert_eq!(
+                        runtime
+                            .dispatch_get(crop, "Application", &[])
+                            .expect("Crop.Application"),
+                        OmValue::Object(application)
+                    );
+                    let crop_parent = expect_object_handle(
+                        runtime
+                            .dispatch_get(crop, "Parent", &[])
+                            .expect("Crop.Parent"),
+                    );
+                    assert_eq!(
+                        runtime
+                            .dispatch_get(crop_parent, "Creator", &[])
+                            .expect("Crop.Parent.Creator"),
+                        OmValue::Number(f64::from(super::XL_CREATOR_CODE))
+                    );
+                    for crop_member in [
+                        "PictureHeight",
+                        "PictureOffsetX",
+                        "PictureOffsetY",
+                        "PictureWidth",
+                        "ShapeHeight",
+                        "ShapeLeft",
+                        "ShapeTop",
+                        "ShapeWidth",
+                    ] {
+                        assert_eq!(
+                            runtime
+                                .dispatch_get(crop, crop_member, &[])
+                                .unwrap_or_else(|error| panic!("Crop.{crop_member}: {error:?}")),
+                            OmValue::Number(0.0)
+                        );
+                        assert_eq!(
+                            runtime
+                                .dispatch_get(crop, crop_member, &[OmValue::Missing])
+                                .expect_err("Crop getter rejects arguments")
+                                .code,
+                            OmErrorCode::InvalidArgument
+                        );
+                    }
                     for (member_name, expected) in [
                         ("Brightness", 0.5),
                         ("ColorType", f64::from(super::MSO_PICTURE_AUTOMATIC)),

@@ -146,10 +146,10 @@ fn loads_office_idl_excel_om_template_and_summarizes_surface() {
         Some("Microsoft.Office.Interop.Excel")
     );
     assert_eq!(summary.enum_count, 8);
-    assert_eq!(summary.interface_count, 49);
+    assert_eq!(summary.interface_count, 50);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 763);
-    assert_eq!(summary.stub_member_count, 763);
+    assert_eq!(summary.member_count, 775);
+    assert_eq!(summary.stub_member_count, 775);
     assert_eq!(
         document.interfaces[0].members[0]
             .metadata
@@ -1194,6 +1194,7 @@ fn builds_coverage_report_for_each_support_state_bucket() {
             "GlowFormat".to_string(),
             "LineFormat".to_string(),
             "PictureFormat".to_string(),
+            "Crop".to_string(),
             "ShadowFormat".to_string(),
             "SoftEdgeFormat".to_string(),
             "TextFrame2".to_string(),
@@ -1356,6 +1357,7 @@ fn builds_focus_surface_registry_from_json_wrapper() {
             "GlowFormat".to_string(),
             "LineFormat".to_string(),
             "PictureFormat".to_string(),
+            "Crop".to_string(),
             "ShadowFormat".to_string(),
             "SoftEdgeFormat".to_string(),
             "TextFrame2".to_string(),
@@ -1417,7 +1419,7 @@ fn builds_coverage_report_from_path_wrapper() {
 
     assert_eq!(report_from_path, report_from_json);
     assert_eq!(report_from_path.support_counts.partial, 1);
-    assert_eq!(report_from_path.missing_focus_surfaces.len(), 48);
+    assert_eq!(report_from_path.missing_focus_surfaces.len(), 49);
 
     fs::remove_file(&path).expect("remove temp document");
 }
@@ -1588,7 +1590,7 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(registry.library, "Excel");
     assert_eq!(registry.version, "16.0");
-    assert_eq!(registry.focus_surfaces.len(), 49);
+    assert_eq!(registry.focus_surfaces.len(), 50);
     assert!(registry.missing_focus_surfaces.is_empty());
 
     let application = registry
@@ -1711,6 +1713,11 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         .iter()
         .find(|entry| entry.name == "PictureFormat")
         .expect("PictureFormat");
+    let crop = registry
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "Crop")
+        .expect("Crop");
     let shadow_format = registry
         .focus_surfaces
         .iter()
@@ -1860,7 +1867,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
     assert_eq!(fill_format.member_count, 5);
     assert_eq!(glow_format.member_count, 4);
     assert_eq!(line_format.member_count, 5);
-    assert_eq!(picture_format.member_count, 14);
+    assert_eq!(picture_format.member_count, 15);
+    assert_eq!(crop.member_count, 11);
     assert_eq!(shadow_format.member_count, 5);
     assert_eq!(soft_edge_format.member_count, 4);
     assert_eq!(text_frame2.member_count, 4);
@@ -2968,8 +2976,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(coverage.library, "Excel");
     assert_eq!(coverage.version, "16.0");
-    assert_eq!(coverage.member_count, 763);
-    assert_eq!(coverage.support_counts.stub, 763);
+    assert_eq!(coverage.member_count, 775);
+    assert_eq!(coverage.support_counts.stub, 775);
     assert!(coverage.missing_focus_surfaces.is_empty());
 
     let application_coverage = coverage
@@ -3092,6 +3100,11 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         .iter()
         .find(|entry| entry.name == "PictureFormat")
         .expect("PictureFormat coverage");
+    let crop_coverage = coverage
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "Crop")
+        .expect("Crop coverage");
     let shadow_format_coverage = coverage
         .focus_surfaces
         .iter()
@@ -3820,8 +3833,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         ]
     );
 
-    assert_eq!(picture_format_coverage.member_count, 14);
-    assert_eq!(picture_format_coverage.support_counts.stub, 14);
+    assert_eq!(picture_format_coverage.member_count, 15);
+    assert_eq!(picture_format_coverage.support_counts.stub, 15);
     assert_eq!(
         picture_format_coverage.stub_members,
         vec![
@@ -3831,6 +3844,7 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
             "Brightness".to_string(),
             "Contrast".to_string(),
             "ColorType".to_string(),
+            "Crop".to_string(),
             "IncrementBrightness".to_string(),
             "IncrementContrast".to_string(),
             "CropLeft".to_string(),
@@ -3839,6 +3853,24 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
             "CropBottom".to_string(),
             "TransparentBackground".to_string(),
             "TransparencyColor".to_string()
+        ]
+    );
+    assert_eq!(crop_coverage.member_count, 11);
+    assert_eq!(crop_coverage.support_counts.stub, 11);
+    assert_eq!(
+        crop_coverage.stub_members,
+        vec![
+            "Creator".to_string(),
+            "Application".to_string(),
+            "Parent".to_string(),
+            "PictureHeight".to_string(),
+            "PictureOffsetX".to_string(),
+            "PictureOffsetY".to_string(),
+            "PictureWidth".to_string(),
+            "ShapeHeight".to_string(),
+            "ShapeLeft".to_string(),
+            "ShapeTop".to_string(),
+            "ShapeWidth".to_string()
         ]
     );
     assert_eq!(shadow_format_coverage.member_count, 5);
