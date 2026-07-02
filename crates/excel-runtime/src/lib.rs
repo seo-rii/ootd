@@ -91064,6 +91064,218 @@ mod tests {
                 .expect("WorksheetFunction.Yield"),
         );
         assert!((yield_value - 0.065).abs() < 1e-8);
+        let price_mat = expect_number(
+            runtime
+                .dispatch_invoke(
+                    worksheet_function,
+                    "PriceMat",
+                    &[
+                        OmValue::Number(181.0),
+                        OmValue::Number(366.0),
+                        OmValue::Number(1.0),
+                        OmValue::Number(0.1),
+                        OmValue::Number(0.1),
+                        OmValue::Number(3.0),
+                    ],
+                )
+                .expect("WorksheetFunction.PriceMat"),
+        );
+        let basis3_issue_to_maturity = 365.0 / 365.0;
+        let basis3_settlement_to_maturity = 185.0 / 365.0;
+        let basis3_issue_to_settlement = 180.0 / 365.0;
+        let basis3_maturity_value = 100.0 + 100.0 * 0.1 * basis3_issue_to_maturity;
+        let basis3_accrued_interest = 100.0 * 0.1 * basis3_issue_to_settlement;
+        let expected_price_mat = basis3_maturity_value
+            / (1.0 + 0.1 * basis3_settlement_to_maturity)
+            - basis3_accrued_interest;
+        assert!((price_mat - expected_price_mat).abs() < 1e-8);
+        let yield_mat = expect_number(
+            runtime
+                .dispatch_invoke(
+                    worksheet_function,
+                    "YieldMat",
+                    &[
+                        OmValue::Number(181.0),
+                        OmValue::Number(366.0),
+                        OmValue::Number(1.0),
+                        OmValue::Number(0.1),
+                        OmValue::Number(100.0),
+                        OmValue::Number(3.0),
+                    ],
+                )
+                .expect("WorksheetFunction.YieldMat"),
+        );
+        let expected_yield_mat = (basis3_maturity_value / (100.0 + basis3_accrued_interest) - 1.0)
+            / basis3_settlement_to_maturity;
+        assert!((yield_mat - expected_yield_mat).abs() < 1e-8);
+        let duration_settlement =
+            super::formula_date_serial_from_args(2018.0, 7.0, 1.0).expect("duration settlement");
+        let duration_maturity =
+            super::formula_date_serial_from_args(2048.0, 1.0, 1.0).expect("duration maturity");
+        let duration = expect_number(
+            runtime
+                .dispatch_invoke(
+                    worksheet_function,
+                    "Duration",
+                    &[
+                        OmValue::Number(duration_settlement),
+                        OmValue::Number(duration_maturity),
+                        OmValue::Number(0.08),
+                        OmValue::Number(0.09),
+                        OmValue::Number(2.0),
+                        OmValue::Number(1.0),
+                    ],
+                )
+                .expect("WorksheetFunction.Duration"),
+        );
+        assert!((duration - 10.919145281591925).abs() < 1e-9);
+        let mduration_settlement = super::formula_date_serial_from_args(2008.0, 1.0, 1.0)
+            .expect("modified duration settlement");
+        let mduration_maturity = super::formula_date_serial_from_args(2016.0, 1.0, 1.0)
+            .expect("modified duration maturity");
+        let mduration = expect_number(
+            runtime
+                .dispatch_invoke(
+                    worksheet_function,
+                    "MDuration",
+                    &[
+                        OmValue::Number(mduration_settlement),
+                        OmValue::Number(mduration_maturity),
+                        OmValue::Number(0.08),
+                        OmValue::Number(0.09),
+                        OmValue::Number(2.0),
+                        OmValue::Number(1.0),
+                    ],
+                )
+                .expect("WorksheetFunction.MDuration"),
+        );
+        assert!((mduration - 5.735669813918838).abs() < 1e-9);
+        let accr_int = expect_number(
+            runtime
+                .dispatch_invoke(
+                    worksheet_function,
+                    "AccrInt",
+                    &[
+                        OmValue::Number(39508.0),
+                        OmValue::Number(39691.0),
+                        OmValue::Number(39569.0),
+                        OmValue::Number(0.1),
+                        OmValue::Number(1000.0),
+                        OmValue::Number(2.0),
+                        OmValue::Number(0.0),
+                    ],
+                )
+                .expect("WorksheetFunction.AccrInt"),
+        );
+        assert!((accr_int - 16.666666666666668).abs() < 1e-8);
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "AccrIntM",
+                        &[
+                            OmValue::Number(1.0),
+                            OmValue::Number(366.0),
+                            OmValue::Number(0.1),
+                        ],
+                    )
+                    .expect("WorksheetFunction.AccrIntM")
+            ),
+            100.0
+        );
+        let odd_first_settlement =
+            super::formula_date_serial_from_args(2023.0, 7.0, 1.0).expect("odd first settlement");
+        let odd_first_maturity =
+            super::formula_date_serial_from_args(2025.0, 1.0, 1.0).expect("odd first maturity");
+        let odd_first_issue =
+            super::formula_date_serial_from_args(2023.0, 1.0, 1.0).expect("odd first issue");
+        let odd_first_coupon =
+            super::formula_date_serial_from_args(2024.0, 1.0, 1.0).expect("odd first coupon");
+        let odd_f_price = expect_number(
+            runtime
+                .dispatch_invoke(
+                    worksheet_function,
+                    "OddFPrice",
+                    &[
+                        OmValue::Number(odd_first_settlement),
+                        OmValue::Number(odd_first_maturity),
+                        OmValue::Number(odd_first_issue),
+                        OmValue::Number(odd_first_coupon),
+                        OmValue::Number(0.1),
+                        OmValue::Number(0.1),
+                        OmValue::Number(100.0),
+                        OmValue::Number(1.0),
+                        OmValue::Number(3.0),
+                    ],
+                )
+                .expect("WorksheetFunction.OddFPrice"),
+        );
+        assert!((odd_f_price - 99.85602423543864).abs() < 1e-8);
+        let odd_f_yield = expect_number(
+            runtime
+                .dispatch_invoke(
+                    worksheet_function,
+                    "OddFYield",
+                    &[
+                        OmValue::Number(odd_first_settlement),
+                        OmValue::Number(odd_first_maturity),
+                        OmValue::Number(odd_first_issue),
+                        OmValue::Number(odd_first_coupon),
+                        OmValue::Number(0.1),
+                        OmValue::Number(99.85602423543864),
+                        OmValue::Number(100.0),
+                        OmValue::Number(1.0),
+                        OmValue::Number(3.0),
+                    ],
+                )
+                .expect("WorksheetFunction.OddFYield"),
+        );
+        assert!((odd_f_yield - 0.1).abs() < 1e-8);
+        let odd_last_settlement =
+            super::formula_date_serial_from_args(2024.0, 7.0, 1.0).expect("odd last settlement");
+        let odd_last_maturity =
+            super::formula_date_serial_from_args(2025.0, 1.0, 1.0).expect("odd last maturity");
+        let odd_last_interest =
+            super::formula_date_serial_from_args(2024.0, 1.0, 1.0).expect("odd last interest");
+        let odd_l_price = expect_number(
+            runtime
+                .dispatch_invoke(
+                    worksheet_function,
+                    "OddLPrice",
+                    &[
+                        OmValue::Number(odd_last_settlement),
+                        OmValue::Number(odd_last_maturity),
+                        OmValue::Number(odd_last_interest),
+                        OmValue::Number(0.1),
+                        OmValue::Number(0.1),
+                        OmValue::Number(100.0),
+                        OmValue::Number(1.0),
+                        OmValue::Number(3.0),
+                    ],
+                )
+                .expect("WorksheetFunction.OddLPrice"),
+        );
+        assert!((odd_l_price - 99.87962318471394).abs() < 1e-8);
+        let odd_l_yield = expect_number(
+            runtime
+                .dispatch_invoke(
+                    worksheet_function,
+                    "OddLYield",
+                    &[
+                        OmValue::Number(odd_last_settlement),
+                        OmValue::Number(odd_last_maturity),
+                        OmValue::Number(odd_last_interest),
+                        OmValue::Number(0.1),
+                        OmValue::Number(99.87962318471394),
+                        OmValue::Number(100.0),
+                        OmValue::Number(1.0),
+                        OmValue::Number(3.0),
+                    ],
+                )
+                .expect("WorksheetFunction.OddLYield"),
+        );
+        assert!((odd_l_yield - 0.1).abs() < 1e-8);
         assert_eq!(
             expect_number(
                 runtime
