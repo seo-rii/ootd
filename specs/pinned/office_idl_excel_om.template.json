@@ -13271,6 +13271,33 @@
           "access": "read"
         },
         {
+          "name": "ColorType",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "PictureFormat",
+                  "sourceMember": "ColorType"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "MsoPictureColorType"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "MsoPictureColorType"
+          },
+          "access": "read"
+        },
+        {
           "name": "CropLeft",
           "memberKind": "property",
           "support": "stub",

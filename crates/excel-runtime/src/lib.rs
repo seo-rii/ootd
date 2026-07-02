@@ -387,6 +387,7 @@ const MSO_FLIP_HORIZONTAL: i32 = 0;
 const MSO_FLIP_VERTICAL: i32 = 1;
 const MSO_FALSE: i32 = 0;
 const MSO_TRUE: i32 = -1;
+const MSO_PICTURE_AUTOMATIC: i32 = 1;
 const MSO_SCALE_FROM_TOP_LEFT: i32 = 0;
 const MSO_SCALE_FROM_MIDDLE: i32 = 1;
 const MSO_SCALE_FROM_BOTTOM_RIGHT: i32 = 2;
@@ -2843,6 +2844,9 @@ impl ExcelRuntime {
                         if matches!(kind, ChartFormatChildKind::PictureFormat) =>
                     {
                         Ok(OmValue::Number(0.5))
+                    }
+                    "ColorType" if matches!(kind, ChartFormatChildKind::PictureFormat) => {
+                        Ok(OmValue::Number(f64::from(MSO_PICTURE_AUTOMATIC)))
                     }
                     "CropLeft" | "CropTop" | "CropRight" | "CropBottom"
                         if matches!(kind, ChartFormatChildKind::PictureFormat) =>
@@ -18234,6 +18238,7 @@ impl ExcelRuntime {
                             | "Application"
                             | "Parent"
                             | "Brightness"
+                            | "ColorType"
                             | "Contrast"
                             | "CropLeft"
                             | "CropTop"
@@ -68819,6 +68824,7 @@ mod tests {
             if surface_name == "PictureFormat" {
                 for member_name in [
                     "Brightness",
+                    "ColorType",
                     "Contrast",
                     "CropLeft",
                     "CropTop",
@@ -129682,6 +129688,7 @@ mod tests {
                 if child_surface == "PictureFormat" {
                     for (member_name, expected) in [
                         ("Brightness", 0.5),
+                        ("ColorType", f64::from(super::MSO_PICTURE_AUTOMATIC)),
                         ("Contrast", 0.5),
                         ("CropLeft", 0.0),
                         ("CropTop", 0.0),
