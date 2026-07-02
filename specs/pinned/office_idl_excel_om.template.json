@@ -16234,6 +16234,638 @@
           }
         },
         {
+          "name": "TBillPrice",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          },
+          "params": [
+            {
+              "name": "Arg1",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg2",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg3",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "WorksheetFunction",
+                  "sourceMember": "TBillPrice"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          }
+        },
+        {
+          "name": "TBillYield",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          },
+          "params": [
+            {
+              "name": "Arg1",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg2",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg3",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "WorksheetFunction",
+                  "sourceMember": "TBillYield"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          }
+        },
+        {
+          "name": "CoupDayBs",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          },
+          "params": [
+            {
+              "name": "Arg1",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg2",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg3",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg4",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "WorksheetFunction",
+                  "sourceMember": "CoupDayBs"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          }
+        },
+        {
+          "name": "CoupDays",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          },
+          "params": [
+            {
+              "name": "Arg1",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg2",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg3",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg4",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "WorksheetFunction",
+                  "sourceMember": "CoupDays"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          }
+        },
+        {
+          "name": "CoupDaysNc",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          },
+          "params": [
+            {
+              "name": "Arg1",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg2",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg3",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg4",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "WorksheetFunction",
+                  "sourceMember": "CoupDaysNc"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          }
+        },
+        {
+          "name": "CoupNcd",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          },
+          "params": [
+            {
+              "name": "Arg1",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg2",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg3",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg4",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "WorksheetFunction",
+                  "sourceMember": "CoupNcd"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          }
+        },
+        {
+          "name": "CoupNum",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          },
+          "params": [
+            {
+              "name": "Arg1",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg2",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg3",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg4",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "WorksheetFunction",
+                  "sourceMember": "CoupNum"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          }
+        },
+        {
+          "name": "CoupPcd",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          },
+          "params": [
+            {
+              "name": "Arg1",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg2",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg3",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg4",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "WorksheetFunction",
+                  "sourceMember": "CoupPcd"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          }
+        },
+        {
+          "name": "Price",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          },
+          "params": [
+            {
+              "name": "Arg1",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg2",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg3",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg4",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg5",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg6",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg7",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "WorksheetFunction",
+                  "sourceMember": "Price"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          }
+        },
+        {
+          "name": "Yield",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          },
+          "params": [
+            {
+              "name": "Arg1",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg2",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg3",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg4",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg5",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg6",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg7",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "WorksheetFunction",
+                  "sourceMember": "Yield"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          }
+        },
+        {
           "name": "Not",
           "memberKind": "method",
           "returnType": {

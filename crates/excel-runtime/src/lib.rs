@@ -90885,6 +90885,188 @@ mod tests {
         assert_eq!(
             expect_number(
                 runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "TBillPrice",
+                        &[
+                            OmValue::Number(1.0),
+                            OmValue::Number(361.0),
+                            OmValue::Number(0.1),
+                        ],
+                    )
+                    .expect("WorksheetFunction.TBillPrice")
+            ),
+            90.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "TBillYield",
+                        &[
+                            OmValue::Number(1.0),
+                            OmValue::Number(361.0),
+                            OmValue::Number(90.0),
+                        ],
+                    )
+                    .expect("WorksheetFunction.TBillYield")
+            ),
+            1.0 / 9.0
+        );
+        let coupon_settlement =
+            super::formula_date_serial_from_args(2011.0, 1.0, 25.0).expect("coupon settlement");
+        let coupon_maturity =
+            super::formula_date_serial_from_args(2011.0, 11.0, 15.0).expect("coupon maturity");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "CoupDayBs",
+                        &[
+                            OmValue::Number(coupon_settlement),
+                            OmValue::Number(coupon_maturity),
+                            OmValue::Number(2.0),
+                            OmValue::Number(1.0),
+                        ],
+                    )
+                    .expect("WorksheetFunction.CoupDayBs")
+            ),
+            71.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "CoupDays",
+                        &[
+                            OmValue::Number(coupon_settlement),
+                            OmValue::Number(coupon_maturity),
+                            OmValue::Number(2.0),
+                            OmValue::Number(1.0),
+                        ],
+                    )
+                    .expect("WorksheetFunction.CoupDays")
+            ),
+            181.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "CoupDaysNc",
+                        &[
+                            OmValue::Number(coupon_settlement),
+                            OmValue::Number(coupon_maturity),
+                            OmValue::Number(2.0),
+                            OmValue::Number(1.0),
+                        ],
+                    )
+                    .expect("WorksheetFunction.CoupDaysNc")
+            ),
+            110.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "CoupNcd",
+                        &[
+                            OmValue::Number(coupon_settlement),
+                            OmValue::Number(coupon_maturity),
+                            OmValue::Number(2.0),
+                            OmValue::Number(1.0),
+                        ],
+                    )
+                    .expect("WorksheetFunction.CoupNcd")
+            ),
+            super::formula_date_serial_from_args(2011.0, 5.0, 15.0).expect("next coupon")
+        );
+        let coupon_count_settlement = super::formula_date_serial_from_args(2007.0, 1.0, 25.0)
+            .expect("coupon count settlement");
+        let coupon_count_maturity = super::formula_date_serial_from_args(2008.0, 11.0, 15.0)
+            .expect("coupon count maturity");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "CoupNum",
+                        &[
+                            OmValue::Number(coupon_count_settlement),
+                            OmValue::Number(coupon_count_maturity),
+                            OmValue::Number(2.0),
+                            OmValue::Number(1.0),
+                        ],
+                    )
+                    .expect("WorksheetFunction.CoupNum")
+            ),
+            4.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "CoupPcd",
+                        &[
+                            OmValue::Number(coupon_settlement),
+                            OmValue::Number(coupon_maturity),
+                            OmValue::Number(2.0),
+                            OmValue::Number(1.0),
+                        ],
+                    )
+                    .expect("WorksheetFunction.CoupPcd")
+            ),
+            super::formula_date_serial_from_args(2010.0, 11.0, 15.0).expect("previous coupon")
+        );
+        let price_settlement =
+            super::formula_date_serial_from_args(2008.0, 2.0, 15.0).expect("price settlement");
+        let price_maturity =
+            super::formula_date_serial_from_args(2017.0, 11.0, 15.0).expect("price maturity");
+        let price = expect_number(
+            runtime
+                .dispatch_invoke(
+                    worksheet_function,
+                    "Price",
+                    &[
+                        OmValue::Number(price_settlement),
+                        OmValue::Number(price_maturity),
+                        OmValue::Number(0.0575),
+                        OmValue::Number(0.065),
+                        OmValue::Number(100.0),
+                        OmValue::Number(2.0),
+                        OmValue::Number(0.0),
+                    ],
+                )
+                .expect("WorksheetFunction.Price"),
+        );
+        assert!((price - 94.63436162132213).abs() < 1e-8);
+        let yield_value = expect_number(
+            runtime
+                .dispatch_invoke(
+                    worksheet_function,
+                    "Yield",
+                    &[
+                        OmValue::Number(price_settlement),
+                        OmValue::Number(price_maturity),
+                        OmValue::Number(0.0575),
+                        OmValue::Number(94.63436162132213),
+                        OmValue::Number(100.0),
+                        OmValue::Number(2.0),
+                        OmValue::Number(0.0),
+                    ],
+                )
+                .expect("WorksheetFunction.Yield"),
+        );
+        assert!((yield_value - 0.065).abs() < 1e-8);
+        assert_eq!(
+            expect_number(
+                runtime
                     .dispatch_invoke(worksheet_function, "Not", &[OmValue::Bool(false)])
                     .expect("WorksheetFunction.Not")
             ),
