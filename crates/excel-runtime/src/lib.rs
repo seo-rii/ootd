@@ -128658,6 +128658,41 @@ mod tests {
                 .dispatch_get(chart_object, "Chart", &[])
                 .expect("ChartObject.Chart"),
         );
+        let chart_groups = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartGroups", &[])
+                .expect("Chart.ChartGroups"),
+        );
+        let chart_group = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_groups, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartGroups.Item(1)"),
+        );
+        let series_lines = expect_object_handle(
+            runtime
+                .dispatch_get(chart_group, "SeriesLines", &[])
+                .expect("ChartGroup.SeriesLines"),
+        );
+        let drop_lines = expect_object_handle(
+            runtime
+                .dispatch_get(chart_group, "DropLines", &[])
+                .expect("ChartGroup.DropLines"),
+        );
+        let hi_lo_lines = expect_object_handle(
+            runtime
+                .dispatch_get(chart_group, "HiLoLines", &[])
+                .expect("ChartGroup.HiLoLines"),
+        );
+        let up_bars = expect_object_handle(
+            runtime
+                .dispatch_get(chart_group, "UpBars", &[])
+                .expect("ChartGroup.UpBars"),
+        );
+        let down_bars = expect_object_handle(
+            runtime
+                .dispatch_get(chart_group, "DownBars", &[])
+                .expect("ChartGroup.DownBars"),
+        );
         assert_eq!(
             runtime
                 .dispatch_get(workbook.0, "Saved", &[])
@@ -128705,6 +128740,28 @@ mod tests {
                     .expect("Workbook.Saved after read-only chart no-op"),
                 OmValue::Bool(true),
                 "Chart.{member} should not dirty the read-only workbook"
+            );
+        }
+        for (surface, handle) in [
+            ("SeriesLines", series_lines),
+            ("DropLines", drop_lines),
+            ("HiLoLines", hi_lo_lines),
+            ("UpBars", up_bars),
+            ("DownBars", down_bars),
+        ] {
+            assert_eq!(
+                runtime
+                    .dispatch_invoke(handle, "Copy", &[])
+                    .unwrap_or_else(|error| panic!("{surface}.Copy: {error:?}")),
+                OmValue::Empty,
+                "{surface}.Copy should be allowed for read-only workbooks"
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(workbook.0, "Saved", &[])
+                    .expect("Workbook.Saved after read-only chart group line Copy"),
+                OmValue::Bool(true),
+                "{surface}.Copy should not dirty the read-only workbook"
             );
         }
         assert!(
