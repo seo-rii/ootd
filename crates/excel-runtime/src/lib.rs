@@ -87963,6 +87963,69 @@ mod tests {
             ),
             0.0
         );
+        let expon_dist = expect_number(
+            runtime
+                .dispatch_invoke(
+                    worksheet_function,
+                    "Expon_Dist",
+                    &[
+                        OmValue::Number(0.2),
+                        OmValue::Number(10.0),
+                        OmValue::Bool(true),
+                    ],
+                )
+                .expect("WorksheetFunction.Expon_Dist"),
+        );
+        assert!((expon_dist - 0.8646647167633873).abs() < 1e-6);
+        let norm_dist = expect_number(
+            runtime
+                .dispatch_invoke(
+                    worksheet_function,
+                    "Norm_Dist",
+                    &[
+                        OmValue::Number(42.0),
+                        OmValue::Number(40.0),
+                        OmValue::Number(1.5),
+                        OmValue::Bool(true),
+                    ],
+                )
+                .expect("WorksheetFunction.Norm_Dist"),
+        );
+        assert!((norm_dist - 0.9087887802741321).abs() < 1e-6);
+        let norm_s_dist = expect_number(
+            runtime
+                .dispatch_invoke(
+                    worksheet_function,
+                    "Norm_S_Dist",
+                    &[OmValue::Number(1.0), OmValue::Bool(true)],
+                )
+                .expect("WorksheetFunction.Norm_S_Dist"),
+        );
+        assert!((norm_s_dist - 0.8413447460685429).abs() < 1e-6);
+        let norm_inv = expect_number(
+            runtime
+                .dispatch_invoke(
+                    worksheet_function,
+                    "Norm_Inv",
+                    &[
+                        OmValue::Number(0.9087887802741321),
+                        OmValue::Number(40.0),
+                        OmValue::Number(1.5),
+                    ],
+                )
+                .expect("WorksheetFunction.Norm_Inv"),
+        );
+        assert!((norm_inv - 42.0).abs() < 1e-6);
+        let norm_s_inv = expect_number(
+            runtime
+                .dispatch_invoke(
+                    worksheet_function,
+                    "Norm_S_Inv",
+                    &[OmValue::Number(0.8413447460685429)],
+                )
+                .expect("WorksheetFunction.Norm_S_Inv"),
+        );
+        assert!((norm_s_inv - 1.0).abs() < 1e-6);
         assert_eq!(
             expect_number(
                 runtime
