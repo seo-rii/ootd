@@ -88080,6 +88080,219 @@ mod tests {
                 expected
             );
         }
+        for (member, args, expected) in [
+            (
+                "Cell",
+                vec![
+                    OmValue::Text("address".to_string()),
+                    OmValue::Object(first_source),
+                ],
+                "$A$1",
+            ),
+            (
+                "Choose",
+                vec![
+                    OmValue::Number(2.0),
+                    OmValue::Text("red".to_string()),
+                    OmValue::Text("blue".to_string()),
+                ],
+                "blue",
+            ),
+            (
+                "CubeKpiMember",
+                vec![
+                    OmValue::Text("conn".to_string()),
+                    OmValue::Text("fallback".to_string()),
+                    OmValue::Number(1.0),
+                    OmValue::Text("caption".to_string()),
+                ],
+                "caption",
+            ),
+            (
+                "CubeMember",
+                vec![
+                    OmValue::Text("conn".to_string()),
+                    OmValue::Text("fallback".to_string()),
+                    OmValue::Text("caption".to_string()),
+                ],
+                "caption",
+            ),
+            (
+                "CubeRankedMember",
+                vec![
+                    OmValue::Text("conn".to_string()),
+                    OmValue::Text("fallback".to_string()),
+                    OmValue::Number(1.0),
+                    OmValue::Text("caption".to_string()),
+                ],
+                "caption",
+            ),
+            (
+                "CubeSet",
+                vec![
+                    OmValue::Text("conn".to_string()),
+                    OmValue::Text("set".to_string()),
+                    OmValue::Text("caption".to_string()),
+                ],
+                "caption",
+            ),
+            (
+                "DetectLanguage",
+                vec![OmValue::Text("hello".to_string())],
+                "en",
+            ),
+            (
+                "FilterXML",
+                vec![
+                    OmValue::Text("<root><item id=\"a\">one</item></root>".to_string()),
+                    OmValue::Text("/root/item".to_string()),
+                ],
+                "one",
+            ),
+            (
+                "Hyperlink",
+                vec![
+                    OmValue::Text("https://example.test".to_string()),
+                    OmValue::Text("Example".to_string()),
+                ],
+                "Example",
+            ),
+            (
+                "Image",
+                vec![
+                    OmValue::Text("https://example.test/image.png".to_string()),
+                    OmValue::Text("Alt".to_string()),
+                ],
+                "Alt",
+            ),
+            (
+                "Info",
+                vec![OmValue::Text("recalc".to_string())],
+                "Automatic",
+            ),
+            ("Phonetic", vec![OmValue::Text("かな".to_string())], "かな"),
+            (
+                "RegexExtract",
+                vec![
+                    OmValue::Text("abc123".to_string()),
+                    OmValue::Text("\\d+".to_string()),
+                ],
+                "123",
+            ),
+            (
+                "RegexReplace",
+                vec![
+                    OmValue::Text("abc123".to_string()),
+                    OmValue::Text("\\d+".to_string()),
+                    OmValue::Text("!".to_string()),
+                ],
+                "abc!",
+            ),
+            (
+                "Text",
+                vec![OmValue::Number(42.5), OmValue::Text("0.00".to_string())],
+                "42.50",
+            ),
+            (
+                "Translate",
+                vec![
+                    OmValue::Text("hello".to_string()),
+                    OmValue::Text("en".to_string()),
+                    OmValue::Text("es".to_string()),
+                ],
+                "hola",
+            ),
+            (
+                "WebService",
+                vec![OmValue::Text("data:text/plain,hello%20world".to_string())],
+                "hello world",
+            ),
+        ] {
+            assert_eq!(
+                expect_text(
+                    runtime
+                        .dispatch_invoke(worksheet_function, member, &args)
+                        .expect("WorksheetFunction parser-backed text dispatch")
+                ),
+                expected
+            );
+        }
+        for (member, args, expected) in [
+            (
+                "Index",
+                vec![OmValue::Object(first_source), OmValue::Number(2.0)],
+                6.0,
+            ),
+            (
+                "Lookup",
+                vec![
+                    OmValue::Number(3.0),
+                    OmValue::Object(paired_x_source),
+                    OmValue::Object(paired_y_source),
+                ],
+                6.0,
+            ),
+            (
+                "VLookup",
+                vec![
+                    OmValue::Number(2.0),
+                    OmValue::Object(prob_source),
+                    OmValue::Number(2.0),
+                    OmValue::Bool(false),
+                ],
+                0.1,
+            ),
+            (
+                "XLookup",
+                vec![
+                    OmValue::Number(4.0),
+                    OmValue::Object(paired_x_source),
+                    OmValue::Object(paired_y_source),
+                ],
+                8.0,
+            ),
+            ("Indirect", vec![OmValue::Text("B3".to_string())], 3.0),
+            (
+                "Offset",
+                vec![
+                    OmValue::Object(paired_x_source),
+                    OmValue::Number(1.0),
+                    OmValue::Number(0.0),
+                ],
+                2.0,
+            ),
+            ("TrimRange", vec![OmValue::Object(first_source)], 4.0),
+            (
+                "Ifs",
+                vec![
+                    OmValue::Bool(false),
+                    OmValue::Number(1.0),
+                    OmValue::Bool(true),
+                    OmValue::Number(2.0),
+                ],
+                2.0,
+            ),
+            (
+                "Switch",
+                vec![
+                    OmValue::Text("b".to_string()),
+                    OmValue::Text("a".to_string()),
+                    OmValue::Number(1.0),
+                    OmValue::Text("b".to_string()),
+                    OmValue::Number(2.0),
+                ],
+                2.0,
+            ),
+        ] {
+            assert_eq!(
+                expect_number(
+                    runtime
+                        .dispatch_invoke(worksheet_function, member, &args)
+                        .expect("WorksheetFunction parser-backed numeric dispatch")
+                ),
+                expected
+            );
+        }
         assert_eq!(
             expect_number(
                 runtime

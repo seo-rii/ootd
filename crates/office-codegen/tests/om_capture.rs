@@ -148,8 +148,8 @@ fn loads_office_idl_excel_om_template_and_summarizes_surface() {
     assert_eq!(summary.enum_count, 8);
     assert_eq!(summary.interface_count, 58);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 1330);
-    assert_eq!(summary.stub_member_count, 1330);
+    assert_eq!(summary.member_count, 1365);
+    assert_eq!(summary.stub_member_count, 1365);
     assert_eq!(
         document.interfaces[0].members[0]
             .metadata
@@ -1905,7 +1905,7 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         .expect("Point");
 
     assert_eq!(application.member_count, 44);
-    assert_eq!(worksheet_function.member_count, 386);
+    assert_eq!(worksheet_function.member_count, 421);
     assert_eq!(workbooks.member_count, 7);
     assert_eq!(workbook.member_count, 26);
     assert_eq!(worksheets.member_count, 13);
@@ -3044,8 +3044,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(coverage.library, "Excel");
     assert_eq!(coverage.version, "16.0");
-    assert_eq!(coverage.member_count, 1330);
-    assert_eq!(coverage.support_counts.stub, 1330);
+    assert_eq!(coverage.member_count, 1365);
+    assert_eq!(coverage.support_counts.stub, 1365);
     assert!(coverage.missing_focus_surfaces.is_empty());
 
     let application_coverage = coverage
@@ -3391,8 +3391,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         ]
     );
 
-    assert_eq!(worksheet_function_coverage.member_count, 386);
-    assert_eq!(worksheet_function_coverage.support_counts.stub, 386);
+    assert_eq!(worksheet_function_coverage.member_count, 421);
+    assert_eq!(worksheet_function_coverage.support_counts.stub, 421);
     assert_eq!(
         worksheet_function_coverage.stub_members,
         vec![
@@ -3781,7 +3781,42 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
             "ChiSq_Test".to_string(),
             "F_Test".to_string(),
             "T_Test".to_string(),
-            "Z_Test".to_string()
+            "Z_Test".to_string(),
+            "Cell".to_string(),
+            "Choose".to_string(),
+            "CubeKpiMember".to_string(),
+            "CubeMember".to_string(),
+            "CubeMemberProperty".to_string(),
+            "CubeRankedMember".to_string(),
+            "CubeSet".to_string(),
+            "DetectLanguage".to_string(),
+            "DGet".to_string(),
+            "FilterXML".to_string(),
+            "GetPivotData".to_string(),
+            "HLookup".to_string(),
+            "Hyperlink".to_string(),
+            "Ifs".to_string(),
+            "Image".to_string(),
+            "Index".to_string(),
+            "Indirect".to_string(),
+            "Info".to_string(),
+            "Lambda".to_string(),
+            "Let".to_string(),
+            "Lookup".to_string(),
+            "MakeArray".to_string(),
+            "Offset".to_string(),
+            "Phonetic".to_string(),
+            "Reduce".to_string(),
+            "RegexExtract".to_string(),
+            "RegexReplace".to_string(),
+            "Scan".to_string(),
+            "Switch".to_string(),
+            "Text".to_string(),
+            "Translate".to_string(),
+            "TrimRange".to_string(),
+            "VLookup".to_string(),
+            "WebService".to_string(),
+            "XLookup".to_string(),
         ]
     );
 
