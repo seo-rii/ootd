@@ -389,6 +389,9 @@ const MSO_FALSE: i32 = 0;
 const MSO_TRUE: i32 = -1;
 const MSO_PICTURE_AUTOMATIC: i32 = 1;
 const MSO_AUTO_SIZE_NONE: i32 = 0;
+const MSO_ANCHOR_NONE: i32 = 1;
+const MSO_ANCHOR_TOP: i32 = 1;
+const MSO_TEXT_ORIENTATION_HORIZONTAL: i32 = 1;
 const MSO_SCALE_FROM_TOP_LEFT: i32 = 0;
 const MSO_SCALE_FROM_MIDDLE: i32 = 1;
 const MSO_SCALE_FROM_BOTTOM_RIGHT: i32 = 2;
@@ -2828,6 +2831,9 @@ impl ExcelRuntime {
                     "AutoSize" if matches!(kind, ChartFormatChildKind::TextFrame2) => {
                         Ok(OmValue::Number(f64::from(MSO_AUTO_SIZE_NONE)))
                     }
+                    "HorizontalAnchor" if matches!(kind, ChartFormatChildKind::TextFrame2) => {
+                        Ok(OmValue::Number(f64::from(MSO_ANCHOR_NONE)))
+                    }
                     "MarginBottom" | "MarginLeft" | "MarginRight" | "MarginTop"
                         if matches!(kind, ChartFormatChildKind::TextFrame2) =>
                     {
@@ -2837,6 +2843,12 @@ impl ExcelRuntime {
                         if matches!(kind, ChartFormatChildKind::TextFrame2) =>
                     {
                         Ok(OmValue::Number(f64::from(MSO_FALSE)))
+                    }
+                    "Orientation" if matches!(kind, ChartFormatChildKind::TextFrame2) => {
+                        Ok(OmValue::Number(f64::from(MSO_TEXT_ORIENTATION_HORIZONTAL)))
+                    }
+                    "VerticalAnchor" if matches!(kind, ChartFormatChildKind::TextFrame2) => {
+                        Ok(OmValue::Number(f64::from(MSO_ANCHOR_TOP)))
                     }
                     "Radius"
                         if matches!(
@@ -18345,11 +18357,14 @@ impl ExcelRuntime {
                             | "Parent"
                             | "AutoSize"
                             | "HasText"
+                            | "HorizontalAnchor"
                             | "MarginBottom"
                             | "MarginLeft"
                             | "MarginRight"
                             | "MarginTop"
                             | "NoTextRotation"
+                            | "Orientation"
+                            | "VerticalAnchor"
                             | "WordWrap"
                     )
                     | (
@@ -68881,11 +68896,14 @@ mod tests {
                 for member_name in [
                     "AutoSize",
                     "HasText",
+                    "HorizontalAnchor",
                     "MarginBottom",
                     "MarginLeft",
                     "MarginRight",
                     "MarginTop",
                     "NoTextRotation",
+                    "Orientation",
+                    "VerticalAnchor",
                     "WordWrap",
                 ] {
                     let member = surface
@@ -129779,6 +129797,27 @@ mod tests {
                             runtime
                                 .dispatch_get(format_child, member_name, &[OmValue::Missing])
                                 .expect_err("TextFrame2 tri-state getter rejects arguments")
+                                .code,
+                            OmErrorCode::InvalidArgument
+                        );
+                    }
+                    for (member_name, expected) in [
+                        ("HorizontalAnchor", super::MSO_ANCHOR_NONE),
+                        ("Orientation", super::MSO_TEXT_ORIENTATION_HORIZONTAL),
+                        ("VerticalAnchor", super::MSO_ANCHOR_TOP),
+                    ] {
+                        assert_eq!(
+                            runtime
+                                .dispatch_get(format_child, member_name, &[])
+                                .unwrap_or_else(|error| {
+                                    panic!("{child_surface}.{member_name} failed: {error:?}")
+                                }),
+                            OmValue::Number(f64::from(expected))
+                        );
+                        assert_eq!(
+                            runtime
+                                .dispatch_get(format_child, member_name, &[OmValue::Missing])
+                                .expect_err("TextFrame2 enum getter rejects arguments")
                                 .code,
                             OmErrorCode::InvalidArgument
                         );

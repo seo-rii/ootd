@@ -14258,6 +14258,33 @@
           "access": "read"
         },
         {
+          "name": "HorizontalAnchor",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "TextFrame2",
+                  "sourceMember": "HorizontalAnchor"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "MsoHorizontalAnchor"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "MsoHorizontalAnchor"
+          },
+          "access": "read"
+        },
+        {
           "name": "MarginBottom",
           "memberKind": "property",
           "support": "stub",
@@ -14389,6 +14416,60 @@
             "kind": "primitive",
             "name": "i32",
             "aliasOf": "MsoTriState"
+          },
+          "access": "read"
+        },
+        {
+          "name": "Orientation",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "TextFrame2",
+                  "sourceMember": "Orientation"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "MsoTextOrientation"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "MsoTextOrientation"
+          },
+          "access": "read"
+        },
+        {
+          "name": "VerticalAnchor",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "TextFrame2",
+                  "sourceMember": "VerticalAnchor"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "MsoVerticalAnchor"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "MsoVerticalAnchor"
           },
           "access": "read"
         },
