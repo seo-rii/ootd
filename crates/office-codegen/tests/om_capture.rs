@@ -146,10 +146,10 @@ fn loads_office_idl_excel_om_template_and_summarizes_surface() {
         Some("Microsoft.Office.Interop.Excel")
     );
     assert_eq!(summary.enum_count, 8);
-    assert_eq!(summary.interface_count, 50);
+    assert_eq!(summary.interface_count, 52);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 857);
-    assert_eq!(summary.stub_member_count, 857);
+    assert_eq!(summary.member_count, 873);
+    assert_eq!(summary.stub_member_count, 873);
     assert_eq!(
         document.interfaces[0].members[0]
             .metadata
@@ -1187,6 +1187,8 @@ fn builds_coverage_report_for_each_support_state_bucket() {
             "PlotArea".to_string(),
             "ChartTitle".to_string(),
             "Legend".to_string(),
+            "LegendEntries".to_string(),
+            "LegendEntry".to_string(),
             "DataTable".to_string(),
             "ChartFormat".to_string(),
             "Adjustments".to_string(),
@@ -1350,6 +1352,8 @@ fn builds_focus_surface_registry_from_json_wrapper() {
             "PlotArea".to_string(),
             "ChartTitle".to_string(),
             "Legend".to_string(),
+            "LegendEntries".to_string(),
+            "LegendEntry".to_string(),
             "DataTable".to_string(),
             "ChartFormat".to_string(),
             "Adjustments".to_string(),
@@ -1419,7 +1423,7 @@ fn builds_coverage_report_from_path_wrapper() {
 
     assert_eq!(report_from_path, report_from_json);
     assert_eq!(report_from_path.support_counts.partial, 1);
-    assert_eq!(report_from_path.missing_focus_surfaces.len(), 49);
+    assert_eq!(report_from_path.missing_focus_surfaces.len(), 51);
 
     fs::remove_file(&path).expect("remove temp document");
 }
@@ -1590,7 +1594,7 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(registry.library, "Excel");
     assert_eq!(registry.version, "16.0");
-    assert_eq!(registry.focus_surfaces.len(), 50);
+    assert_eq!(registry.focus_surfaces.len(), 52);
     assert!(registry.missing_focus_surfaces.is_empty());
 
     let application = registry
@@ -1678,6 +1682,16 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         .iter()
         .find(|entry| entry.name == "Legend")
         .expect("Legend");
+    let legend_entries = registry
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "LegendEntries")
+        .expect("LegendEntries");
+    let legend_entry = registry
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "LegendEntry")
+        .expect("LegendEntry");
     let data_table = registry
         .focus_surfaces
         .iter()
@@ -1860,7 +1874,9 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
     assert_eq!(chart_area.member_count, 15);
     assert_eq!(plot_area.member_count, 18);
     assert_eq!(chart_title.member_count, 15);
-    assert_eq!(legend.member_count, 14);
+    assert_eq!(legend.member_count, 15);
+    assert_eq!(legend_entries.member_count, 5);
+    assert_eq!(legend_entry.member_count, 10);
     assert_eq!(data_table.member_count, 10);
     assert_eq!(chart_format.member_count, 13);
     assert_eq!(adjustments.member_count, 5);
@@ -2976,8 +2992,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(coverage.library, "Excel");
     assert_eq!(coverage.version, "16.0");
-    assert_eq!(coverage.member_count, 857);
-    assert_eq!(coverage.support_counts.stub, 857);
+    assert_eq!(coverage.member_count, 873);
+    assert_eq!(coverage.support_counts.stub, 873);
     assert!(coverage.missing_focus_surfaces.is_empty());
 
     let application_coverage = coverage
@@ -3065,6 +3081,16 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         .iter()
         .find(|entry| entry.name == "Legend")
         .expect("Legend coverage");
+    let legend_entries_coverage = coverage
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "LegendEntries")
+        .expect("LegendEntries coverage");
+    let legend_entry_coverage = coverage
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "LegendEntry")
+        .expect("LegendEntry coverage");
     let data_table_coverage = coverage
         .focus_surfaces
         .iter()
@@ -3777,8 +3803,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         ]
     );
 
-    assert_eq!(legend_coverage.member_count, 14);
-    assert_eq!(legend_coverage.support_counts.stub, 14);
+    assert_eq!(legend_coverage.member_count, 15);
+    assert_eq!(legend_coverage.support_counts.stub, 15);
     assert_eq!(
         legend_coverage.stub_members,
         vec![
@@ -3794,8 +3820,40 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
             "Application".to_string(),
             "Parent".to_string(),
             "Select".to_string(),
+            "LegendEntries".to_string(),
             "Clear".to_string(),
             "Delete".to_string()
+        ]
+    );
+
+    assert_eq!(legend_entries_coverage.member_count, 5);
+    assert_eq!(legend_entries_coverage.support_counts.stub, 5);
+    assert_eq!(
+        legend_entries_coverage.stub_members,
+        vec![
+            "Count".to_string(),
+            "Item".to_string(),
+            "Creator".to_string(),
+            "Application".to_string(),
+            "Parent".to_string()
+        ]
+    );
+
+    assert_eq!(legend_entry_coverage.member_count, 10);
+    assert_eq!(legend_entry_coverage.support_counts.stub, 10);
+    assert_eq!(
+        legend_entry_coverage.stub_members,
+        vec![
+            "Index".to_string(),
+            "Format".to_string(),
+            "Left".to_string(),
+            "Top".to_string(),
+            "Width".to_string(),
+            "Height".to_string(),
+            "Creator".to_string(),
+            "Application".to_string(),
+            "Parent".to_string(),
+            "Select".to_string()
         ]
     );
 
