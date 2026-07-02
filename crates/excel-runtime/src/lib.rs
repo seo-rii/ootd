@@ -706,6 +706,11 @@ enum ChartFormatParent {
         entry_index: usize,
         chart_object_parent: Option<ChartObjectsParent>,
     },
+    LegendKey {
+        chart_id: ChartId,
+        entry_index: usize,
+        chart_object_parent: Option<ChartObjectsParent>,
+    },
     DataTable {
         chart_id: ChartId,
         chart_object_parent: Option<ChartObjectsParent>,
@@ -956,6 +961,12 @@ enum RuntimeObjectKind {
         chart_object_parent: Option<ChartObjectsParent>,
     },
     LegendEntry {
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        entry_index: usize,
+        chart_object_parent: Option<ChartObjectsParent>,
+    },
+    LegendKey {
         workbook: WorkbookHandle,
         chart_id: ChartId,
         entry_index: usize,
@@ -2746,6 +2757,19 @@ impl ExcelRuntime {
                 entry_index,
                 chart_object_parent,
             } => self.dispatch_get_legend_entry(
+                workbook,
+                chart_id,
+                entry_index,
+                chart_object_parent,
+                member,
+                args,
+            ),
+            RuntimeObjectKind::LegendKey {
+                workbook,
+                chart_id,
+                entry_index,
+                chart_object_parent,
+            } => self.dispatch_get_legend_key(
                 workbook,
                 chart_id,
                 entry_index,
@@ -8643,6 +8667,9 @@ impl ExcelRuntime {
             ))),
             RuntimeObjectKind::LegendEntry { .. } => Err(OmError::unsupported(format!(
                 "LegendEntry.{member} is not writable"
+            ))),
+            RuntimeObjectKind::LegendKey { .. } => Err(OmError::unsupported(format!(
+                "LegendKey.{member} is not writable"
             ))),
             RuntimeObjectKind::DataTable {
                 workbook, chart_id, ..
@@ -17318,6 +17345,9 @@ impl ExcelRuntime {
                     "LegendEntry.{member} is not implemented as a method"
                 ))),
             },
+            RuntimeObjectKind::LegendKey { .. } => Err(OmError::unsupported(format!(
+                "LegendKey.{member} is not implemented as a method"
+            ))),
             RuntimeObjectKind::DataTable {
                 workbook,
                 chart_id,
@@ -18138,6 +18168,7 @@ impl ExcelRuntime {
             RuntimeObjectKind::Legend { .. } => Some("Legend"),
             RuntimeObjectKind::LegendEntries { .. } => Some("LegendEntries"),
             RuntimeObjectKind::LegendEntry { .. } => Some("LegendEntry"),
+            RuntimeObjectKind::LegendKey { .. } => Some("LegendKey"),
             RuntimeObjectKind::DataTable { .. } => Some("DataTable"),
             RuntimeObjectKind::ChartFormat { .. } => Some("ChartFormat"),
             RuntimeObjectKind::Adjustments { .. } => Some("Adjustments"),
@@ -18504,6 +18535,7 @@ impl ExcelRuntime {
                         "LegendEntry",
                         "Index"
                             | "Format"
+                            | "LegendKey"
                             | "Left"
                             | "Top"
                             | "Width"
@@ -18512,6 +18544,17 @@ impl ExcelRuntime {
                             | "Application"
                             | "Parent"
                             | "Select"
+                    )
+                    | (
+                        "LegendKey",
+                        "Format"
+                            | "Left"
+                            | "Top"
+                            | "Width"
+                            | "Height"
+                            | "Creator"
+                            | "Application"
+                            | "Parent"
                     )
                     | (
                         "DataTable",
@@ -23943,6 +23986,19 @@ impl ExcelRuntime {
                     chart_object_parent,
                 })
             }
+            ChartFormatParent::LegendKey {
+                chart_id,
+                entry_index,
+                chart_object_parent,
+            } => {
+                self.validate_legend_entry_index(workbook, chart_id, entry_index)?;
+                Ok(RuntimeObjectKind::LegendKey {
+                    workbook,
+                    chart_id,
+                    entry_index,
+                    chart_object_parent,
+                })
+            }
             ChartFormatParent::DataTable {
                 chart_id,
                 chart_object_parent,
@@ -24322,6 +24378,14 @@ impl ExcelRuntime {
                     },
                 },
             ))),
+            "LegendKey" => Ok(OmValue::Object(
+                self.register_legend_key_handle_with_chart_object_parent_origin(
+                    workbook,
+                    chart_id,
+                    entry_index,
+                    chart_object_parent,
+                ),
+            )),
             "Left" | "Top" | "Width" | "Height" => Ok(OmValue::Number(0.0)),
             "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
             "Application" => Ok(OmValue::Object(self.root_application())),
@@ -24334,6 +24398,54 @@ impl ExcelRuntime {
             )),
             _ => Err(OmError::unsupported(format!(
                 "LegendEntry.{member} is not implemented"
+            ))),
+        }
+    }
+
+    fn dispatch_get_legend_key(
+        &mut self,
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        entry_index: usize,
+        chart_object_parent: Option<ChartObjectsParent>,
+        member: &str,
+        args: &[OmValue],
+    ) -> OmResult<OmValue> {
+        if self.focus_member_declared("LegendKey", member) {
+            self.focus_member_supported("LegendKey", member, false)?;
+        }
+
+        if !args.is_empty() {
+            return Err(OmError::invalid_argument(format!(
+                "LegendKey.{member} does not accept arguments"
+            )));
+        }
+        self.validate_legend_entry_index(workbook, chart_id, entry_index)?;
+
+        match member {
+            "Format" => Ok(OmValue::Object(self.register_object(
+                RuntimeObjectKind::ChartFormat {
+                    workbook,
+                    parent: ChartFormatParent::LegendKey {
+                        chart_id,
+                        entry_index,
+                        chart_object_parent,
+                    },
+                },
+            ))),
+            "Left" | "Top" | "Width" | "Height" => Ok(OmValue::Number(0.0)),
+            "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
+            "Application" => Ok(OmValue::Object(self.root_application())),
+            "Parent" => Ok(OmValue::Object(
+                self.register_legend_entry_handle_with_chart_object_parent_origin(
+                    workbook,
+                    chart_id,
+                    entry_index,
+                    chart_object_parent,
+                ),
+            )),
+            _ => Err(OmError::unsupported(format!(
+                "LegendKey.{member} is not implemented"
             ))),
         }
     }
@@ -32199,6 +32311,21 @@ impl ExcelRuntime {
         })
     }
 
+    fn register_legend_key_handle_with_chart_object_parent_origin(
+        &mut self,
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        entry_index: usize,
+        chart_object_parent: Option<ChartObjectsParent>,
+    ) -> ObjectHandle {
+        self.register_object(RuntimeObjectKind::LegendKey {
+            workbook,
+            chart_id,
+            entry_index,
+            chart_object_parent,
+        })
+    }
+
     fn register_data_table_handle_with_chart_object_parent_origin(
         &mut self,
         workbook: WorkbookHandle,
@@ -34130,6 +34257,11 @@ impl ExcelRuntime {
                     chart_id: object_chart_id,
                     ..
                 }
+                | RuntimeObjectKind::LegendKey {
+                    workbook: object_workbook,
+                    chart_id: object_chart_id,
+                    ..
+                }
                 | RuntimeObjectKind::DataTable {
                     workbook: object_workbook,
                     chart_id: object_chart_id,
@@ -34155,6 +34287,10 @@ impl ExcelRuntime {
                             ..
                         }
                         | ChartFormatParent::LegendEntry {
+                            chart_id: object_chart_id,
+                            ..
+                        }
+                        | ChartFormatParent::LegendKey {
                             chart_id: object_chart_id,
                             ..
                         }
@@ -34226,6 +34362,10 @@ impl ExcelRuntime {
                             chart_id: object_chart_id,
                             ..
                         }
+                        | ChartFormatParent::LegendKey {
+                            chart_id: object_chart_id,
+                            ..
+                        }
                         | ChartFormatParent::DataTable {
                             chart_id: object_chart_id,
                             ..
@@ -34291,6 +34431,10 @@ impl ExcelRuntime {
                             ..
                         }
                         | ChartFormatParent::LegendEntry {
+                            chart_id: object_chart_id,
+                            ..
+                        }
+                        | ChartFormatParent::LegendKey {
                             chart_id: object_chart_id,
                             ..
                         }
@@ -34741,6 +34885,11 @@ impl ExcelRuntime {
                     chart_id: object_chart_id,
                     ..
                 }
+                | RuntimeObjectKind::LegendKey {
+                    workbook: object_workbook,
+                    chart_id: object_chart_id,
+                    ..
+                }
                 | RuntimeObjectKind::ChartFormat {
                     workbook: object_workbook,
                     parent:
@@ -34757,6 +34906,14 @@ impl ExcelRuntime {
                             ..
                         },
                 }
+                | RuntimeObjectKind::ChartFormat {
+                    workbook: object_workbook,
+                    parent:
+                        ChartFormatParent::LegendKey {
+                            chart_id: object_chart_id,
+                            ..
+                        },
+                }
                 | RuntimeObjectKind::Adjustments {
                     workbook: object_workbook,
                     parent:
@@ -34769,6 +34926,14 @@ impl ExcelRuntime {
                     workbook: object_workbook,
                     parent:
                         ChartFormatParent::LegendEntry {
+                            chart_id: object_chart_id,
+                            ..
+                        },
+                }
+                | RuntimeObjectKind::Adjustments {
+                    workbook: object_workbook,
+                    parent:
+                        ChartFormatParent::LegendKey {
                             chart_id: object_chart_id,
                             ..
                         },
@@ -34786,6 +34951,15 @@ impl ExcelRuntime {
                     workbook: object_workbook,
                     parent:
                         ChartFormatParent::LegendEntry {
+                            chart_id: object_chart_id,
+                            ..
+                        },
+                    ..
+                }
+                | RuntimeObjectKind::ChartFormatChild {
+                    workbook: object_workbook,
+                    parent:
+                        ChartFormatParent::LegendKey {
                             chart_id: object_chart_id,
                             ..
                         },
@@ -46905,6 +47079,7 @@ fn runtime_object_owner(object: RuntimeObjectKind) -> Option<WorkbookHandle> {
         | RuntimeObjectKind::Legend { workbook, .. }
         | RuntimeObjectKind::LegendEntries { workbook, .. }
         | RuntimeObjectKind::LegendEntry { workbook, .. }
+        | RuntimeObjectKind::LegendKey { workbook, .. }
         | RuntimeObjectKind::DataTable { workbook, .. }
         | RuntimeObjectKind::ChartFormat { workbook, .. }
         | RuntimeObjectKind::Adjustments { workbook, .. }
@@ -68990,6 +69165,7 @@ mod tests {
                 &[
                     "Index",
                     "Format",
+                    "LegendKey",
                     "Left",
                     "Top",
                     "Width",
@@ -68999,6 +69175,20 @@ mod tests {
                     "Parent",
                 ][..],
                 &["Select"][..],
+            ),
+            (
+                "LegendKey",
+                &[
+                    "Format",
+                    "Left",
+                    "Top",
+                    "Width",
+                    "Height",
+                    "Creator",
+                    "Application",
+                    "Parent",
+                ][..],
+                &[][..],
             ),
             (
                 "DataTable",
@@ -130116,6 +130306,11 @@ mod tests {
                 .dispatch_invoke(legend, "LegendEntries", &[OmValue::Number(1.0)])
                 .expect("Legend.LegendEntries(1)"),
         );
+        let first_legend_key = expect_object_handle(
+            runtime
+                .dispatch_get(first_legend_entry, "LegendKey", &[])
+                .expect("LegendEntry.LegendKey"),
+        );
         let chart_groups = expect_object_handle(
             runtime
                 .dispatch_get(chart, "ChartGroups", &[])
@@ -130272,6 +130467,11 @@ mod tests {
                 &["Left", "Top", "Width", "Height"][..],
             ),
             (
+                first_legend_key,
+                "LegendKey",
+                &["Left", "Top", "Width", "Height"][..],
+            ),
+            (
                 axis_title,
                 "AxisTitle",
                 &["Left", "Top", "Width", "Height"][..],
@@ -130322,6 +130522,24 @@ mod tests {
             runtime
                 .dispatch_get(first_legend_entry_from_legend, "Index", &[])
                 .expect("Legend.LegendEntries(1).Index"),
+            OmValue::Number(1.0)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(first_legend_entry, "LegendKey", &[OmValue::Missing])
+                .expect_err("LegendEntry.LegendKey rejects arguments")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        let legend_key_parent = expect_object_handle(
+            runtime
+                .dispatch_get(first_legend_key, "Parent", &[])
+                .expect("LegendKey.Parent"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(legend_key_parent, "Index", &[])
+                .expect("LegendKey.Parent.Index"),
             OmValue::Number(1.0)
         );
         assert_eq!(
@@ -130554,6 +130772,7 @@ mod tests {
             (plot_area, "PlotArea"),
             (chart_title, "ChartTitle"),
             (first_legend_entry, "LegendEntry"),
+            (first_legend_key, "LegendKey"),
             (legend, "Legend"),
             (axis, "Axis"),
             (tick_labels, "TickLabels"),
