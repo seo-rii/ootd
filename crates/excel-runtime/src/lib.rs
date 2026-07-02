@@ -2917,8 +2917,17 @@ impl ExcelRuntime {
                     "Visible" if matches!(kind, ChartFormatChildKind::ThreeD) => {
                         Ok(OmValue::Number(f64::from(MSO_FALSE)))
                     }
-                    "Depth" if matches!(kind, ChartFormatChildKind::ThreeD) => {
+                    "BevelBottomDepth" | "BevelBottomInset" | "BevelTopDepth" | "BevelTopInset"
+                    | "ContourWidth" | "Depth" | "FieldOfView" | "LightAngle" | "RotationX"
+                    | "RotationY" | "RotationZ" | "Z"
+                        if matches!(kind, ChartFormatChildKind::ThreeD) =>
+                    {
                         Ok(OmValue::Number(0.0))
+                    }
+                    "Perspective" | "ProjectText"
+                        if matches!(kind, ChartFormatChildKind::ThreeD) =>
+                    {
+                        Ok(OmValue::Number(f64::from(MSO_FALSE)))
                     }
                     "Brightness" | "Contrast"
                         if matches!(kind, ChartFormatChildKind::PictureFormat) =>
@@ -18447,7 +18456,24 @@ impl ExcelRuntime {
                     )
                     | (
                         "ThreeDFormat",
-                        "Creator" | "Application" | "Parent" | "Visible" | "Depth"
+                        "Creator"
+                            | "Application"
+                            | "Parent"
+                            | "BevelBottomDepth"
+                            | "BevelBottomInset"
+                            | "BevelTopDepth"
+                            | "BevelTopInset"
+                            | "ContourWidth"
+                            | "Depth"
+                            | "FieldOfView"
+                            | "LightAngle"
+                            | "Perspective"
+                            | "ProjectText"
+                            | "RotationX"
+                            | "RotationY"
+                            | "RotationZ"
+                            | "Visible"
+                            | "Z"
                     )
                     | (
                         "ChartGroups",
@@ -69079,7 +69105,23 @@ mod tests {
                 }
             }
             if surface_name == "ThreeDFormat" {
-                for member_name in ["Visible", "Depth"] {
+                for member_name in [
+                    "BevelBottomDepth",
+                    "BevelBottomInset",
+                    "BevelTopDepth",
+                    "BevelTopInset",
+                    "ContourWidth",
+                    "Depth",
+                    "FieldOfView",
+                    "LightAngle",
+                    "Perspective",
+                    "ProjectText",
+                    "RotationX",
+                    "RotationY",
+                    "RotationZ",
+                    "Visible",
+                    "Z",
+                ] {
                     let member = surface
                         .members
                         .iter()
@@ -130131,21 +130173,57 @@ mod tests {
                             .code,
                         OmErrorCode::InvalidArgument
                     );
-                    assert_eq!(
-                        runtime
-                            .dispatch_get(format_child, "Depth", &[])
-                            .unwrap_or_else(|error| {
-                                panic!("{child_surface}.Depth failed: {error:?}")
-                            }),
-                        OmValue::Number(0.0)
-                    );
-                    assert_eq!(
-                        runtime
-                            .dispatch_get(format_child, "Depth", &[OmValue::Missing])
-                            .expect_err("ThreeDFormat.Depth rejects arguments")
-                            .code,
-                        OmErrorCode::InvalidArgument
-                    );
+                    for member_name in [
+                        "BevelBottomDepth",
+                        "BevelBottomInset",
+                        "BevelTopDepth",
+                        "BevelTopInset",
+                        "ContourWidth",
+                        "Depth",
+                        "FieldOfView",
+                        "LightAngle",
+                        "RotationX",
+                        "RotationY",
+                        "RotationZ",
+                        "Z",
+                    ] {
+                        assert_eq!(
+                            runtime
+                                .dispatch_get(format_child, member_name, &[])
+                                .unwrap_or_else(|error| {
+                                    panic!("{child_surface}.{member_name} failed: {error:?}")
+                                }),
+                            OmValue::Number(0.0)
+                        );
+                        assert_eq!(
+                            runtime
+                                .dispatch_get(format_child, member_name, &[OmValue::Missing])
+                                .expect_err(&format!(
+                                    "{child_surface}.{member_name} rejects arguments"
+                                ))
+                                .code,
+                            OmErrorCode::InvalidArgument
+                        );
+                    }
+                    for member_name in ["Perspective", "ProjectText"] {
+                        assert_eq!(
+                            runtime
+                                .dispatch_get(format_child, member_name, &[])
+                                .unwrap_or_else(|error| {
+                                    panic!("{child_surface}.{member_name} failed: {error:?}")
+                                }),
+                            OmValue::Number(f64::from(super::MSO_FALSE))
+                        );
+                        assert_eq!(
+                            runtime
+                                .dispatch_get(format_child, member_name, &[OmValue::Missing])
+                                .expect_err(&format!(
+                                    "{child_surface}.{member_name} rejects arguments"
+                                ))
+                                .code,
+                            OmErrorCode::InvalidArgument
+                        );
+                    }
                 }
                 if child_surface == "PictureFormat" {
                     let crop = expect_object_handle(

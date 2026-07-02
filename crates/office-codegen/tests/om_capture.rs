@@ -148,8 +148,8 @@ fn loads_office_idl_excel_om_template_and_summarizes_surface() {
     assert_eq!(summary.enum_count, 8);
     assert_eq!(summary.interface_count, 50);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 803);
-    assert_eq!(summary.stub_member_count, 803);
+    assert_eq!(summary.member_count, 816);
+    assert_eq!(summary.stub_member_count, 816);
     assert_eq!(
         document.interfaces[0].members[0]
             .metadata
@@ -1872,7 +1872,7 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
     assert_eq!(shadow_format.member_count, 10);
     assert_eq!(soft_edge_format.member_count, 5);
     assert_eq!(text_frame2.member_count, 14);
-    assert_eq!(three_d_format.member_count, 5);
+    assert_eq!(three_d_format.member_count, 18);
     assert_eq!(chart_groups.member_count, 5);
     assert_eq!(chart_group.member_count, 33);
     assert_eq!(category_collection.member_count, 5);
@@ -2976,8 +2976,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(coverage.library, "Excel");
     assert_eq!(coverage.version, "16.0");
-    assert_eq!(coverage.member_count, 803);
-    assert_eq!(coverage.support_counts.stub, 803);
+    assert_eq!(coverage.member_count, 816);
+    assert_eq!(coverage.support_counts.stub, 816);
     assert!(coverage.missing_focus_surfaces.is_empty());
 
     let application_coverage = coverage
@@ -3890,8 +3890,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
             "Transparency".to_string()
         ]
     );
-    assert_eq!(three_d_format_coverage.member_count, 5);
-    assert_eq!(three_d_format_coverage.support_counts.stub, 5);
+    assert_eq!(three_d_format_coverage.member_count, 18);
+    assert_eq!(three_d_format_coverage.support_counts.stub, 18);
     assert_eq!(
         three_d_format_coverage.stub_members,
         vec![
@@ -3899,7 +3899,20 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
             "Application".to_string(),
             "Parent".to_string(),
             "Visible".to_string(),
-            "Depth".to_string()
+            "Depth".to_string(),
+            "BevelBottomDepth".to_string(),
+            "BevelBottomInset".to_string(),
+            "BevelTopDepth".to_string(),
+            "BevelTopInset".to_string(),
+            "ContourWidth".to_string(),
+            "FieldOfView".to_string(),
+            "LightAngle".to_string(),
+            "Perspective".to_string(),
+            "ProjectText".to_string(),
+            "RotationX".to_string(),
+            "RotationY".to_string(),
+            "RotationZ".to_string(),
+            "Z".to_string()
         ]
     );
     assert_eq!(glow_format_coverage.member_count, 6);
