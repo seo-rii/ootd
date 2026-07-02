@@ -2850,6 +2850,14 @@ impl ExcelRuntime {
                     "VerticalAnchor" if matches!(kind, ChartFormatChildKind::TextFrame2) => {
                         Ok(OmValue::Number(f64::from(MSO_ANCHOR_TOP)))
                     }
+                    "Blur" | "OffsetX" | "OffsetY" | "Size"
+                        if matches!(kind, ChartFormatChildKind::Shadow) =>
+                    {
+                        Ok(OmValue::Number(0.0))
+                    }
+                    "Obscured" if matches!(kind, ChartFormatChildKind::Shadow) => {
+                        Ok(OmValue::Number(f64::from(MSO_FALSE)))
+                    }
                     "Radius"
                         if matches!(
                             kind,
@@ -18344,7 +18352,16 @@ impl ExcelRuntime {
                     )
                     | (
                         "ShadowFormat",
-                        "Creator" | "Application" | "Parent" | "Visible" | "Transparency"
+                        "Creator"
+                            | "Application"
+                            | "Parent"
+                            | "Blur"
+                            | "Obscured"
+                            | "OffsetX"
+                            | "OffsetY"
+                            | "Size"
+                            | "Visible"
+                            | "Transparency"
                     )
                     | (
                         "SoftEdgeFormat",
@@ -68883,6 +68900,25 @@ mod tests {
             }
             if matches!(surface_name, "FillFormat" | "LineFormat") {
                 for member_name in ["Visible", "Transparency"] {
+                    let member = surface
+                        .members
+                        .iter()
+                        .find(|member| member.name == member_name)
+                        .unwrap_or_else(|| panic!("{surface_name}.{member_name} focus member"));
+                    assert!(matches!(member.support, office_idl::SupportState::Stub));
+                    assert!(matches!(member.access, office_idl::AccessMode::Read));
+                }
+            }
+            if surface_name == "ShadowFormat" {
+                for member_name in [
+                    "Blur",
+                    "Obscured",
+                    "OffsetX",
+                    "OffsetY",
+                    "Size",
+                    "Transparency",
+                    "Visible",
+                ] {
                     let member = surface
                         .members
                         .iter()
@@ -129736,6 +129772,45 @@ mod tests {
                         OmErrorCode::InvalidArgument
                     );
                 }
+                if child_surface == "ShadowFormat" {
+                    for member_name in ["Blur", "OffsetX", "OffsetY", "Size", "Transparency"] {
+                        assert_eq!(
+                            runtime
+                                .dispatch_get(format_child, member_name, &[])
+                                .unwrap_or_else(|error| {
+                                    panic!("{child_surface}.{member_name} failed: {error:?}")
+                                }),
+                            OmValue::Number(0.0)
+                        );
+                        assert_eq!(
+                            runtime
+                                .dispatch_get(format_child, member_name, &[OmValue::Missing])
+                                .expect_err("ShadowFormat numeric getter rejects arguments")
+                                .code,
+                            OmErrorCode::InvalidArgument
+                        );
+                    }
+                    for (member_name, expected) in [
+                        ("Obscured", super::MSO_FALSE),
+                        ("Visible", super::MSO_FALSE),
+                    ] {
+                        assert_eq!(
+                            runtime
+                                .dispatch_get(format_child, member_name, &[])
+                                .unwrap_or_else(|error| {
+                                    panic!("{child_surface}.{member_name} failed: {error:?}")
+                                }),
+                            OmValue::Number(f64::from(expected))
+                        );
+                        assert_eq!(
+                            runtime
+                                .dispatch_get(format_child, member_name, &[OmValue::Missing])
+                                .expect_err("ShadowFormat tri-state getter rejects arguments")
+                                .code,
+                            OmErrorCode::InvalidArgument
+                        );
+                    }
+                }
                 if child_surface == "TextFrame2" {
                     assert_eq!(
                         runtime
@@ -129836,38 +129911,6 @@ mod tests {
                         runtime
                             .dispatch_get(format_child, "Radius", &[OmValue::Missing])
                             .expect_err("format child Radius rejects arguments")
-                            .code,
-                        OmErrorCode::InvalidArgument
-                    );
-                }
-                if child_surface == "ShadowFormat" {
-                    assert_eq!(
-                        runtime
-                            .dispatch_get(format_child, "Visible", &[])
-                            .unwrap_or_else(|error| {
-                                panic!("{child_surface}.Visible failed: {error:?}")
-                            }),
-                        OmValue::Number(f64::from(super::MSO_FALSE))
-                    );
-                    assert_eq!(
-                        runtime
-                            .dispatch_get(format_child, "Visible", &[OmValue::Missing])
-                            .expect_err("ShadowFormat.Visible rejects arguments")
-                            .code,
-                        OmErrorCode::InvalidArgument
-                    );
-                    assert_eq!(
-                        runtime
-                            .dispatch_get(format_child, "Transparency", &[])
-                            .unwrap_or_else(|error| {
-                                panic!("{child_surface}.Transparency failed: {error:?}")
-                            }),
-                        OmValue::Number(0.0)
-                    );
-                    assert_eq!(
-                        runtime
-                            .dispatch_get(format_child, "Transparency", &[OmValue::Missing])
-                            .expect_err("ShadowFormat.Transparency rejects arguments")
                             .code,
                         OmErrorCode::InvalidArgument
                     );
