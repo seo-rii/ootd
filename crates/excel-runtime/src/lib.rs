@@ -71858,6 +71858,53 @@ mod tests {
     }
 
     #[test]
+    fn parser_backed_formula_functions_are_pinned_as_worksheet_functions() {
+        let source = include_str!("lib.rs");
+        let parser_start = source
+            .find("fn formula_array_projection_function_name")
+            .expect("formula function helper start");
+        let parser_end = source
+            .find("fn parse_formula_reference_text")
+            .expect("formula reference parser boundary");
+        let parser_source = &source[parser_start..parser_end];
+        let marker = "name.eq_ignore_ascii_case(\"";
+        let mut parser_names = std::collections::BTreeSet::new();
+        let mut offset = 0_usize;
+        while let Some(relative_start) = parser_source[offset..].find(marker) {
+            let name_start = offset + relative_start + marker.len();
+            let Some(relative_end) = parser_source[name_start..].find('"') else {
+                break;
+            };
+            let name = &parser_source[name_start..name_start + relative_end];
+            if !matches!(name, "TRUE" | "FALSE") {
+                parser_names.insert(name.to_string());
+            }
+            offset = name_start + relative_end + 1;
+        }
+
+        let document = office_idl::OfficeIdlDocument::from_json_str(super::PINNED_OM_TEMPLATE_JSON)
+            .expect("pinned OM template");
+        let worksheet_function = document
+            .interfaces
+            .iter()
+            .find(|interface| interface.name == "WorksheetFunction")
+            .expect("WorksheetFunction interface");
+        let pinned_names = worksheet_function
+            .members
+            .iter()
+            .map(|member| member.name.replace('_', ".").to_ascii_uppercase())
+            .collect::<std::collections::BTreeSet<_>>();
+        let missing = parser_names
+            .difference(&pinned_names)
+            .cloned()
+            .collect::<Vec<_>>();
+        assert!(
+            missing.is_empty(),
+            "parser-backed formula functions missing from WorksheetFunction: {missing:?}"
+        );
+    }
+
+    #[test]
     fn opens_and_saves_detected_format() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
