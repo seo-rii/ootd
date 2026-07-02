@@ -197,6 +197,9 @@ pub struct FontSummary {
     pub child_names: Vec<String>,
     pub child_attr_maps: Vec<BTreeMap<String, String>>,
     pub child_texts: Vec<Option<String>>,
+    pub nested_child_names: Vec<Vec<String>>,
+    pub nested_child_attr_maps: Vec<Vec<BTreeMap<String, String>>>,
+    pub nested_child_texts: Vec<Vec<Option<String>>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -5200,6 +5203,9 @@ fn parse_stylesheet_summary(styles_xml: &[u8]) -> OmResult<StylesheetSummary> {
                             child_names: Vec::new(),
                             child_attr_maps: Vec::new(),
                             child_texts: Vec::new(),
+                            nested_child_names: Vec::new(),
+                            nested_child_attr_maps: Vec::new(),
+                            nested_child_texts: Vec::new(),
                         });
                         section_depth += 1;
                     }
@@ -5841,6 +5847,50 @@ fn parse_stylesheet_summary(styles_xml: &[u8]) -> OmResult<StylesheetSummary> {
                             .child_attr_maps
                             .push(parse_child_attrs(&element, reader.decoder())?);
                         current_font.child_texts.push(None);
+                        current_font.nested_child_names.push(Vec::new());
+                        current_font.nested_child_attr_maps.push(Vec::new());
+                        current_font.nested_child_texts.push(Vec::new());
+                        section_depth += 1;
+                    }
+                    _ if current_section == Some(StylesheetSection::Fonts)
+                        && section_depth == 3 =>
+                    {
+                        let current_font = fonts.last_mut().ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "styles.xml encountered nested font child outside tracked font child",
+                            )
+                        })?;
+                        current_font
+                            .nested_child_names
+                            .last_mut()
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered nested font child before direct font child",
+                                )
+                            })?
+                            .push(local_name.clone());
+                        current_font
+                            .nested_child_attr_maps
+                            .last_mut()
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered nested font child before direct font child",
+                                )
+                            })?
+                            .push(parse_child_attrs(&element, reader.decoder())?);
+                        current_font
+                            .nested_child_texts
+                            .last_mut()
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered nested font child before direct font child",
+                                )
+                            })?
+                            .push(None);
                         section_depth += 1;
                     }
                     _ if current_section == Some(StylesheetSection::Fills)
@@ -6567,6 +6617,9 @@ fn parse_stylesheet_summary(styles_xml: &[u8]) -> OmResult<StylesheetSummary> {
                             child_names: Vec::new(),
                             child_attr_maps: Vec::new(),
                             child_texts: Vec::new(),
+                            nested_child_names: Vec::new(),
+                            nested_child_attr_maps: Vec::new(),
+                            nested_child_texts: Vec::new(),
                         });
                     }
                     b"fill"
@@ -7195,6 +7248,55 @@ fn parse_stylesheet_summary(styles_xml: &[u8]) -> OmResult<StylesheetSummary> {
                             .child_attr_maps
                             .push(parse_child_attrs(&element, reader.decoder())?);
                         current_font.child_texts.push(None);
+                        current_font.nested_child_names.push(Vec::new());
+                        current_font.nested_child_attr_maps.push(Vec::new());
+                        current_font.nested_child_texts.push(Vec::new());
+                    }
+                    _ if current_section == Some(StylesheetSection::Fonts)
+                        && section_depth == 3 =>
+                    {
+                        let current_font = fonts.last_mut().ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "styles.xml encountered nested font child outside tracked font child",
+                            )
+                        })?;
+                        current_font
+                            .nested_child_names
+                            .last_mut()
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered nested font child before direct font child",
+                                )
+                            })?
+                            .push(
+                                String::from_utf8_lossy(element.name().as_ref())
+                                    .rsplit(':')
+                                    .next()
+                                    .unwrap_or_default()
+                                    .to_string(),
+                            );
+                        current_font
+                            .nested_child_attr_maps
+                            .last_mut()
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered nested font child before direct font child",
+                                )
+                            })?
+                            .push(parse_child_attrs(&element, reader.decoder())?);
+                        current_font
+                            .nested_child_texts
+                            .last_mut()
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered nested font child before direct font child",
+                                )
+                            })?
+                            .push(None);
                     }
                     _ if current_section == Some(StylesheetSection::Fills)
                         && section_depth == 2 =>
@@ -7531,6 +7633,24 @@ fn parse_stylesheet_summary(styles_xml: &[u8]) -> OmResult<StylesheetSummary> {
                                 OmError::new(
                                     OmErrorCode::InvalidState,
                                     "styles.xml encountered font child text before font child",
+                                )
+                            })?,
+                        &content,
+                    );
+                } else if element_stack.len() == 5
+                    && element_stack.first().map(String::as_str) == Some("styleSheet")
+                    && element_stack.get(1).map(String::as_str) == Some("fonts")
+                    && element_stack.get(2).map(String::as_str) == Some("font")
+                {
+                    append_summary_text(
+                        fonts
+                            .last_mut()
+                            .and_then(|font| font.nested_child_texts.last_mut())
+                            .and_then(|children| children.last_mut())
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered nested font child text before nested font child",
                                 )
                             })?,
                         &content,
@@ -7999,6 +8119,24 @@ fn parse_stylesheet_summary(styles_xml: &[u8]) -> OmResult<StylesheetSummary> {
                                 OmError::new(
                                     OmErrorCode::InvalidState,
                                     "styles.xml encountered font child text before font child",
+                                )
+                            })?,
+                        &content,
+                    );
+                } else if element_stack.len() == 5
+                    && element_stack.first().map(String::as_str) == Some("styleSheet")
+                    && element_stack.get(1).map(String::as_str) == Some("fonts")
+                    && element_stack.get(2).map(String::as_str) == Some("font")
+                {
+                    append_summary_text(
+                        fonts
+                            .last_mut()
+                            .and_then(|font| font.nested_child_texts.last_mut())
+                            .and_then(|children| children.last_mut())
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered nested font child text before nested font child",
                                 )
                             })?,
                         &content,
@@ -49715,6 +49853,9 @@ mod tests {
                     BTreeMap::from([("val".to_string(), "Calibri".to_string())]),
                 ],
                 child_texts: vec![None, None],
+                nested_child_names: vec![Vec::new(), Vec::new()],
+                nested_child_attr_maps: vec![Vec::new(), Vec::new()],
+                nested_child_texts: vec![Vec::new(), Vec::new()],
             }]
         );
     }
@@ -49743,6 +49884,9 @@ mod tests {
                     BTreeMap::from([("val".to_string(), "Calibri".to_string())]),
                 ],
                 child_texts: vec![None, Some("alphabeta".to_string())],
+                nested_child_names: vec![Vec::new(), Vec::new()],
+                nested_child_attr_maps: vec![Vec::new(), Vec::new()],
+                nested_child_texts: vec![Vec::new(), Vec::new()],
             }]
         );
     }
@@ -49785,6 +49929,9 @@ mod tests {
                     BTreeMap::new(),
                 ],
                 child_texts: vec![None, None],
+                nested_child_names: vec![Vec::new(), Vec::new()],
+                nested_child_attr_maps: vec![Vec::new(), Vec::new()],
+                nested_child_texts: vec![Vec::new(), Vec::new()],
             }]
         );
     }
@@ -49873,6 +50020,9 @@ mod tests {
                     BTreeMap::from([("val".to_string(), "2".to_string())]),
                 ],
                 child_texts: vec![None, None, None],
+                nested_child_names: vec![Vec::new(), Vec::new(), Vec::new()],
+                nested_child_attr_maps: vec![Vec::new(), Vec::new(), Vec::new()],
+                nested_child_texts: vec![Vec::new(), Vec::new(), Vec::new()],
             }]
         );
     }
@@ -49919,6 +50069,49 @@ mod tests {
                     BTreeMap::from([("val".to_string(), "Calibri".to_string())]),
                 ],
                 child_texts: vec![None, None, None],
+                nested_child_names: vec![Vec::new(), Vec::new(), Vec::new()],
+                nested_child_attr_maps: vec![Vec::new(), Vec::new(), Vec::new()],
+                nested_child_texts: vec![Vec::new(), Vec::new(), Vec::new()],
+            }]
+        );
+    }
+
+    #[test]
+    fn load_collects_font_nested_child_summary_in_styles_summary() {
+        let codec = XlsxCodec;
+        let loaded = codec
+            .load(
+                &workbook_with_font_nested_color_bytes(),
+                CommonLoadOptions::default(),
+            )
+            .expect("load workbook");
+        let styles_summary = loaded
+            .support_parts
+            .styles_summary
+            .as_ref()
+            .expect("typed styles summary");
+
+        assert_eq!(
+            styles_summary.fonts,
+            vec![FontSummary {
+                child_names: vec!["sz".to_string(), "color".to_string(), "name".to_string()],
+                child_attr_maps: vec![
+                    BTreeMap::from([("val".to_string(), "11".to_string())]),
+                    BTreeMap::from([("rgb".to_string(), "FFFF0000".to_string())]),
+                    BTreeMap::from([("val".to_string(), "Calibri".to_string())]),
+                ],
+                child_texts: vec![None, None, None],
+                nested_child_names: vec![Vec::new(), vec!["tint".to_string()], Vec::new(),],
+                nested_child_attr_maps: vec![
+                    Vec::new(),
+                    vec![BTreeMap::from([("val".to_string(), "-0.25".to_string())])],
+                    Vec::new(),
+                ],
+                nested_child_texts: vec![
+                    Vec::new(),
+                    vec![Some("alphabeta".to_string())],
+                    Vec::new(),
+                ],
             }]
         );
     }
@@ -66765,6 +66958,13 @@ mod tests {
     fn dirty_save_preserves_font_child_texts_in_styles_xml() {
         assert_dirty_save_preserves_styles_xml_for_mutated_input(
             workbook_with_font_child_text_bytes(),
+        );
+    }
+
+    #[test]
+    fn dirty_save_preserves_font_nested_child_summary_in_styles_xml() {
+        assert_dirty_save_preserves_styles_xml_for_mutated_input(
+            workbook_with_font_nested_color_bytes(),
         );
     }
 
@@ -84433,6 +84633,82 @@ mod tests {
         let error = codec
             .save(&loaded, office_common::SaveOptions::default())
             .expect_err("save should fail when font child cdata text drifts");
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("typed styles summary drifted"));
+        assert!(error.message.contains("xl/styles.xml"));
+    }
+
+    #[test]
+    fn save_rejects_stylesheet_when_font_nested_child_attr_drifts() {
+        let codec = XlsxCodec;
+        let input = workbook_with_font_nested_color_bytes();
+        let mut loaded = codec
+            .load(&input, CommonLoadOptions::default())
+            .expect("load workbook");
+        let sheet_id = loaded.state.worksheets[0].id;
+        let styles_xml = String::from_utf8(
+            loaded
+                .package
+                .part("xl/styles.xml")
+                .expect("styles part")
+                .bytes
+                .clone(),
+        )
+        .expect("styles xml utf8")
+        .replace(r#"tint val="-0.25""#, r#"tint val="-0.5""#);
+        loaded
+            .package
+            .replace_part_bytes("xl/styles.xml", styles_xml.into_bytes())
+            .expect("replace styles part");
+        loaded
+            .state
+            .set_range_values(
+                &office_common::RangeRef::single_cell(WorkbookId(0), sheet_id, 1, 1),
+                &office_common::OmArray::scalar(office_common::OmValue::Number(9.0)),
+            )
+            .expect("set value");
+
+        let error = codec
+            .save(&loaded, office_common::SaveOptions::default())
+            .expect_err("save should fail when font nested child attrs drift");
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("typed styles summary drifted"));
+        assert!(error.message.contains("xl/styles.xml"));
+    }
+
+    #[test]
+    fn save_rejects_stylesheet_when_font_nested_child_text_drifts() {
+        let codec = XlsxCodec;
+        let input = workbook_with_font_nested_color_bytes();
+        let mut loaded = codec
+            .load(&input, CommonLoadOptions::default())
+            .expect("load workbook");
+        let sheet_id = loaded.state.worksheets[0].id;
+        let styles_xml = String::from_utf8(
+            loaded
+                .package
+                .part("xl/styles.xml")
+                .expect("styles part")
+                .bytes
+                .clone(),
+        )
+        .expect("styles xml utf8")
+        .replace("alpha<![CDATA[beta]]>", "changed<![CDATA[beta]]>");
+        loaded
+            .package
+            .replace_part_bytes("xl/styles.xml", styles_xml.into_bytes())
+            .expect("replace styles part");
+        loaded
+            .state
+            .set_range_values(
+                &office_common::RangeRef::single_cell(WorkbookId(0), sheet_id, 1, 1),
+                &office_common::OmArray::scalar(office_common::OmValue::Number(9.0)),
+            )
+            .expect("set value");
+
+        let error = codec
+            .save(&loaded, office_common::SaveOptions::default())
+            .expect_err("save should fail when font nested child text drifts");
         assert_eq!(error.code, OmErrorCode::InvalidState);
         assert!(error.message.contains("typed styles summary drifted"));
         assert!(error.message.contains("xl/styles.xml"));
@@ -117978,6 +118254,27 @@ mod tests {
         .replace(
             r#"<font><sz val="11"/><name val="Calibri"/></font>"#,
             r#"<font><sz val="11"/><name val="Calibri">alpha<![CDATA[beta]]></name></font>"#,
+        );
+        package
+            .replace_part_bytes("xl/styles.xml", styles_xml.into_bytes())
+            .expect("replace styles part");
+        package.to_bytes().expect("package bytes")
+    }
+
+    fn workbook_with_font_nested_color_bytes() -> Vec<u8> {
+        let mut package = OpcPackage::from_bytes(&workbook_with_styles_and_theme_bytes())
+            .expect("base workbook package");
+        let styles_xml = String::from_utf8(
+            package
+                .part("xl/styles.xml")
+                .expect("styles part")
+                .bytes
+                .clone(),
+        )
+        .expect("styles xml utf8")
+        .replace(
+            r#"<font><sz val="11"/><name val="Calibri"/></font>"#,
+            r#"<font><sz val="11"/><color rgb="FFFF0000"><tint val="-0.25">alpha<![CDATA[beta]]></tint></color><name val="Calibri"/></font>"#,
         );
         package
             .replace_part_bytes("xl/styles.xml", styles_xml.into_bytes())
