@@ -148,8 +148,8 @@ fn loads_office_idl_excel_om_template_and_summarizes_surface() {
     assert_eq!(summary.enum_count, 8);
     assert_eq!(summary.interface_count, 55);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 909);
-    assert_eq!(summary.stub_member_count, 909);
+    assert_eq!(summary.member_count, 913);
+    assert_eq!(summary.stub_member_count, 913);
     assert_eq!(
         document.interfaces[0].members[0]
             .metadata
@@ -1894,8 +1894,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
     assert_eq!(chart.member_count, 80);
     assert_eq!(chart_area.member_count, 16);
     assert_eq!(plot_area.member_count, 19);
-    assert_eq!(chart_title.member_count, 15);
-    assert_eq!(legend.member_count, 15);
+    assert_eq!(chart_title.member_count, 16);
+    assert_eq!(legend.member_count, 16);
     assert_eq!(legend_entries.member_count, 5);
     assert_eq!(legend_entry.member_count, 11);
     assert_eq!(legend_key.member_count, 8);
@@ -1924,8 +1924,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
     assert_eq!(axis.member_count, 45);
     assert_eq!(tick_labels.member_count, 16);
     assert_eq!(gridlines.member_count, 8);
-    assert_eq!(display_unit_label.member_count, 15);
-    assert_eq!(axis_title.member_count, 15);
+    assert_eq!(display_unit_label.member_count, 16);
+    assert_eq!(axis_title.member_count, 16);
     assert_eq!(series_collection.member_count, 7);
     assert_eq!(series.member_count, 28);
     assert_eq!(leader_lines.member_count, 7);
@@ -3016,8 +3016,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(coverage.library, "Excel");
     assert_eq!(coverage.version, "16.0");
-    assert_eq!(coverage.member_count, 909);
-    assert_eq!(coverage.support_counts.stub, 909);
+    assert_eq!(coverage.member_count, 913);
+    assert_eq!(coverage.support_counts.stub, 913);
     assert!(coverage.missing_focus_surfaces.is_empty());
 
     let application_coverage = coverage
@@ -3821,13 +3821,14 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         ]
     );
 
-    assert_eq!(chart_title_coverage.member_count, 15);
-    assert_eq!(chart_title_coverage.support_counts.stub, 15);
+    assert_eq!(chart_title_coverage.member_count, 16);
+    assert_eq!(chart_title_coverage.support_counts.stub, 16);
     assert_eq!(
         chart_title_coverage.stub_members,
         vec![
             "Name".to_string(),
             "Format".to_string(),
+            "Border".to_string(),
             "Text".to_string(),
             "Caption".to_string(),
             "Left".to_string(),
@@ -3844,13 +3845,14 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         ]
     );
 
-    assert_eq!(legend_coverage.member_count, 15);
-    assert_eq!(legend_coverage.support_counts.stub, 15);
+    assert_eq!(legend_coverage.member_count, 16);
+    assert_eq!(legend_coverage.support_counts.stub, 16);
     assert_eq!(
         legend_coverage.stub_members,
         vec![
             "Name".to_string(),
             "Format".to_string(),
+            "Border".to_string(),
             "Position".to_string(),
             "IncludeInLayout".to_string(),
             "Left".to_string(),
@@ -4345,13 +4347,14 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
     );
 
     for coverage_entry in [display_unit_label_coverage, axis_title_coverage] {
-        assert_eq!(coverage_entry.member_count, 15);
-        assert_eq!(coverage_entry.support_counts.stub, 15);
+        assert_eq!(coverage_entry.member_count, 16);
+        assert_eq!(coverage_entry.support_counts.stub, 16);
         assert_eq!(
             coverage_entry.stub_members,
             vec![
                 "Name".to_string(),
                 "Format".to_string(),
+                "Border".to_string(),
                 "Text".to_string(),
                 "Caption".to_string(),
                 "Left".to_string(),

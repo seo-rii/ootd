@@ -831,7 +831,25 @@ enum BorderParent {
         chart_id: ChartId,
         chart_object_parent: Option<ChartObjectsParent>,
     },
+    ChartTitle {
+        chart_id: ChartId,
+        chart_object_parent: Option<ChartObjectsParent>,
+    },
+    Legend {
+        chart_id: ChartId,
+        chart_object_parent: Option<ChartObjectsParent>,
+    },
     Axis {
+        chart_id: ChartId,
+        axis_index: usize,
+        chart_object_parent: Option<ChartObjectsParent>,
+    },
+    AxisTitle {
+        chart_id: ChartId,
+        axis_index: usize,
+        chart_object_parent: Option<ChartObjectsParent>,
+    },
+    DisplayUnitLabel {
         chart_id: ChartId,
         axis_index: usize,
         chart_object_parent: Option<ChartObjectsParent>,
@@ -18683,6 +18701,7 @@ impl ExcelRuntime {
                         "ChartTitle",
                         "Name"
                             | "Format"
+                            | "Border"
                             | "Text"
                             | "Caption"
                             | "Left"
@@ -18701,6 +18720,7 @@ impl ExcelRuntime {
                         "Legend",
                         "Name"
                             | "Format"
+                            | "Border"
                             | "LegendEntries"
                             | "Position"
                             | "IncludeInLayout"
@@ -19078,6 +19098,7 @@ impl ExcelRuntime {
                         "DisplayUnitLabel",
                         "Name"
                             | "Format"
+                            | "Border"
                             | "Text"
                             | "Caption"
                             | "Left"
@@ -19096,6 +19117,7 @@ impl ExcelRuntime {
                         "AxisTitle",
                         "Name"
                             | "Format"
+                            | "Border"
                             | "Text"
                             | "Caption"
                             | "Left"
@@ -24441,6 +24463,40 @@ impl ExcelRuntime {
                     chart_object_parent,
                 })
             }
+            BorderParent::ChartTitle {
+                chart_id,
+                chart_object_parent,
+            } => {
+                if self.chart_model(workbook, chart_id)?.title.is_none() {
+                    return Err(OmError::new(OmErrorCode::NotFound, "chart title not found"));
+                }
+                Ok(RuntimeObjectKind::ChartTitle {
+                    workbook,
+                    chart_id,
+                    chart_object_parent,
+                })
+            }
+            BorderParent::Legend {
+                chart_id,
+                chart_object_parent,
+            } => {
+                if !self
+                    .chart_model(workbook, chart_id)?
+                    .legend
+                    .as_ref()
+                    .is_some_and(|legend| legend.visible)
+                {
+                    return Err(OmError::new(
+                        OmErrorCode::NotFound,
+                        "chart legend not found",
+                    ));
+                }
+                Ok(RuntimeObjectKind::Legend {
+                    workbook,
+                    chart_id,
+                    chart_object_parent,
+                })
+            }
             BorderParent::Axis {
                 chart_id,
                 axis_index,
@@ -24448,6 +24504,49 @@ impl ExcelRuntime {
             } => {
                 self.axis_model(workbook, chart_id, axis_index)?;
                 Ok(RuntimeObjectKind::Axis {
+                    workbook,
+                    chart_id,
+                    axis_index,
+                    chart_object_parent,
+                })
+            }
+            BorderParent::AxisTitle {
+                chart_id,
+                axis_index,
+                chart_object_parent,
+            } => {
+                if self
+                    .axis_model(workbook, chart_id, axis_index)?
+                    .title
+                    .is_none()
+                {
+                    return Err(OmError::new(OmErrorCode::NotFound, "axis title not found"));
+                }
+                Ok(RuntimeObjectKind::AxisTitle {
+                    workbook,
+                    chart_id,
+                    axis_index,
+                    chart_object_parent,
+                })
+            }
+            BorderParent::DisplayUnitLabel {
+                chart_id,
+                axis_index,
+                chart_object_parent,
+            } => {
+                let axis = self.axis_model(workbook, chart_id, axis_index)?;
+                if axis.kind != ChartAxisKind::Value {
+                    return Err(OmError::unsupported(
+                        "DisplayUnitLabel applies only to value axes",
+                    ));
+                }
+                if axis.display_unit.is_none() || axis.has_display_unit_label != Some(true) {
+                    return Err(OmError::new(
+                        OmErrorCode::NotFound,
+                        "display unit label not found",
+                    ));
+                }
+                Ok(RuntimeObjectKind::DisplayUnitLabel {
                     workbook,
                     chart_id,
                     axis_index,
@@ -24569,6 +24668,15 @@ impl ExcelRuntime {
                 RuntimeObjectKind::ChartFormat {
                     workbook,
                     parent: ChartFormatParent::Legend {
+                        chart_id,
+                        chart_object_parent,
+                    },
+                },
+            ))),
+            "Border" => Ok(OmValue::Object(self.register_object(
+                RuntimeObjectKind::Border {
+                    workbook,
+                    parent: BorderParent::Legend {
                         chart_id,
                         chart_object_parent,
                     },
@@ -26284,6 +26392,16 @@ impl ExcelRuntime {
                     },
                 },
             ))),
+            "Border" => Ok(OmValue::Object(self.register_object(
+                RuntimeObjectKind::Border {
+                    workbook,
+                    parent: BorderParent::AxisTitle {
+                        chart_id,
+                        axis_index,
+                        chart_object_parent,
+                    },
+                },
+            ))),
             "Text" | "Caption" => Ok(OmValue::Text(title.text.clone())),
             "Left" | "Top" | "Width" | "Height" => Ok(OmValue::Number(0.0)),
             "Orientation" => Ok(OmValue::Number(f64::from(XL_ORIENTATION_HORIZONTAL))),
@@ -26341,6 +26459,16 @@ impl ExcelRuntime {
                 RuntimeObjectKind::ChartFormat {
                     workbook,
                     parent: ChartFormatParent::DisplayUnitLabel {
+                        chart_id,
+                        axis_index,
+                        chart_object_parent,
+                    },
+                },
+            ))),
+            "Border" => Ok(OmValue::Object(self.register_object(
+                RuntimeObjectKind::Border {
+                    workbook,
+                    parent: BorderParent::DisplayUnitLabel {
                         chart_id,
                         axis_index,
                         chart_object_parent,
@@ -26465,6 +26593,15 @@ impl ExcelRuntime {
                 RuntimeObjectKind::ChartFormat {
                     workbook,
                     parent: ChartFormatParent::ChartTitle {
+                        chart_id,
+                        chart_object_parent,
+                    },
+                },
+            ))),
+            "Border" => Ok(OmValue::Object(self.register_object(
+                RuntimeObjectKind::Border {
+                    workbook,
+                    parent: BorderParent::ChartTitle {
                         chart_id,
                         chart_object_parent,
                     },
@@ -34672,6 +34809,14 @@ impl ExcelRuntime {
                             chart_id: object_chart_id,
                             ..
                         }
+                        | BorderParent::AxisTitle {
+                            chart_id: object_chart_id,
+                            ..
+                        }
+                        | BorderParent::DisplayUnitLabel {
+                            chart_id: object_chart_id,
+                            ..
+                        }
                         | BorderParent::Gridlines {
                             chart_id: object_chart_id,
                             ..
@@ -35027,6 +35172,14 @@ impl ExcelRuntime {
                             chart_id: object_chart_id,
                             ..
                         }
+                        | BorderParent::ChartTitle {
+                            chart_id: object_chart_id,
+                            ..
+                        }
+                        | BorderParent::Legend {
+                            chart_id: object_chart_id,
+                            ..
+                        }
                         | BorderParent::DataTable {
                             chart_id: object_chart_id,
                             ..
@@ -35036,6 +35189,14 @@ impl ExcelRuntime {
                             ..
                         }
                         | BorderParent::Axis {
+                            chart_id: object_chart_id,
+                            ..
+                        }
+                        | BorderParent::AxisTitle {
+                            chart_id: object_chart_id,
+                            ..
+                        }
+                        | BorderParent::DisplayUnitLabel {
                             chart_id: object_chart_id,
                             ..
                         }
@@ -35188,6 +35349,20 @@ impl ExcelRuntime {
                 {
                     Some(object_id)
                 }
+                RuntimeObjectKind::Border {
+                    workbook: object_workbook,
+                    parent:
+                        BorderParent::AxisTitle {
+                            chart_id: object_chart_id,
+                            axis_index: object_axis_index,
+                            ..
+                        },
+                } if *object_workbook == workbook
+                    && *object_chart_id == chart_id
+                    && *object_axis_index == axis_index =>
+                {
+                    Some(object_id)
+                }
                 _ => None,
             })
             .collect::<Vec<_>>();
@@ -35240,6 +35415,20 @@ impl ExcelRuntime {
                             ..
                         },
                     ..
+                } if *object_workbook == workbook
+                    && *object_chart_id == chart_id
+                    && *object_axis_index == axis_index =>
+                {
+                    Some(object_id)
+                }
+                RuntimeObjectKind::Border {
+                    workbook: object_workbook,
+                    parent:
+                        BorderParent::DisplayUnitLabel {
+                            chart_id: object_chart_id,
+                            axis_index: object_axis_index,
+                            ..
+                        },
                 } if *object_workbook == workbook
                     && *object_chart_id == chart_id
                     && *object_axis_index == axis_index =>
@@ -35534,6 +35723,16 @@ impl ExcelRuntime {
                 } if *object_workbook == workbook && *object_chart_id == chart_id => {
                     Some(object_id)
                 }
+                RuntimeObjectKind::Border {
+                    workbook: object_workbook,
+                    parent:
+                        BorderParent::ChartTitle {
+                            chart_id: object_chart_id,
+                            ..
+                        },
+                } if *object_workbook == workbook && *object_chart_id == chart_id => {
+                    Some(object_id)
+                }
                 _ => None,
             })
             .collect::<Vec<_>>();
@@ -35642,6 +35841,16 @@ impl ExcelRuntime {
                             ..
                         },
                     ..
+                } if *object_workbook == workbook && *object_chart_id == chart_id => {
+                    Some(object_id)
+                }
+                RuntimeObjectKind::Border {
+                    workbook: object_workbook,
+                    parent:
+                        BorderParent::Legend {
+                            chart_id: object_chart_id,
+                            ..
+                        },
                 } if *object_workbook == workbook && *object_chart_id == chart_id => {
                     Some(object_id)
                 }
@@ -69852,6 +70061,7 @@ mod tests {
                 &[
                     "Name",
                     "Format",
+                    "Border",
                     "Orientation",
                     "ReadingOrder",
                     "Creator",
@@ -69862,7 +70072,14 @@ mod tests {
             ),
             (
                 "Legend",
-                &["Name", "Format", "Creator", "Application", "Parent"][..],
+                &[
+                    "Name",
+                    "Format",
+                    "Border",
+                    "Creator",
+                    "Application",
+                    "Parent",
+                ][..],
                 &["Select", "LegendEntries", "Clear", "Delete"][..],
             ),
             (
@@ -69910,6 +70127,7 @@ mod tests {
                 &[
                     "Name",
                     "Format",
+                    "Border",
                     "Orientation",
                     "ReadingOrder",
                     "Creator",
@@ -69923,6 +70141,7 @@ mod tests {
                 &[
                     "Name",
                     "Format",
+                    "Border",
                     "Orientation",
                     "ReadingOrder",
                     "Creator",
@@ -70413,6 +70632,7 @@ mod tests {
             for member_name in [
                 "Name",
                 "Format",
+                "Border",
                 "Left",
                 "Top",
                 "Width",
@@ -131718,6 +131938,51 @@ mod tests {
             }
         }
 
+        for (handle, surface, parent_name) in [
+            (chart_title, "ChartTitle", "Chart Title"),
+            (legend, "Legend", "Legend"),
+            (axis_title, "AxisTitle", "Axis Title"),
+            (display_unit_label, "DisplayUnitLabel", "Display Unit Label"),
+        ] {
+            let border = expect_object_handle(
+                runtime
+                    .dispatch_get(handle, "Border", &[])
+                    .unwrap_or_else(|error| panic!("{surface}.Border failed: {error:?}")),
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(handle, "Border", &[OmValue::Missing])
+                    .expect_err("Border getter rejects arguments")
+                    .code,
+                OmErrorCode::InvalidArgument
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(border, "LineStyle", &[])
+                    .unwrap_or_else(|error| panic!("{surface}.Border.LineStyle failed: {error:?}")),
+                OmValue::Number(f64::from(super::XL_CONTINUOUS))
+            );
+            let border_parent = expect_object_handle(
+                runtime
+                    .dispatch_get(border, "Parent", &[])
+                    .unwrap_or_else(|error| panic!("{surface}.Border.Parent failed: {error:?}")),
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(border_parent, "Name", &[])
+                    .unwrap_or_else(|error| {
+                        panic!("{surface}.Border.Parent.Name failed: {error:?}")
+                    }),
+                OmValue::Text(parent_name.to_string())
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(workbook.0, "Saved", &[])
+                    .expect("Workbook.Saved after Border getter"),
+                OmValue::Bool(true)
+            );
+        }
+
         for (handle, member, args) in [
             (chart_object, "Copy", Vec::new()),
             (
@@ -151248,6 +151513,11 @@ mod tests {
                 .dispatch_get(final_display_unit_label, "Format", &[])
                 .expect("final DisplayUnitLabel.Format"),
         );
+        let final_display_unit_label_border = expect_object_handle(
+            final_runtime
+                .dispatch_get(final_display_unit_label, "Border", &[])
+                .expect("final DisplayUnitLabel.Border"),
+        );
         let final_display_unit_label_adjustments = expect_object_handle(
             final_runtime
                 .dispatch_get(final_display_unit_label_format, "Adjustments", &[])
@@ -151326,6 +151596,13 @@ mod tests {
             final_runtime
                 .dispatch_get(final_display_unit_label_format, "Creator", &[])
                 .expect_err("DisplayUnitLabel.Format handle is stale after delete")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            final_runtime
+                .dispatch_get(final_display_unit_label_border, "LineStyle", &[])
+                .expect_err("DisplayUnitLabel.Border handle is stale after delete")
                 .code,
             OmErrorCode::InvalidState
         );
@@ -151446,6 +151723,11 @@ mod tests {
                 .dispatch_get(chart, "ChartTitle", &[])
                 .expect("duplicate Chart.ChartTitle"),
         );
+        let chart_title_border = expect_object_handle(
+            runtime
+                .dispatch_get(chart_title, "Border", &[])
+                .expect("ChartTitle.Border"),
+        );
         let legend = expect_object_handle(
             runtime
                 .dispatch_get(chart, "Legend", &[])
@@ -151455,6 +151737,11 @@ mod tests {
             runtime
                 .dispatch_get(chart, "Legend", &[])
                 .expect("duplicate Chart.Legend"),
+        );
+        let legend_border = expect_object_handle(
+            runtime
+                .dispatch_get(legend, "Border", &[])
+                .expect("Legend.Border"),
         );
         let category_axis = expect_object_handle(
             runtime
@@ -151474,6 +151761,11 @@ mod tests {
             runtime
                 .dispatch_get(category_axis, "AxisTitle", &[])
                 .expect("duplicate Axis.AxisTitle"),
+        );
+        let axis_title_border = expect_object_handle(
+            runtime
+                .dispatch_get(axis_title, "Border", &[])
+                .expect("AxisTitle.Border"),
         );
         let search_range = expect_object_handle(
             runtime
@@ -151521,6 +151813,13 @@ mod tests {
             runtime
                 .dispatch_get(duplicate_axis_title, "Text", &[])
                 .expect_err("duplicate deleted AxisTitle handle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(axis_title_border, "LineStyle", &[])
+                .expect_err("deleted AxisTitle.Border handle should be stale")
                 .code,
             OmErrorCode::InvalidState
         );
@@ -151575,6 +151874,13 @@ mod tests {
         );
         assert_eq!(
             runtime
+                .dispatch_get(chart_title_border, "LineStyle", &[])
+                .expect_err("deleted ChartTitle.Border handle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
                 .dispatch_get(chart, "HasTitle", &[])
                 .expect("Chart.HasTitle after ChartTitle.Delete"),
             OmValue::Bool(false)
@@ -151619,6 +151925,13 @@ mod tests {
             runtime
                 .dispatch_get(duplicate_legend, "Position", &[])
                 .expect_err("duplicate deleted Legend handle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(legend_border, "LineStyle", &[])
+                .expect_err("deleted Legend.Border handle should be stale")
                 .code,
             OmErrorCode::InvalidState
         );
