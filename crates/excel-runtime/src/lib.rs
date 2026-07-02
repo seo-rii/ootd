@@ -87644,6 +87644,106 @@ mod tests {
         assert_eq!(
             expect_number(
                 runtime
+                    .dispatch_invoke(worksheet_function, "Abs", &[OmValue::Number(-8.0)])
+                    .expect("WorksheetFunction.Abs")
+            ),
+            8.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(worksheet_function, "Int", &[OmValue::Number(2.9)])
+                    .expect("WorksheetFunction.Int")
+            ),
+            2.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "Round",
+                        &[OmValue::Number(1.235), OmValue::Number(2.0)],
+                    )
+                    .expect("WorksheetFunction.Round")
+            ),
+            1.24
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "Power",
+                        &[OmValue::Number(2.0), OmValue::Number(3.0)],
+                    )
+                    .expect("WorksheetFunction.Power")
+            ),
+            8.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(worksheet_function, "Sqrt", &[OmValue::Number(81.0)])
+                    .expect("WorksheetFunction.Sqrt")
+            ),
+            9.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "Mod",
+                        &[OmValue::Number(10.0), OmValue::Number(3.0)],
+                    )
+                    .expect("WorksheetFunction.Mod")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(worksheet_function, "Sign", &[OmValue::Number(-9.0)])
+                    .expect("WorksheetFunction.Sign")
+            ),
+            -1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "RoundUp",
+                        &[OmValue::Number(1.21), OmValue::Number(1.0)],
+                    )
+                    .expect("WorksheetFunction.RoundUp")
+            ),
+            1.3
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "RoundDown",
+                        &[OmValue::Number(-1.29), OmValue::Number(1.0)],
+                    )
+                    .expect("WorksheetFunction.RoundDown")
+            ),
+            -1.2
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(worksheet_function, "Even", &[OmValue::Number(1.5)])
+                    .expect("WorksheetFunction.Even")
+            ),
+            2.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
                     .dispatch_invoke(
                         worksheet_function,
                         "SumIf",
