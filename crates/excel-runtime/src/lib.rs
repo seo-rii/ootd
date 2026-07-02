@@ -17158,11 +17158,34 @@ impl ExcelRuntime {
                     ))),
                 }
             }
-            RuntimeObjectKind::ChartFormat { .. } | RuntimeObjectKind::ChartFormatChild { .. } => {
-                Err(OmError::unsupported(format!(
+            RuntimeObjectKind::ChartFormat { .. } => Err(OmError::unsupported(format!(
+                "member {member} is not implemented as a method for this format handle"
+            ))),
+            RuntimeObjectKind::ChartFormatChild {
+                workbook,
+                parent,
+                kind,
+            } => match member {
+                "IncrementBrightness" | "IncrementContrast"
+                    if matches!(kind, ChartFormatChildKind::PictureFormat) =>
+                {
+                    if args.len() != 1 {
+                        return Err(OmError::invalid_argument(format!(
+                            "PictureFormat.{member} requires one increment argument"
+                        )));
+                    }
+                    let OmValue::Number(_increment) = args[0] else {
+                        return Err(OmError::invalid_argument(format!(
+                            "PictureFormat.{member} increment must be numeric"
+                        )));
+                    };
+                    self.chart_format_parent_object_kind(workbook, parent)?;
+                    Ok(OmValue::Empty)
+                }
+                _ => Err(OmError::unsupported(format!(
                     "member {member} is not implemented as a method for this format handle"
-                )))
-            }
+                ))),
+            },
             RuntimeObjectKind::Adjustments { workbook, parent } => {
                 self.dispatch_invoke_adjustments(workbook, parent, member, args)
             }
@@ -18243,6 +18266,8 @@ impl ExcelRuntime {
                             | "Brightness"
                             | "ColorType"
                             | "Contrast"
+                            | "IncrementBrightness"
+                            | "IncrementContrast"
                             | "CropLeft"
                             | "CropTop"
                             | "CropRight"
@@ -68830,6 +68855,8 @@ mod tests {
                     "Brightness",
                     "ColorType",
                     "Contrast",
+                    "IncrementBrightness",
+                    "IncrementContrast",
                     "CropLeft",
                     "CropTop",
                     "CropRight",
@@ -129714,6 +129741,34 @@ mod tests {
                             runtime
                                 .dispatch_get(format_child, member_name, &[OmValue::Missing])
                                 .expect_err("PictureFormat getter rejects arguments")
+                                .code,
+                            OmErrorCode::InvalidArgument
+                        );
+                    }
+                    for member_name in ["IncrementBrightness", "IncrementContrast"] {
+                        assert_eq!(
+                            runtime
+                                .dispatch_invoke(format_child, member_name, &[OmValue::Number(0.1)])
+                                .unwrap_or_else(|error| {
+                                    panic!("{child_surface}.{member_name} failed: {error:?}")
+                                }),
+                            OmValue::Empty
+                        );
+                        assert_eq!(
+                            runtime
+                                .dispatch_invoke(format_child, member_name, &[])
+                                .expect_err("PictureFormat increment method requires an argument")
+                                .code,
+                            OmErrorCode::InvalidArgument
+                        );
+                        assert_eq!(
+                            runtime
+                                .dispatch_invoke(
+                                    format_child,
+                                    member_name,
+                                    &[OmValue::Text("0.1".to_string())],
+                                )
+                                .expect_err("PictureFormat increment method rejects text")
                                 .code,
                             OmErrorCode::InvalidArgument
                         );
