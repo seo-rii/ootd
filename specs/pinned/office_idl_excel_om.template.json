@@ -11901,6 +11901,60 @@
           }
         },
         {
+          "name": "Orientation",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "ChartTitle",
+                  "sourceMember": "Orientation"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "XlOrientation"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "XlOrientation"
+          },
+          "access": "read"
+        },
+        {
+          "name": "ReadingOrder",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "ChartTitle",
+                  "sourceMember": "ReadingOrder"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "XlReadingOrder"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "XlReadingOrder"
+          },
+          "access": "read"
+        },
+        {
           "name": "Creator",
           "memberKind": "property",
           "support": "stub",
@@ -20518,6 +20572,60 @@
           }
         },
         {
+          "name": "Orientation",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "DisplayUnitLabel",
+                  "sourceMember": "Orientation"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "XlOrientation"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "XlOrientation"
+          },
+          "access": "read"
+        },
+        {
+          "name": "ReadingOrder",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "DisplayUnitLabel",
+                  "sourceMember": "ReadingOrder"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "XlReadingOrder"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "XlReadingOrder"
+          },
+          "access": "read"
+        },
+        {
           "name": "Creator",
           "memberKind": "property",
           "support": "stub",
@@ -20856,6 +20964,60 @@
             "name": "f64",
             "aliasOf": "Double"
           }
+        },
+        {
+          "name": "Orientation",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "AxisTitle",
+                  "sourceMember": "Orientation"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "XlOrientation"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "XlOrientation"
+          },
+          "access": "read"
+        },
+        {
+          "name": "ReadingOrder",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "AxisTitle",
+                  "sourceMember": "ReadingOrder"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "XlReadingOrder"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "XlReadingOrder"
+          },
+          "access": "read"
         },
         {
           "name": "Creator",
@@ -22377,6 +22539,60 @@
           "access": "readwrite"
         },
         {
+          "name": "Orientation",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "DataLabels",
+                  "sourceMember": "Orientation"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "XlOrientation"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "XlOrientation"
+          },
+          "access": "read"
+        },
+        {
+          "name": "ReadingOrder",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "DataLabels",
+                  "sourceMember": "ReadingOrder"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "XlReadingOrder"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "XlReadingOrder"
+          },
+          "access": "read"
+        },
+        {
           "name": "Creator",
           "memberKind": "property",
           "support": "stub",
@@ -22963,6 +23179,60 @@
             "aliasOf": "BSTR"
           },
           "access": "readwrite"
+        },
+        {
+          "name": "Orientation",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "DataLabel",
+                  "sourceMember": "Orientation"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "XlOrientation"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "XlOrientation"
+          },
+          "access": "read"
+        },
+        {
+          "name": "ReadingOrder",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "DataLabel",
+                  "sourceMember": "ReadingOrder"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "XlReadingOrder"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "XlReadingOrder"
+          },
+          "access": "read"
         },
         {
           "name": "Creator",

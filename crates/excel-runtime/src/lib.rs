@@ -177,6 +177,7 @@ const XL_TICK_LABEL_POSITION_LOW: i32 = -4134;
 const XL_TICK_LABEL_POSITION_NEXT_TO_AXIS: i32 = 4;
 const XL_TICK_LABEL_POSITION_NONE: i32 = -4142;
 const XL_TICK_LABEL_ORIENTATION_AUTOMATIC: i32 = -4105;
+const XL_ORIENTATION_HORIZONTAL: i32 = -4128;
 const XL_READING_ORDER_CONTEXT: i32 = -5002;
 const XL_LABEL_POSITION_ABOVE: i32 = 0;
 const XL_LABEL_POSITION_BELOW: i32 = 1;
@@ -18366,6 +18367,8 @@ impl ExcelRuntime {
                             | "Top"
                             | "Width"
                             | "Height"
+                            | "Orientation"
+                            | "ReadingOrder"
                             | "Creator"
                             | "Application"
                             | "Parent"
@@ -18382,6 +18385,8 @@ impl ExcelRuntime {
                             | "Top"
                             | "Width"
                             | "Height"
+                            | "Orientation"
+                            | "ReadingOrder"
                             | "Creator"
                             | "Application"
                             | "Parent"
@@ -18724,6 +18729,8 @@ impl ExcelRuntime {
                             | "Top"
                             | "Width"
                             | "Height"
+                            | "Orientation"
+                            | "ReadingOrder"
                             | "Creator"
                             | "Application"
                             | "Parent"
@@ -18805,6 +18812,8 @@ impl ExcelRuntime {
                             | "NumberFormatLinked"
                             | "Position"
                             | "Separator"
+                            | "Orientation"
+                            | "ReadingOrder"
                             | "Creator"
                             | "Application"
                             | "Parent"
@@ -18831,6 +18840,8 @@ impl ExcelRuntime {
                             | "NumberFormatLinked"
                             | "Position"
                             | "Separator"
+                            | "Orientation"
+                            | "ReadingOrder"
                             | "Creator"
                             | "Application"
                             | "Parent"
@@ -25487,6 +25498,8 @@ impl ExcelRuntime {
             ))),
             "Text" | "Caption" => Ok(OmValue::Text(title.text.clone())),
             "Left" | "Top" | "Width" | "Height" => Ok(OmValue::Number(0.0)),
+            "Orientation" => Ok(OmValue::Number(f64::from(XL_ORIENTATION_HORIZONTAL))),
+            "ReadingOrder" => Ok(OmValue::Number(f64::from(XL_READING_ORDER_CONTEXT))),
             "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
             "Application" => Ok(OmValue::Object(self.root_application())),
             "Parent" => Ok(OmValue::Object(self.register_object(
@@ -25548,6 +25561,8 @@ impl ExcelRuntime {
             ))),
             "Text" | "Caption" => Ok(OmValue::Text(chart_axis_display_unit_label_text(axis))),
             "Left" | "Top" | "Width" | "Height" => Ok(OmValue::Number(0.0)),
+            "Orientation" => Ok(OmValue::Number(f64::from(XL_ORIENTATION_HORIZONTAL))),
+            "ReadingOrder" => Ok(OmValue::Number(f64::from(XL_READING_ORDER_CONTEXT))),
             "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
             "Application" => Ok(OmValue::Object(self.root_application())),
             "Parent" => Ok(OmValue::Object(self.register_object(
@@ -25658,6 +25673,8 @@ impl ExcelRuntime {
             ))),
             "Text" | "Caption" => Ok(OmValue::Text(title.text.clone())),
             "Left" | "Top" | "Width" | "Height" => Ok(OmValue::Number(0.0)),
+            "Orientation" => Ok(OmValue::Number(f64::from(XL_ORIENTATION_HORIZONTAL))),
+            "ReadingOrder" => Ok(OmValue::Number(f64::from(XL_READING_ORDER_CONTEXT))),
             "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
             "Application" => Ok(OmValue::Object(self.root_application())),
             "Parent" => Ok(OmValue::Object(
@@ -26680,6 +26697,8 @@ impl ExcelRuntime {
             .and_then(|labels| labels.separator.clone())
             .map(OmValue::Text)
             .unwrap_or(OmValue::Empty)),
+            "Orientation" => Ok(OmValue::Number(f64::from(XL_ORIENTATION_HORIZONTAL))),
+            "ReadingOrder" => Ok(OmValue::Number(f64::from(XL_READING_ORDER_CONTEXT))),
             "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
             "Application" => Ok(OmValue::Object(self.root_application())),
             "Parent" => Ok(OmValue::Object(
@@ -26850,6 +26869,8 @@ impl ExcelRuntime {
                 .and_then(|labels| labels.separator.clone())
                 .map(OmValue::Text)
                 .unwrap_or(OmValue::Empty)),
+            "Orientation" => Ok(OmValue::Number(f64::from(XL_ORIENTATION_HORIZONTAL))),
+            "ReadingOrder" => Ok(OmValue::Number(f64::from(XL_READING_ORDER_CONTEXT))),
             "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
             "Application" => Ok(OmValue::Object(self.root_application())),
             "Parent" => Ok(OmValue::Object(
@@ -68550,7 +68571,15 @@ mod tests {
             ),
             (
                 "ChartTitle",
-                &["Name", "Format", "Creator", "Application", "Parent"][..],
+                &[
+                    "Name",
+                    "Format",
+                    "Orientation",
+                    "ReadingOrder",
+                    "Creator",
+                    "Application",
+                    "Parent",
+                ][..],
                 &["Select", "Delete"][..],
             ),
             (
@@ -68565,12 +68594,28 @@ mod tests {
             ),
             (
                 "AxisTitle",
-                &["Name", "Format", "Creator", "Application", "Parent"][..],
+                &[
+                    "Name",
+                    "Format",
+                    "Orientation",
+                    "ReadingOrder",
+                    "Creator",
+                    "Application",
+                    "Parent",
+                ][..],
                 &["Select", "Delete"][..],
             ),
             (
                 "DisplayUnitLabel",
-                &["Name", "Format", "Creator", "Application", "Parent"][..],
+                &[
+                    "Name",
+                    "Format",
+                    "Orientation",
+                    "ReadingOrder",
+                    "Creator",
+                    "Application",
+                    "Parent",
+                ][..],
                 &["Select", "Delete"][..],
             ),
         ] {
@@ -69390,6 +69435,8 @@ mod tests {
                     "Name",
                     "Format",
                     "Count",
+                    "Orientation",
+                    "ReadingOrder",
                     "Creator",
                     "Application",
                     "Parent",
@@ -69401,6 +69448,8 @@ mod tests {
                     "Name",
                     "Format",
                     "Index",
+                    "Orientation",
+                    "ReadingOrder",
                     "Creator",
                     "Application",
                     "Parent",
@@ -129850,6 +129899,45 @@ mod tests {
                     .expect("Workbook.Saved after TickLabels scalar getter"),
                 OmValue::Bool(true)
             );
+        }
+
+        for (handle, surface) in [
+            (chart_title, "ChartTitle"),
+            (axis_title, "AxisTitle"),
+            (display_unit_label, "DisplayUnitLabel"),
+            (data_labels, "DataLabels"),
+            (data_label, "DataLabel"),
+        ] {
+            for (member, expected) in [
+                (
+                    "Orientation",
+                    OmValue::Number(f64::from(super::XL_ORIENTATION_HORIZONTAL)),
+                ),
+                (
+                    "ReadingOrder",
+                    OmValue::Number(f64::from(super::XL_READING_ORDER_CONTEXT)),
+                ),
+            ] {
+                assert_eq!(
+                    runtime
+                        .dispatch_get(handle, member, &[])
+                        .unwrap_or_else(|error| panic!("{surface}.{member} failed: {error:?}")),
+                    expected
+                );
+                assert_eq!(
+                    runtime
+                        .dispatch_get(handle, member, &[OmValue::Missing])
+                        .expect_err("label text direction getter rejects arguments")
+                        .code,
+                    OmErrorCode::InvalidArgument
+                );
+                assert_eq!(
+                    runtime
+                        .dispatch_get(workbook.0, "Saved", &[])
+                        .expect("Workbook.Saved after label text direction getter"),
+                    OmValue::Bool(true)
+                );
+            }
         }
 
         for (handle, member, args) in [
