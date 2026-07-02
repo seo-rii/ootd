@@ -87744,6 +87744,94 @@ mod tests {
         assert_eq!(
             expect_number(
                 runtime
+                    .dispatch_invoke(worksheet_function, "Sin", &[OmValue::Number(0.0)])
+                    .expect("WorksheetFunction.Sin")
+            ),
+            0.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(worksheet_function, "Cos", &[OmValue::Number(0.0)])
+                    .expect("WorksheetFunction.Cos")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(worksheet_function, "Tan", &[OmValue::Number(0.0)])
+                    .expect("WorksheetFunction.Tan")
+            ),
+            0.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(worksheet_function, "Asin", &[OmValue::Number(1.0)])
+                    .expect("WorksheetFunction.Asin")
+            ),
+            std::f64::consts::FRAC_PI_2
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(worksheet_function, "Acos", &[OmValue::Number(1.0)])
+                    .expect("WorksheetFunction.Acos")
+            ),
+            0.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(worksheet_function, "Atan", &[OmValue::Number(1.0)])
+                    .expect("WorksheetFunction.Atan")
+            ),
+            std::f64::consts::FRAC_PI_4
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "Atan2",
+                        &[OmValue::Number(1.0), OmValue::Number(1.0)],
+                    )
+                    .expect("WorksheetFunction.Atan2")
+            ),
+            std::f64::consts::FRAC_PI_4
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "Degrees",
+                        &[OmValue::Number(std::f64::consts::PI)],
+                    )
+                    .expect("WorksheetFunction.Degrees")
+            ),
+            180.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(worksheet_function, "Radians", &[OmValue::Number(180.0)])
+                    .expect("WorksheetFunction.Radians")
+            ),
+            std::f64::consts::PI
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(worksheet_function, "Pi", &[])
+                    .expect("WorksheetFunction.Pi")
+            ),
+            std::f64::consts::PI
+        );
+        assert_eq!(
+            expect_number(
+                runtime
                     .dispatch_invoke(
                         worksheet_function,
                         "SumIf",
