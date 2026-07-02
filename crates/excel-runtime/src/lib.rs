@@ -88594,6 +88594,122 @@ mod tests {
                 runtime
                     .dispatch_invoke(
                         worksheet_function,
+                        "Date",
+                        &[
+                            OmValue::Number(2024.0),
+                            OmValue::Number(2.0),
+                            OmValue::Number(29.0),
+                        ],
+                    )
+                    .expect("WorksheetFunction.Date")
+            ),
+            45351.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(worksheet_function, "Year", &[OmValue::Number(45351.0)])
+                    .expect("WorksheetFunction.Year")
+            ),
+            2024.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(worksheet_function, "Month", &[OmValue::Number(45351.0)])
+                    .expect("WorksheetFunction.Month")
+            ),
+            2.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(worksheet_function, "Day", &[OmValue::Number(45351.0)])
+                    .expect("WorksheetFunction.Day")
+            ),
+            29.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "Days",
+                        &[OmValue::Number(45352.0), OmValue::Number(45350.0)],
+                    )
+                    .expect("WorksheetFunction.Days")
+            ),
+            2.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "Time",
+                        &[
+                            OmValue::Number(6.0),
+                            OmValue::Number(0.0),
+                            OmValue::Number(0.0),
+                        ],
+                    )
+                    .expect("WorksheetFunction.Time")
+            ),
+            0.25
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "Hour",
+                        &[OmValue::Number(0.7815972222222223)],
+                    )
+                    .expect("WorksheetFunction.Hour")
+            ),
+            18.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "Minute",
+                        &[OmValue::Number(0.7815972222222223)],
+                    )
+                    .expect("WorksheetFunction.Minute")
+            ),
+            45.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "Second",
+                        &[OmValue::Number(0.7815972222222223)],
+                    )
+                    .expect("WorksheetFunction.Second")
+            ),
+            30.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "Weekday",
+                        &[OmValue::Number(45351.0), OmValue::Number(2.0)],
+                    )
+                    .expect("WorksheetFunction.Weekday")
+            ),
+            4.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
                         "SumIf",
                         &[
                             OmValue::Object(first_source),
