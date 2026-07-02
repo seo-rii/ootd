@@ -18228,6 +18228,7 @@ impl ExcelRuntime {
                             | "Select"
                             | "Delete"
                             | "ClearFormats"
+                            | "Copy"
                     )
                     | (
                         "DropLines",
@@ -18239,6 +18240,7 @@ impl ExcelRuntime {
                             | "Select"
                             | "Delete"
                             | "ClearFormats"
+                            | "Copy"
                     )
                     | (
                         "HiLoLines",
@@ -18250,6 +18252,7 @@ impl ExcelRuntime {
                             | "Select"
                             | "Delete"
                             | "ClearFormats"
+                            | "Copy"
                     )
                     | (
                         "UpBars",
@@ -18261,6 +18264,7 @@ impl ExcelRuntime {
                             | "Select"
                             | "Delete"
                             | "ClearFormats"
+                            | "Copy"
                     )
                     | (
                         "DownBars",
@@ -18272,6 +18276,7 @@ impl ExcelRuntime {
                             | "Select"
                             | "Delete"
                             | "ClearFormats"
+                            | "Copy"
                     )
                     | (
                         "Axes",
@@ -68479,6 +68484,12 @@ mod tests {
                 clear_formats.support,
                 office_idl::SupportState::Stub
             ));
+            let copy = surface
+                .members
+                .iter()
+                .find(|member| member.name == "Copy")
+                .unwrap_or_else(|| panic!("{surface_name}.Copy focus member"));
+            assert!(matches!(copy.support, office_idl::SupportState::Stub));
         }
         let axis = runtime
             .dispatch_registry()
@@ -68994,7 +69005,7 @@ mod tests {
                 assert!(matches!(member.support, office_idl::SupportState::Stub));
                 assert!(matches!(member.access, office_idl::AccessMode::Read));
             }
-            for member_name in ["Select", "Delete", "ClearFormats"] {
+            for member_name in ["Select", "Delete", "ClearFormats", "Copy"] {
                 let member = surface
                     .members
                     .iter()

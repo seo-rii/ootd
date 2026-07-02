@@ -15027,6 +15027,22 @@
               ]
             }
           }
+        },
+        {
+          "name": "Copy",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "SeriesLines",
+                  "sourceMember": "Copy"
+                }
+              ]
+            }
+          }
         }
       ]
     },
@@ -15217,6 +15233,22 @@
                   "kind": "method",
                   "sourceInterface": "DropLines",
                   "sourceMember": "ClearFormats"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Copy",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "DropLines",
+                  "sourceMember": "Copy"
                 }
               ]
             }
@@ -15415,6 +15447,22 @@
               ]
             }
           }
+        },
+        {
+          "name": "Copy",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "HiLoLines",
+                  "sourceMember": "Copy"
+                }
+              ]
+            }
+          }
         }
       ]
     },
@@ -15609,6 +15657,22 @@
               ]
             }
           }
+        },
+        {
+          "name": "Copy",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "UpBars",
+                  "sourceMember": "Copy"
+                }
+              ]
+            }
+          }
         }
       ]
     },
@@ -15799,6 +15863,22 @@
                   "kind": "method",
                   "sourceInterface": "DownBars",
                   "sourceMember": "ClearFormats"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Copy",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "DownBars",
+                  "sourceMember": "Copy"
                 }
               ]
             }
