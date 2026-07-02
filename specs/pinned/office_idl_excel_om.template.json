@@ -212,7 +212,7 @@
           "memberKind": "property",
           "returnType": {
             "kind": "interface",
-            "name": "Worksheets",
+            "name": "Sheets",
             "aliasOf": "Excel.Sheets"
           },
           "support": "stub",
@@ -227,7 +227,7 @@
               ],
               "typeInfo": {
                 "kind": "interface",
-                "name": "Worksheets",
+                "name": "Sheets",
                 "aliasOf": "Excel.Sheets"
               }
             }
@@ -2331,7 +2331,7 @@
           "memberKind": "property",
           "returnType": {
             "kind": "interface",
-            "name": "Worksheets",
+            "name": "Sheets",
             "aliasOf": "Excel.Sheets"
           },
           "support": "stub",
@@ -2346,7 +2346,7 @@
               ],
               "typeInfo": {
                 "kind": "interface",
-                "name": "Worksheets",
+                "name": "Sheets",
                 "aliasOf": "Excel.Sheets"
               }
             }
@@ -3686,6 +3686,497 @@
                 {
                   "kind": "method",
                   "sourceInterface": "Charts",
+                  "sourceMember": "Select"
+                }
+              ]
+            }
+          },
+          "params": [
+            {
+              "name": "Replace",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Sheets",
+      "kind": "dispatch",
+      "metadata": {
+        "iid": "{000208B1-0000-0000-C000-000000000046}",
+        "sourceInherits": [
+          "IDispatch"
+        ]
+      },
+      "members": [
+        {
+          "name": "Count",
+          "memberKind": "property",
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "Int32"
+          },
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Sheets",
+                  "sourceMember": "Count"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "Int32"
+              }
+            }
+          }
+        },
+        {
+          "name": "Parent",
+          "memberKind": "property",
+          "returnType": {
+            "kind": "interface",
+            "name": "Workbook",
+            "aliasOf": "Excel.Workbook"
+          },
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Sheets",
+                  "sourceMember": "Parent"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Workbook",
+                "aliasOf": "Excel.Workbook"
+              }
+            }
+          }
+        },
+        {
+          "name": "Application",
+          "memberKind": "property",
+          "returnType": {
+            "kind": "interface",
+            "name": "Application",
+            "aliasOf": "Excel.Application"
+          },
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Sheets",
+                  "sourceMember": "Application"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Application",
+                "aliasOf": "Excel.Application"
+              }
+            }
+          }
+        },
+        {
+          "name": "Creator",
+          "memberKind": "property",
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "Int32"
+          },
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Sheets",
+                  "sourceMember": "Creator"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "Int32"
+              }
+            }
+          }
+        },
+        {
+          "name": "Visible",
+          "memberKind": "property",
+          "access": "readwrite",
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "XlSheetVisibility"
+          },
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Sheets",
+                  "sourceMember": "Visible"
+                },
+                {
+                  "kind": "property_set",
+                  "sourceInterface": "Sheets",
+                  "sourceMember": "Visible"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "XlSheetVisibility"
+              }
+            }
+          }
+        },
+        {
+          "name": "Add",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "variant",
+            "name": "Variant",
+            "aliasOf": "VARIANT"
+          },
+          "params": [
+            {
+              "name": "Before",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "After",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "Count",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "Type",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Sheets",
+                  "sourceMember": "Add"
+                }
+              ],
+              "typeInfo": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          }
+        },
+        {
+          "name": "Item",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "variant",
+            "name": "Variant",
+            "aliasOf": "VARIANT"
+          },
+          "params": [
+            {
+              "name": "Index",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Sheets",
+                  "sourceMember": "Item",
+                  "dispId": 0
+                }
+              ],
+              "typeInfo": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          }
+        },
+        {
+          "name": "Delete",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "primitive",
+            "name": "bool",
+            "aliasOf": "VARIANT_BOOL"
+          },
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Sheets",
+                  "sourceMember": "Delete"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "bool",
+                "aliasOf": "VARIANT_BOOL"
+              }
+            }
+          }
+        },
+        {
+          "name": "Copy",
+          "memberKind": "method",
+          "params": [
+            {
+              "name": "Before",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "After",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Sheets",
+                  "sourceMember": "Copy"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Move",
+          "memberKind": "method",
+          "params": [
+            {
+              "name": "Before",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "After",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Sheets",
+                  "sourceMember": "Move"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "PrintPreview",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Sheets",
+                  "sourceMember": "PrintPreview"
+                }
+              ]
+            }
+          },
+          "params": [
+            {
+              "name": "EnableChanges",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            }
+          ]
+        },
+        {
+          "name": "PrintOut",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Sheets",
+                  "sourceMember": "PrintOut"
+                }
+              ]
+            }
+          },
+          "params": [
+            {
+              "name": "From",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "To",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "Copies",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "Preview",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "ActivePrinter",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "PrintToFile",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "Collate",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "PrToFileName",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            }
+          ]
+        },
+        {
+          "name": "Select",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "Sheets",
                   "sourceMember": "Select"
                 }
               ]

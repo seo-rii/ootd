@@ -679,7 +679,8 @@ impl RuntimeSheetCollectionKind {
 
     fn focus_surface_name(self) -> &'static str {
         match self {
-            Self::Worksheets | Self::Sheets => "Worksheets",
+            Self::Worksheets => "Worksheets",
+            Self::Sheets => "Sheets",
             Self::Charts => "Charts",
         }
     }
@@ -18478,6 +18479,22 @@ impl ExcelRuntime {
                     | (
                         "Names",
                         "Count" | "Item" | "Add" | "Creator" | "Application" | "Parent"
+                    )
+                    | (
+                        "Sheets",
+                        "Count"
+                            | "Item"
+                            | "Add"
+                            | "Creator"
+                            | "Application"
+                            | "Parent"
+                            | "Visible"
+                            | "Delete"
+                            | "Copy"
+                            | "Move"
+                            | "PrintPreview"
+                            | "PrintOut"
+                            | "Select"
                     )
                     | (
                         "Charts",
@@ -71766,6 +71783,7 @@ mod tests {
             "ChartObjects",
             "ChartObject",
             "Chart",
+            "Sheets",
             "Charts",
             "ChartArea",
             "PlotArea",

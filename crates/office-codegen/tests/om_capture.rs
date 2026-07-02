@@ -146,10 +146,10 @@ fn loads_office_idl_excel_om_template_and_summarizes_surface() {
         Some("Microsoft.Office.Interop.Excel")
     );
     assert_eq!(summary.enum_count, 8);
-    assert_eq!(summary.interface_count, 56);
+    assert_eq!(summary.interface_count, 57);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 930);
-    assert_eq!(summary.stub_member_count, 930);
+    assert_eq!(summary.member_count, 943);
+    assert_eq!(summary.stub_member_count, 943);
     assert_eq!(
         document.interfaces[0].members[0]
             .metadata
@@ -1178,6 +1178,7 @@ fn builds_coverage_report_for_each_support_state_bucket() {
             "Workbooks".to_string(),
             "Workbook".to_string(),
             "Worksheets".to_string(),
+            "Sheets".to_string(),
             "Charts".to_string(),
             "Worksheet".to_string(),
             "Range".to_string(),
@@ -1347,6 +1348,7 @@ fn builds_focus_surface_registry_from_json_wrapper() {
             "Workbooks".to_string(),
             "Workbook".to_string(),
             "Worksheets".to_string(),
+            "Sheets".to_string(),
             "Charts".to_string(),
             "Worksheet".to_string(),
             "Range".to_string(),
@@ -1435,7 +1437,7 @@ fn builds_coverage_report_from_path_wrapper() {
 
     assert_eq!(report_from_path, report_from_json);
     assert_eq!(report_from_path.support_counts.partial, 1);
-    assert_eq!(report_from_path.missing_focus_surfaces.len(), 55);
+    assert_eq!(report_from_path.missing_focus_surfaces.len(), 56);
 
     fs::remove_file(&path).expect("remove temp document");
 }
@@ -1606,7 +1608,7 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(registry.library, "Excel");
     assert_eq!(registry.version, "16.0");
-    assert_eq!(registry.focus_surfaces.len(), 56);
+    assert_eq!(registry.focus_surfaces.len(), 57);
     assert!(registry.missing_focus_surfaces.is_empty());
 
     let application = registry
@@ -1629,6 +1631,11 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         .iter()
         .find(|entry| entry.name == "Worksheets")
         .expect("Worksheets");
+    let sheets = registry
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "Sheets")
+        .expect("Sheets");
     let charts = registry
         .focus_surfaces
         .iter()
@@ -1894,6 +1901,7 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
     assert_eq!(workbooks.member_count, 7);
     assert_eq!(workbook.member_count, 26);
     assert_eq!(worksheets.member_count, 13);
+    assert_eq!(sheets.member_count, 13);
     assert_eq!(charts.member_count, 13);
     assert_eq!(worksheet.member_count, 28);
     assert_eq!(range.member_count, 51);
@@ -3028,8 +3036,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(coverage.library, "Excel");
     assert_eq!(coverage.version, "16.0");
-    assert_eq!(coverage.member_count, 930);
-    assert_eq!(coverage.support_counts.stub, 930);
+    assert_eq!(coverage.member_count, 943);
+    assert_eq!(coverage.support_counts.stub, 943);
     assert!(coverage.missing_focus_surfaces.is_empty());
 
     let application_coverage = coverage
@@ -3052,6 +3060,11 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         .iter()
         .find(|entry| entry.name == "Worksheets")
         .expect("Worksheets coverage");
+    let sheets_coverage = coverage
+        .focus_surfaces
+        .iter()
+        .find(|entry| entry.name == "Sheets")
+        .expect("Sheets coverage");
     let charts_coverage = coverage
         .focus_surfaces
         .iter()
@@ -3417,6 +3430,27 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
     assert_eq!(worksheets_coverage.support_counts.stub, 13);
     assert_eq!(
         worksheets_coverage.stub_members,
+        vec![
+            "Count".to_string(),
+            "Parent".to_string(),
+            "Application".to_string(),
+            "Creator".to_string(),
+            "Visible".to_string(),
+            "Add".to_string(),
+            "Item".to_string(),
+            "Delete".to_string(),
+            "Copy".to_string(),
+            "Move".to_string(),
+            "PrintPreview".to_string(),
+            "PrintOut".to_string(),
+            "Select".to_string()
+        ]
+    );
+
+    assert_eq!(sheets_coverage.member_count, 13);
+    assert_eq!(sheets_coverage.support_counts.stub, 13);
+    assert_eq!(
+        sheets_coverage.stub_members,
         vec![
             "Count".to_string(),
             "Parent".to_string(),
