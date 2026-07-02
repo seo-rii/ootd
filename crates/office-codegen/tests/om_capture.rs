@@ -148,8 +148,8 @@ fn loads_office_idl_excel_om_template_and_summarizes_surface() {
     assert_eq!(summary.enum_count, 8);
     assert_eq!(summary.interface_count, 55);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 904);
-    assert_eq!(summary.stub_member_count, 904);
+    assert_eq!(summary.member_count, 905);
+    assert_eq!(summary.stub_member_count, 905);
     assert_eq!(
         document.interfaces[0].members[0]
             .metadata
@@ -1921,7 +1921,7 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
     assert_eq!(up_bars.member_count, 10);
     assert_eq!(down_bars.member_count, 10);
     assert_eq!(axes.member_count, 5);
-    assert_eq!(axis.member_count, 44);
+    assert_eq!(axis.member_count, 45);
     assert_eq!(tick_labels.member_count, 16);
     assert_eq!(gridlines.member_count, 7);
     assert_eq!(display_unit_label.member_count, 15);
@@ -3016,8 +3016,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(coverage.library, "Excel");
     assert_eq!(coverage.version, "16.0");
-    assert_eq!(coverage.member_count, 904);
-    assert_eq!(coverage.support_counts.stub, 904);
+    assert_eq!(coverage.member_count, 905);
+    assert_eq!(coverage.support_counts.stub, 905);
     assert!(coverage.missing_focus_surfaces.is_empty());
 
     let application_coverage = coverage
@@ -4248,13 +4248,14 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         ]
     );
 
-    assert_eq!(axis_coverage.member_count, 44);
-    assert_eq!(axis_coverage.support_counts.stub, 44);
+    assert_eq!(axis_coverage.member_count, 45);
+    assert_eq!(axis_coverage.support_counts.stub, 45);
     assert_eq!(
         axis_coverage.stub_members,
         vec![
             "Type".to_string(),
             "Format".to_string(),
+            "Border".to_string(),
             "AxisGroup".to_string(),
             "AxisBetweenCategories".to_string(),
             "CategoryType".to_string(),

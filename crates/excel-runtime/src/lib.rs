@@ -823,6 +823,11 @@ impl ChartGroupLineKind {
 
 #[derive(Debug, Clone, Copy)]
 enum BorderParent {
+    Axis {
+        chart_id: ChartId,
+        axis_index: usize,
+        chart_object_parent: Option<ChartObjectsParent>,
+    },
     LeaderLines {
         chart_id: ChartId,
         series_index: usize,
@@ -24422,6 +24427,19 @@ impl ExcelRuntime {
                     chart_object_parent,
                 })
             }
+            BorderParent::Axis {
+                chart_id,
+                axis_index,
+                chart_object_parent,
+            } => {
+                self.axis_model(workbook, chart_id, axis_index)?;
+                Ok(RuntimeObjectKind::Axis {
+                    workbook,
+                    chart_id,
+                    axis_index,
+                    chart_object_parent,
+                })
+            }
         }
     }
 
@@ -25776,6 +25794,16 @@ impl ExcelRuntime {
                 RuntimeObjectKind::ChartFormat {
                     workbook,
                     parent: ChartFormatParent::Axis {
+                        chart_id,
+                        axis_index,
+                        chart_object_parent,
+                    },
+                },
+            ))),
+            "Border" => Ok(OmValue::Object(self.register_object(
+                RuntimeObjectKind::Border {
+                    workbook,
+                    parent: BorderParent::Axis {
                         chart_id,
                         axis_index,
                         chart_object_parent,
@@ -34514,6 +34542,16 @@ impl ExcelRuntime {
                             ..
                         },
                     ..
+                } if *object_workbook == workbook && *object_chart_id == chart_id => {
+                    Some(object_id)
+                }
+                RuntimeObjectKind::Border {
+                    workbook: object_workbook,
+                    parent:
+                        BorderParent::Axis {
+                            chart_id: object_chart_id,
+                            ..
+                        },
                 } if *object_workbook == workbook && *object_chart_id == chart_id => {
                     Some(object_id)
                 }
@@ -70085,6 +70123,7 @@ mod tests {
         for member_name in [
             "Type",
             "Format",
+            "Border",
             "AxisGroup",
             "DisplayUnitLabel",
             "MajorGridlines",
@@ -155141,6 +155180,28 @@ mod tests {
                 .dispatch_invoke(axes, "Item", &[OmValue::Number(f64::from(super::XL_VALUE))])
                 .expect("Axes.Item(xlValue)"),
         );
+        let value_axis_border = expect_object_handle(
+            runtime
+                .dispatch_get(value_axis, "Border", &[])
+                .expect("Axis.Border"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(value_axis_border, "LineStyle", &[])
+                .expect("Axis.Border.LineStyle"),
+            OmValue::Number(f64::from(super::XL_CONTINUOUS))
+        );
+        let value_axis_border_parent = expect_object_handle(
+            runtime
+                .dispatch_get(value_axis_border, "Parent", &[])
+                .expect("Axis.Border.Parent"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(value_axis_border_parent, "Type", &[])
+                .expect("Axis.Border.Parent.Type"),
+            OmValue::Number(f64::from(super::XL_VALUE))
+        );
         runtime
             .dispatch_invoke(value_axis, "Delete", &[])
             .expect("Axis.Delete");
@@ -155155,6 +155216,13 @@ mod tests {
             runtime
                 .dispatch_get(axes, "Count", &[])
                 .expect_err("axes handle should be stale after Axis.Delete")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(value_axis_border, "Creator", &[])
+                .expect_err("axis border handle should be stale after Axis.Delete")
                 .code,
             OmErrorCode::InvalidState
         );

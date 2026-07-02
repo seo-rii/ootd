@@ -19476,6 +19476,33 @@
           "access": "read"
         },
         {
+          "name": "Border",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Axis",
+                  "sourceMember": "Border"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Border",
+                "aliasOf": "Excel.Border"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "interface",
+            "name": "Border",
+            "aliasOf": "Excel.Border"
+          },
+          "access": "read"
+        },
+        {
           "name": "AxisGroup",
           "memberKind": "property",
           "support": "stub",
