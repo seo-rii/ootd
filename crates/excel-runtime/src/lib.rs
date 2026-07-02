@@ -88710,6 +88710,130 @@ mod tests {
                 runtime
                     .dispatch_invoke(
                         worksheet_function,
+                        "EDate",
+                        &[OmValue::Number(45322.0), OmValue::Number(1.0)],
+                    )
+                    .expect("WorksheetFunction.EDate")
+            ),
+            45351.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "EoMonth",
+                        &[OmValue::Number(45337.0), OmValue::Number(1.0)],
+                    )
+                    .expect("WorksheetFunction.EoMonth")
+            ),
+            45382.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "Days360",
+                        &[OmValue::Number(45292.0), OmValue::Number(45323.0)],
+                    )
+                    .expect("WorksheetFunction.Days360")
+            ),
+            30.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "YearFrac",
+                        &[
+                            OmValue::Number(45292.0),
+                            OmValue::Number(45474.0),
+                            OmValue::Number(1.0),
+                        ],
+                    )
+                    .expect("WorksheetFunction.YearFrac")
+            ),
+            182.0 / 366.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "DatedIf",
+                        &[
+                            OmValue::Number(43845.0),
+                            OmValue::Number(44275.0),
+                            OmValue::Text("Y".to_string()),
+                        ],
+                    )
+                    .expect("WorksheetFunction.DatedIf")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(worksheet_function, "WeekNum", &[OmValue::Number(45657.0)])
+                    .expect("WorksheetFunction.WeekNum")
+            ),
+            53.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "IsoWeekNum",
+                        &[OmValue::Number(45351.0)],
+                    )
+                    .expect("WorksheetFunction.IsoWeekNum")
+            ),
+            9.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "DateValue",
+                        &[OmValue::Text("2024-02-29".to_string())],
+                    )
+                    .expect("WorksheetFunction.DateValue")
+            ),
+            45351.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "TimeValue",
+                        &[OmValue::Text("6:00 PM".to_string())],
+                    )
+                    .expect("WorksheetFunction.TimeValue")
+            ),
+            0.75
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "NetworkDays",
+                        &[OmValue::Number(45292.0), OmValue::Number(45296.0)],
+                    )
+                    .expect("WorksheetFunction.NetworkDays")
+            ),
+            5.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
                         "SumIf",
                         &[
                             OmValue::Object(first_source),
