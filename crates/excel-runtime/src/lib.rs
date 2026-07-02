@@ -91382,6 +91382,149 @@ mod tests {
                 .expect("WorksheetFunction.Gauss"),
         );
         assert!((gauss - 0.3413447460685429).abs() < 1e-6);
+        let phi = expect_number(
+            runtime
+                .dispatch_invoke(worksheet_function, "Phi", &[OmValue::Number(1.0)])
+                .expect("WorksheetFunction.Phi"),
+        );
+        assert!((phi - 0.24197072451914337).abs() < 1e-8);
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "Standardize",
+                        &[
+                            OmValue::Number(42.0),
+                            OmValue::Number(40.0),
+                            OmValue::Number(1.5),
+                        ],
+                    )
+                    .expect("WorksheetFunction.Standardize")
+            ),
+            4.0 / 3.0
+        );
+        let confidence_norm = expect_number(
+            runtime
+                .dispatch_invoke(
+                    worksheet_function,
+                    "Confidence_Norm",
+                    &[
+                        OmValue::Number(0.05),
+                        OmValue::Number(2.5),
+                        OmValue::Number(50.0),
+                    ],
+                )
+                .expect("WorksheetFunction.Confidence_Norm"),
+        );
+        assert!((confidence_norm - 0.6929519121748389).abs() < 1e-8);
+        let confidence_t = expect_number(
+            runtime
+                .dispatch_invoke(
+                    worksheet_function,
+                    "Confidence_T",
+                    &[
+                        OmValue::Number(0.5),
+                        OmValue::Number(2.0),
+                        OmValue::Number(2.0),
+                    ],
+                )
+                .expect("WorksheetFunction.Confidence_T"),
+        );
+        assert!((confidence_t - std::f64::consts::SQRT_2).abs() < 1e-6);
+        let binom_dist = expect_number(
+            runtime
+                .dispatch_invoke(
+                    worksheet_function,
+                    "Binom_Dist",
+                    &[
+                        OmValue::Number(6.0),
+                        OmValue::Number(10.0),
+                        OmValue::Number(0.5),
+                        OmValue::Bool(false),
+                    ],
+                )
+                .expect("WorksheetFunction.Binom_Dist"),
+        );
+        assert!((binom_dist - 0.205078125).abs() < 1e-12);
+        let binom_dist_range = expect_number(
+            runtime
+                .dispatch_invoke(
+                    worksheet_function,
+                    "Binom_Dist_Range",
+                    &[
+                        OmValue::Number(10.0),
+                        OmValue::Number(0.5),
+                        OmValue::Number(4.0),
+                        OmValue::Number(6.0),
+                    ],
+                )
+                .expect("WorksheetFunction.Binom_Dist_Range"),
+        );
+        assert!((binom_dist_range - 0.65625).abs() < 1e-12);
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "Binom_Inv",
+                        &[
+                            OmValue::Number(6.0),
+                            OmValue::Number(0.5),
+                            OmValue::Number(0.75),
+                        ],
+                    )
+                    .expect("WorksheetFunction.Binom_Inv")
+            ),
+            4.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "CritBinom",
+                        &[
+                            OmValue::Number(6.0),
+                            OmValue::Number(0.5),
+                            OmValue::Number(0.75),
+                        ],
+                    )
+                    .expect("WorksheetFunction.CritBinom")
+            ),
+            4.0
+        );
+        let neg_binom = expect_number(
+            runtime
+                .dispatch_invoke(
+                    worksheet_function,
+                    "NegBinom_Dist",
+                    &[
+                        OmValue::Number(10.0),
+                        OmValue::Number(5.0),
+                        OmValue::Number(0.25),
+                        OmValue::Bool(false),
+                    ],
+                )
+                .expect("WorksheetFunction.NegBinom_Dist"),
+        );
+        assert!((neg_binom - 0.05504866037517786).abs() < 1e-10);
+        let hyp_geom = expect_number(
+            runtime
+                .dispatch_invoke(
+                    worksheet_function,
+                    "HypGeom_Dist",
+                    &[
+                        OmValue::Number(2.0),
+                        OmValue::Number(4.0),
+                        OmValue::Number(5.0),
+                        OmValue::Number(10.0),
+                        OmValue::Bool(false),
+                    ],
+                )
+                .expect("WorksheetFunction.HypGeom_Dist"),
+        );
+        assert!((hyp_geom - 0.47619047619047616).abs() < 1e-10);
         assert_eq!(
             expect_number(
                 runtime
