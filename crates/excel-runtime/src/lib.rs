@@ -88834,6 +88834,122 @@ mod tests {
                 runtime
                     .dispatch_invoke(
                         worksheet_function,
+                        "WorkDay",
+                        &[OmValue::Number(45296.0), OmValue::Number(1.0)],
+                    )
+                    .expect("WorksheetFunction.WorkDay")
+            ),
+            45299.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "WorkDay_Intl",
+                        &[
+                            OmValue::Number(45296.0),
+                            OmValue::Number(1.0),
+                            OmValue::Number(11.0),
+                        ],
+                    )
+                    .expect("WorksheetFunction.WorkDay_Intl")
+            ),
+            45297.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "NetworkDays_Intl",
+                        &[
+                            OmValue::Number(45292.0),
+                            OmValue::Number(45298.0),
+                            OmValue::Number(11.0),
+                        ],
+                    )
+                    .expect("WorksheetFunction.NetworkDays_Intl")
+            ),
+            6.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "IfError",
+                        &[OmValue::Number(9.0), OmValue::Number(42.0)],
+                    )
+                    .expect("WorksheetFunction.IfError")
+            ),
+            9.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "IfNa",
+                        &[OmValue::Number(5.0), OmValue::Number(11.0)],
+                    )
+                    .expect("WorksheetFunction.IfNa")
+            ),
+            5.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(worksheet_function, "IsError", &[OmValue::Number(5.0)],)
+                    .expect("WorksheetFunction.IsError")
+            ),
+            0.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(worksheet_function, "IsNA", &[OmValue::Number(5.0)],)
+                    .expect("WorksheetFunction.IsNA")
+            ),
+            0.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "IsBlank",
+                        &[OmValue::Text(String::new())],
+                    )
+                    .expect("WorksheetFunction.IsBlank")
+            ),
+            0.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(worksheet_function, "IsNumber", &[OmValue::Number(3.0)])
+                    .expect("WorksheetFunction.IsNumber")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "IsText",
+                        &[OmValue::Text("literal".to_string())],
+                    )
+                    .expect("WorksheetFunction.IsText")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
                         "SumIf",
                         &[
                             OmValue::Object(first_source),

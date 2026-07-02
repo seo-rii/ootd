@@ -11039,6 +11039,451 @@
               }
             }
           }
+        },
+        {
+          "name": "WorkDay",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          },
+          "params": [
+            {
+              "name": "Arg1",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg2",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg3",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "WorksheetFunction",
+                  "sourceMember": "WorkDay"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          }
+        },
+        {
+          "name": "WorkDay_Intl",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          },
+          "params": [
+            {
+              "name": "Arg1",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg2",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg3",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "Arg4",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "WorksheetFunction",
+                  "sourceMember": "WorkDay_Intl"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          }
+        },
+        {
+          "name": "NetworkDays_Intl",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          },
+          "params": [
+            {
+              "name": "Arg1",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg2",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg3",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            },
+            {
+              "name": "Arg4",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              },
+              "optional": true
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "WorksheetFunction",
+                  "sourceMember": "NetworkDays_Intl"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          }
+        },
+        {
+          "name": "IfError",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "variant",
+            "name": "Variant",
+            "aliasOf": "VARIANT"
+          },
+          "params": [
+            {
+              "name": "Arg1",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg2",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "WorksheetFunction",
+                  "sourceMember": "IfError"
+                }
+              ],
+              "typeInfo": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          }
+        },
+        {
+          "name": "IfNa",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "variant",
+            "name": "Variant",
+            "aliasOf": "VARIANT"
+          },
+          "params": [
+            {
+              "name": "Arg1",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            },
+            {
+              "name": "Arg2",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "WorksheetFunction",
+                  "sourceMember": "IfNa"
+                }
+              ],
+              "typeInfo": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          }
+        },
+        {
+          "name": "IsError",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          },
+          "params": [
+            {
+              "name": "Arg1",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "WorksheetFunction",
+                  "sourceMember": "IsError"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          }
+        },
+        {
+          "name": "IsNA",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          },
+          "params": [
+            {
+              "name": "Arg1",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "WorksheetFunction",
+                  "sourceMember": "IsNA"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          }
+        },
+        {
+          "name": "IsBlank",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          },
+          "params": [
+            {
+              "name": "Arg1",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "WorksheetFunction",
+                  "sourceMember": "IsBlank"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          }
+        },
+        {
+          "name": "IsNumber",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          },
+          "params": [
+            {
+              "name": "Arg1",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "WorksheetFunction",
+                  "sourceMember": "IsNumber"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          }
+        },
+        {
+          "name": "IsText",
+          "memberKind": "method",
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          },
+          "params": [
+            {
+              "name": "Arg1",
+              "type": {
+                "kind": "variant",
+                "name": "Variant",
+                "aliasOf": "VARIANT"
+              }
+            }
+          ],
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "WorksheetFunction",
+                  "sourceMember": "IsText"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          }
         }
       ]
     },

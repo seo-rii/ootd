@@ -148,8 +148,8 @@ fn loads_office_idl_excel_om_template_and_summarizes_surface() {
     assert_eq!(summary.enum_count, 8);
     assert_eq!(summary.interface_count, 58);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 1065);
-    assert_eq!(summary.stub_member_count, 1065);
+    assert_eq!(summary.member_count, 1075);
+    assert_eq!(summary.stub_member_count, 1075);
     assert_eq!(
         document.interfaces[0].members[0]
             .metadata
@@ -1905,7 +1905,7 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         .expect("Point");
 
     assert_eq!(application.member_count, 44);
-    assert_eq!(worksheet_function.member_count, 121);
+    assert_eq!(worksheet_function.member_count, 131);
     assert_eq!(workbooks.member_count, 7);
     assert_eq!(workbook.member_count, 26);
     assert_eq!(worksheets.member_count, 13);
@@ -3044,8 +3044,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(coverage.library, "Excel");
     assert_eq!(coverage.version, "16.0");
-    assert_eq!(coverage.member_count, 1065);
-    assert_eq!(coverage.support_counts.stub, 1065);
+    assert_eq!(coverage.member_count, 1075);
+    assert_eq!(coverage.support_counts.stub, 1075);
     assert!(coverage.missing_focus_surfaces.is_empty());
 
     let application_coverage = coverage
@@ -3391,8 +3391,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         ]
     );
 
-    assert_eq!(worksheet_function_coverage.member_count, 121);
-    assert_eq!(worksheet_function_coverage.support_counts.stub, 121);
+    assert_eq!(worksheet_function_coverage.member_count, 131);
+    assert_eq!(worksheet_function_coverage.support_counts.stub, 131);
     assert_eq!(
         worksheet_function_coverage.stub_members,
         vec![
@@ -3516,7 +3516,17 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
             "IsoWeekNum".to_string(),
             "DateValue".to_string(),
             "TimeValue".to_string(),
-            "NetworkDays".to_string()
+            "NetworkDays".to_string(),
+            "WorkDay".to_string(),
+            "WorkDay_Intl".to_string(),
+            "NetworkDays_Intl".to_string(),
+            "IfError".to_string(),
+            "IfNa".to_string(),
+            "IsError".to_string(),
+            "IsNA".to_string(),
+            "IsBlank".to_string(),
+            "IsNumber".to_string(),
+            "IsText".to_string()
         ]
     );
 
