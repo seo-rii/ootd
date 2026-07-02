@@ -823,6 +823,14 @@ impl ChartGroupLineKind {
 
 #[derive(Debug, Clone, Copy)]
 enum BorderParent {
+    ChartArea {
+        chart_id: ChartId,
+        chart_object_parent: Option<ChartObjectsParent>,
+    },
+    PlotArea {
+        chart_id: ChartId,
+        chart_object_parent: Option<ChartObjectsParent>,
+    },
     Axis {
         chart_id: ChartId,
         axis_index: usize,
@@ -18634,6 +18642,7 @@ impl ExcelRuntime {
                         "ChartArea",
                         "Name"
                             | "Format"
+                            | "Border"
                             | "Left"
                             | "Top"
                             | "Width"
@@ -18652,6 +18661,7 @@ impl ExcelRuntime {
                         "PlotArea",
                         "Name"
                             | "Format"
+                            | "Border"
                             | "Left"
                             | "Top"
                             | "Width"
@@ -24043,6 +24053,22 @@ impl ExcelRuntime {
                     },
                 },
             ))),
+            "Border" => Ok(OmValue::Object(self.register_object(
+                RuntimeObjectKind::Border {
+                    workbook,
+                    parent: match surface {
+                        "ChartArea" => BorderParent::ChartArea {
+                            chart_id,
+                            chart_object_parent,
+                        },
+                        "PlotArea" => BorderParent::PlotArea {
+                            chart_id,
+                            chart_object_parent,
+                        },
+                        _ => unreachable!("chart child surface was provided by runtime dispatch"),
+                    },
+                },
+            ))),
             "Name" => Ok(OmValue::Text(match surface {
                 "ChartArea" => "Chart Area".to_string(),
                 "PlotArea" => "Plot Area".to_string(),
@@ -24393,6 +24419,28 @@ impl ExcelRuntime {
         parent: BorderParent,
     ) -> OmResult<RuntimeObjectKind> {
         match parent {
+            BorderParent::ChartArea {
+                chart_id,
+                chart_object_parent,
+            } => {
+                self.chart_model(workbook, chart_id)?;
+                Ok(RuntimeObjectKind::ChartArea {
+                    workbook,
+                    chart_id,
+                    chart_object_parent,
+                })
+            }
+            BorderParent::PlotArea {
+                chart_id,
+                chart_object_parent,
+            } => {
+                self.chart_model(workbook, chart_id)?;
+                Ok(RuntimeObjectKind::PlotArea {
+                    workbook,
+                    chart_id,
+                    chart_object_parent,
+                })
+            }
             BorderParent::Axis {
                 chart_id,
                 axis_index,
@@ -34967,6 +35015,38 @@ impl ExcelRuntime {
                             ..
                         },
                     ..
+                }
+                | RuntimeObjectKind::Border {
+                    workbook: object_workbook,
+                    parent:
+                        BorderParent::ChartArea {
+                            chart_id: object_chart_id,
+                            ..
+                        }
+                        | BorderParent::PlotArea {
+                            chart_id: object_chart_id,
+                            ..
+                        }
+                        | BorderParent::DataTable {
+                            chart_id: object_chart_id,
+                            ..
+                        }
+                        | BorderParent::Gridlines {
+                            chart_id: object_chart_id,
+                            ..
+                        }
+                        | BorderParent::Axis {
+                            chart_id: object_chart_id,
+                            ..
+                        }
+                        | BorderParent::LeaderLines {
+                            chart_id: object_chart_id,
+                            ..
+                        }
+                        | BorderParent::ChartGroupLines {
+                            chart_id: object_chart_id,
+                            ..
+                        },
                 }
                 | RuntimeObjectKind::DataLabels {
                     workbook: object_workbook,
@@ -69716,6 +69796,7 @@ mod tests {
         for member_name in [
             "Name",
             "Format",
+            "Border",
             "Left",
             "Top",
             "Width",
@@ -69756,7 +69837,14 @@ mod tests {
         for (surface_name, read_members, method_members) in [
             (
                 "PlotArea",
-                &["Name", "Format", "Creator", "Application", "Parent"][..],
+                &[
+                    "Name",
+                    "Format",
+                    "Border",
+                    "Creator",
+                    "Application",
+                    "Parent",
+                ][..],
                 &["Select", "Copy", "Clear", "ClearFormats", "ClearContents"][..],
             ),
             (
@@ -110552,6 +110640,11 @@ mod tests {
                 .dispatch_get(chart_origin_chart_area, "Format", &[])
                 .expect("chart-origin ChartArea.Format"),
         );
+        let chart_origin_chart_area_border = expect_object_handle(
+            runtime
+                .dispatch_get(chart_origin_chart_area, "Border", &[])
+                .expect("chart-origin ChartArea.Border"),
+        );
         let chart_origin_format_chart_area = expect_object_handle(
             runtime
                 .dispatch_get(chart_origin_chart_area_format, "Parent", &[])
@@ -110579,6 +110672,34 @@ mod tests {
             runtime
                 .dispatch_get(chart, "ChartType", &[])
                 .expect("chart sheet Chart.ChartType after ChartArea.Format")
+        );
+        let chart_origin_border_chart_area = expect_object_handle(
+            runtime
+                .dispatch_get(chart_origin_chart_area_border, "Parent", &[])
+                .expect("chart-origin ChartArea.Border.Parent"),
+        );
+        let chart_origin_border_chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_origin_border_chart_area, "Parent", &[])
+                .expect("chart-origin ChartArea.Border.Parent.Parent"),
+        );
+        let chart_origin_border_chart_object = expect_object_handle(
+            runtime
+                .dispatch_get(chart_origin_border_chart, "Parent", &[])
+                .expect("chart-origin ChartArea.Border.Parent.Parent.Parent"),
+        );
+        let chart_origin_border_origin = expect_object_handle(
+            runtime
+                .dispatch_get(chart_origin_border_chart_object, "Parent", &[])
+                .expect("chart-origin ChartArea.Border parent origin"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_origin_border_origin, "ChartType", &[])
+                .expect("chart-origin ChartArea.Border parent origin ChartType"),
+            runtime
+                .dispatch_get(chart, "ChartType", &[])
+                .expect("chart sheet Chart.ChartType after ChartArea.Border")
         );
         runtime
             .dispatch_set(
@@ -111153,6 +111274,39 @@ mod tests {
             runtime
                 .dispatch_get(chart, "ChartType", &[])
                 .expect("chart sheet Chart.ChartType after PlotArea parent chain")
+        );
+        let sheet_origin_plot_area_border = expect_object_handle(
+            runtime
+                .dispatch_get(sheet_origin_plot_area, "Border", &[])
+                .expect("sheet-origin PlotArea.Border"),
+        );
+        let sheet_origin_plot_area_border_parent = expect_object_handle(
+            runtime
+                .dispatch_get(sheet_origin_plot_area_border, "Parent", &[])
+                .expect("sheet-origin PlotArea.Border.Parent"),
+        );
+        let sheet_origin_plot_area_border_chart = expect_object_handle(
+            runtime
+                .dispatch_get(sheet_origin_plot_area_border_parent, "Parent", &[])
+                .expect("sheet-origin PlotArea.Border.Parent.Parent"),
+        );
+        let sheet_origin_plot_area_border_chart_object = expect_object_handle(
+            runtime
+                .dispatch_get(sheet_origin_plot_area_border_chart, "Parent", &[])
+                .expect("sheet-origin PlotArea.Border.Parent.Parent.Parent"),
+        );
+        let sheet_origin_plot_area_border_origin = expect_object_handle(
+            runtime
+                .dispatch_get(sheet_origin_plot_area_border_chart_object, "Parent", &[])
+                .expect("sheet-origin PlotArea.Border parent origin"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(sheet_origin_plot_area_border_origin, "ChartType", &[])
+                .expect("sheet-origin PlotArea.Border parent origin ChartType"),
+            runtime
+                .dispatch_get(chart, "ChartType", &[])
+                .expect("chart sheet Chart.ChartType after PlotArea.Border")
         );
     }
 

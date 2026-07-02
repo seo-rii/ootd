@@ -10936,6 +10936,33 @@
           }
         },
         {
+          "name": "Border",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "ChartArea",
+                  "sourceMember": "Border"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Border",
+                "aliasOf": "Excel.Border"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "interface",
+            "name": "Border",
+            "aliasOf": "Excel.Border"
+          },
+          "access": "read"
+        },
+        {
           "name": "Left",
           "memberKind": "property",
           "support": "stub",
@@ -11295,6 +11322,33 @@
             "name": "ChartFormat",
             "aliasOf": "Excel.ChartFormat"
           }
+        },
+        {
+          "name": "Border",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "PlotArea",
+                  "sourceMember": "Border"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Border",
+                "aliasOf": "Excel.Border"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "interface",
+            "name": "Border",
+            "aliasOf": "Excel.Border"
+          },
+          "access": "read"
         },
         {
           "name": "Left",

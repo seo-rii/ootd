@@ -148,8 +148,8 @@ fn loads_office_idl_excel_om_template_and_summarizes_surface() {
     assert_eq!(summary.enum_count, 8);
     assert_eq!(summary.interface_count, 55);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 907);
-    assert_eq!(summary.stub_member_count, 907);
+    assert_eq!(summary.member_count, 909);
+    assert_eq!(summary.stub_member_count, 909);
     assert_eq!(
         document.interfaces[0].members[0]
             .metadata
@@ -1892,8 +1892,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
     assert_eq!(chart_object.member_count, 35);
     assert_eq!(shape_range.member_count, 46);
     assert_eq!(chart.member_count, 80);
-    assert_eq!(chart_area.member_count, 15);
-    assert_eq!(plot_area.member_count, 18);
+    assert_eq!(chart_area.member_count, 16);
+    assert_eq!(plot_area.member_count, 19);
     assert_eq!(chart_title.member_count, 15);
     assert_eq!(legend.member_count, 15);
     assert_eq!(legend_entries.member_count, 5);
@@ -3016,8 +3016,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(coverage.library, "Excel");
     assert_eq!(coverage.version, "16.0");
-    assert_eq!(coverage.member_count, 907);
-    assert_eq!(coverage.support_counts.stub, 907);
+    assert_eq!(coverage.member_count, 909);
+    assert_eq!(coverage.support_counts.stub, 909);
     assert!(coverage.missing_focus_surfaces.is_empty());
 
     let application_coverage = coverage
@@ -3770,13 +3770,14 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         ]
     );
 
-    assert_eq!(chart_area_coverage.member_count, 15);
-    assert_eq!(chart_area_coverage.support_counts.stub, 15);
+    assert_eq!(chart_area_coverage.member_count, 16);
+    assert_eq!(chart_area_coverage.support_counts.stub, 16);
     assert_eq!(
         chart_area_coverage.stub_members,
         vec![
             "Name".to_string(),
             "Format".to_string(),
+            "Border".to_string(),
             "Left".to_string(),
             "Top".to_string(),
             "Width".to_string(),
@@ -3793,13 +3794,14 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         ]
     );
 
-    assert_eq!(plot_area_coverage.member_count, 18);
-    assert_eq!(plot_area_coverage.support_counts.stub, 18);
+    assert_eq!(plot_area_coverage.member_count, 19);
+    assert_eq!(plot_area_coverage.support_counts.stub, 19);
     assert_eq!(
         plot_area_coverage.stub_members,
         vec![
             "Name".to_string(),
             "Format".to_string(),
+            "Border".to_string(),
             "Left".to_string(),
             "Top".to_string(),
             "Width".to_string(),
