@@ -87608,7 +87608,11 @@ mod tests {
         assert_eq!(
             expect_number(
                 runtime
-                    .dispatch_invoke(worksheet_function, "Count", &[OmValue::Object(first_source)])
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "Count",
+                        &[OmValue::Object(first_source)],
+                    )
                     .expect("WorksheetFunction.Count")
             ),
             2.0
@@ -87616,7 +87620,11 @@ mod tests {
         assert_eq!(
             expect_number(
                 runtime
-                    .dispatch_invoke(worksheet_function, "CountA", &[OmValue::Object(first_source)])
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "CountA",
+                        &[OmValue::Object(first_source)],
+                    )
                     .expect("WorksheetFunction.CountA")
             ),
             3.0
@@ -87925,7 +87933,11 @@ mod tests {
         assert!((fisher_value - 0.9729550745276566).abs() < 1e-8);
         let fisher_inv_value = expect_number(
             runtime
-                .dispatch_invoke(worksheet_function, "FisherInv", &[OmValue::Number(0.972955)])
+                .dispatch_invoke(
+                    worksheet_function,
+                    "FisherInv",
+                    &[OmValue::Number(0.972955)],
+                )
                 .expect("WorksheetFunction.FisherInv"),
         );
         assert!((fisher_inv_value - 0.972955_f64.tanh()).abs() < 1e-8);
@@ -88143,7 +88155,11 @@ mod tests {
                     .dispatch_invoke(
                         worksheet_function,
                         "Floor_Math",
-                        &[OmValue::Number(-4.3), OmValue::Number(2.0), OmValue::Number(1.0)],
+                        &[
+                            OmValue::Number(-4.3),
+                            OmValue::Number(2.0),
+                            OmValue::Number(1.0),
+                        ],
                     )
                     .expect("WorksheetFunction.Floor_Math")
             ),
@@ -88184,6 +88200,114 @@ mod tests {
                     .expect("WorksheetFunction.Iso_Ceiling")
             ),
             -4.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(worksheet_function, "Exp", &[OmValue::Number(0.0)])
+                    .expect("WorksheetFunction.Exp")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(worksheet_function, "Ln", &[OmValue::Number(1.0)])
+                    .expect("WorksheetFunction.Ln")
+            ),
+            0.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "Log",
+                        &[OmValue::Number(8.0), OmValue::Number(2.0)],
+                    )
+                    .expect("WorksheetFunction.Log")
+            ),
+            8_f64.log(2.0)
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(worksheet_function, "Log10", &[OmValue::Number(1000.0)])
+                    .expect("WorksheetFunction.Log10")
+            ),
+            3.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "Trunc",
+                        &[OmValue::Number(1234.0), OmValue::Number(-2.0)],
+                    )
+                    .expect("WorksheetFunction.Trunc")
+            ),
+            1200.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "BitAnd",
+                        &[OmValue::Number(13.0), OmValue::Number(11.0)],
+                    )
+                    .expect("WorksheetFunction.BitAnd")
+            ),
+            9.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "BitOr",
+                        &[OmValue::Number(13.0), OmValue::Number(11.0)],
+                    )
+                    .expect("WorksheetFunction.BitOr")
+            ),
+            15.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "BitXor",
+                        &[OmValue::Number(13.0), OmValue::Number(11.0)],
+                    )
+                    .expect("WorksheetFunction.BitXor")
+            ),
+            6.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "BitLShift",
+                        &[OmValue::Number(5.0), OmValue::Number(2.0)],
+                    )
+                    .expect("WorksheetFunction.BitLShift")
+            ),
+            20.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "BitRShift",
+                        &[OmValue::Number(20.0), OmValue::Number(2.0)],
+                    )
+                    .expect("WorksheetFunction.BitRShift")
+            ),
+            5.0
         );
         assert_eq!(
             expect_number(
