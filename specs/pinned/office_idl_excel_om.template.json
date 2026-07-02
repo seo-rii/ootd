@@ -13215,6 +13215,60 @@
             "aliasOf": "Excel.ChartFormat"
           },
           "access": "read"
+        },
+        {
+          "name": "Brightness",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "PictureFormat",
+                  "sourceMember": "Brightness"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Single"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Single"
+          },
+          "access": "read"
+        },
+        {
+          "name": "Contrast",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "PictureFormat",
+                  "sourceMember": "Contrast"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Single"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Single"
+          },
+          "access": "read"
         }
       ]
     },

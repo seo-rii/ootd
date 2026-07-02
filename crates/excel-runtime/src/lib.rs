@@ -2839,6 +2839,11 @@ impl ExcelRuntime {
                     "Depth" if matches!(kind, ChartFormatChildKind::ThreeD) => {
                         Ok(OmValue::Number(0.0))
                     }
+                    "Brightness" | "Contrast"
+                        if matches!(kind, ChartFormatChildKind::PictureFormat) =>
+                    {
+                        Ok(OmValue::Number(0.5))
+                    }
                     _ => Err(OmError::unsupported(format!(
                         "{surface}.{member} is not implemented"
                     ))),
@@ -18213,7 +18218,10 @@ impl ExcelRuntime {
                         "LineFormat",
                         "Creator" | "Application" | "Parent" | "Visible" | "Transparency"
                     )
-                    | ("PictureFormat", "Creator" | "Application" | "Parent")
+                    | (
+                        "PictureFormat",
+                        "Creator" | "Application" | "Parent" | "Brightness" | "Contrast"
+                    )
                     | (
                         "ShadowFormat",
                         "Creator" | "Application" | "Parent" | "Visible" | "Transparency"
@@ -68780,6 +68788,17 @@ mod tests {
             }
             if surface_name == "ThreeDFormat" {
                 for member_name in ["Visible", "Depth"] {
+                    let member = surface
+                        .members
+                        .iter()
+                        .find(|member| member.name == member_name)
+                        .unwrap_or_else(|| panic!("{surface_name}.{member_name} focus member"));
+                    assert!(matches!(member.support, office_idl::SupportState::Stub));
+                    assert!(matches!(member.access, office_idl::AccessMode::Read));
+                }
+            }
+            if surface_name == "PictureFormat" {
+                for member_name in ["Brightness", "Contrast"] {
                     let member = surface
                         .members
                         .iter()
@@ -129632,6 +129651,25 @@ mod tests {
                             .code,
                         OmErrorCode::InvalidArgument
                     );
+                }
+                if child_surface == "PictureFormat" {
+                    for member_name in ["Brightness", "Contrast"] {
+                        assert_eq!(
+                            runtime
+                                .dispatch_get(format_child, member_name, &[])
+                                .unwrap_or_else(|error| {
+                                    panic!("{child_surface}.{member_name} failed: {error:?}")
+                                }),
+                            OmValue::Number(0.5)
+                        );
+                        assert_eq!(
+                            runtime
+                                .dispatch_get(format_child, member_name, &[OmValue::Missing])
+                                .expect_err("PictureFormat getter rejects arguments")
+                                .code,
+                            OmErrorCode::InvalidArgument
+                        );
+                    }
                 }
                 assert_eq!(
                     runtime
