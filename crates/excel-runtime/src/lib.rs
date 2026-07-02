@@ -87618,6 +87618,158 @@ mod tests {
                 &[],
             )
             .expect("set Sheet1 paired y values");
+        let chisq_actual_source = expect_object_handle(
+            runtime
+                .dispatch_invoke(first_sheet, "Range", &[OmValue::Text("D1:D3".to_string())])
+                .expect("Sheet1.Range(D1:D3)"),
+        );
+        runtime
+            .dispatch_set(
+                chisq_actual_source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        3,
+                        1,
+                        vec![
+                            OmValue::Number(10.0),
+                            OmValue::Number(20.0),
+                            OmValue::Number(30.0),
+                        ],
+                    )
+                    .expect("CHISQ.TEST actual values"),
+                ),
+                &[],
+            )
+            .expect("set Sheet1 chisq actual values");
+        let chisq_expected_source = expect_object_handle(
+            runtime
+                .dispatch_invoke(first_sheet, "Range", &[OmValue::Text("E1:E3".to_string())])
+                .expect("Sheet1.Range(E1:E3)"),
+        );
+        runtime
+            .dispatch_set(
+                chisq_expected_source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        3,
+                        1,
+                        vec![
+                            OmValue::Number(20.0),
+                            OmValue::Number(20.0),
+                            OmValue::Number(20.0),
+                        ],
+                    )
+                    .expect("CHISQ.TEST expected values"),
+                ),
+                &[],
+            )
+            .expect("set Sheet1 chisq expected values");
+        let f_first_source = expect_object_handle(
+            runtime
+                .dispatch_invoke(first_sheet, "Range", &[OmValue::Text("F1:F2".to_string())])
+                .expect("Sheet1.Range(F1:F2)"),
+        );
+        runtime
+            .dispatch_set(
+                f_first_source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(2, 1, vec![OmValue::Number(1.0), OmValue::Number(5.0)])
+                        .expect("F.TEST first sample"),
+                ),
+                &[],
+            )
+            .expect("set Sheet1 f first values");
+        let f_second_source = expect_object_handle(
+            runtime
+                .dispatch_invoke(first_sheet, "Range", &[OmValue::Text("G1:G2".to_string())])
+                .expect("Sheet1.Range(G1:G2)"),
+        );
+        runtime
+            .dispatch_set(
+                f_second_source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(2, 1, vec![OmValue::Number(1.0), OmValue::Number(3.0)])
+                        .expect("F.TEST second sample"),
+                ),
+                &[],
+            )
+            .expect("set Sheet1 f second values");
+        let ttest_first_source = expect_object_handle(
+            runtime
+                .dispatch_invoke(first_sheet, "Range", &[OmValue::Text("H1:H3".to_string())])
+                .expect("Sheet1.Range(H1:H3)"),
+        );
+        runtime
+            .dispatch_set(
+                ttest_first_source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        3,
+                        1,
+                        vec![
+                            OmValue::Number(2.0),
+                            OmValue::Number(4.0),
+                            OmValue::Number(6.0),
+                        ],
+                    )
+                    .expect("T.TEST first sample"),
+                ),
+                &[],
+            )
+            .expect("set Sheet1 t first values");
+        let ttest_second_source = expect_object_handle(
+            runtime
+                .dispatch_invoke(first_sheet, "Range", &[OmValue::Text("I1:I3".to_string())])
+                .expect("Sheet1.Range(I1:I3)"),
+        );
+        runtime
+            .dispatch_set(
+                ttest_second_source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        3,
+                        1,
+                        vec![
+                            OmValue::Number(1.0),
+                            OmValue::Number(2.0),
+                            OmValue::Number(3.0),
+                        ],
+                    )
+                    .expect("T.TEST second sample"),
+                ),
+                &[],
+            )
+            .expect("set Sheet1 t second values");
+        let ztest_source = expect_object_handle(
+            runtime
+                .dispatch_invoke(first_sheet, "Range", &[OmValue::Text("J1:J3".to_string())])
+                .expect("Sheet1.Range(J1:J3)"),
+        );
+        runtime
+            .dispatch_set(
+                ztest_source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        3,
+                        1,
+                        vec![
+                            OmValue::Number(1.0),
+                            OmValue::Number(2.0),
+                            OmValue::Number(3.0),
+                        ],
+                    )
+                    .expect("Z.TEST sample"),
+                ),
+                &[],
+            )
+            .expect("set Sheet1 z values");
 
         assert_eq!(
             expect_number(
@@ -88190,6 +88342,58 @@ mod tests {
                 .expect("WorksheetFunction.T_Inv"),
         );
         assert!((t_inv - 1.0).abs() < 1e-6);
+        let chisq_test = expect_number(
+            runtime
+                .dispatch_invoke(
+                    worksheet_function,
+                    "ChiSq_Test",
+                    &[
+                        OmValue::Object(chisq_actual_source),
+                        OmValue::Object(chisq_expected_source),
+                    ],
+                )
+                .expect("WorksheetFunction.ChiSq_Test"),
+        );
+        assert!((chisq_test - (-5.0_f64).exp()).abs() < 1e-12);
+        let f_test = expect_number(
+            runtime
+                .dispatch_invoke(
+                    worksheet_function,
+                    "F_Test",
+                    &[
+                        OmValue::Object(f_first_source),
+                        OmValue::Object(f_second_source),
+                    ],
+                )
+                .expect("WorksheetFunction.F_Test"),
+        );
+        let expected_f_test = 2.0 * (1.0 - 2.0 / std::f64::consts::PI * 2.0_f64.atan());
+        assert!((f_test - expected_f_test).abs() < 1e-7);
+        let t_test = expect_number(
+            runtime
+                .dispatch_invoke(
+                    worksheet_function,
+                    "T_Test",
+                    &[
+                        OmValue::Object(ttest_first_source),
+                        OmValue::Object(ttest_second_source),
+                        OmValue::Number(2.0),
+                        OmValue::Number(1.0),
+                    ],
+                )
+                .expect("WorksheetFunction.T_Test"),
+        );
+        assert!((t_test - (1.0 - (6.0_f64 / 7.0).sqrt())).abs() < 1e-7);
+        let z_test = expect_number(
+            runtime
+                .dispatch_invoke(
+                    worksheet_function,
+                    "Z_Test",
+                    &[OmValue::Object(ztest_source), OmValue::Number(2.0)],
+                )
+                .expect("WorksheetFunction.Z_Test"),
+        );
+        assert!((z_test - 0.5).abs() < 1e-7);
         assert_eq!(
             expect_number(
                 runtime
