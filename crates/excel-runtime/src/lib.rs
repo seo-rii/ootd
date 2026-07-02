@@ -677,6 +677,13 @@ impl RuntimeSheetCollectionKind {
         }
     }
 
+    fn focus_surface_name(self) -> &'static str {
+        match self {
+            Self::Worksheets | Self::Sheets => "Worksheets",
+            Self::Charts => "Charts",
+        }
+    }
+
     fn includes(self, kind: SheetKind) -> bool {
         match self {
             Self::Worksheets => kind == SheetKind::Worksheet,
@@ -18473,6 +18480,22 @@ impl ExcelRuntime {
                         "Count" | "Item" | "Add" | "Creator" | "Application" | "Parent"
                     )
                     | (
+                        "Charts",
+                        "Count"
+                            | "Item"
+                            | "Add"
+                            | "Creator"
+                            | "Application"
+                            | "Parent"
+                            | "Visible"
+                            | "Delete"
+                            | "Copy"
+                            | "Move"
+                            | "PrintPreview"
+                            | "PrintOut"
+                            | "Select"
+                    )
+                    | (
                         "Name",
                         "Name"
                             | "RefersTo"
@@ -19943,9 +19966,8 @@ impl ExcelRuntime {
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
-        self.focus_member_supported("Worksheets", member, false)?;
-
         let collection_name = collection_kind.member_name();
+        self.focus_member_supported(collection_kind.focus_surface_name(), member, false)?;
         match member {
             "Count" => {
                 if !args.is_empty() {
@@ -29211,9 +29233,8 @@ impl ExcelRuntime {
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
-        self.focus_member_supported("Worksheets", member, false)?;
-
         let collection_name = collection_kind.member_name();
+        self.focus_member_supported(collection_kind.focus_surface_name(), member, false)?;
         match member {
             "Add" if collection_kind != RuntimeSheetCollectionKind::Charts => {
                 let added_sheet = self.add_worksheet(workbook, args)?;
@@ -71745,6 +71766,7 @@ mod tests {
             "ChartObjects",
             "ChartObject",
             "Chart",
+            "Charts",
             "ChartArea",
             "PlotArea",
             "ChartTitle",

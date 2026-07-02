@@ -69,11 +69,12 @@ pub struct CanonicalOmGenerationResult {
     pub summary: OmCaptureBundleSummary,
 }
 
-pub const PRIORITY_OM_SURFACES: [&str; 55] = [
+pub const PRIORITY_OM_SURFACES: [&str; 56] = [
     "Application",
     "Workbooks",
     "Workbook",
     "Worksheets",
+    "Charts",
     "Worksheet",
     "Range",
     "Areas",
