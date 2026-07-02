@@ -65634,7 +65634,8 @@ mod tests {
         .replace(r#"data-root="alpha""#, r#"data-root="beta""#)
         .replace(r#"data-extra="1""#, r#"data-extra="2""#)
         .replace(r#"r:id="rId1""#, r#"r:id="rId9""#)
-        .replace(r#"display="Example""#, r#"display="Drifted""#);
+        .replace(r#"display="Example""#, r#"display="Drifted""#)
+        .replace(r#"tooltip="Visit example""#, r#"tooltip="Drifted tip""#);
         loaded
             .package
             .replace_part_bytes("xl/worksheets/sheet1.xml", sheet_xml.into_bytes())
@@ -65679,10 +65680,12 @@ mod tests {
         assert!(saved_sheet_xml.contains(r#"data-extra="1""#));
         assert!(saved_sheet_xml.contains(r#"r:id="rId1""#));
         assert!(saved_sheet_xml.contains(r#"display="Example""#));
+        assert!(saved_sheet_xml.contains(r#"tooltip="Visit example""#));
         assert!(!saved_sheet_xml.contains(r#"data-root="beta""#));
         assert!(!saved_sheet_xml.contains(r#"data-extra="2""#));
         assert!(!saved_sheet_xml.contains(r#"r:id="rId9""#));
         assert!(!saved_sheet_xml.contains(r#"display="Drifted""#));
+        assert!(!saved_sheet_xml.contains(r#"tooltip="Drifted tip""#));
     }
 
     #[test]

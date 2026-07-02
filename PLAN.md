@@ -4229,6 +4229,8 @@
   - 범위: `workbook_with_blank_external_hyperlink_anchor_and_hyperlinks_container_attrs_bytes()` fallback path에서 worksheet XML의 `<hyperlink>` `r:id` binding drift를 주입한 뒤, dirty save가 `hyperlinks_part_summary`와 serialized hyperlink attr map을 기준으로 원래 `rId1` binding을 복구하는지 회귀로 검증
   - `Step 6.6b2b2b2b2b2f2b2s DONE` worksheet internal hyperlink location drift recovery
   - 범위: `workbook_with_blank_internal_hyperlink_anchor_bytes()` fallback path에서 internal hyperlink `location` attr drift를 주입한 뒤, dirty save가 `location="Sheet1!A1"`를 원본대로 복구하고 blank anchor `C3`는 reopen 후에도 비물질화 상태를 유지하는지 회귀로 검증
+  - `Step 6.6b2b2b2b2b2f2b2t DONE` worksheet external hyperlink tooltip drift recovery
+  - 범위: `workbook_with_blank_external_hyperlink_anchor_and_hyperlinks_container_attrs_bytes()` fallback path에서 worksheet XML의 external hyperlink `tooltip` attr drift를 주입한 뒤, dirty save가 `hyperlinks_part_summary`의 원본 attr map을 기준으로 `tooltip="Visit example"`을 복구하는지 회귀로 검증
 - 목표
   - 현재 core worksheet rewrite 이후 남아 있는 fidelity gap을 좁힌다.
   - style/theme/merge/comment/hyperlink/formula cached-value 계열 보존을 순차적으로 올린다.
