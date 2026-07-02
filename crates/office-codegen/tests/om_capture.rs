@@ -148,8 +148,8 @@ fn loads_office_idl_excel_om_template_and_summarizes_surface() {
     assert_eq!(summary.enum_count, 8);
     assert_eq!(summary.interface_count, 49);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 754);
-    assert_eq!(summary.stub_member_count, 754);
+    assert_eq!(summary.member_count, 758);
+    assert_eq!(summary.stub_member_count, 758);
     assert_eq!(
         document.interfaces[0].members[0]
             .metadata
@@ -1860,7 +1860,7 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
     assert_eq!(fill_format.member_count, 5);
     assert_eq!(glow_format.member_count, 4);
     assert_eq!(line_format.member_count, 5);
-    assert_eq!(picture_format.member_count, 5);
+    assert_eq!(picture_format.member_count, 9);
     assert_eq!(shadow_format.member_count, 5);
     assert_eq!(soft_edge_format.member_count, 4);
     assert_eq!(text_frame2.member_count, 4);
@@ -2968,8 +2968,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(coverage.library, "Excel");
     assert_eq!(coverage.version, "16.0");
-    assert_eq!(coverage.member_count, 754);
-    assert_eq!(coverage.support_counts.stub, 754);
+    assert_eq!(coverage.member_count, 758);
+    assert_eq!(coverage.support_counts.stub, 758);
     assert!(coverage.missing_focus_surfaces.is_empty());
 
     let application_coverage = coverage
@@ -3820,8 +3820,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         ]
     );
 
-    assert_eq!(picture_format_coverage.member_count, 5);
-    assert_eq!(picture_format_coverage.support_counts.stub, 5);
+    assert_eq!(picture_format_coverage.member_count, 9);
+    assert_eq!(picture_format_coverage.support_counts.stub, 9);
     assert_eq!(
         picture_format_coverage.stub_members,
         vec![
@@ -3829,7 +3829,11 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
             "Application".to_string(),
             "Parent".to_string(),
             "Brightness".to_string(),
-            "Contrast".to_string()
+            "Contrast".to_string(),
+            "CropLeft".to_string(),
+            "CropTop".to_string(),
+            "CropRight".to_string(),
+            "CropBottom".to_string()
         ]
     );
     assert_eq!(shadow_format_coverage.member_count, 5);

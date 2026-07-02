@@ -2844,6 +2844,11 @@ impl ExcelRuntime {
                     {
                         Ok(OmValue::Number(0.5))
                     }
+                    "CropLeft" | "CropTop" | "CropRight" | "CropBottom"
+                        if matches!(kind, ChartFormatChildKind::PictureFormat) =>
+                    {
+                        Ok(OmValue::Number(0.0))
+                    }
                     _ => Err(OmError::unsupported(format!(
                         "{surface}.{member} is not implemented"
                     ))),
@@ -18220,7 +18225,15 @@ impl ExcelRuntime {
                     )
                     | (
                         "PictureFormat",
-                        "Creator" | "Application" | "Parent" | "Brightness" | "Contrast"
+                        "Creator"
+                            | "Application"
+                            | "Parent"
+                            | "Brightness"
+                            | "Contrast"
+                            | "CropLeft"
+                            | "CropTop"
+                            | "CropRight"
+                            | "CropBottom"
                     )
                     | (
                         "ShadowFormat",
@@ -68798,7 +68811,14 @@ mod tests {
                 }
             }
             if surface_name == "PictureFormat" {
-                for member_name in ["Brightness", "Contrast"] {
+                for member_name in [
+                    "Brightness",
+                    "Contrast",
+                    "CropLeft",
+                    "CropTop",
+                    "CropRight",
+                    "CropBottom",
+                ] {
                     let member = surface
                         .members
                         .iter()
@@ -129653,14 +129673,21 @@ mod tests {
                     );
                 }
                 if child_surface == "PictureFormat" {
-                    for member_name in ["Brightness", "Contrast"] {
+                    for (member_name, expected) in [
+                        ("Brightness", 0.5),
+                        ("Contrast", 0.5),
+                        ("CropLeft", 0.0),
+                        ("CropTop", 0.0),
+                        ("CropRight", 0.0),
+                        ("CropBottom", 0.0),
+                    ] {
                         assert_eq!(
                             runtime
                                 .dispatch_get(format_child, member_name, &[])
                                 .unwrap_or_else(|error| {
                                     panic!("{child_surface}.{member_name} failed: {error:?}")
                                 }),
-                            OmValue::Number(0.5)
+                            OmValue::Number(expected)
                         );
                         assert_eq!(
                             runtime
