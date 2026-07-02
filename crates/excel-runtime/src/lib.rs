@@ -391,6 +391,11 @@ const MSO_PICTURE_AUTOMATIC: i32 = 1;
 const MSO_AUTO_SIZE_NONE: i32 = 0;
 const MSO_ANCHOR_NONE: i32 = 1;
 const MSO_ANCHOR_TOP: i32 = 1;
+const MSO_ARROWHEAD_LENGTH_MEDIUM: i32 = 2;
+const MSO_ARROWHEAD_NONE: i32 = 1;
+const MSO_ARROWHEAD_WIDTH_MEDIUM: i32 = 2;
+const MSO_LINE_SINGLE: i32 = 1;
+const MSO_LINE_SOLID: i32 = 1;
 const MSO_TEXT_ORIENTATION_HORIZONTAL: i32 = 1;
 const MSO_SCALE_FROM_TOP_LEFT: i32 = 0;
 const MSO_SCALE_FROM_MIDDLE: i32 = 1;
@@ -2823,6 +2828,33 @@ impl ExcelRuntime {
                             ChartFormatChildKind::Fill | ChartFormatChildKind::Line
                         ) =>
                     {
+                        Ok(OmValue::Number(0.0))
+                    }
+                    "BeginArrowheadLength" | "EndArrowheadLength"
+                        if matches!(kind, ChartFormatChildKind::Line) =>
+                    {
+                        Ok(OmValue::Number(f64::from(MSO_ARROWHEAD_LENGTH_MEDIUM)))
+                    }
+                    "BeginArrowheadStyle" | "EndArrowheadStyle"
+                        if matches!(kind, ChartFormatChildKind::Line) =>
+                    {
+                        Ok(OmValue::Number(f64::from(MSO_ARROWHEAD_NONE)))
+                    }
+                    "BeginArrowheadWidth" | "EndArrowheadWidth"
+                        if matches!(kind, ChartFormatChildKind::Line) =>
+                    {
+                        Ok(OmValue::Number(f64::from(MSO_ARROWHEAD_WIDTH_MEDIUM)))
+                    }
+                    "DashStyle" if matches!(kind, ChartFormatChildKind::Line) => {
+                        Ok(OmValue::Number(f64::from(MSO_LINE_SOLID)))
+                    }
+                    "InsetPen" if matches!(kind, ChartFormatChildKind::Line) => {
+                        Ok(OmValue::Number(f64::from(MSO_FALSE)))
+                    }
+                    "Style" if matches!(kind, ChartFormatChildKind::Line) => {
+                        Ok(OmValue::Number(f64::from(MSO_LINE_SINGLE)))
+                    }
+                    "Weight" if matches!(kind, ChartFormatChildKind::Line) => {
                         Ok(OmValue::Number(0.0))
                     }
                     "HasText" if matches!(kind, ChartFormatChildKind::TextFrame2) => {
@@ -18330,7 +18362,21 @@ impl ExcelRuntime {
                     )
                     | (
                         "LineFormat",
-                        "Creator" | "Application" | "Parent" | "Visible" | "Transparency"
+                        "Creator"
+                            | "Application"
+                            | "Parent"
+                            | "BeginArrowheadLength"
+                            | "BeginArrowheadStyle"
+                            | "BeginArrowheadWidth"
+                            | "DashStyle"
+                            | "EndArrowheadLength"
+                            | "EndArrowheadStyle"
+                            | "EndArrowheadWidth"
+                            | "InsetPen"
+                            | "Style"
+                            | "Transparency"
+                            | "Visible"
+                            | "Weight"
                     )
                     | (
                         "PictureFormat",
@@ -68898,8 +68944,32 @@ mod tests {
                 assert!(matches!(member.support, office_idl::SupportState::Stub));
                 assert!(matches!(member.access, office_idl::AccessMode::Read));
             }
-            if matches!(surface_name, "FillFormat" | "LineFormat") {
+            if surface_name == "FillFormat" {
                 for member_name in ["Visible", "Transparency"] {
+                    let member = surface
+                        .members
+                        .iter()
+                        .find(|member| member.name == member_name)
+                        .unwrap_or_else(|| panic!("{surface_name}.{member_name} focus member"));
+                    assert!(matches!(member.support, office_idl::SupportState::Stub));
+                    assert!(matches!(member.access, office_idl::AccessMode::Read));
+                }
+            }
+            if surface_name == "LineFormat" {
+                for member_name in [
+                    "BeginArrowheadLength",
+                    "BeginArrowheadStyle",
+                    "BeginArrowheadWidth",
+                    "DashStyle",
+                    "EndArrowheadLength",
+                    "EndArrowheadStyle",
+                    "EndArrowheadWidth",
+                    "InsetPen",
+                    "Style",
+                    "Transparency",
+                    "Visible",
+                    "Weight",
+                ] {
                     let member = surface
                         .members
                         .iter()
@@ -129768,6 +129838,50 @@ mod tests {
                         runtime
                             .dispatch_get(format_child, "Transparency", &[OmValue::Missing])
                             .expect_err("format child Transparency rejects arguments")
+                            .code,
+                        OmErrorCode::InvalidArgument
+                    );
+                }
+                if child_surface == "LineFormat" {
+                    for (member_name, expected) in [
+                        ("BeginArrowheadLength", super::MSO_ARROWHEAD_LENGTH_MEDIUM),
+                        ("BeginArrowheadStyle", super::MSO_ARROWHEAD_NONE),
+                        ("BeginArrowheadWidth", super::MSO_ARROWHEAD_WIDTH_MEDIUM),
+                        ("DashStyle", super::MSO_LINE_SOLID),
+                        ("EndArrowheadLength", super::MSO_ARROWHEAD_LENGTH_MEDIUM),
+                        ("EndArrowheadStyle", super::MSO_ARROWHEAD_NONE),
+                        ("EndArrowheadWidth", super::MSO_ARROWHEAD_WIDTH_MEDIUM),
+                        ("InsetPen", super::MSO_FALSE),
+                        ("Style", super::MSO_LINE_SINGLE),
+                    ] {
+                        assert_eq!(
+                            runtime
+                                .dispatch_get(format_child, member_name, &[])
+                                .unwrap_or_else(|error| {
+                                    panic!("{child_surface}.{member_name} failed: {error:?}")
+                                }),
+                            OmValue::Number(f64::from(expected))
+                        );
+                        assert_eq!(
+                            runtime
+                                .dispatch_get(format_child, member_name, &[OmValue::Missing])
+                                .expect_err("LineFormat enum getter rejects arguments")
+                                .code,
+                            OmErrorCode::InvalidArgument
+                        );
+                    }
+                    assert_eq!(
+                        runtime
+                            .dispatch_get(format_child, "Weight", &[])
+                            .unwrap_or_else(|error| {
+                                panic!("{child_surface}.Weight failed: {error:?}")
+                            }),
+                        OmValue::Number(0.0)
+                    );
+                    assert_eq!(
+                        runtime
+                            .dispatch_get(format_child, "Weight", &[OmValue::Missing])
+                            .expect_err("LineFormat.Weight rejects arguments")
                             .code,
                         OmErrorCode::InvalidArgument
                     );
