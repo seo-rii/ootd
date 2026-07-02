@@ -88948,6 +88948,104 @@ mod tests {
         assert_eq!(
             expect_number(
                 runtime
+                    .dispatch_invoke(worksheet_function, "IsLogical", &[OmValue::Bool(true)])
+                    .expect("WorksheetFunction.IsLogical")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(worksheet_function, "IsNonText", &[OmValue::Number(3.0)])
+                    .expect("WorksheetFunction.IsNonText")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "IsRef",
+                        &[OmValue::Object(first_source)]
+                    )
+                    .expect("WorksheetFunction.IsRef")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(worksheet_function, "N", &[OmValue::Bool(true)])
+                    .expect("WorksheetFunction.N")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "Type",
+                        &[OmValue::Text("literal".to_string())],
+                    )
+                    .expect("WorksheetFunction.Type")
+            ),
+            2.0
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(worksheet_function, "Error_Type", &[OmValue::Number(42.0)])
+                .expect("WorksheetFunction.Error_Type"),
+            OmValue::Error(CellError::NA)
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(worksheet_function, "Not", &[OmValue::Bool(false)])
+                    .expect("WorksheetFunction.Not")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "And",
+                        &[OmValue::Bool(true), OmValue::Number(1.0)],
+                    )
+                    .expect("WorksheetFunction.And")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "Or",
+                        &[OmValue::Bool(false), OmValue::Number(1.0)],
+                    )
+                    .expect("WorksheetFunction.Or")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "Xor",
+                        &[OmValue::Bool(true), OmValue::Bool(false)],
+                    )
+                    .expect("WorksheetFunction.Xor")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
                     .dispatch_invoke(
                         worksheet_function,
                         "SumIf",
