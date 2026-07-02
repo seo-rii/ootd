@@ -87568,6 +87568,56 @@ mod tests {
                 &[],
             )
             .expect("set Sheet1 source values");
+        let paired_x_source = expect_object_handle(
+            runtime
+                .dispatch_invoke(first_sheet, "Range", &[OmValue::Text("B1:B4".to_string())])
+                .expect("Sheet1.Range(B1:B4)"),
+        );
+        runtime
+            .dispatch_set(
+                paired_x_source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        4,
+                        1,
+                        vec![
+                            OmValue::Number(1.0),
+                            OmValue::Number(2.0),
+                            OmValue::Number(3.0),
+                            OmValue::Number(4.0),
+                        ],
+                    )
+                    .expect("paired x values"),
+                ),
+                &[],
+            )
+            .expect("set Sheet1 paired x values");
+        let paired_y_source = expect_object_handle(
+            runtime
+                .dispatch_invoke(first_sheet, "Range", &[OmValue::Text("C1:C4".to_string())])
+                .expect("Sheet1.Range(C1:C4)"),
+        );
+        runtime
+            .dispatch_set(
+                paired_y_source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        4,
+                        1,
+                        vec![
+                            OmValue::Number(2.0),
+                            OmValue::Number(4.0),
+                            OmValue::Number(6.0),
+                            OmValue::Number(8.0),
+                        ],
+                    )
+                    .expect("paired y values"),
+                ),
+                &[],
+            )
+            .expect("set Sheet1 paired y values");
 
         assert_eq!(
             expect_number(
@@ -87763,6 +87813,155 @@ mod tests {
                     .expect("WorksheetFunction.Rank")
             ),
             1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "Correl",
+                        &[
+                            OmValue::Object(paired_x_source),
+                            OmValue::Object(paired_y_source),
+                        ],
+                    )
+                    .expect("WorksheetFunction.Correl")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "Pearson",
+                        &[
+                            OmValue::Object(paired_x_source),
+                            OmValue::Object(paired_y_source),
+                        ],
+                    )
+                    .expect("WorksheetFunction.Pearson")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "Covar",
+                        &[
+                            OmValue::Object(paired_x_source),
+                            OmValue::Object(paired_y_source),
+                        ],
+                    )
+                    .expect("WorksheetFunction.Covar")
+            ),
+            2.5
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "Covariance_P",
+                        &[
+                            OmValue::Object(paired_x_source),
+                            OmValue::Object(paired_y_source),
+                        ],
+                    )
+                    .expect("WorksheetFunction.Covariance_P")
+            ),
+            2.5
+        );
+        let covariance_s = expect_number(
+            runtime
+                .dispatch_invoke(
+                    worksheet_function,
+                    "Covariance_S",
+                    &[
+                        OmValue::Object(paired_x_source),
+                        OmValue::Object(paired_y_source),
+                    ],
+                )
+                .expect("WorksheetFunction.Covariance_S"),
+        );
+        assert!((covariance_s - (10.0 / 3.0)).abs() < 1e-12);
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "Slope",
+                        &[
+                            OmValue::Object(paired_y_source),
+                            OmValue::Object(paired_x_source),
+                        ],
+                    )
+                    .expect("WorksheetFunction.Slope")
+            ),
+            2.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "Intercept",
+                        &[
+                            OmValue::Object(paired_y_source),
+                            OmValue::Object(paired_x_source),
+                        ],
+                    )
+                    .expect("WorksheetFunction.Intercept")
+            ),
+            0.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "RSq",
+                        &[
+                            OmValue::Object(paired_y_source),
+                            OmValue::Object(paired_x_source),
+                        ],
+                    )
+                    .expect("WorksheetFunction.RSq")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "Forecast",
+                        &[
+                            OmValue::Number(5.0),
+                            OmValue::Object(paired_y_source),
+                            OmValue::Object(paired_x_source),
+                        ],
+                    )
+                    .expect("WorksheetFunction.Forecast")
+            ),
+            10.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "Steyx",
+                        &[
+                            OmValue::Object(paired_y_source),
+                            OmValue::Object(paired_x_source),
+                        ],
+                    )
+                    .expect("WorksheetFunction.Steyx")
+            ),
+            0.0
         );
         assert_eq!(
             expect_number(
