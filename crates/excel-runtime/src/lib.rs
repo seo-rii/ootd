@@ -176,6 +176,8 @@ const XL_TICK_LABEL_POSITION_HIGH: i32 = -4127;
 const XL_TICK_LABEL_POSITION_LOW: i32 = -4134;
 const XL_TICK_LABEL_POSITION_NEXT_TO_AXIS: i32 = 4;
 const XL_TICK_LABEL_POSITION_NONE: i32 = -4142;
+const XL_TICK_LABEL_ORIENTATION_AUTOMATIC: i32 = -4105;
+const XL_READING_ORDER_CONTEXT: i32 = -5002;
 const XL_LABEL_POSITION_ABOVE: i32 = 0;
 const XL_LABEL_POSITION_BELOW: i32 = 1;
 const XL_LABEL_POSITION_BEST_FIT: i32 = 5;
@@ -25387,6 +25389,10 @@ impl ExcelRuntime {
                 axis.tick_label_number_format_linked.unwrap_or(true),
             )),
             "Offset" => Ok(OmValue::Number(100.0)),
+            "Orientation" => Ok(OmValue::Number(f64::from(
+                XL_TICK_LABEL_ORIENTATION_AUTOMATIC,
+            ))),
+            "ReadingOrder" => Ok(OmValue::Number(f64::from(XL_READING_ORDER_CONTEXT))),
             "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
             "Application" => Ok(OmValue::Object(self.root_application())),
             "Parent" => Ok(OmValue::Object(self.register_object(
@@ -68941,6 +68947,8 @@ mod tests {
             "Format",
             "MultiLevel",
             "Offset",
+            "Orientation",
+            "ReadingOrder",
             "Creator",
             "Application",
             "Parent",
@@ -129768,6 +129776,14 @@ mod tests {
             ("Depth", OmValue::Number(1.0)),
             ("MultiLevel", OmValue::Bool(true)),
             ("Offset", OmValue::Number(100.0)),
+            (
+                "Orientation",
+                OmValue::Number(f64::from(super::XL_TICK_LABEL_ORIENTATION_AUTOMATIC)),
+            ),
+            (
+                "ReadingOrder",
+                OmValue::Number(f64::from(super::XL_READING_ORDER_CONTEXT)),
+            ),
         ] {
             assert_eq!(
                 runtime

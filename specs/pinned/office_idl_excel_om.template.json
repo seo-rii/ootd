@@ -19946,6 +19946,60 @@
           "access": "read"
         },
         {
+          "name": "Orientation",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "TickLabels",
+                  "sourceMember": "Orientation"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "XlTickLabelOrientation"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "XlTickLabelOrientation"
+          },
+          "access": "read"
+        },
+        {
+          "name": "ReadingOrder",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "TickLabels",
+                  "sourceMember": "ReadingOrder"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "XlReadingOrder"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "XlReadingOrder"
+          },
+          "access": "read"
+        },
+        {
           "name": "Creator",
           "memberKind": "property",
           "support": "stub",
