@@ -87770,6 +87770,76 @@ mod tests {
                 &[],
             )
             .expect("set Sheet1 z values");
+        let shape_source = expect_object_handle(
+            runtime
+                .dispatch_invoke(first_sheet, "Range", &[OmValue::Text("K1:K10".to_string())])
+                .expect("Sheet1.Range(K1:K10)"),
+        );
+        runtime
+            .dispatch_set(
+                shape_source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        10,
+                        1,
+                        vec![
+                            OmValue::Number(3.0),
+                            OmValue::Number(4.0),
+                            OmValue::Number(5.0),
+                            OmValue::Number(2.0),
+                            OmValue::Number(3.0),
+                            OmValue::Number(4.0),
+                            OmValue::Number(5.0),
+                            OmValue::Number(6.0),
+                            OmValue::Number(4.0),
+                            OmValue::Number(7.0),
+                        ],
+                    )
+                    .expect("statistical shape values"),
+                ),
+                &[],
+            )
+            .expect("set Sheet1 shape values");
+        let prob_source = expect_object_handle(
+            runtime
+                .dispatch_invoke(first_sheet, "Range", &[OmValue::Text("L1:M4".to_string())])
+                .expect("Sheet1.Range(L1:M4)"),
+        );
+        runtime
+            .dispatch_set(
+                prob_source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        4,
+                        2,
+                        vec![
+                            OmValue::Number(0.0),
+                            OmValue::Number(0.2),
+                            OmValue::Number(1.0),
+                            OmValue::Number(0.3),
+                            OmValue::Number(2.0),
+                            OmValue::Number(0.1),
+                            OmValue::Number(3.0),
+                            OmValue::Number(0.4),
+                        ],
+                    )
+                    .expect("PROB source values"),
+                ),
+                &[],
+            )
+            .expect("set Sheet1 PROB values");
+        let prob_x_source = expect_object_handle(
+            runtime
+                .dispatch_invoke(first_sheet, "Range", &[OmValue::Text("L1:L4".to_string())])
+                .expect("Sheet1.Range(L1:L4)"),
+        );
+        let prob_p_source = expect_object_handle(
+            runtime
+                .dispatch_invoke(first_sheet, "Range", &[OmValue::Text("M1:M4".to_string())])
+                .expect("Sheet1.Range(M1:M4)"),
+        );
 
         assert_eq!(
             expect_number(
@@ -87830,6 +87900,54 @@ mod tests {
                     .expect("WorksheetFunction.CountA")
             ),
             3.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "AverageA",
+                        &[
+                            OmValue::Number(1.0),
+                            OmValue::Number(2.0),
+                            OmValue::Number(3.0),
+                        ],
+                    )
+                    .expect("WorksheetFunction.AverageA")
+            ),
+            2.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "MaxA",
+                        &[
+                            OmValue::Number(1.0),
+                            OmValue::Number(5.0),
+                            OmValue::Number(3.0),
+                        ],
+                    )
+                    .expect("WorksheetFunction.MaxA")
+            ),
+            5.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "MinA",
+                        &[
+                            OmValue::Number(1.0),
+                            OmValue::Number(5.0),
+                            OmValue::Number(3.0),
+                        ],
+                    )
+                    .expect("WorksheetFunction.MinA")
+            ),
+            1.0
         );
         assert_eq!(
             expect_number(
@@ -87918,6 +88036,67 @@ mod tests {
                 .expect("WorksheetFunction.HarMean"),
         );
         assert!((har_mean - (72.0 / 13.0)).abs() < 1e-12);
+        let ave_dev = expect_number(
+            runtime
+                .dispatch_invoke(
+                    worksheet_function,
+                    "AveDev",
+                    &[
+                        OmValue::Number(1.0),
+                        OmValue::Number(2.0),
+                        OmValue::Number(3.0),
+                    ],
+                )
+                .expect("WorksheetFunction.AveDev"),
+        );
+        assert!((ave_dev - (2.0 / 3.0)).abs() < 1e-12);
+        let kurt = expect_number(
+            runtime
+                .dispatch_invoke(worksheet_function, "Kurt", &[OmValue::Object(shape_source)])
+                .expect("WorksheetFunction.Kurt"),
+        );
+        assert!((kurt - -0.15179963720841627).abs() < 1e-10);
+        let skew = expect_number(
+            runtime
+                .dispatch_invoke(worksheet_function, "Skew", &[OmValue::Object(shape_source)])
+                .expect("WorksheetFunction.Skew"),
+        );
+        assert!((skew - 0.35954307140679737).abs() < 1e-10);
+        let skew_p = expect_number(
+            runtime
+                .dispatch_invoke(
+                    worksheet_function,
+                    "Skew_P",
+                    &[OmValue::Object(shape_source)],
+                )
+                .expect("WorksheetFunction.Skew_P"),
+        );
+        assert!((skew_p - 0.30319333935414383).abs() < 1e-10);
+        let trim_mean = expect_number(
+            runtime
+                .dispatch_invoke(
+                    worksheet_function,
+                    "TrimMean",
+                    &[OmValue::Object(shape_source), OmValue::Number(0.2)],
+                )
+                .expect("WorksheetFunction.TrimMean"),
+        );
+        assert!((trim_mean - 4.25).abs() < 1e-12);
+        let prob = expect_number(
+            runtime
+                .dispatch_invoke(
+                    worksheet_function,
+                    "Prob",
+                    &[
+                        OmValue::Object(prob_x_source),
+                        OmValue::Object(prob_p_source),
+                        OmValue::Number(1.0),
+                        OmValue::Number(3.0),
+                    ],
+                )
+                .expect("WorksheetFunction.Prob"),
+        );
+        assert!((prob - 0.8).abs() < 1e-12);
         assert_eq!(
             expect_number(
                 runtime
