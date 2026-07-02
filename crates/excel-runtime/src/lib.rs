@@ -87972,6 +87972,118 @@ mod tests {
         assert_eq!(
             expect_number(
                 runtime
+                    .dispatch_invoke(worksheet_function, "Odd", &[OmValue::Number(2.0)])
+                    .expect("WorksheetFunction.Odd")
+            ),
+            3.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "Gcd",
+                        &[OmValue::Number(24.0), OmValue::Number(36.0)],
+                    )
+                    .expect("WorksheetFunction.Gcd")
+            ),
+            12.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "Lcm",
+                        &[OmValue::Number(5.0), OmValue::Number(2.0)],
+                    )
+                    .expect("WorksheetFunction.Lcm")
+            ),
+            10.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(worksheet_function, "Fact", &[OmValue::Number(5.9)])
+                    .expect("WorksheetFunction.Fact")
+            ),
+            120.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(worksheet_function, "FactDouble", &[OmValue::Number(7.0)])
+                    .expect("WorksheetFunction.FactDouble")
+            ),
+            105.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "Combin",
+                        &[OmValue::Number(8.0), OmValue::Number(2.0)],
+                    )
+                    .expect("WorksheetFunction.Combin")
+            ),
+            28.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "Combina",
+                        &[OmValue::Number(4.0), OmValue::Number(3.0)],
+                    )
+                    .expect("WorksheetFunction.Combina")
+            ),
+            20.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "Permut",
+                        &[OmValue::Number(3.0), OmValue::Number(2.0)],
+                    )
+                    .expect("WorksheetFunction.Permut")
+            ),
+            6.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "PermutationA",
+                        &[OmValue::Number(3.0), OmValue::Number(2.0)],
+                    )
+                    .expect("WorksheetFunction.PermutationA")
+            ),
+            9.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "Multinomial",
+                        &[
+                            OmValue::Number(2.0),
+                            OmValue::Number(3.0),
+                            OmValue::Number(4.0),
+                        ],
+                    )
+                    .expect("WorksheetFunction.Multinomial")
+            ),
+            1260.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
                     .dispatch_invoke(
                         worksheet_function,
                         "SumIf",
