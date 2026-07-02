@@ -2858,6 +2858,9 @@ impl ExcelRuntime {
                     {
                         Ok(OmValue::Number(f64::from(MSO_FALSE)))
                     }
+                    "TransparencyColor" if matches!(kind, ChartFormatChildKind::PictureFormat) => {
+                        Ok(OmValue::Number(0.0))
+                    }
                     _ => Err(OmError::unsupported(format!(
                         "{surface}.{member} is not implemented"
                     ))),
@@ -18245,6 +18248,7 @@ impl ExcelRuntime {
                             | "CropRight"
                             | "CropBottom"
                             | "TransparentBackground"
+                            | "TransparencyColor"
                     )
                     | (
                         "ShadowFormat",
@@ -68831,6 +68835,7 @@ mod tests {
                     "CropRight",
                     "CropBottom",
                     "TransparentBackground",
+                    "TransparencyColor",
                 ] {
                     let member = surface
                         .members
@@ -129695,6 +129700,7 @@ mod tests {
                         ("CropRight", 0.0),
                         ("CropBottom", 0.0),
                         ("TransparentBackground", f64::from(super::MSO_FALSE)),
+                        ("TransparencyColor", 0.0),
                     ] {
                         assert_eq!(
                             runtime

@@ -13431,6 +13431,33 @@
             "aliasOf": "MsoTriState"
           },
           "access": "read"
+        },
+        {
+          "name": "TransparencyColor",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "PictureFormat",
+                  "sourceMember": "TransparencyColor"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "MsoRGBType"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "MsoRGBType"
+          },
+          "access": "read"
         }
       ]
     },
