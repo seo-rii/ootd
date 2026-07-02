@@ -87912,6 +87912,66 @@ mod tests {
         assert_eq!(
             expect_number(
                 runtime
+                    .dispatch_invoke(worksheet_function, "SqrtPi", &[OmValue::Number(2.0)])
+                    .expect("WorksheetFunction.SqrtPi")
+            ),
+            (2.0 * std::f64::consts::PI).sqrt()
+        );
+        let fisher_value = expect_number(
+            runtime
+                .dispatch_invoke(worksheet_function, "Fisher", &[OmValue::Number(0.75)])
+                .expect("WorksheetFunction.Fisher"),
+        );
+        assert!((fisher_value - 0.9729550745276566).abs() < 1e-8);
+        let fisher_inv_value = expect_number(
+            runtime
+                .dispatch_invoke(worksheet_function, "FisherInv", &[OmValue::Number(0.972955)])
+                .expect("WorksheetFunction.FisherInv"),
+        );
+        assert!((fisher_inv_value - 0.972955_f64.tanh()).abs() < 1e-8);
+        let erf_value = expect_number(
+            runtime
+                .dispatch_invoke(worksheet_function, "Erf", &[OmValue::Number(1.0)])
+                .expect("WorksheetFunction.Erf"),
+        );
+        assert!((erf_value - 0.8427007929497149).abs() < 1e-8);
+        let erf_precise_value = expect_number(
+            runtime
+                .dispatch_invoke(worksheet_function, "Erf_Precise", &[OmValue::Number(-1.0)])
+                .expect("WorksheetFunction.Erf_Precise"),
+        );
+        assert!((erf_precise_value + 0.8427007929497149).abs() < 1e-8);
+        let erfc_value = expect_number(
+            runtime
+                .dispatch_invoke(worksheet_function, "Erfc", &[OmValue::Number(1.0)])
+                .expect("WorksheetFunction.Erfc"),
+        );
+        assert!((erfc_value - 0.15729920705028513).abs() < 1e-8);
+        let erfc_precise_value = expect_number(
+            runtime
+                .dispatch_invoke(worksheet_function, "Erfc_Precise", &[OmValue::Number(-1.0)])
+                .expect("WorksheetFunction.Erfc_Precise"),
+        );
+        assert!((erfc_precise_value - 1.842700792949715).abs() < 1e-8);
+        let gamma_ln_value = expect_number(
+            runtime
+                .dispatch_invoke(worksheet_function, "GammaLn", &[OmValue::Number(4.0)])
+                .expect("WorksheetFunction.GammaLn"),
+        );
+        assert!((gamma_ln_value - 1.7917594692280554).abs() < 1e-8);
+        let gamma_ln_precise_value = expect_number(
+            runtime
+                .dispatch_invoke(
+                    worksheet_function,
+                    "GammaLn_Precise",
+                    &[OmValue::Number(0.5)],
+                )
+                .expect("WorksheetFunction.GammaLn_Precise"),
+        );
+        assert!((gamma_ln_precise_value - 0.5723649429247004).abs() < 1e-8);
+        assert_eq!(
+            expect_number(
+                runtime
                     .dispatch_invoke(
                         worksheet_function,
                         "SumIf",
