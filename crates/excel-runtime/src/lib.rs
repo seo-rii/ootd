@@ -87593,6 +87593,99 @@ mod tests {
             ),
             6.0
         );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "Average",
+                        &[OmValue::Object(first_source)],
+                    )
+                    .expect("WorksheetFunction.Average")
+            ),
+            5.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(worksheet_function, "Count", &[OmValue::Object(first_source)])
+                    .expect("WorksheetFunction.Count")
+            ),
+            2.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(worksheet_function, "CountA", &[OmValue::Object(first_source)])
+                    .expect("WorksheetFunction.CountA")
+            ),
+            3.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(worksheet_function, "Min", &[OmValue::Object(first_source)])
+                    .expect("WorksheetFunction.Min")
+            ),
+            4.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "Product",
+                        &[OmValue::Object(first_source)],
+                    )
+                    .expect("WorksheetFunction.Product")
+            ),
+            24.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "SumIf",
+                        &[
+                            OmValue::Object(first_source),
+                            OmValue::Text(">4".to_string()),
+                        ],
+                    )
+                    .expect("WorksheetFunction.SumIf")
+            ),
+            6.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "CountIf",
+                        &[
+                            OmValue::Object(first_source),
+                            OmValue::Text(">4".to_string()),
+                        ],
+                    )
+                    .expect("WorksheetFunction.CountIf")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_invoke(
+                        worksheet_function,
+                        "AverageIf",
+                        &[
+                            OmValue::Object(first_source),
+                            OmValue::Text(">4".to_string()),
+                        ],
+                    )
+                    .expect("WorksheetFunction.AverageIf")
+            ),
+            6.0
+        );
 
         let worksheets = expect_object_handle(
             runtime

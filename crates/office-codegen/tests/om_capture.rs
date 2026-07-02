@@ -148,8 +148,8 @@ fn loads_office_idl_excel_om_template_and_summarizes_surface() {
     assert_eq!(summary.enum_count, 8);
     assert_eq!(summary.interface_count, 58);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 947);
-    assert_eq!(summary.stub_member_count, 947);
+    assert_eq!(summary.member_count, 957);
+    assert_eq!(summary.stub_member_count, 957);
     assert_eq!(
         document.interfaces[0].members[0]
             .metadata
@@ -1905,7 +1905,7 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         .expect("Point");
 
     assert_eq!(application.member_count, 44);
-    assert_eq!(worksheet_function.member_count, 3);
+    assert_eq!(worksheet_function.member_count, 13);
     assert_eq!(workbooks.member_count, 7);
     assert_eq!(workbook.member_count, 26);
     assert_eq!(worksheets.member_count, 13);
@@ -3044,8 +3044,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(coverage.library, "Excel");
     assert_eq!(coverage.version, "16.0");
-    assert_eq!(coverage.member_count, 947);
-    assert_eq!(coverage.support_counts.stub, 947);
+    assert_eq!(coverage.member_count, 957);
+    assert_eq!(coverage.support_counts.stub, 957);
     assert!(coverage.missing_focus_surfaces.is_empty());
 
     let application_coverage = coverage
@@ -3391,14 +3391,24 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         ]
     );
 
-    assert_eq!(worksheet_function_coverage.member_count, 3);
-    assert_eq!(worksheet_function_coverage.support_counts.stub, 3);
+    assert_eq!(worksheet_function_coverage.member_count, 13);
+    assert_eq!(worksheet_function_coverage.support_counts.stub, 13);
     assert_eq!(
         worksheet_function_coverage.stub_members,
         vec![
             "Application".to_string(),
             "Creator".to_string(),
-            "Parent".to_string()
+            "Parent".to_string(),
+            "Sum".to_string(),
+            "Average".to_string(),
+            "Count".to_string(),
+            "CountA".to_string(),
+            "Min".to_string(),
+            "Max".to_string(),
+            "Product".to_string(),
+            "SumIf".to_string(),
+            "CountIf".to_string(),
+            "AverageIf".to_string()
         ]
     );
 
