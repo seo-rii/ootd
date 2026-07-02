@@ -13377,6 +13377,33 @@
             "aliasOf": "Single"
           },
           "access": "read"
+        },
+        {
+          "name": "TransparentBackground",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "PictureFormat",
+                  "sourceMember": "TransparentBackground"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "MsoTriState"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "MsoTriState"
+          },
+          "access": "read"
         }
       ]
     },
