@@ -22482,6 +22482,33 @@
           "access": "readwrite"
         },
         {
+          "name": "LeaderLines",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Series",
+                  "sourceMember": "LeaderLines"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "LeaderLines",
+                "aliasOf": "Excel.LeaderLines"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "interface",
+            "name": "LeaderLines",
+            "aliasOf": "Excel.LeaderLines"
+          },
+          "access": "read"
+        },
+        {
           "name": "DataLabels",
           "memberKind": "property",
           "support": "stub",
@@ -22760,6 +22787,157 @@
                 {
                   "kind": "method",
                   "sourceInterface": "Series",
+                  "sourceMember": "Delete"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "LeaderLines",
+      "kind": "dispatch",
+      "metadata": {
+        "sourceInherits": [
+          "IDispatch"
+        ]
+      },
+      "members": [
+        {
+          "name": "Format",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "LeaderLines",
+                  "sourceMember": "Format"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "ChartFormat",
+                "aliasOf": "Excel.ChartFormat"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "interface",
+            "name": "ChartFormat",
+            "aliasOf": "Excel.ChartFormat"
+          },
+          "access": "read"
+        },
+        {
+          "name": "Creator",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "LeaderLines",
+                  "sourceMember": "Creator"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "Int32"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "Int32"
+          },
+          "access": "read"
+        },
+        {
+          "name": "Application",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "LeaderLines",
+                  "sourceMember": "Application"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Application",
+                "aliasOf": "Excel.Application"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "interface",
+            "name": "Application",
+            "aliasOf": "Excel.Application"
+          },
+          "access": "read"
+        },
+        {
+          "name": "Parent",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "LeaderLines",
+                  "sourceMember": "Parent"
+                }
+              ],
+              "typeInfo": {
+                "kind": "interface",
+                "name": "Series",
+                "aliasOf": "Excel.Series"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "interface",
+            "name": "Series",
+            "aliasOf": "Excel.Series"
+          },
+          "access": "read"
+        },
+        {
+          "name": "Select",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "LeaderLines",
+                  "sourceMember": "Select"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Delete",
+          "memberKind": "method",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "method",
+                  "sourceInterface": "LeaderLines",
                   "sourceMember": "Delete"
                 }
               ]

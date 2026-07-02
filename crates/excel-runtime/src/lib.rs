@@ -751,6 +751,11 @@ enum ChartFormatParent {
         series_index: usize,
         chart_object_parent: Option<ChartObjectsParent>,
     },
+    LeaderLines {
+        chart_id: ChartId,
+        series_index: usize,
+        chart_object_parent: Option<ChartObjectsParent>,
+    },
     DataLabel {
         chart_id: ChartId,
         series_index: usize,
@@ -1083,6 +1088,12 @@ enum RuntimeObjectKind {
         chart_object_parent: Option<ChartObjectsParent>,
     },
     Series {
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        series_index: usize,
+        chart_object_parent: Option<ChartObjectsParent>,
+    },
+    LeaderLines {
         workbook: WorkbookHandle,
         chart_id: ChartId,
         series_index: usize,
@@ -3059,6 +3070,19 @@ impl ExcelRuntime {
                 series_index,
                 chart_object_parent,
             } => self.dispatch_get_data_labels(
+                workbook,
+                chart_id,
+                series_index,
+                chart_object_parent,
+                member,
+                args,
+            ),
+            RuntimeObjectKind::LeaderLines {
+                workbook,
+                chart_id,
+                series_index,
+                chart_object_parent,
+            } => self.dispatch_get_leader_lines(
                 workbook,
                 chart_id,
                 series_index,
@@ -6704,6 +6728,7 @@ impl ExcelRuntime {
             | RuntimeObjectKind::ChartCategory { .. }
             | RuntimeObjectKind::Axes { .. }
             | RuntimeObjectKind::SeriesCollection { .. }
+            | RuntimeObjectKind::LeaderLines { .. }
             | RuntimeObjectKind::Points { .. } => Err(OmError::unsupported(format!(
                 "member {member} is not writable for this object handle"
             ))),
@@ -17692,6 +17717,96 @@ impl ExcelRuntime {
                     "DataLabels.{member} is not implemented as a method"
                 ))),
             },
+            RuntimeObjectKind::LeaderLines {
+                workbook,
+                chart_id,
+                series_index,
+                chart_object_parent,
+            } => {
+                match member {
+                    "Select" => {
+                        if !args.is_empty() {
+                            return Err(OmError::invalid_argument(
+                                "LeaderLines.Select does not accept arguments",
+                            ));
+                        }
+                        if !self.leader_lines_visible(workbook, chart_id, series_index)? {
+                            return Err(OmError::new(
+                                OmErrorCode::NotFound,
+                                "leader lines not found",
+                            ));
+                        }
+                        let chart = self.register_chart_handle_with_chart_object_parent_origin(
+                            workbook,
+                            chart_id,
+                            chart_object_parent,
+                        );
+                        self.dispatch_invoke(chart, "Select", &[])
+                    }
+                    "Delete" => {
+                        if !args.is_empty() {
+                            return Err(OmError::invalid_argument(
+                                "LeaderLines.Delete does not accept arguments",
+                            ));
+                        }
+                        {
+                            let runtime = self.runtime_workbook_mut(workbook)?;
+                            if runtime.read_only {
+                                return Err(OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "cannot modify a read-only workbook",
+                                ));
+                            }
+                            let chart = runtime.loaded.state.charts.get_mut(&chart_id).ok_or_else(
+                                || OmError::new(OmErrorCode::NotFound, "chart not found"),
+                            )?;
+                            let inherited_data_labels = chart.data_labels.clone();
+                            let inherited_has_leader_lines = inherited_data_labels
+                                .as_ref()
+                                .and_then(|labels| labels.has_leader_lines)
+                                .unwrap_or(false);
+                            let series = chart.series.get_mut(series_index).ok_or_else(|| {
+                                OmError::new(OmErrorCode::NotFound, "series not found")
+                            })?;
+                            if let Some(data_labels) = series.data_labels.as_mut() {
+                                if data_labels.has_leader_lines != Some(true) {
+                                    return Err(OmError::new(
+                                        OmErrorCode::NotFound,
+                                        "leader lines not found",
+                                    ));
+                                }
+                                data_labels.has_leader_lines = Some(false);
+                                data_labels.dirty = true;
+                            } else if inherited_has_leader_lines {
+                                let mut data_labels = inherited_data_labels
+                                    .unwrap_or_else(chart_data_labels_default_visible_model);
+                                data_labels.has_leader_lines = Some(false);
+                                data_labels.dirty = true;
+                                series.data_labels = Some(data_labels);
+                            } else {
+                                return Err(OmError::new(
+                                    OmErrorCode::NotFound,
+                                    "leader lines not found",
+                                ));
+                            }
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                        }
+                        self.stale_leader_lines_handles_for_series(
+                            workbook,
+                            chart_id,
+                            series_index,
+                        );
+                        self.find_state = None;
+                        self.cut_copy_mode = None;
+                        self.clipboard = None;
+                        Ok(OmValue::Empty)
+                    }
+                    _ => Err(OmError::unsupported(format!(
+                        "LeaderLines.{member} is not implemented as a method"
+                    ))),
+                }
+            }
             RuntimeObjectKind::DataLabel {
                 workbook,
                 chart_id,
@@ -18175,6 +18290,7 @@ impl ExcelRuntime {
             RuntimeObjectKind::ChartFormatChild { kind, .. } => Some(kind.surface_name()),
             RuntimeObjectKind::PictureCrop { .. } => Some("Crop"),
             RuntimeObjectKind::DataLabels { .. } => Some("DataLabels"),
+            RuntimeObjectKind::LeaderLines { .. } => Some("LeaderLines"),
             RuntimeObjectKind::DataLabel { .. } => Some("DataLabel"),
             RuntimeObjectKind::ChartGroups { .. } => Some("ChartGroups"),
             RuntimeObjectKind::ChartGroup { .. } => Some("ChartGroup"),
@@ -18941,6 +19057,7 @@ impl ExcelRuntime {
                             | "AxisGroup"
                             | "HasDataLabels"
                             | "HasLeaderLines"
+                            | "LeaderLines"
                             | "DataLabels"
                             | "Points"
                             | "PlotOrder"
@@ -18954,6 +19071,10 @@ impl ExcelRuntime {
                             | "Copy"
                             | "Paste"
                             | "Delete"
+                    )
+                    | (
+                        "LeaderLines",
+                        "Format" | "Creator" | "Application" | "Parent" | "Select" | "Delete"
                     )
                     | (
                         "DataLabels",
@@ -24133,6 +24254,24 @@ impl ExcelRuntime {
                     chart_object_parent,
                 })
             }
+            ChartFormatParent::LeaderLines {
+                chart_id,
+                series_index,
+                chart_object_parent,
+            } => {
+                if !self.leader_lines_visible(workbook, chart_id, series_index)? {
+                    return Err(OmError::new(
+                        OmErrorCode::NotFound,
+                        "leader lines not found",
+                    ));
+                }
+                Ok(RuntimeObjectKind::LeaderLines {
+                    workbook,
+                    chart_id,
+                    series_index,
+                    chart_object_parent,
+                })
+            }
             ChartFormatParent::DataLabel {
                 chart_id,
                 series_index,
@@ -26900,6 +27039,22 @@ impl ExcelRuntime {
                 .and_then(|labels| labels.has_leader_lines)
                 .unwrap_or(false),
             )),
+            "LeaderLines" => {
+                if !self.leader_lines_visible(workbook, chart_id, series_index)? {
+                    return Err(OmError::new(
+                        OmErrorCode::NotFound,
+                        "leader lines not found",
+                    ));
+                }
+                Ok(OmValue::Object(
+                    self.register_leader_lines_handle_with_chart_object_parent_origin(
+                        workbook,
+                        chart_id,
+                        series_index,
+                        chart_object_parent,
+                    ),
+                ))
+            }
             "DataLabels" => {
                 self.series_model(workbook, chart_id, series_index)?;
                 let handle = self.register_data_labels_handle_with_chart_object_parent_origin(
@@ -26943,6 +27098,52 @@ impl ExcelRuntime {
             )),
             _ => Err(OmError::unsupported(format!(
                 "Series.{member} is not implemented"
+            ))),
+        }
+    }
+
+    fn dispatch_get_leader_lines(
+        &mut self,
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        series_index: usize,
+        chart_object_parent: Option<ChartObjectsParent>,
+        member: &str,
+        args: &[OmValue],
+    ) -> OmResult<OmValue> {
+        if self.focus_member_declared("LeaderLines", member) {
+            self.focus_member_supported("LeaderLines", member, false)?;
+        }
+
+        if !args.is_empty() {
+            return Err(OmError::invalid_argument(format!(
+                "LeaderLines.{member} does not accept arguments"
+            )));
+        }
+        self.leader_lines_visible(workbook, chart_id, series_index)?;
+        match member {
+            "Format" => Ok(OmValue::Object(self.register_object(
+                RuntimeObjectKind::ChartFormat {
+                    workbook,
+                    parent: ChartFormatParent::LeaderLines {
+                        chart_id,
+                        series_index,
+                        chart_object_parent,
+                    },
+                },
+            ))),
+            "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
+            "Application" => Ok(OmValue::Object(self.root_application())),
+            "Parent" => Ok(OmValue::Object(
+                self.register_series_handle_with_chart_object_parent_origin(
+                    workbook,
+                    chart_id,
+                    series_index,
+                    chart_object_parent,
+                ),
+            )),
+            _ => Err(OmError::unsupported(format!(
+                "LeaderLines.{member} is not implemented"
             ))),
         }
     }
@@ -32354,6 +32555,21 @@ impl ExcelRuntime {
         })
     }
 
+    fn register_leader_lines_handle_with_chart_object_parent_origin(
+        &mut self,
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        series_index: usize,
+        chart_object_parent: Option<ChartObjectsParent>,
+    ) -> ObjectHandle {
+        self.register_object(RuntimeObjectKind::LeaderLines {
+            workbook,
+            chart_id,
+            series_index,
+            chart_object_parent,
+        })
+    }
+
     fn register_data_label_handle_with_chart_object_parent_origin(
         &mut self,
         workbook: WorkbookHandle,
@@ -33771,6 +33987,22 @@ impl ExcelRuntime {
         Ok(())
     }
 
+    fn leader_lines_visible(
+        &self,
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        series_index: usize,
+    ) -> OmResult<bool> {
+        let labels =
+            chart_series_effective_data_labels(self.chart_model(workbook, chart_id)?, series_index);
+        if labels.is_none() && self.series_model(workbook, chart_id, series_index).is_err() {
+            return Err(OmError::new(OmErrorCode::NotFound, "series not found"));
+        }
+        Ok(labels
+            .and_then(|labels| labels.has_leader_lines)
+            .unwrap_or(false))
+    }
+
     fn validate_data_label_index(
         &self,
         workbook: WorkbookHandle,
@@ -34326,6 +34558,10 @@ impl ExcelRuntime {
                             chart_id: object_chart_id,
                             ..
                         }
+                        | ChartFormatParent::LeaderLines {
+                            chart_id: object_chart_id,
+                            ..
+                        }
                         | ChartFormatParent::DataLabel {
                             chart_id: object_chart_id,
                             ..
@@ -34395,6 +34631,10 @@ impl ExcelRuntime {
                             ..
                         }
                         | ChartFormatParent::DataLabels {
+                            chart_id: object_chart_id,
+                            ..
+                        }
+                        | ChartFormatParent::LeaderLines {
                             chart_id: object_chart_id,
                             ..
                         }
@@ -34470,6 +34710,10 @@ impl ExcelRuntime {
                             chart_id: object_chart_id,
                             ..
                         }
+                        | ChartFormatParent::LeaderLines {
+                            chart_id: object_chart_id,
+                            ..
+                        }
                         | ChartFormatParent::DataLabel {
                             chart_id: object_chart_id,
                             ..
@@ -34485,6 +34729,11 @@ impl ExcelRuntime {
                     ..
                 }
                 | RuntimeObjectKind::DataLabels {
+                    workbook: object_workbook,
+                    chart_id: object_chart_id,
+                    ..
+                }
+                | RuntimeObjectKind::LeaderLines {
                     workbook: object_workbook,
                     chart_id: object_chart_id,
                     ..
@@ -34819,6 +35068,64 @@ impl ExcelRuntime {
         }
     }
 
+    fn stale_leader_lines_handles_for_series(
+        &mut self,
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        series_index: usize,
+    ) {
+        let stale_object_ids = self
+            .objects
+            .iter()
+            .filter_map(|(&object_id, object)| match object {
+                RuntimeObjectKind::LeaderLines {
+                    workbook: object_workbook,
+                    chart_id: object_chart_id,
+                    series_index: object_series_index,
+                    ..
+                }
+                | RuntimeObjectKind::ChartFormat {
+                    workbook: object_workbook,
+                    parent:
+                        ChartFormatParent::LeaderLines {
+                            chart_id: object_chart_id,
+                            series_index: object_series_index,
+                            ..
+                        },
+                }
+                | RuntimeObjectKind::Adjustments {
+                    workbook: object_workbook,
+                    parent:
+                        ChartFormatParent::LeaderLines {
+                            chart_id: object_chart_id,
+                            series_index: object_series_index,
+                            ..
+                        },
+                }
+                | RuntimeObjectKind::ChartFormatChild {
+                    workbook: object_workbook,
+                    parent:
+                        ChartFormatParent::LeaderLines {
+                            chart_id: object_chart_id,
+                            series_index: object_series_index,
+                            ..
+                        },
+                    ..
+                } if *object_workbook == workbook
+                    && *object_chart_id == chart_id
+                    && *object_series_index == series_index =>
+                {
+                    Some(object_id)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        for object_id in stale_object_ids {
+            self.objects.remove(&object_id);
+            self.stale_objects.insert(object_id);
+        }
+    }
+
     fn stale_chart_title_handles_for_chart(&mut self, workbook: WorkbookHandle, chart_id: ChartId) {
         let stale_object_ids = self
             .objects
@@ -35069,6 +35376,10 @@ impl ExcelRuntime {
                             chart_id: object_chart_id,
                             ..
                         }
+                        | ChartFormatParent::LeaderLines {
+                            chart_id: object_chart_id,
+                            ..
+                        }
                         | ChartFormatParent::DataLabel {
                             chart_id: object_chart_id,
                             ..
@@ -35089,6 +35400,10 @@ impl ExcelRuntime {
                             chart_id: object_chart_id,
                             ..
                         }
+                        | ChartFormatParent::LeaderLines {
+                            chart_id: object_chart_id,
+                            ..
+                        }
                         | ChartFormatParent::DataLabel {
                             chart_id: object_chart_id,
                             ..
@@ -35106,6 +35421,10 @@ impl ExcelRuntime {
                             ..
                         }
                         | ChartFormatParent::DataLabels {
+                            chart_id: object_chart_id,
+                            ..
+                        }
+                        | ChartFormatParent::LeaderLines {
                             chart_id: object_chart_id,
                             ..
                         }
@@ -47086,6 +47405,7 @@ fn runtime_object_owner(object: RuntimeObjectKind) -> Option<WorkbookHandle> {
         | RuntimeObjectKind::ChartFormatChild { workbook, .. }
         | RuntimeObjectKind::PictureCrop { workbook, .. }
         | RuntimeObjectKind::DataLabels { workbook, .. }
+        | RuntimeObjectKind::LeaderLines { workbook, .. }
         | RuntimeObjectKind::DataLabel { workbook, .. }
         | RuntimeObjectKind::ChartGroups { workbook, .. }
         | RuntimeObjectKind::ChartGroup { workbook, .. }
@@ -70025,12 +70345,17 @@ mod tests {
                 "Series",
                 &[
                     "Format",
+                    "LeaderLines",
                     "DataLabels",
                     "Points",
                     "Creator",
                     "Application",
                     "Parent",
                 ][..],
+            ),
+            (
+                "LeaderLines",
+                &["Format", "Creator", "Application", "Parent"][..],
             ),
             (
                 "DataLabels",
@@ -70105,6 +70430,7 @@ mod tests {
                 "DataLabels",
                 &["Item", "Delete", "Propagate", "Select", "ClearFormats"][..],
             ),
+            ("LeaderLines", &["Select", "Delete"][..]),
             ("DataLabel", &["Delete", "Select", "ClearFormats"][..]),
             ("Points", &["Item"][..]),
             (
@@ -70435,6 +70761,7 @@ mod tests {
             "AxisTitle",
             "SeriesCollection",
             "Series",
+            "LeaderLines",
             "DataLabels",
             "DataLabel",
             "Points",
@@ -129040,6 +129367,151 @@ mod tests {
                 .dispatch_get(second_label, "Separator", &[])
                 .expect("DataLabel.Separator after Series.ApplyDataLabels"),
             OmValue::Text(" / ".to_string())
+        );
+    }
+
+    #[test]
+    fn series_leader_lines_surface_follows_data_label_state() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection"),
+        );
+        let series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("SeriesCollection.Item(1)"),
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_get(series, "LeaderLines", &[])
+                .expect_err("Series.LeaderLines rejects absent leader lines")
+                .code,
+            OmErrorCode::NotFound
+        );
+        runtime
+            .dispatch_invoke(
+                series,
+                "ApplyDataLabels",
+                &[
+                    OmValue::Number(f64::from(super::XL_DATA_LABELS_SHOW_VALUE)),
+                    OmValue::Bool(false),
+                    OmValue::Bool(true),
+                    OmValue::Bool(true),
+                    OmValue::Bool(false),
+                    OmValue::Bool(false),
+                    OmValue::Bool(true),
+                    OmValue::Bool(false),
+                    OmValue::Bool(false),
+                    OmValue::Text(", ".to_string()),
+                ],
+            )
+            .expect("Series.ApplyDataLabels with leader lines");
+        assert_eq!(
+            runtime
+                .dispatch_get(series, "HasLeaderLines", &[])
+                .expect("Series.HasLeaderLines after ApplyDataLabels"),
+            OmValue::Bool(true)
+        );
+        let leader_lines = expect_object_handle(
+            runtime
+                .dispatch_get(series, "LeaderLines", &[])
+                .expect("Series.LeaderLines"),
+        );
+        let leader_format = expect_object_handle(
+            runtime
+                .dispatch_get(leader_lines, "Format", &[])
+                .expect("LeaderLines.Format"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(leader_lines, "Creator", &[])
+                .expect("LeaderLines.Creator"),
+            OmValue::Number(f64::from(super::XL_CREATOR_CODE))
+        );
+        let leader_parent = expect_object_handle(
+            runtime
+                .dispatch_get(leader_lines, "Parent", &[])
+                .expect("LeaderLines.Parent"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(leader_parent, "PlotOrder", &[])
+                .expect("LeaderLines.Parent.PlotOrder"),
+            OmValue::Number(1.0)
+        );
+        let format_parent = expect_object_handle(
+            runtime
+                .dispatch_get(leader_format, "Parent", &[])
+                .expect("LeaderLines.Format.Parent"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(format_parent, "Creator", &[])
+                .expect("LeaderLines.Format.Parent.Creator"),
+            OmValue::Number(f64::from(super::XL_CREATOR_CODE))
+        );
+        runtime
+            .dispatch_invoke(leader_lines, "Select", &[])
+            .expect("LeaderLines.Select");
+        runtime
+            .dispatch_invoke(leader_lines, "Delete", &[])
+            .expect("LeaderLines.Delete");
+        assert_eq!(
+            runtime
+                .dispatch_get(series, "HasLeaderLines", &[])
+                .expect("Series.HasLeaderLines after LeaderLines.Delete"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(series, "HasDataLabels", &[])
+                .expect("Series.HasDataLabels after LeaderLines.Delete"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(leader_lines, "Creator", &[])
+                .expect_err("LeaderLines handle is stale after Delete")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(leader_format, "Creator", &[])
+                .expect_err("LeaderLines.Format handle is stale after Delete")
+                .code,
+            OmErrorCode::InvalidState
         );
     }
 
