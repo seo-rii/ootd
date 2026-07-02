@@ -2808,6 +2808,14 @@ impl ExcelRuntime {
                     {
                         Ok(OmValue::Number(f64::from(MSO_TRUE)))
                     }
+                    "Transparency"
+                        if matches!(
+                            kind,
+                            ChartFormatChildKind::Fill | ChartFormatChildKind::Line
+                        ) =>
+                    {
+                        Ok(OmValue::Number(0.0))
+                    }
                     _ => Err(OmError::unsupported(format!(
                         "{surface}.{member} is not implemented"
                     ))),
@@ -18172,12 +18180,12 @@ impl ExcelRuntime {
                     )
                     | (
                         "FillFormat",
-                        "Creator" | "Application" | "Parent" | "Visible"
+                        "Creator" | "Application" | "Parent" | "Visible" | "Transparency"
                     )
                     | ("GlowFormat", "Creator" | "Application" | "Parent")
                     | (
                         "LineFormat",
-                        "Creator" | "Application" | "Parent" | "Visible"
+                        "Creator" | "Application" | "Parent" | "Visible" | "Transparency"
                     )
                     | ("PictureFormat", "Creator" | "Application" | "Parent")
                     | ("ShadowFormat", "Creator" | "Application" | "Parent")
@@ -68693,13 +68701,15 @@ mod tests {
                 assert!(matches!(member.access, office_idl::AccessMode::Read));
             }
             if matches!(surface_name, "FillFormat" | "LineFormat") {
-                let member = surface
-                    .members
-                    .iter()
-                    .find(|member| member.name == "Visible")
-                    .unwrap_or_else(|| panic!("{surface_name}.Visible focus member"));
-                assert!(matches!(member.support, office_idl::SupportState::Stub));
-                assert!(matches!(member.access, office_idl::AccessMode::Read));
+                for member_name in ["Visible", "Transparency"] {
+                    let member = surface
+                        .members
+                        .iter()
+                        .find(|member| member.name == member_name)
+                        .unwrap_or_else(|| panic!("{surface_name}.{member_name} focus member"));
+                    assert!(matches!(member.support, office_idl::SupportState::Stub));
+                    assert!(matches!(member.access, office_idl::AccessMode::Read));
+                }
             }
         }
         let series = runtime
@@ -129428,6 +129438,21 @@ mod tests {
                         runtime
                             .dispatch_get(format_child, "Visible", &[OmValue::Missing])
                             .expect_err("format child Visible rejects arguments")
+                            .code,
+                        OmErrorCode::InvalidArgument
+                    );
+                    assert_eq!(
+                        runtime
+                            .dispatch_get(format_child, "Transparency", &[])
+                            .unwrap_or_else(|error| {
+                                panic!("{child_surface}.Transparency failed: {error:?}")
+                            }),
+                        OmValue::Number(0.0)
+                    );
+                    assert_eq!(
+                        runtime
+                            .dispatch_get(format_child, "Transparency", &[OmValue::Missing])
+                            .expect_err("format child Transparency rejects arguments")
                             .code,
                         OmErrorCode::InvalidArgument
                     );

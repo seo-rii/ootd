@@ -12831,6 +12831,33 @@
             "aliasOf": "MsoTriState"
           },
           "access": "read"
+        },
+        {
+          "name": "Transparency",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "FillFormat",
+                  "sourceMember": "Transparency"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
+          },
+          "access": "read"
         }
       ]
     },
@@ -13040,6 +13067,33 @@
             "kind": "primitive",
             "name": "i32",
             "aliasOf": "MsoTriState"
+          },
+          "access": "read"
+        },
+        {
+          "name": "Transparency",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "LineFormat",
+                  "sourceMember": "Transparency"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Double"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Double"
           },
           "access": "read"
         }
