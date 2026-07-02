@@ -2833,6 +2833,12 @@ impl ExcelRuntime {
                     "Transparency" if matches!(kind, ChartFormatChildKind::Shadow) => {
                         Ok(OmValue::Number(0.0))
                     }
+                    "Visible" if matches!(kind, ChartFormatChildKind::ThreeD) => {
+                        Ok(OmValue::Number(f64::from(MSO_FALSE)))
+                    }
+                    "Depth" if matches!(kind, ChartFormatChildKind::ThreeD) => {
+                        Ok(OmValue::Number(0.0))
+                    }
                     _ => Err(OmError::unsupported(format!(
                         "{surface}.{member} is not implemented"
                     ))),
@@ -18220,7 +18226,10 @@ impl ExcelRuntime {
                         "TextFrame2",
                         "Creator" | "Application" | "Parent" | "HasText"
                     )
-                    | ("ThreeDFormat", "Creator" | "Application" | "Parent")
+                    | (
+                        "ThreeDFormat",
+                        "Creator" | "Application" | "Parent" | "Visible" | "Depth"
+                    )
                     | (
                         "ChartGroups",
                         "Count" | "Item" | "Creator" | "Application" | "Parent"
@@ -68760,6 +68769,17 @@ mod tests {
             }
             if surface_name == "ShadowFormat" {
                 for member_name in ["Visible", "Transparency"] {
+                    let member = surface
+                        .members
+                        .iter()
+                        .find(|member| member.name == member_name)
+                        .unwrap_or_else(|| panic!("{surface_name}.{member_name} focus member"));
+                    assert!(matches!(member.support, office_idl::SupportState::Stub));
+                    assert!(matches!(member.access, office_idl::AccessMode::Read));
+                }
+            }
+            if surface_name == "ThreeDFormat" {
+                for member_name in ["Visible", "Depth"] {
                     let member = surface
                         .members
                         .iter()
@@ -129577,6 +129597,38 @@ mod tests {
                         runtime
                             .dispatch_get(format_child, "Transparency", &[OmValue::Missing])
                             .expect_err("ShadowFormat.Transparency rejects arguments")
+                            .code,
+                        OmErrorCode::InvalidArgument
+                    );
+                }
+                if child_surface == "ThreeDFormat" {
+                    assert_eq!(
+                        runtime
+                            .dispatch_get(format_child, "Visible", &[])
+                            .unwrap_or_else(|error| {
+                                panic!("{child_surface}.Visible failed: {error:?}")
+                            }),
+                        OmValue::Number(f64::from(super::MSO_FALSE))
+                    );
+                    assert_eq!(
+                        runtime
+                            .dispatch_get(format_child, "Visible", &[OmValue::Missing])
+                            .expect_err("ThreeDFormat.Visible rejects arguments")
+                            .code,
+                        OmErrorCode::InvalidArgument
+                    );
+                    assert_eq!(
+                        runtime
+                            .dispatch_get(format_child, "Depth", &[])
+                            .unwrap_or_else(|error| {
+                                panic!("{child_surface}.Depth failed: {error:?}")
+                            }),
+                        OmValue::Number(0.0)
+                    );
+                    assert_eq!(
+                        runtime
+                            .dispatch_get(format_child, "Depth", &[OmValue::Missing])
+                            .expect_err("ThreeDFormat.Depth rejects arguments")
                             .code,
                         OmErrorCode::InvalidArgument
                     );
