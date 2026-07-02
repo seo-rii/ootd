@@ -148,8 +148,8 @@ fn loads_office_idl_excel_om_template_and_summarizes_surface() {
     assert_eq!(summary.enum_count, 8);
     assert_eq!(summary.interface_count, 50);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 816);
-    assert_eq!(summary.stub_member_count, 816);
+    assert_eq!(summary.member_count, 832);
+    assert_eq!(summary.stub_member_count, 832);
     assert_eq!(
         document.interfaces[0].members[0]
             .metadata
@@ -1858,9 +1858,9 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
     assert_eq!(shape_range.member_count, 46);
     assert_eq!(chart.member_count, 80);
     assert_eq!(chart_area.member_count, 15);
-    assert_eq!(plot_area.member_count, 10);
-    assert_eq!(chart_title.member_count, 9);
-    assert_eq!(legend.member_count, 10);
+    assert_eq!(plot_area.member_count, 18);
+    assert_eq!(chart_title.member_count, 13);
+    assert_eq!(legend.member_count, 14);
     assert_eq!(data_table.member_count, 10);
     assert_eq!(chart_format.member_count, 13);
     assert_eq!(adjustments.member_count, 5);
@@ -2976,8 +2976,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(coverage.library, "Excel");
     assert_eq!(coverage.version, "16.0");
-    assert_eq!(coverage.member_count, 816);
-    assert_eq!(coverage.support_counts.stub, 816);
+    assert_eq!(coverage.member_count, 832);
+    assert_eq!(coverage.support_counts.stub, 832);
     assert!(coverage.missing_focus_surfaces.is_empty());
 
     let application_coverage = coverage
@@ -3728,13 +3728,21 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         ]
     );
 
-    assert_eq!(plot_area_coverage.member_count, 10);
-    assert_eq!(plot_area_coverage.support_counts.stub, 10);
+    assert_eq!(plot_area_coverage.member_count, 18);
+    assert_eq!(plot_area_coverage.support_counts.stub, 18);
     assert_eq!(
         plot_area_coverage.stub_members,
         vec![
             "Name".to_string(),
             "Format".to_string(),
+            "Left".to_string(),
+            "Top".to_string(),
+            "Width".to_string(),
+            "Height".to_string(),
+            "InsideLeft".to_string(),
+            "InsideTop".to_string(),
+            "InsideWidth".to_string(),
+            "InsideHeight".to_string(),
             "Creator".to_string(),
             "Application".to_string(),
             "Parent".to_string(),
@@ -3746,8 +3754,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         ]
     );
 
-    assert_eq!(chart_title_coverage.member_count, 9);
-    assert_eq!(chart_title_coverage.support_counts.stub, 9);
+    assert_eq!(chart_title_coverage.member_count, 13);
+    assert_eq!(chart_title_coverage.support_counts.stub, 13);
     assert_eq!(
         chart_title_coverage.stub_members,
         vec![
@@ -3755,6 +3763,10 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
             "Format".to_string(),
             "Text".to_string(),
             "Caption".to_string(),
+            "Left".to_string(),
+            "Top".to_string(),
+            "Width".to_string(),
+            "Height".to_string(),
             "Creator".to_string(),
             "Application".to_string(),
             "Parent".to_string(),
@@ -3763,8 +3775,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
         ]
     );
 
-    assert_eq!(legend_coverage.member_count, 10);
-    assert_eq!(legend_coverage.support_counts.stub, 10);
+    assert_eq!(legend_coverage.member_count, 14);
+    assert_eq!(legend_coverage.support_counts.stub, 14);
     assert_eq!(
         legend_coverage.stub_members,
         vec![
@@ -3772,6 +3784,10 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
             "Format".to_string(),
             "Position".to_string(),
             "IncludeInLayout".to_string(),
+            "Left".to_string(),
+            "Top".to_string(),
+            "Width".to_string(),
+            "Height".to_string(),
             "Creator".to_string(),
             "Application".to_string(),
             "Parent".to_string(),

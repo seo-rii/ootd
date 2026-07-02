@@ -18304,6 +18304,14 @@ impl ExcelRuntime {
                         "PlotArea",
                         "Name"
                             | "Format"
+                            | "Left"
+                            | "Top"
+                            | "Width"
+                            | "Height"
+                            | "InsideLeft"
+                            | "InsideTop"
+                            | "InsideWidth"
+                            | "InsideHeight"
                             | "Creator"
                             | "Application"
                             | "Parent"
@@ -18319,6 +18327,10 @@ impl ExcelRuntime {
                             | "Format"
                             | "Text"
                             | "Caption"
+                            | "Left"
+                            | "Top"
+                            | "Width"
+                            | "Height"
                             | "Creator"
                             | "Application"
                             | "Parent"
@@ -18331,6 +18343,10 @@ impl ExcelRuntime {
                             | "Format"
                             | "Position"
                             | "IncludeInLayout"
+                            | "Left"
+                            | "Top"
+                            | "Width"
+                            | "Height"
                             | "Creator"
                             | "Application"
                             | "Parent"
@@ -23646,6 +23662,12 @@ impl ExcelRuntime {
                     member,
                 )?))
             }
+            "Left" | "Top" | "Width" | "Height" | "InsideLeft" | "InsideTop" | "InsideWidth"
+            | "InsideHeight"
+                if surface == "PlotArea" =>
+            {
+                Ok(OmValue::Number(0.0))
+            }
             "RoundedCorners" if surface == "ChartArea" => Ok(OmValue::Bool(
                 self.chart_model(workbook, chart_id)?
                     .rounded_corners
@@ -23942,6 +23964,7 @@ impl ExcelRuntime {
                 },
             ))),
             "IncludeInLayout" => Ok(OmValue::Bool(legend.include_in_layout.unwrap_or(true))),
+            "Left" | "Top" | "Width" | "Height" => Ok(OmValue::Number(0.0)),
             "Position" => {
                 let position = legend.position.ok_or_else(|| {
                     OmError::unsupported("Legend.Position is unavailable for unknown position")
@@ -25574,6 +25597,7 @@ impl ExcelRuntime {
                 },
             ))),
             "Text" | "Caption" => Ok(OmValue::Text(title.text.clone())),
+            "Left" | "Top" | "Width" | "Height" => Ok(OmValue::Number(0.0)),
             "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
             "Application" => Ok(OmValue::Object(self.root_application())),
             "Parent" => Ok(OmValue::Object(
@@ -129580,6 +129604,45 @@ mod tests {
                 .expect("Application.CutCopyMode default"),
             OmValue::Bool(false)
         );
+
+        for (handle, surface, members) in [
+            (
+                plot_area,
+                "PlotArea",
+                &[
+                    "Left",
+                    "Top",
+                    "Width",
+                    "Height",
+                    "InsideLeft",
+                    "InsideTop",
+                    "InsideWidth",
+                    "InsideHeight",
+                ][..],
+            ),
+            (
+                chart_title,
+                "ChartTitle",
+                &["Left", "Top", "Width", "Height"][..],
+            ),
+            (legend, "Legend", &["Left", "Top", "Width", "Height"][..]),
+        ] {
+            for member in members {
+                assert_eq!(
+                    runtime
+                        .dispatch_get(handle, member, &[])
+                        .unwrap_or_else(|error| panic!("{surface}.{member} failed: {error:?}")),
+                    OmValue::Number(0.0)
+                );
+                assert_eq!(
+                    runtime
+                        .dispatch_get(handle, member, &[OmValue::Missing])
+                        .expect_err(&format!("{surface}.{member} rejects arguments"))
+                        .code,
+                    OmErrorCode::InvalidArgument
+                );
+            }
+        }
 
         for (handle, member, args) in [
             (chart_object, "Copy", Vec::new()),
