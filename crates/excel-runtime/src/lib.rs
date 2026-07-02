@@ -18999,6 +18999,7 @@ impl ExcelRuntime {
                         "DropLines",
                         "Name"
                             | "Format"
+                            | "Border"
                             | "Creator"
                             | "Application"
                             | "Parent"
@@ -19011,6 +19012,7 @@ impl ExcelRuntime {
                         "HiLoLines",
                         "Name"
                             | "Format"
+                            | "Border"
                             | "Creator"
                             | "Application"
                             | "Parent"
@@ -19023,6 +19025,7 @@ impl ExcelRuntime {
                         "UpBars",
                         "Name"
                             | "Format"
+                            | "Border"
                             | "Creator"
                             | "Application"
                             | "Parent"
@@ -19035,6 +19038,7 @@ impl ExcelRuntime {
                         "DownBars",
                         "Name"
                             | "Format"
+                            | "Border"
                             | "Creator"
                             | "Application"
                             | "Parent"
@@ -122070,6 +122074,30 @@ mod tests {
                     .dispatch_get(line_object, "Format", &[])
                     .expect("ChartGroup line object Format"),
             );
+            let border = expect_object_handle(
+                runtime
+                    .dispatch_get(line_object, "Border", &[])
+                    .expect("ChartGroup line object Border"),
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(border, "LineStyle", &[])
+                    .expect("ChartGroup line object Border.LineStyle"),
+                OmValue::Number(f64::from(super::XL_CONTINUOUS))
+            );
+            let border_parent = expect_object_handle(
+                runtime
+                    .dispatch_get(border, "Parent", &[])
+                    .expect("ChartGroup line object Border.Parent"),
+            );
+            assert_eq!(
+                expect_text(
+                    runtime
+                        .dispatch_get(border_parent, "Name", &[])
+                        .expect("ChartGroup line object Border.Parent.Name")
+                ),
+                display_name
+            );
             let format_parent = expect_object_handle(
                 runtime
                     .dispatch_get(format, "Parent", &[])
@@ -122174,13 +122202,13 @@ mod tests {
                     .code,
                 OmErrorCode::Unsupported
             );
-            line_objects.push((line_object, format, member, flag_member));
+            line_objects.push((line_object, format, border, member, flag_member));
         }
 
         let mut down_bars_handles = None;
-        for (line_object, format, member, flag_member) in line_objects {
+        for (line_object, format, border, member, flag_member) in line_objects {
             if member == "DownBars" {
-                down_bars_handles = Some((line_object, format));
+                down_bars_handles = Some((line_object, format, border));
                 continue;
             }
             let search_range = expect_object_handle(
@@ -122242,13 +122270,20 @@ mod tests {
             );
             assert_eq!(
                 runtime
+                    .dispatch_get(border, "LineStyle", &[])
+                    .expect_err("deleted ChartGroup line Border should be stale")
+                    .code,
+                OmErrorCode::InvalidState
+            );
+            assert_eq!(
+                runtime
                     .dispatch_get(chart_group, member, &[])
                     .expect_err("deleted ChartGroup line object should be unavailable")
                     .code,
                 OmErrorCode::NotFound
             );
             if member == "UpBars" {
-                let (down_bars, down_bars_format) =
+                let (down_bars, down_bars_format, down_bars_border) =
                     down_bars_handles.expect("DownBars handle before UpBars.Delete");
                 assert_eq!(
                     runtime
@@ -122261,6 +122296,13 @@ mod tests {
                     runtime
                         .dispatch_get(down_bars_format, "Creator", &[])
                         .expect_err("DownBars.Format should be stale after UpBars.Delete")
+                        .code,
+                    OmErrorCode::InvalidState
+                );
+                assert_eq!(
+                    runtime
+                        .dispatch_get(down_bars_border, "LineStyle", &[])
+                        .expect_err("DownBars.Border should be stale after UpBars.Delete")
                         .code,
                     OmErrorCode::InvalidState
                 );
@@ -122285,6 +122327,11 @@ mod tests {
             runtime
                 .dispatch_get(down_bars, "Format", &[])
                 .expect("DownBars.Format after restore"),
+        );
+        let down_bars_border = expect_object_handle(
+            runtime
+                .dispatch_get(down_bars, "Border", &[])
+                .expect("DownBars.Border after restore"),
         );
         let search_range = expect_object_handle(
             runtime
@@ -122337,6 +122384,13 @@ mod tests {
             runtime
                 .dispatch_get(down_bars_format, "Creator", &[])
                 .expect_err("DownBars.Format should be stale after DownBars.Delete")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(down_bars_border, "LineStyle", &[])
+                .expect_err("DownBars.Border should be stale after DownBars.Delete")
                 .code,
             OmErrorCode::InvalidState
         );
