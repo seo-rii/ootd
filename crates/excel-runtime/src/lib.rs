@@ -18678,6 +18678,10 @@ impl ExcelRuntime {
                             | "Format"
                             | "Text"
                             | "Caption"
+                            | "Left"
+                            | "Top"
+                            | "Width"
+                            | "Height"
                             | "Creator"
                             | "Application"
                             | "Parent"
@@ -18690,6 +18694,10 @@ impl ExcelRuntime {
                             | "Format"
                             | "Text"
                             | "Caption"
+                            | "Left"
+                            | "Top"
+                            | "Width"
+                            | "Height"
                             | "Creator"
                             | "Application"
                             | "Parent"
@@ -25428,6 +25436,7 @@ impl ExcelRuntime {
                 },
             ))),
             "Text" | "Caption" => Ok(OmValue::Text(title.text.clone())),
+            "Left" | "Top" | "Width" | "Height" => Ok(OmValue::Number(0.0)),
             "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
             "Application" => Ok(OmValue::Object(self.root_application())),
             "Parent" => Ok(OmValue::Object(self.register_object(
@@ -25488,6 +25497,7 @@ impl ExcelRuntime {
                 },
             ))),
             "Text" | "Caption" => Ok(OmValue::Text(chart_axis_display_unit_label_text(axis))),
+            "Left" | "Top" | "Width" | "Height" => Ok(OmValue::Number(0.0)),
             "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
             "Application" => Ok(OmValue::Object(self.root_application())),
             "Parent" => Ok(OmValue::Object(self.register_object(
@@ -68936,6 +68946,50 @@ mod tests {
                 .find(|member| member.name == member_name)
                 .unwrap_or_else(|| panic!("Gridlines.{member_name} focus member"));
             assert!(matches!(member.support, office_idl::SupportState::Stub));
+        }
+        for surface_name in ["AxisTitle", "DisplayUnitLabel"] {
+            let surface = runtime
+                .dispatch_registry()
+                .focus_surfaces
+                .iter()
+                .find(|surface| surface.name == surface_name)
+                .unwrap_or_else(|| panic!("{surface_name} focus surface"));
+            for member_name in [
+                "Name",
+                "Format",
+                "Left",
+                "Top",
+                "Width",
+                "Height",
+                "Creator",
+                "Application",
+                "Parent",
+            ] {
+                let member = surface
+                    .members
+                    .iter()
+                    .find(|member| member.name == member_name)
+                    .unwrap_or_else(|| panic!("{surface_name}.{member_name} focus member"));
+                assert!(matches!(member.support, office_idl::SupportState::Stub));
+                assert!(matches!(member.access, office_idl::AccessMode::Read));
+            }
+            for member_name in ["Text", "Caption"] {
+                let member = surface
+                    .members
+                    .iter()
+                    .find(|member| member.name == member_name)
+                    .unwrap_or_else(|| panic!("{surface_name}.{member_name} focus member"));
+                assert!(matches!(member.support, office_idl::SupportState::Stub));
+                assert!(matches!(member.access, office_idl::AccessMode::Readwrite));
+            }
+            for member_name in ["Select", "Delete"] {
+                let member = surface
+                    .members
+                    .iter()
+                    .find(|member| member.name == member_name)
+                    .unwrap_or_else(|| panic!("{surface_name}.{member_name} focus member"));
+                assert!(matches!(member.support, office_idl::SupportState::Stub));
+            }
         }
         let chart_format = runtime
             .dispatch_registry()
@@ -129551,10 +129605,36 @@ mod tests {
                 )
                 .expect("Axes.Item(xlCategory)"),
         );
+        let value_axis = expect_object_handle(
+            runtime
+                .dispatch_invoke(axes, "Item", &[OmValue::Number(f64::from(super::XL_VALUE))])
+                .expect("Axes.Item(xlValue)"),
+        );
         let tick_labels = expect_object_handle(
             runtime
                 .dispatch_get(axis, "TickLabels", &[])
                 .expect("Axis.TickLabels"),
+        );
+        runtime
+            .dispatch_set(axis, "HasTitle", OmValue::Bool(true), &[])
+            .expect("enable axis title for layout getters");
+        let axis_title = expect_object_handle(
+            runtime
+                .dispatch_get(axis, "AxisTitle", &[])
+                .expect("Axis.AxisTitle"),
+        );
+        runtime
+            .dispatch_set(
+                value_axis,
+                "DisplayUnit",
+                OmValue::Number(f64::from(super::XL_DISPLAY_UNIT_CUSTOM)),
+                &[],
+            )
+            .expect("enable display unit label for layout getters");
+        let display_unit_label = expect_object_handle(
+            runtime
+                .dispatch_get(value_axis, "DisplayUnitLabel", &[])
+                .expect("Axis.DisplayUnitLabel"),
         );
         let series_collection = expect_object_handle(
             runtime
@@ -129626,6 +129706,16 @@ mod tests {
                 &["Left", "Top", "Width", "Height"][..],
             ),
             (legend, "Legend", &["Left", "Top", "Width", "Height"][..]),
+            (
+                axis_title,
+                "AxisTitle",
+                &["Left", "Top", "Width", "Height"][..],
+            ),
+            (
+                display_unit_label,
+                "DisplayUnitLabel",
+                &["Left", "Top", "Width", "Height"][..],
+            ),
         ] {
             for member in members {
                 assert_eq!(
