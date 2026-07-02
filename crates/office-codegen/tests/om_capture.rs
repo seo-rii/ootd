@@ -148,8 +148,8 @@ fn loads_office_idl_excel_om_template_and_summarizes_surface() {
     assert_eq!(summary.enum_count, 8);
     assert_eq!(summary.interface_count, 50);
     assert_eq!(summary.class_count, 3);
-    assert_eq!(summary.member_count, 800);
-    assert_eq!(summary.stub_member_count, 800);
+    assert_eq!(summary.member_count, 803);
+    assert_eq!(summary.stub_member_count, 803);
     assert_eq!(
         document.interfaces[0].members[0]
             .metadata
@@ -1865,12 +1865,12 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
     assert_eq!(chart_format.member_count, 13);
     assert_eq!(adjustments.member_count, 5);
     assert_eq!(fill_format.member_count, 5);
-    assert_eq!(glow_format.member_count, 4);
+    assert_eq!(glow_format.member_count, 6);
     assert_eq!(line_format.member_count, 15);
     assert_eq!(picture_format.member_count, 15);
     assert_eq!(crop.member_count, 11);
     assert_eq!(shadow_format.member_count, 10);
-    assert_eq!(soft_edge_format.member_count, 4);
+    assert_eq!(soft_edge_format.member_count, 5);
     assert_eq!(text_frame2.member_count, 14);
     assert_eq!(three_d_format.member_count, 5);
     assert_eq!(chart_groups.member_count, 5);
@@ -2976,8 +2976,8 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
 
     assert_eq!(coverage.library, "Excel");
     assert_eq!(coverage.version, "16.0");
-    assert_eq!(coverage.member_count, 800);
-    assert_eq!(coverage.support_counts.stub, 800);
+    assert_eq!(coverage.member_count, 803);
+    assert_eq!(coverage.support_counts.stub, 803);
     assert!(coverage.missing_focus_surfaces.is_empty());
 
     let application_coverage = coverage
@@ -3902,19 +3902,31 @@ fn summarizes_focus_surface_registry_and_coverage_from_template_document() {
             "Depth".to_string()
         ]
     );
-    for coverage_entry in [glow_format_coverage, soft_edge_format_coverage] {
-        assert_eq!(coverage_entry.member_count, 4);
-        assert_eq!(coverage_entry.support_counts.stub, 4);
-        assert_eq!(
-            coverage_entry.stub_members,
-            vec![
-                "Creator".to_string(),
-                "Application".to_string(),
-                "Parent".to_string(),
-                "Radius".to_string()
-            ]
-        );
-    }
+    assert_eq!(glow_format_coverage.member_count, 6);
+    assert_eq!(glow_format_coverage.support_counts.stub, 6);
+    assert_eq!(
+        glow_format_coverage.stub_members,
+        vec![
+            "Creator".to_string(),
+            "Application".to_string(),
+            "Parent".to_string(),
+            "Radius".to_string(),
+            "Transparency".to_string(),
+            "Visible".to_string()
+        ]
+    );
+    assert_eq!(soft_edge_format_coverage.member_count, 5);
+    assert_eq!(soft_edge_format_coverage.support_counts.stub, 5);
+    assert_eq!(
+        soft_edge_format_coverage.stub_members,
+        vec![
+            "Creator".to_string(),
+            "Application".to_string(),
+            "Parent".to_string(),
+            "Radius".to_string(),
+            "Type".to_string()
+        ]
+    );
     assert_eq!(text_frame2_coverage.member_count, 14);
     assert_eq!(text_frame2_coverage.support_counts.stub, 14);
     assert_eq!(

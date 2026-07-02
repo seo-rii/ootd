@@ -396,6 +396,7 @@ const MSO_ARROWHEAD_NONE: i32 = 1;
 const MSO_ARROWHEAD_WIDTH_MEDIUM: i32 = 2;
 const MSO_LINE_SINGLE: i32 = 1;
 const MSO_LINE_SOLID: i32 = 1;
+const MSO_SOFT_EDGE_TYPE_NONE: i32 = 0;
 const MSO_TEXT_ORIENTATION_HORIZONTAL: i32 = 1;
 const MSO_SCALE_FROM_TOP_LEFT: i32 = 0;
 const MSO_SCALE_FROM_MIDDLE: i32 = 1;
@@ -2897,6 +2898,15 @@ impl ExcelRuntime {
                         ) =>
                     {
                         Ok(OmValue::Number(0.0))
+                    }
+                    "Transparency" if matches!(kind, ChartFormatChildKind::Glow) => {
+                        Ok(OmValue::Number(0.0))
+                    }
+                    "Visible" if matches!(kind, ChartFormatChildKind::Glow) => {
+                        Ok(OmValue::Number(f64::from(MSO_FALSE)))
+                    }
+                    "Type" if matches!(kind, ChartFormatChildKind::SoftEdge) => {
+                        Ok(OmValue::Number(f64::from(MSO_SOFT_EDGE_TYPE_NONE)))
                     }
                     "Visible" if matches!(kind, ChartFormatChildKind::Shadow) => {
                         Ok(OmValue::Number(f64::from(MSO_FALSE)))
@@ -18358,7 +18368,12 @@ impl ExcelRuntime {
                     )
                     | (
                         "GlowFormat",
-                        "Creator" | "Application" | "Parent" | "Radius"
+                        "Creator"
+                            | "Application"
+                            | "Parent"
+                            | "Radius"
+                            | "Transparency"
+                            | "Visible"
                     )
                     | (
                         "LineFormat",
@@ -18411,7 +18426,7 @@ impl ExcelRuntime {
                     )
                     | (
                         "SoftEdgeFormat",
-                        "Creator" | "Application" | "Parent" | "Radius"
+                        "Creator" | "Application" | "Parent" | "Radius" | "Type"
                     )
                     | (
                         "TextFrame2",
@@ -68989,6 +69004,28 @@ mod tests {
                     "Transparency",
                     "Visible",
                 ] {
+                    let member = surface
+                        .members
+                        .iter()
+                        .find(|member| member.name == member_name)
+                        .unwrap_or_else(|| panic!("{surface_name}.{member_name} focus member"));
+                    assert!(matches!(member.support, office_idl::SupportState::Stub));
+                    assert!(matches!(member.access, office_idl::AccessMode::Read));
+                }
+            }
+            if surface_name == "GlowFormat" {
+                for member_name in ["Radius", "Transparency", "Visible"] {
+                    let member = surface
+                        .members
+                        .iter()
+                        .find(|member| member.name == member_name)
+                        .unwrap_or_else(|| panic!("{surface_name}.{member_name} focus member"));
+                    assert!(matches!(member.support, office_idl::SupportState::Stub));
+                    assert!(matches!(member.access, office_idl::AccessMode::Read));
+                }
+            }
+            if surface_name == "SoftEdgeFormat" {
+                for member_name in ["Radius", "Type"] {
                     let member = surface
                         .members
                         .iter()
@@ -130025,6 +130062,55 @@ mod tests {
                         runtime
                             .dispatch_get(format_child, "Radius", &[OmValue::Missing])
                             .expect_err("format child Radius rejects arguments")
+                            .code,
+                        OmErrorCode::InvalidArgument
+                    );
+                }
+                if child_surface == "GlowFormat" {
+                    assert_eq!(
+                        runtime
+                            .dispatch_get(format_child, "Transparency", &[])
+                            .unwrap_or_else(|error| {
+                                panic!("{child_surface}.Transparency failed: {error:?}")
+                            }),
+                        OmValue::Number(0.0)
+                    );
+                    assert_eq!(
+                        runtime
+                            .dispatch_get(format_child, "Transparency", &[OmValue::Missing])
+                            .expect_err("GlowFormat.Transparency rejects arguments")
+                            .code,
+                        OmErrorCode::InvalidArgument
+                    );
+                    assert_eq!(
+                        runtime
+                            .dispatch_get(format_child, "Visible", &[])
+                            .unwrap_or_else(|error| {
+                                panic!("{child_surface}.Visible failed: {error:?}")
+                            }),
+                        OmValue::Number(f64::from(super::MSO_FALSE))
+                    );
+                    assert_eq!(
+                        runtime
+                            .dispatch_get(format_child, "Visible", &[OmValue::Missing])
+                            .expect_err("GlowFormat.Visible rejects arguments")
+                            .code,
+                        OmErrorCode::InvalidArgument
+                    );
+                }
+                if child_surface == "SoftEdgeFormat" {
+                    assert_eq!(
+                        runtime
+                            .dispatch_get(format_child, "Type", &[])
+                            .unwrap_or_else(|error| {
+                                panic!("{child_surface}.Type failed: {error:?}")
+                            }),
+                        OmValue::Number(f64::from(super::MSO_SOFT_EDGE_TYPE_NONE))
+                    );
+                    assert_eq!(
+                        runtime
+                            .dispatch_get(format_child, "Type", &[OmValue::Missing])
+                            .expect_err("SoftEdgeFormat.Type rejects arguments")
                             .code,
                         OmErrorCode::InvalidArgument
                     );

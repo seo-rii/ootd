@@ -12977,6 +12977,60 @@
             "aliasOf": "Single"
           },
           "access": "read"
+        },
+        {
+          "name": "Transparency",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "GlowFormat",
+                  "sourceMember": "Transparency"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "f64",
+                "aliasOf": "Single"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "primitive",
+            "name": "f64",
+            "aliasOf": "Single"
+          },
+          "access": "read"
+        },
+        {
+          "name": "Visible",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "GlowFormat",
+                  "sourceMember": "Visible"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "MsoTriState"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "MsoTriState"
+          },
+          "access": "read"
         }
       ]
     },
@@ -14513,6 +14567,33 @@
             "kind": "primitive",
             "name": "f64",
             "aliasOf": "Single"
+          },
+          "access": "read"
+        },
+        {
+          "name": "Type",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "SoftEdgeFormat",
+                  "sourceMember": "Type"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "i32",
+                "aliasOf": "MsoSoftEdgeType"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "primitive",
+            "name": "i32",
+            "aliasOf": "MsoSoftEdgeType"
           },
           "access": "read"
         }
