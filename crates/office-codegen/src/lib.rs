@@ -1406,17 +1406,36 @@ fn validate_capture_bundle_contract(
             ),
         });
     }
+    let required_writable_output_paths = required_writable_output_paths();
     let writable_output_names = writable_outputs
         .iter()
         .map(|(logical_name, value)| {
             value
                 .as_str()
-                .and_then(|path| path.rsplit(['\\', '/']).next())
-                .map(str::to_string)
                 .ok_or_else(|| CanonicalOmGenerationError::CaptureBundleContract {
                     message: format!(
                         "capture_manifest.json writableOutputs.{logical_name} was not a path string"
                     ),
+                })
+                .and_then(|path| {
+                    let expected_relative_path = required_writable_output_paths
+                        .get(logical_name.as_str())
+                        .expect("required writable output names and paths are in sync");
+                    if !path_has_relative_suffix(path, expected_relative_path) {
+                        return Err(CanonicalOmGenerationError::CaptureBundleContract {
+                            message: format!(
+                                "capture_manifest.json writableOutputs.{logical_name} path {path} did not end with required {expected_relative_path}"
+                            ),
+                        });
+                    }
+                    path.rsplit(['\\', '/'])
+                        .next()
+                        .map(str::to_string)
+                        .ok_or_else(|| CanonicalOmGenerationError::CaptureBundleContract {
+                            message: format!(
+                                "capture_manifest.json writableOutputs.{logical_name} was not a path string"
+                            ),
+                        })
                 })
         })
         .collect::<Result<BTreeSet<_>, _>>()?;
@@ -1677,6 +1696,33 @@ fn required_capture_payload_paths() -> BTreeMap<&'static str, &'static str> {
     ]
     .into_iter()
     .collect()
+}
+
+fn required_writable_output_paths() -> BTreeMap<&'static str, &'static str> {
+    [
+        ("raw_typelib_identity", "raw/raw_typelib_identity.json"),
+        (
+            "excel_typelib_snapshot_idl",
+            "snapshots/excel_typelib_snapshot.idl",
+        ),
+        (
+            "excel_typelib_snapshot_odl",
+            "snapshots/excel_typelib_snapshot.odl",
+        ),
+        ("excel_pia_identity", "raw/excel_pia_identity.json"),
+        (
+            "excel_pia_public_surface",
+            "snapshots/excel_pia_public_surface.json",
+        ),
+    ]
+    .into_iter()
+    .collect()
+}
+
+fn path_has_relative_suffix(path: &str, expected_relative_path: &str) -> bool {
+    let path = path.replace('\\', "/");
+    let expected_relative_path = expected_relative_path.replace('\\', "/");
+    path == expected_relative_path || path.ends_with(&format!("/{expected_relative_path}"))
 }
 
 fn bundle_relative_path(bundle_root: &Path, relative_path: &str) -> Option<PathBuf> {
