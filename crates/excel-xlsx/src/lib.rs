@@ -70108,6 +70108,86 @@ mod tests {
     }
 
     #[test]
+    fn dirty_save_restores_external_hyperlink_inner_xml_for_blank_external_hyperlink_anchor_without_legacy_ref_lists()
+     {
+        let codec = XlsxCodec;
+        let input = workbook_with_blank_external_hyperlink_anchor_and_hyperlink_inner_xml_bytes();
+        let mut loaded = codec
+            .load(&input, CommonLoadOptions::default())
+            .expect("load workbook");
+        let sheet_id = loaded.state.worksheets[0].id;
+        let worksheet_support = loaded
+            .worksheet_support_parts
+            .get_mut(&sheet_id)
+            .expect("worksheet support parts");
+        worksheet_support.hyperlink_refs.clear();
+        let sheet_xml = String::from_utf8(
+            loaded
+                .package
+                .part("xl/worksheets/sheet1.xml")
+                .expect("sheet part")
+                .bytes
+                .clone(),
+        )
+        .expect("sheet xml utf8")
+        .replace(r#"<ext preserve="1"/>"#, r#"<ext preserve="2"/>"#);
+        loaded
+            .package
+            .replace_part_bytes("xl/worksheets/sheet1.xml", sheet_xml.into_bytes())
+            .expect("replace sheet xml");
+        loaded.state.insert_cell(
+            sheet_id,
+            3,
+            3,
+            CellData {
+                value: CellValue::Number(4.0),
+                formula: None,
+                style_id: None,
+            },
+        );
+        loaded
+            .state
+            .set_range_values(
+                &office_common::RangeRef::single_cell(WorkbookId(0), sheet_id, 3, 3),
+                &office_common::OmArray::scalar(office_common::OmValue::Empty),
+            )
+            .expect("blank C3");
+        assert!(loaded.state.cell(sheet_id, 3, 3).is_none());
+
+        let saved = codec
+            .save(&loaded, office_common::SaveOptions::default())
+            .expect("save workbook");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_sheet_xml_bytes = saved_package
+            .part("xl/worksheets/sheet1.xml")
+            .expect("saved sheet part")
+            .bytes
+            .as_slice();
+        let saved_sheet_xml =
+            String::from_utf8(saved_sheet_xml_bytes.to_vec()).expect("saved sheet xml utf8");
+        let saved_summary = crate::parse_worksheet_hyperlinks_part_summary(saved_sheet_xml_bytes)
+            .expect("saved worksheet hyperlinks summary")
+            .expect("saved hyperlinks part summary");
+
+        assert!(saved_sheet_xml.contains(r#"<c r="C3"/>"#));
+        assert!(saved_sheet_xml.contains(r#"r:id="rId1""#));
+        assert!(saved_sheet_xml.contains(r#"display="Example""#));
+        assert!(saved_sheet_xml.contains(r#"tooltip="Visit example""#));
+        assert!(saved_sheet_xml.contains(r#"<ext preserve="1"/>"#));
+        assert!(!saved_sheet_xml.contains(r#"<ext preserve="2"/>"#));
+        assert_eq!(
+            saved_summary.hyperlink_inner_xmls,
+            vec![r#"<ext preserve="1"/>"#.to_string()]
+        );
+
+        let reopened = codec
+            .load(&saved, CommonLoadOptions::default())
+            .expect("reopen workbook");
+        let reopened_sheet_id = reopened.state.worksheets[0].id;
+        assert!(reopened.state.cell(reopened_sheet_id, 3, 3).is_none());
+    }
+
+    #[test]
     fn dirty_save_restores_external_hyperlink_display_for_blank_external_hyperlink_anchor_without_legacy_ref_lists()
      {
         let codec = XlsxCodec;
@@ -128082,6 +128162,29 @@ mod tests {
 </worksheet>"#
                     .to_vec(),
             )
+            .expect("replace sheet xml");
+        package.to_bytes().expect("package bytes")
+    }
+
+    fn workbook_with_blank_external_hyperlink_anchor_and_hyperlink_inner_xml_bytes() -> Vec<u8> {
+        let mut package = OpcPackage::from_bytes(
+            &workbook_with_blank_external_hyperlink_anchor_and_hyperlinks_container_attrs_bytes(),
+        )
+        .expect("base workbook package");
+        let sheet_xml = String::from_utf8(
+            package
+                .part("xl/worksheets/sheet1.xml")
+                .expect("sheet part")
+                .bytes
+                .clone(),
+        )
+        .expect("sheet xml utf8")
+        .replace(
+            r#"<hyperlink ref="$C$3" r:id="rId1" display="Example" tooltip="Visit example" data-extra="1"/>"#,
+            r#"<hyperlink ref="$C$3" r:id="rId1" display="Example" tooltip="Visit example" data-extra="1"><ext preserve="1"/></hyperlink>"#,
+        );
+        package
+            .replace_part_bytes("xl/worksheets/sheet1.xml", sheet_xml.into_bytes())
             .expect("replace sheet xml");
         package.to_bytes().expect("package bytes")
     }
