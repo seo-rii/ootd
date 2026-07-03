@@ -75,6 +75,8 @@ pub struct XlsxCodec;
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct WorkbookSupportParts {
     pub content_types_source_bytes: Option<Vec<u8>>,
+    pub package_relationships_part_source_bytes: Option<Vec<u8>>,
+    pub package_relationships_summary: Option<WorksheetRelationshipsPartSummary>,
     pub workbook_relationships_part_uri: Option<String>,
     pub workbook_relationships_part_source_bytes: Option<Vec<u8>>,
     pub workbook_relationships_summary: Option<WorksheetRelationshipsPartSummary>,
@@ -3292,6 +3294,12 @@ fn collect_workbook_support_parts(
     let content_types_source_bytes = package
         .part("[Content_Types].xml")
         .map(|part| part.bytes.clone());
+    let package_relationships_part_source_bytes =
+        package.part("_rels/.rels").map(|part| part.bytes.clone());
+    let package_relationships_summary = package_relationships_part_source_bytes
+        .as_deref()
+        .map(|source_bytes| parse_worksheet_relationships_part_summary(source_bytes, &[]))
+        .transpose()?;
     let workbook_relationships_part_uri = package
         .contains(WORKBOOK_RELS_PART_NAME)
         .then(|| WORKBOOK_RELS_PART_NAME.to_string());
@@ -3382,6 +3390,8 @@ fn collect_workbook_support_parts(
 
     let support_parts = WorkbookSupportParts {
         content_types_source_bytes,
+        package_relationships_part_source_bytes,
+        package_relationships_summary,
         workbook_relationships_part_uri,
         workbook_relationships_part_source_bytes,
         workbook_relationships_summary,
@@ -4839,6 +4849,39 @@ fn ensure_support_parts_present_with_options(
             return Err(OmError::new(
                 OmErrorCode::InvalidState,
                 "explicit content types part bytes changed: [Content_Types].xml",
+            ));
+        }
+    }
+    if let (Some(source_bytes), Some(expected_summary)) = (
+        support_parts
+            .package_relationships_part_source_bytes
+            .as_deref(),
+        support_parts.package_relationships_summary.as_ref(),
+    ) && validate_package_source_bytes
+    {
+        let actual_part = package.part("_rels/.rels").ok_or_else(|| {
+            OmError::new(
+                OmErrorCode::InvalidState,
+                "explicit package relationships part is missing: _rels/.rels",
+            )
+        })?;
+        let actual_summary =
+            parse_worksheet_relationships_part_summary(actual_part.bytes.as_slice(), &[]).map_err(
+                |error| OmError::new(error.code, format!("_rels/.rels: {}", error.message)),
+            )?;
+        if &actual_summary != expected_summary {
+            return Err(OmError::new(
+                OmErrorCode::InvalidState,
+                format!(
+                    "explicit package relationships summary changed for _rels/.rels: expected {:?} but found {:?}",
+                    expected_summary, actual_summary
+                ),
+            ));
+        }
+        if actual_part.bytes != source_bytes {
+            return Err(OmError::new(
+                OmErrorCode::InvalidState,
+                "explicit package relationships part bytes changed: _rels/.rels",
             ));
         }
     }
@@ -39955,6 +39998,115 @@ mod tests {
                 .contains("explicit content types part is missing")
         );
         assert!(error.message.contains("[Content_Types].xml"));
+    }
+
+    #[test]
+    fn ensure_support_parts_present_rejects_missing_package_relationships_part() {
+        let codec = XlsxCodec;
+        let loaded = codec
+            .load(
+                &workbook_with_styles_and_theme_bytes(),
+                CommonLoadOptions::default(),
+            )
+            .expect("load workbook");
+        assert!(
+            loaded
+                .support_parts
+                .package_relationships_part_source_bytes
+                .is_some()
+        );
+        let mut package = loaded.package.clone();
+        package.remove_part("_rels/.rels");
+
+        let error = super::ensure_support_parts_present(&package, &loaded.support_parts)
+            .expect_err("ensure should fail when package relationships part is missing");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(
+            error
+                .message
+                .contains("explicit package relationships part is missing")
+        );
+        assert!(error.message.contains("_rels/.rels"));
+    }
+
+    #[test]
+    fn ensure_support_parts_present_rejects_package_relationships_source_bytes_drift() {
+        let codec = XlsxCodec;
+        let loaded = codec
+            .load(
+                &workbook_with_styles_and_theme_bytes(),
+                CommonLoadOptions::default(),
+            )
+            .expect("load workbook");
+        assert!(
+            loaded
+                .support_parts
+                .package_relationships_part_source_bytes
+                .is_some()
+        );
+        let mut package = loaded.package.clone();
+        let package_rels = String::from_utf8(
+            package
+                .part("_rels/.rels")
+                .expect("package rels part")
+                .bytes
+                .clone(),
+        )
+        .expect("package rels utf8")
+        .replace(r#"<Relationship Id="rId1""#, r#" <Relationship Id="rId1""#);
+        package
+            .replace_part_bytes("_rels/.rels", package_rels.into_bytes())
+            .expect("replace package rels");
+
+        let error = super::ensure_support_parts_present(&package, &loaded.support_parts)
+            .expect_err("ensure should fail when package rels source bytes drift");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(
+            error
+                .message
+                .contains("explicit package relationships part bytes changed")
+        );
+        assert!(error.message.contains("_rels/.rels"));
+    }
+
+    #[test]
+    fn ensure_support_parts_present_rejects_package_relationships_summary_drift() {
+        let codec = XlsxCodec;
+        let loaded = codec
+            .load(
+                &workbook_with_styles_and_theme_bytes(),
+                CommonLoadOptions::default(),
+            )
+            .expect("load workbook");
+        let mut package = loaded.package.clone();
+        let package_rels = String::from_utf8(
+            package
+                .part("_rels/.rels")
+                .expect("package rels part")
+                .bytes
+                .clone(),
+        )
+        .expect("package rels utf8")
+        .replace(
+            r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">"#,
+            r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships" data-preserve="changed">"#,
+        );
+        package
+            .replace_part_bytes("_rels/.rels", package_rels.into_bytes())
+            .expect("replace package rels");
+
+        let error = super::ensure_support_parts_present(&package, &loaded.support_parts)
+            .expect_err("ensure should fail when package rels summary drifts");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(
+            error
+                .message
+                .contains("explicit package relationships summary changed")
+        );
+        assert!(error.message.contains("_rels/.rels"));
     }
 
     #[test]
