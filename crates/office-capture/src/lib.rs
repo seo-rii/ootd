@@ -196,6 +196,8 @@ pub struct CaptureExecutionReceipt {
     pub started_at_utc: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub completed_at_utc: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub expected_capture_outputs: Vec<String>,
     #[serde(default)]
     pub host: CaptureHostIdentity,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -761,6 +763,7 @@ impl CapturePlan {
         )?;
 
         let execution_receipt_payload = serde_json::to_vec_pretty(&CaptureExecutionReceipt {
+            expected_capture_outputs: execution_plan.pending_capture_outputs.clone(),
             command_results: execution_plan
                 .commands
                 .iter()
@@ -2097,6 +2100,13 @@ mod tests {
         CaptureExecutionReceipt {
             started_at_utc: Some("2026-03-27T01:02:03Z".to_string()),
             completed_at_utc: Some("2026-03-27T01:03:04Z".to_string()),
+            expected_capture_outputs: vec![
+                "raw_typelib_identity.json".to_string(),
+                "excel_typelib_snapshot.idl".to_string(),
+                "excel_typelib_snapshot.odl".to_string(),
+                "excel_pia_identity.json".to_string(),
+                "excel_pia_public_surface.json".to_string(),
+            ],
             host: CaptureHostIdentity {
                 computer_name: Some("WIN-EXCEL".to_string()),
                 user_name: Some("runner".to_string()),
@@ -2580,6 +2590,16 @@ mod tests {
             &fs::read(&result.execution_receipt_template_path).expect("receipt template file"),
         )
         .expect("receipt template json");
+        assert_eq!(
+            receipt_template["expectedCaptureOutputs"],
+            serde_json::json!([
+                "raw_typelib_identity.json",
+                "excel_typelib_snapshot.idl",
+                "excel_typelib_snapshot.odl",
+                "excel_pia_identity.json",
+                "excel_pia_public_surface.json"
+            ])
+        );
         assert_eq!(receipt_template["commandResults"][0]["status"], "pending");
         assert_eq!(
             receipt_template["manualStepResults"][0]["status"],
@@ -2839,6 +2859,16 @@ mod tests {
         let receipt =
             CaptureExecutionReceipt::from_json_path(&receipt_path).expect("execution receipt");
         assert_eq!(receipt.host.computer_name.as_deref(), Some("WIN-EXCEL"));
+        assert_eq!(
+            receipt.expected_capture_outputs,
+            vec![
+                "raw_typelib_identity.json".to_string(),
+                "excel_typelib_snapshot.idl".to_string(),
+                "excel_typelib_snapshot.odl".to_string(),
+                "excel_pia_identity.json".to_string(),
+                "excel_pia_public_surface.json".to_string(),
+            ]
+        );
         assert_eq!(receipt.command_results[0].status, "completed");
         assert_eq!(
             receipt.manual_step_results[0].name,
