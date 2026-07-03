@@ -4971,6 +4971,35 @@ fn ensure_support_parts_present_with_options(
     {
         ensure_relationship_binding(calc_chain_relationship, CALC_CHAIN_RELATIONSHIP_TYPE)?;
     }
+    if let (Some(workbook_rels), Some(expected_summary)) = (
+        support_parts.workbook_relationships_part_uri.as_deref(),
+        support_parts.workbook_relationships_summary.as_ref(),
+    ) && validate_workbook_relationships_source_bytes
+    {
+        let actual_summary = parse_worksheet_relationships_part_summary(
+            package
+                .part(workbook_rels)
+                .ok_or_else(|| {
+                    OmError::new(
+                        OmErrorCode::InvalidState,
+                        format!("explicit workbook relationships part is missing: {workbook_rels}"),
+                    )
+                })?
+                .bytes
+                .as_slice(),
+            &["xl"],
+        )
+        .map_err(|error| OmError::new(error.code, format!("{workbook_rels}: {}", error.message)))?;
+        if &actual_summary != expected_summary {
+            return Err(OmError::new(
+                OmErrorCode::InvalidState,
+                format!(
+                    "explicit workbook relationships summary changed for {workbook_rels}: expected {:?} but found {:?}",
+                    expected_summary, actual_summary
+                ),
+            ));
+        }
+    }
     if let (Some(workbook_rels), Some(source_bytes)) = (
         support_parts.workbook_relationships_part_uri.as_deref(),
         support_parts
@@ -39826,10 +39855,7 @@ mod tests {
                 .clone(),
         )
         .expect("workbook rels utf8")
-        .replace(
-            r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">"#,
-            r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships" data-preserve="changed">"#,
-        );
+        .replace(r#"<Relationship Id="rId1""#, r#" <Relationship Id="rId1""#);
         package
             .replace_part_bytes("xl/_rels/workbook.xml.rels", workbook_rels.into_bytes())
             .expect("replace workbook rels");
@@ -39842,6 +39868,44 @@ mod tests {
             error
                 .message
                 .contains("explicit workbook relationships part bytes changed")
+        );
+        assert!(error.message.contains("xl/_rels/workbook.xml.rels"));
+    }
+
+    #[test]
+    fn ensure_support_parts_present_rejects_workbook_relationships_summary_drift() {
+        let codec = XlsxCodec;
+        let loaded = codec
+            .load(
+                &workbook_with_styles_and_theme_bytes(),
+                CommonLoadOptions::default(),
+            )
+            .expect("load workbook");
+        let mut package = loaded.package.clone();
+        let workbook_rels = String::from_utf8(
+            package
+                .part("xl/_rels/workbook.xml.rels")
+                .expect("workbook rels part")
+                .bytes
+                .clone(),
+        )
+        .expect("workbook rels utf8")
+        .replace(
+            r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">"#,
+            r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships" data-preserve="changed">"#,
+        );
+        package
+            .replace_part_bytes("xl/_rels/workbook.xml.rels", workbook_rels.into_bytes())
+            .expect("replace workbook rels");
+
+        let error = super::ensure_support_parts_present(&package, &loaded.support_parts)
+            .expect_err("ensure should fail when workbook rels summary drifts");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(
+            error
+                .message
+                .contains("explicit workbook relationships summary changed")
         );
         assert!(error.message.contains("xl/_rels/workbook.xml.rels"));
     }
