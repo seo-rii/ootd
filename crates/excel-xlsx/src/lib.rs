@@ -40407,6 +40407,61 @@ mod tests {
     }
 
     #[test]
+    fn ensure_support_parts_present_rejects_content_types_entry_attr_drift() {
+        let codec = XlsxCodec;
+        let mut package = OpcPackage::from_bytes(&workbook_with_styles_and_theme_bytes())
+            .expect("base workbook package");
+        let content_types = String::from_utf8(
+            package
+                .part("[Content_Types].xml")
+                .expect("content types part")
+                .bytes
+                .clone(),
+        )
+        .expect("content types utf8")
+        .replace(
+            r#"<Default Extension="xml" ContentType="application/xml"/>"#,
+            r#"<Default Extension="xml" ContentType="application/xml" data-default="original"/>"#,
+        )
+        .replace(
+            r#"<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>"#,
+            r#"<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml" data-style="original"/>"#,
+        );
+        package
+            .replace_part_bytes("[Content_Types].xml", content_types.into_bytes())
+            .expect("replace content types");
+        let bytes = package.to_bytes().expect("package bytes");
+        let loaded = codec
+            .load(bytes.as_slice(), CommonLoadOptions::default())
+            .expect("load workbook");
+        let mut package = loaded.package.clone();
+        let content_types = String::from_utf8(
+            package
+                .part("[Content_Types].xml")
+                .expect("content types part")
+                .bytes
+                .clone(),
+        )
+        .expect("content types utf8")
+        .replace(r#"data-default="original""#, r#"data-default="changed""#)
+        .replace(r#"data-style="original""#, r#"data-style="changed""#);
+        package
+            .replace_part_bytes("[Content_Types].xml", content_types.into_bytes())
+            .expect("replace content types");
+
+        let error = super::ensure_support_parts_present(&package, &loaded.support_parts)
+            .expect_err("ensure should fail when content types entry attrs drift");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(
+            error
+                .message
+                .contains("explicit content types summary changed")
+        );
+        assert!(error.message.contains("[Content_Types].xml"));
+    }
+
+    #[test]
     fn load_collects_content_types_structural_summary() {
         let codec = XlsxCodec;
         let mut package = OpcPackage::from_bytes(&workbook_with_styles_and_theme_bytes())
