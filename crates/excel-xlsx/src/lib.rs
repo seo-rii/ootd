@@ -76518,6 +76518,100 @@ mod tests {
     }
 
     #[test]
+    fn dirty_calc_chain_invalidation_preserves_package_xml_structure() {
+        let codec = XlsxCodec;
+        let mut package =
+            OpcPackage::from_bytes(&workbook_with_hyperlink_comment_and_calc_chain_bytes())
+                .expect("base workbook package");
+        let content_types = String::from_utf8(
+            package
+                .part("[Content_Types].xml")
+                .expect("content types part")
+                .bytes
+                .clone(),
+        )
+        .expect("content types utf8")
+        .replace(
+            r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">"#,
+            r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types" data-root="keep"><ext preserve="content-types"/>"#,
+        )
+        .replace(
+            r#"<Default Extension="xml" ContentType="application/xml"/>"#,
+            r#"<Default Extension="xml" ContentType="application/xml" data-default="keep"/>"#,
+        )
+        .replace(
+            r#"<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>"#,
+            r#"<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml" data-workbook="keep"/>"#,
+        );
+        package
+            .replace_part_bytes("[Content_Types].xml", content_types.into_bytes())
+            .expect("replace content types");
+        let workbook_rels = String::from_utf8(
+            package
+                .part("xl/_rels/workbook.xml.rels")
+                .expect("workbook rels part")
+                .bytes
+                .clone(),
+        )
+        .expect("workbook rels utf8")
+        .replace(
+            r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">"#,
+            r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships" data-root="keep"><ext preserve="workbook-rels"/>"#,
+        )
+        .replace(
+            r#"<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>"#,
+            r#"<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml" data-sheet="keep"><ext preserve="sheet"/></Relationship>"#,
+        );
+        package
+            .replace_part_bytes("xl/_rels/workbook.xml.rels", workbook_rels.into_bytes())
+            .expect("replace workbook rels");
+        let input = package.to_bytes().expect("package bytes");
+
+        let mut loaded = codec
+            .load(input.as_slice(), CommonLoadOptions::default())
+            .expect("load workbook");
+        let sheet_id = loaded.state.worksheets[0].id;
+        loaded
+            .state
+            .set_range_values(
+                &office_common::RangeRef::single_cell(WorkbookId(0), sheet_id, 1, 1),
+                &office_common::OmArray::scalar(office_common::OmValue::Number(4.0)),
+            )
+            .expect("set A1");
+
+        let saved = codec
+            .save(&loaded, office_common::SaveOptions::default())
+            .expect("save workbook");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_content_types = String::from_utf8(
+            saved_package
+                .part("[Content_Types].xml")
+                .expect("saved content types")
+                .bytes
+                .clone(),
+        )
+        .expect("saved content types utf8");
+        assert!(saved_content_types.contains(r#"data-root="keep""#));
+        assert!(saved_content_types.contains(r#"<ext preserve="content-types"/>"#));
+        assert!(saved_content_types.contains(r#"data-default="keep""#));
+        assert!(saved_content_types.contains(r#"data-workbook="keep""#));
+        assert!(!saved_content_types.contains("calcChain.xml"));
+        let saved_workbook_rels = String::from_utf8(
+            saved_package
+                .part("xl/_rels/workbook.xml.rels")
+                .expect("saved workbook rels")
+                .bytes
+                .clone(),
+        )
+        .expect("saved workbook rels utf8");
+        assert!(saved_workbook_rels.contains(r#"data-root="keep""#));
+        assert!(saved_workbook_rels.contains(r#"<ext preserve="workbook-rels"/>"#));
+        assert!(saved_workbook_rels.contains(r#"data-sheet="keep""#));
+        assert!(saved_workbook_rels.contains(r#"<ext preserve="sheet"/>"#));
+        assert!(!saved_workbook_rels.contains("calcChain"));
+    }
+
+    #[test]
     fn dirty_save_preserves_vml_shape_attr_maps_during_dirty_save() {
         let codec = XlsxCodec;
         let input = workbook_with_vml_shape_attrs_bytes();

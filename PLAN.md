@@ -4566,6 +4566,8 @@
   - 범위: dirty calcChain invalidation이 `[Content_Types].xml`에서 calcChain override만 제거하고 root attrs, unknown root child, 다른 Default/Override extra attrs 및 chart style override는 그대로 보존하는지 회귀로 고정
   - `Step 6.6b2b2b2b2b2f2b2dp DONE` calcChain workbook relationships strip preservation
   - 범위: dirty calcChain invalidation이 workbook relationships part에서 calcChain 관계만 제거하고 root attrs, unknown root child, unrelated relationship extra attrs/inner XML은 그대로 보존하는지 회귀로 고정
+  - `Step 6.6b2b2b2b2b2f2b2dq DONE` dirty calcChain package XML structure preservation
+  - 범위: 실제 load → dirty worksheet mutation → save 경로에서 calcChain invalidation이 `[Content_Types].xml` 및 workbook relationships의 root attrs, unknown root child, unrelated attrs/inner XML을 보존하면서 calcChain metadata만 제거하는지 통합 회귀로 고정
 - 목표
   - 현재 core worksheet rewrite 이후 남아 있는 fidelity gap을 좁힌다.
   - style/theme/merge/comment/hyperlink/formula cached-value 계열 보존을 순차적으로 올린다.
