@@ -40329,6 +40329,46 @@ mod tests {
     }
 
     #[test]
+    fn ensure_support_parts_present_rejects_content_types_child_order_drift() {
+        let codec = XlsxCodec;
+        let loaded = codec
+            .load(
+                &workbook_with_styles_and_theme_bytes(),
+                CommonLoadOptions::default(),
+            )
+            .expect("load workbook");
+        let mut package = loaded.package.clone();
+        let content_types = String::from_utf8(
+            package
+                .part("[Content_Types].xml")
+                .expect("content types part")
+                .bytes
+                .clone(),
+        )
+        .expect("content types utf8");
+        let worksheet_override = r#"  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>"#;
+        let styles_override = r#"  <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>"#;
+        let content_types = content_types.replace(
+            format!("{worksheet_override}\n{styles_override}").as_str(),
+            format!("{styles_override}\n{worksheet_override}").as_str(),
+        );
+        package
+            .replace_part_bytes("[Content_Types].xml", content_types.into_bytes())
+            .expect("replace content types");
+
+        let error = super::ensure_support_parts_present(&package, &loaded.support_parts)
+            .expect_err("ensure should fail when content types child order drifts");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(
+            error
+                .message
+                .contains("explicit content types summary changed")
+        );
+        assert!(error.message.contains("[Content_Types].xml"));
+    }
+
+    #[test]
     fn load_collects_content_types_structural_summary() {
         let codec = XlsxCodec;
         let mut package = OpcPackage::from_bytes(&workbook_with_styles_and_theme_bytes())
