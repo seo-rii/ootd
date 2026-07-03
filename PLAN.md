@@ -4715,6 +4715,8 @@
   - 범위: `office-capture`가 plan summary, execution plan/receipt template, completion expected-output validation에서 쓰는 pending capture payload filename 목록을 `pending_capture_output_names()` helper로 중앙화해 같은 5개 payload contract가 코드 경로별 inline 목록으로 drift되지 않도록 정리
   - `Step 7.35 DONE` capture writable output contract source centralization
   - 범위: `office-capture` completed bundle 테스트가 writable output logical key/suffix와 payload writable key mapping을 `writable_output_map()` 및 `payload_writable_output_keys()` helper에서 가져오도록 정리해 manifest/checksum output contract 회귀가 코드 경로별 inline 목록과 drift되지 않도록 보강
+  - `Step 7.36 DONE` codegen source registry test corpus summary
+  - 범위: `specs/sources.toml` registry를 valid TOML schema로 정리하고, `office-codegen`이 enabled official/open-source/synthetic/real-world corpus와 validation mode를 typed summary로 읽어 후속 oracle/corpus runner가 같은 source contract를 재사용할 수 있도록 고정
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.

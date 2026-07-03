@@ -9,7 +9,7 @@ default_mode = "lossless"
 [om_contract]
 primary = "excel_type_library"
 secondary = "excel_pia"
-docs = "excel_vba_reference"
+docs_primary = "excel_vba_reference"
 
 [om_contract.excel_type_library]
 platform = "windows"
@@ -76,12 +76,11 @@ limits = "excel_specifications_and_limits"
 compatibility = "function_version_behavior"
 
 [test_corpus]
-official_ms = true
-open_source = true
 synthetic = true
 real_world = true
 
 [test_corpus.official_ms]
+enabled = true
 office_scripts_samples = true
 data_validation_examples = true
 power_bi_financial_sample = true
@@ -89,6 +88,7 @@ mos_excel_course_materials = true
 mos_excel_expert_course_materials = true
 
 [test_corpus.open_source]
+enabled = true
 open_xml_sdk = true
 apache_poi_test_data = true
 libreoffice_sc_qa_unit_data = true

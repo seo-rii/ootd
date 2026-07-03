@@ -7,13 +7,14 @@ use std::{
 
 use office_codegen::{
     CanonicalOmGenerationError, CodegenSummary, OmCaptureBundleError, OmSourcesManifest,
-    PiaCaptureClass, PiaCaptureInterface, PiaPublicSurfaceCapture, TypelibIdentityCapture,
-    build_coverage_report, build_coverage_report_from_json, build_coverage_report_from_path,
-    build_focus_surface_registry, build_focus_surface_registry_from_json,
-    build_focus_surface_registry_from_path, generate_canonical_office_idl_from_dir,
-    load_capture_bundle, normalize_capture_bundle, normalize_capture_bundle_from_dir,
-    normalize_pia_capture_json, summarize_capture_bundle, summarize_om_sources,
-    summarize_om_sources_toml,
+    PiaCaptureClass, PiaCaptureInterface, PiaPublicSurfaceCapture, SourceRegistryManifest,
+    TypelibIdentityCapture, build_coverage_report, build_coverage_report_from_json,
+    build_coverage_report_from_path, build_focus_surface_registry,
+    build_focus_surface_registry_from_json, build_focus_surface_registry_from_path,
+    generate_canonical_office_idl_from_dir, load_capture_bundle, normalize_capture_bundle,
+    normalize_capture_bundle_from_dir, normalize_pia_capture_json, summarize_capture_bundle,
+    summarize_om_sources, summarize_om_sources_toml, summarize_source_registry,
+    summarize_source_registry_toml,
 };
 use office_idl::{AccessMode, CaptureOriginKind, InterfaceKind, OfficeIdlDocument};
 use sha2::{Digest, Sha256};
@@ -140,6 +141,62 @@ fn loads_pinned_om_sources_manifest_and_reports_pending_capture() {
             "locale"
         ]
     );
+}
+
+#[test]
+fn loads_source_registry_and_reports_enabled_test_corpus() {
+    let registry_toml =
+        fs::read_to_string(repo_root().join("specs/sources.toml")).expect("source registry");
+    let manifest = SourceRegistryManifest::from_toml_str(&registry_toml).expect("registry");
+    let summary = summarize_source_registry(&manifest);
+    let summary_from_toml = summarize_source_registry_toml(&registry_toml).expect("summary");
+
+    assert_eq!(summary, summary_from_toml);
+    assert_eq!(summary.project_name, "excel-compat-core");
+    assert_eq!(summary.default_profile, "excel_365");
+    assert_eq!(summary.default_mode, "lossless");
+    assert_eq!(summary.primary_om_artifact, "excel_type_library");
+    assert_eq!(summary.secondary_om_artifact, "excel_pia");
+    assert_eq!(summary.primary_docs_source, "excel_vba_reference");
+    assert_eq!(summary.primary_ooxml_source, "ecma_376");
+    assert_eq!(
+        summary.enabled_corpus_groups,
+        vec![
+            "official_ms".to_string(),
+            "open_source".to_string(),
+            "synthetic".to_string(),
+            "real_world".to_string(),
+        ]
+    );
+    assert_eq!(
+        summary.official_ms_corpus_sources,
+        vec![
+            "office_scripts_samples".to_string(),
+            "data_validation_examples".to_string(),
+            "power_bi_financial_sample".to_string(),
+            "mos_excel_course_materials".to_string(),
+            "mos_excel_expert_course_materials".to_string(),
+        ]
+    );
+    assert_eq!(
+        summary.open_source_corpus_sources,
+        vec![
+            "open_xml_sdk".to_string(),
+            "apache_poi_test_data".to_string(),
+            "libreoffice_sc_qa_unit_data".to_string(),
+        ]
+    );
+    assert_eq!(summary.enabled_corpus_source_count, 10);
+    assert_eq!(
+        summary.validation_modes,
+        vec![
+            "openxml_validator".to_string(),
+            "excel_oracle".to_string(),
+            "render_snapshot".to_string(),
+            "fuzz".to_string(),
+        ]
+    );
+    assert_eq!(summary.profile_count, 3);
 }
 
 #[test]

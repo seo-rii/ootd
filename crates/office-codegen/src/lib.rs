@@ -378,6 +378,116 @@ pub struct OmAcquisition {
     pub normalization_output: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct SourceRegistryManifest {
+    pub project: SourceRegistryProject,
+    pub om_contract: SourceRegistryOmContract,
+    pub ooxml: SourceRegistryOoxml,
+    #[serde(default)]
+    pub binary_formats: BTreeMap<String, String>,
+    #[serde(default)]
+    pub behavior: BTreeMap<String, String>,
+    pub test_corpus: SourceRegistryTestCorpus,
+    pub validation: SourceRegistryValidation,
+    #[serde(default)]
+    pub profiles: BTreeMap<String, SourceRegistryProfile>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct SourceRegistryProject {
+    pub name: String,
+    pub default_profile: String,
+    pub default_mode: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct SourceRegistryOmContract {
+    pub primary: String,
+    pub secondary: String,
+    pub docs_primary: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct SourceRegistryOoxml {
+    pub primary: String,
+    pub packaging: String,
+    pub implementation_notes: String,
+    pub excel_extensions: String,
+    pub shared_structures: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct SourceRegistryTestCorpus {
+    #[serde(default)]
+    pub synthetic: bool,
+    #[serde(default)]
+    pub real_world: bool,
+    #[serde(default)]
+    pub official_ms: SourceRegistryOfficialMsCorpus,
+    #[serde(default)]
+    pub open_source: SourceRegistryOpenSourceCorpus,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+pub struct SourceRegistryOfficialMsCorpus {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub office_scripts_samples: bool,
+    #[serde(default)]
+    pub data_validation_examples: bool,
+    #[serde(default)]
+    pub power_bi_financial_sample: bool,
+    #[serde(default)]
+    pub mos_excel_course_materials: bool,
+    #[serde(default)]
+    pub mos_excel_expert_course_materials: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+pub struct SourceRegistryOpenSourceCorpus {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub open_xml_sdk: bool,
+    #[serde(default)]
+    pub apache_poi_test_data: bool,
+    #[serde(default)]
+    pub libreoffice_sc_qa_unit_data: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct SourceRegistryValidation {
+    pub openxml_validator: bool,
+    pub excel_oracle: bool,
+    pub render_snapshot: bool,
+    pub fuzz: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct SourceRegistryProfile {
+    pub dynamic_arrays: bool,
+    pub implicit_intersection_at: bool,
+    pub strict_write: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceRegistrySummary {
+    pub project_name: String,
+    pub default_profile: String,
+    pub default_mode: String,
+    pub primary_om_artifact: String,
+    pub secondary_om_artifact: String,
+    pub primary_docs_source: String,
+    pub primary_ooxml_source: String,
+    pub enabled_corpus_groups: Vec<String>,
+    pub official_ms_corpus_sources: Vec<String>,
+    pub open_source_corpus_sources: Vec<String>,
+    pub enabled_corpus_source_count: usize,
+    pub validation_modes: Vec<String>,
+    pub profile_count: usize,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OmCaptureSummary {
     pub primary_artifact: String,
@@ -554,6 +664,17 @@ impl CodegenSummary {
 }
 
 impl OmSourcesManifest {
+    pub fn from_toml_str(input: &str) -> Result<Self, OmSourcesLoadError> {
+        Ok(toml::from_str(input)?)
+    }
+
+    pub fn from_toml_path(path: impl AsRef<Path>) -> Result<Self, OmSourcesLoadError> {
+        let input = fs::read_to_string(path)?;
+        Self::from_toml_str(&input)
+    }
+}
+
+impl SourceRegistryManifest {
     pub fn from_toml_str(input: &str) -> Result<Self, OmSourcesLoadError> {
         Ok(toml::from_str(input)?)
     }
@@ -943,6 +1064,89 @@ impl OmCaptureSummary {
     }
 }
 
+impl SourceRegistrySummary {
+    pub fn from_manifest(manifest: &SourceRegistryManifest) -> Self {
+        let mut enabled_corpus_groups = Vec::new();
+        if manifest.test_corpus.official_ms.enabled {
+            enabled_corpus_groups.push("official_ms".to_string());
+        }
+        if manifest.test_corpus.open_source.enabled {
+            enabled_corpus_groups.push("open_source".to_string());
+        }
+        if manifest.test_corpus.synthetic {
+            enabled_corpus_groups.push("synthetic".to_string());
+        }
+        if manifest.test_corpus.real_world {
+            enabled_corpus_groups.push("real_world".to_string());
+        }
+
+        let official_ms = &manifest.test_corpus.official_ms;
+        let mut official_ms_corpus_sources = Vec::new();
+        if official_ms.office_scripts_samples {
+            official_ms_corpus_sources.push("office_scripts_samples".to_string());
+        }
+        if official_ms.data_validation_examples {
+            official_ms_corpus_sources.push("data_validation_examples".to_string());
+        }
+        if official_ms.power_bi_financial_sample {
+            official_ms_corpus_sources.push("power_bi_financial_sample".to_string());
+        }
+        if official_ms.mos_excel_course_materials {
+            official_ms_corpus_sources.push("mos_excel_course_materials".to_string());
+        }
+        if official_ms.mos_excel_expert_course_materials {
+            official_ms_corpus_sources.push("mos_excel_expert_course_materials".to_string());
+        }
+
+        let open_source = &manifest.test_corpus.open_source;
+        let mut open_source_corpus_sources = Vec::new();
+        if open_source.open_xml_sdk {
+            open_source_corpus_sources.push("open_xml_sdk".to_string());
+        }
+        if open_source.apache_poi_test_data {
+            open_source_corpus_sources.push("apache_poi_test_data".to_string());
+        }
+        if open_source.libreoffice_sc_qa_unit_data {
+            open_source_corpus_sources.push("libreoffice_sc_qa_unit_data".to_string());
+        }
+
+        let mut validation_modes = Vec::new();
+        if manifest.validation.openxml_validator {
+            validation_modes.push("openxml_validator".to_string());
+        }
+        if manifest.validation.excel_oracle {
+            validation_modes.push("excel_oracle".to_string());
+        }
+        if manifest.validation.render_snapshot {
+            validation_modes.push("render_snapshot".to_string());
+        }
+        if manifest.validation.fuzz {
+            validation_modes.push("fuzz".to_string());
+        }
+
+        let enabled_corpus_source_count = official_ms_corpus_sources.len()
+            + open_source_corpus_sources.len()
+            + usize::from(manifest.test_corpus.synthetic)
+            + usize::from(manifest.test_corpus.real_world);
+
+        Self {
+            project_name: manifest.project.name.clone(),
+            default_profile: manifest.project.default_profile.clone(),
+            default_mode: manifest.project.default_mode.clone(),
+            primary_om_artifact: manifest.om_contract.primary.clone(),
+            secondary_om_artifact: manifest.om_contract.secondary.clone(),
+            primary_docs_source: manifest.om_contract.docs_primary.clone(),
+            primary_ooxml_source: manifest.ooxml.primary.clone(),
+            enabled_corpus_groups,
+            official_ms_corpus_sources,
+            open_source_corpus_sources,
+            enabled_corpus_source_count,
+            validation_modes,
+            profile_count: manifest.profiles.len(),
+        }
+    }
+}
+
 pub fn summarize(document: &OfficeIdlDocument) -> CodegenSummary {
     CodegenSummary::from_document(document)
 }
@@ -1141,6 +1345,17 @@ pub fn summarize_om_sources(manifest: &OmSourcesManifest) -> OmCaptureSummary {
 pub fn summarize_om_sources_toml(input: &str) -> Result<OmCaptureSummary, OmSourcesLoadError> {
     let manifest = OmSourcesManifest::from_toml_str(input)?;
     Ok(OmCaptureSummary::from_manifest(&manifest))
+}
+
+pub fn summarize_source_registry(manifest: &SourceRegistryManifest) -> SourceRegistrySummary {
+    SourceRegistrySummary::from_manifest(manifest)
+}
+
+pub fn summarize_source_registry_toml(
+    input: &str,
+) -> Result<SourceRegistrySummary, OmSourcesLoadError> {
+    let manifest = SourceRegistryManifest::from_toml_str(input)?;
+    Ok(SourceRegistrySummary::from_manifest(&manifest))
 }
 
 pub fn normalize_pia_capture_json(input: &str) -> Result<OfficeIdlDocument, PiaCaptureLoadError> {
