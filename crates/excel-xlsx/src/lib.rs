@@ -27359,6 +27359,29 @@ mod tests {
     fn load_collects_chartsheet_drawing_inventory_and_clean_save_preserves_parts() {
         let codec = XlsxCodec;
         let mut package = OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("package");
+        let content_types_xml = std::str::from_utf8(
+            package
+                .part("[Content_Types].xml")
+                .expect("content types")
+                .bytes
+                .as_slice(),
+        )
+        .expect("content types utf8")
+        .replace(
+            "</Types>",
+            concat!(
+                r#"<Override PartName="/xl/chartsheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.chartsheet+xml"/>"#,
+                r#"<Override PartName="/xl/drawings/drawing2.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/>"#,
+                r#"<Override PartName="/xl/charts/chart2.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/>"#,
+                r#"<Override PartName="/xl/charts/style2.xml" ContentType="application/vnd.ms-office.chartstyle+xml"/>"#,
+                r#"<Override PartName="/xl/charts/colors2.xml" ContentType="application/vnd.ms-office.chartcolorstyle+xml"/>"#,
+                "</Types>"
+            ),
+        );
+        let content_types_xml_bytes = content_types_xml.into_bytes();
+        package
+            .replace_part_bytes("[Content_Types].xml", content_types_xml_bytes.clone())
+            .expect("replace content types");
         let workbook_rels_xml = std::str::from_utf8(
             package
                 .part(WORKBOOK_RELS_PART_NAME)
@@ -27692,6 +27715,13 @@ mod tests {
                 .expect("saved chart")
                 .bytes,
             chart_xml
+        );
+        assert_eq!(
+            saved_package
+                .part("[Content_Types].xml")
+                .expect("saved content types")
+                .bytes,
+            content_types_xml_bytes
         );
         assert_eq!(
             saved_package
