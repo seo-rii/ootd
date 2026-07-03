@@ -4620,6 +4620,8 @@
   - 범위: mixed ZIP compression method를 가진 workbook에서 dirty worksheet save 후에도 모든 package part의 compression method가 원본과 동일하게 유지되는지 상위 회귀로 고정
   - `Step 6.6b2b2b2b2b2f2b2eq DONE` dirty package part order preservation
   - 범위: dirty worksheet save 후 package part entry 순서가 원본과 동일하게 유지되는지 상위 회귀로 고정
+  - `Step 6.6b2b2b2b2b2f2b2er DONE` dirty package part content type preservation
+  - 범위: dirty worksheet save 후 모든 package part의 resolved content type이 원본과 동일하게 유지되는지 상위 회귀로 고정
 - 목표
   - 현재 core worksheet rewrite 이후 남아 있는 fidelity gap을 좁힌다.
   - style/theme/merge/comment/hyperlink/formula cached-value 계열 보존을 순차적으로 올린다.

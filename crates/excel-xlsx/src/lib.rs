@@ -41115,6 +41115,41 @@ mod tests {
     }
 
     #[test]
+    fn dirty_save_preserves_package_part_content_types() {
+        let codec = XlsxCodec;
+        let input = workbook_with_styles_and_theme_bytes();
+        let original_package = OpcPackage::from_bytes(&input).expect("original package");
+
+        let mut loaded = codec
+            .load(input.as_slice(), CommonLoadOptions::default())
+            .expect("load workbook");
+        let sheet_id = loaded.state.worksheets[0].id;
+        loaded
+            .state
+            .set_range_values(
+                &office_common::RangeRef::single_cell(WorkbookId(0), sheet_id, 1, 1),
+                &office_common::OmArray::scalar(office_common::OmValue::Number(13.0)),
+            )
+            .expect("set A1");
+        let saved = codec
+            .save(&loaded, office_common::SaveOptions::default())
+            .expect("dirty save workbook");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+
+        for original_part in original_package.parts() {
+            assert_eq!(
+                saved_package
+                    .part(original_part.name.as_str())
+                    .expect("saved part")
+                    .content_type,
+                original_part.content_type,
+                "{} should preserve its resolved content type",
+                original_part.name
+            );
+        }
+    }
+
+    #[test]
     fn ensure_support_parts_present_rejects_missing_content_types_part() {
         let codec = XlsxCodec;
         let loaded = codec
