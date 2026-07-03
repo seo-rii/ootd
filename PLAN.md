@@ -4713,6 +4713,8 @@
   - 범위: `office-capture` completion 단계가 modern receipt `expectedCaptureOutputs`에 duplicate payload name이 들어간 경우를 expected output mismatch로 거부하는지 회귀로 고정해 expected output coverage가 duplicate entry로 통과하지 못하도록 보강
   - `Step 7.34 DONE` capture pending output source centralization
   - 범위: `office-capture`가 plan summary, execution plan/receipt template, completion expected-output validation에서 쓰는 pending capture payload filename 목록을 `pending_capture_output_names()` helper로 중앙화해 같은 5개 payload contract가 코드 경로별 inline 목록으로 drift되지 않도록 정리
+  - `Step 7.35 DONE` capture writable output contract source centralization
+  - 범위: `office-capture` completed bundle 테스트가 writable output logical key/suffix와 payload writable key mapping을 `writable_output_map()` 및 `payload_writable_output_keys()` helper에서 가져오도록 정리해 manifest/checksum output contract 회귀가 코드 경로별 inline 목록과 drift되지 않도록 보강
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.

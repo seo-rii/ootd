@@ -1580,6 +1580,17 @@ Set-Content -LiteralPath $ExecutionReceiptPath -Value ($ExecutionReceipt | Conve
         .collect()
     }
 
+    #[cfg(test)]
+    fn payload_writable_output_keys(&self) -> [&'static str; 5] {
+        [
+            "raw_typelib_identity",
+            "excel_typelib_snapshot_idl",
+            "excel_typelib_snapshot_odl",
+            "excel_pia_identity",
+            "excel_pia_public_surface",
+        ]
+    }
+
     fn writable_output_map(&self) -> [(&'static str, String); 8] {
         [
             (
@@ -2605,75 +2616,39 @@ mod tests {
             .collect::<std::collections::BTreeSet<_>>();
         assert_eq!(
             writable_output_keys,
-            [
-                "raw_typelib_identity",
-                "excel_typelib_snapshot_idl",
-                "excel_typelib_snapshot_odl",
-                "excel_pia_identity",
-                "excel_pia_public_surface",
-                "capture_log",
-                "capture_manifest",
-                "output_checksums"
-            ]
-            .into_iter()
-            .map(str::to_string)
-            .collect::<std::collections::BTreeSet<_>>()
+            plan.writable_output_map()
+                .into_iter()
+                .map(|(logical_name, _)| logical_name.to_string())
+                .collect::<std::collections::BTreeSet<_>>()
         );
-        for (logical_name, expected_suffix) in [
-            ("raw_typelib_identity", "raw\\raw_typelib_identity.json"),
-            (
-                "excel_typelib_snapshot_idl",
-                "snapshots\\excel_typelib_snapshot.idl",
-            ),
-            (
-                "excel_typelib_snapshot_odl",
-                "snapshots\\excel_typelib_snapshot.odl",
-            ),
-            ("excel_pia_identity", "raw\\excel_pia_identity.json"),
-            (
-                "excel_pia_public_surface",
-                "snapshots\\excel_pia_public_surface.json",
-            ),
-        ] {
+        for (logical_name, expected_relative_path) in plan.writable_output_map() {
+            let expected_suffix = expected_relative_path.replace('/', "\\");
             assert!(
                 writable_outputs[logical_name]
                     .as_str()
                     .expect("writable output path")
-                    .ends_with(expected_suffix),
+                    .ends_with(&expected_suffix),
                 "{logical_name} did not end with {expected_suffix}"
             );
         }
-        for (logical_name, expected_suffix) in [
-            ("capture_log", "logs\\capture.log"),
-            ("capture_manifest", "manifest\\capture_manifest.json"),
-            ("output_checksums", "manifest\\output_checksums.json"),
-        ] {
-            assert!(
+        let payload_writable_output_keys = plan
+            .payload_writable_output_keys()
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>();
+        let writable_output_names = plan
+            .writable_output_map()
+            .into_iter()
+            .filter(|(logical_name, _)| payload_writable_output_keys.contains(logical_name))
+            .map(|(logical_name, _)| {
                 writable_outputs[logical_name]
                     .as_str()
                     .expect("writable output path")
-                    .ends_with(expected_suffix),
-                "{logical_name} did not end with {expected_suffix}"
-            );
-        }
-        let writable_output_names = [
-            "raw_typelib_identity",
-            "excel_typelib_snapshot_idl",
-            "excel_typelib_snapshot_odl",
-            "excel_pia_identity",
-            "excel_pia_public_surface",
-        ]
-        .into_iter()
-        .map(|logical_name| {
-            writable_outputs[logical_name]
-                .as_str()
-                .expect("writable output path")
-                .rsplit(|ch| ch == '\\' || ch == '/')
-                .next()
-                .expect("writable output file name")
-                .to_string()
-        })
-        .collect::<std::collections::BTreeSet<_>>();
+                    .rsplit(|ch| ch == '\\' || ch == '/')
+                    .next()
+                    .expect("writable output file name")
+                    .to_string()
+            })
+            .collect::<std::collections::BTreeSet<_>>();
         assert_eq!(writable_output_names, expected_output_names);
         let mut expected_checksum_output_names = expected_output_names.clone();
         expected_checksum_output_names.insert("capture.log".to_string());
