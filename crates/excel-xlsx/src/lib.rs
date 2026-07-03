@@ -27371,8 +27371,9 @@ mod tests {
             r#"Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml""#,
             r#"Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chartsheet" Target="chartsheets/sheet1.xml""#,
         );
+        let workbook_rels_xml_bytes = workbook_rels_xml.into_bytes();
         package
-            .replace_part_bytes(WORKBOOK_RELS_PART_NAME, workbook_rels_xml.into_bytes())
+            .replace_part_bytes(WORKBOOK_RELS_PART_NAME, workbook_rels_xml_bytes.clone())
             .expect("replace workbook rels");
         let chartsheet_xml = br#"<?xml version="1.0" encoding="UTF-8"?>
 <chartsheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
@@ -27691,6 +27692,13 @@ mod tests {
                 .expect("saved chart")
                 .bytes,
             chart_xml
+        );
+        assert_eq!(
+            saved_package
+                .part(WORKBOOK_RELS_PART_NAME)
+                .expect("saved workbook rels")
+                .bytes,
+            workbook_rels_xml_bytes
         );
         assert_eq!(
             saved_package
