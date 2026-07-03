@@ -33764,6 +33764,21 @@ mod tests {
                 .expect("chart rels source"),
             &chart_rels_xml
         );
+        assert_eq!(
+            drawing_support
+                .chart_summaries
+                .get("xl/charts/chart2.xml")
+                .expect("chart summary")
+                .opaque_relationships,
+            vec![ChartOpaqueRelationshipSummary {
+                relationship_id: "rIdChartHyperlink2".to_string(),
+                relationship_type:
+                    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink"
+                        .to_string(),
+                target: "https://example.com/chartsheet-chart".to_string(),
+                target_mode: Some("External".to_string()),
+            }]
+        );
         assert!(drawing_support.chart_support_part_uris.is_empty());
         assert_eq!(loaded.state.charts.len(), 1);
 
@@ -33984,6 +33999,21 @@ mod tests {
                 .get("xl/charts/_rels/chart2.xml.rels")
                 .expect("chart rels source"),
             &chart_rels_xml
+        );
+        assert_eq!(
+            drawing_support
+                .chart_summaries
+                .get("xl/charts/chart2.xml")
+                .expect("chart summary")
+                .opaque_relationships,
+            vec![ChartOpaqueRelationshipSummary {
+                relationship_id: "rIdChartPackage2".to_string(),
+                relationship_type:
+                    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/package"
+                        .to_string(),
+                target: "xl/embeddings/oleObject2.bin".to_string(),
+                target_mode: None,
+            }]
         );
         assert!(drawing_support.chart_support_part_uris.is_empty());
         assert_eq!(loaded.state.charts.len(), 1);
