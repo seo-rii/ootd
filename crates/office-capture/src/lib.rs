@@ -2998,6 +2998,68 @@ mod tests {
     }
 
     #[test]
+    fn completion_requires_each_expected_payload_artifact() {
+        let payloads = [
+            (
+                "raw_typelib_identity",
+                "raw/raw_typelib_identity.json",
+                r#"{"library":"Excel"}"#,
+            ),
+            (
+                "excel_typelib_snapshot_idl",
+                "snapshots/excel_typelib_snapshot.idl",
+                "library Excel {}",
+            ),
+            (
+                "excel_typelib_snapshot_odl",
+                "snapshots/excel_typelib_snapshot.odl",
+                "odl Excel {}",
+            ),
+            (
+                "excel_pia_identity",
+                "raw/excel_pia_identity.json",
+                r#"{"assembly":"Microsoft.Office.Interop.Excel"}"#,
+            ),
+            (
+                "excel_pia_public_surface",
+                "snapshots/excel_pia_public_surface.json",
+                r#"{"library":"Excel","interfaces":[]}"#,
+            ),
+        ];
+
+        for (missing_logical_name, _, _) in payloads {
+            let plan = CapturePlan::from_toml_str(resolved_template()).expect("plan");
+            let tempdir = TempDir::new().expect("tempdir");
+            plan.materialize_execution_bundle(tempdir.path())
+                .expect("materialize execution bundle");
+
+            fs::write(tempdir.path().join("logs/capture.log"), "capture log").expect("capture log");
+            fs::write(
+                tempdir.path().join("manifest/execution_receipt.json"),
+                serde_json::to_vec_pretty(&sample_execution_receipt()).expect("receipt payload"),
+            )
+            .expect("execution receipt");
+
+            for (logical_name, relative_path, payload) in payloads {
+                if logical_name != missing_logical_name {
+                    fs::write(tempdir.path().join(relative_path), payload)
+                        .expect("payload artifact");
+                }
+            }
+
+            let error = plan
+                .complete_execution_bundle(tempdir.path())
+                .expect_err("missing payload should be required");
+            match error {
+                CaptureBundleCompletionError::MissingArtifact { logical_name, .. } => {
+                    assert_eq!(logical_name, missing_logical_name);
+                }
+                other => panic!("unexpected error for {missing_logical_name}: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
     fn run_execution_bundle_requires_materialized_launcher() {
         let plan = CapturePlan::from_toml_str(resolved_template()).expect("plan");
         let tempdir = TempDir::new().expect("tempdir");
