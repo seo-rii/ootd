@@ -4230,6 +4230,8 @@
   - 범위: `objectDefaults` grandchild `<a:solidFill>` 및 great-grandchild `<a:srgbClr>`의 leaf name drift/leaf 제거 회귀를 추가해서 mid-depth `object_defaults_child_*_names`/set drift도 attr/text drift와 대칭적으로 fail-fast 되는지 고정
   - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1909 DONE` theme objectDefaults shallow name/set reject parity
   - 범위: `objectDefaults` child `<a:spDef>` 및 nested child `<a:spPr>`의 name drift/child 제거 회귀를 추가해서 shallow `object_defaults_child_names`/nested child set drift도 attr/text drift와 대칭적으로 fail-fast 되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1910 DONE` theme fontScheme first nested child name/set reject parity
+  - 범위: `fontScheme` nested child 중 첫 `<a:latin>` leaf의 name drift 및 제거 회귀를 추가해서 뒤쪽 `<a:font>` 중심 name/set drift와 대칭적으로 `font_scheme_nested_child_names`/set drift가 fail-fast 되는지 고정
   - `Step 6.6a DONE` worksheet hyperlink-ref integrity regression
   - 범위: worksheet support가 추적한 hyperlink `ref` 목록을 load assertion과 dirty save 회귀로 고정하고, hyperlink `ref` drift/삭제를 fail-fast로 막음
   - `Step 6.6b1 DONE` worksheet-local relationship binding integrity
