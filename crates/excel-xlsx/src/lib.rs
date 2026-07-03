@@ -801,7 +801,9 @@ pub struct WorksheetSupportParts {
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct SheetDrawingSupportParts {
     pub sheet_part_uri: Option<String>,
+    pub sheet_part_source_bytes: Option<Vec<u8>>,
     pub relationships_part_uri: Option<String>,
+    pub relationships_part_source_bytes: Option<Vec<u8>>,
     pub drawing_relationship_ids: Vec<String>,
     pub drawing_relationships: Vec<WorksheetRelationshipBinding>,
     pub drawing_part_uris: Vec<String>,
@@ -1635,6 +1637,17 @@ impl XlsxCodec {
                     format!("explicit drawing host sheet part is missing: {sheet_part_uri}"),
                 ));
             }
+            if let (Some(sheet_part_uri), Some(source_bytes)) = (
+                support_parts.sheet_part_uri.as_deref(),
+                support_parts.sheet_part_source_bytes.as_deref(),
+            ) {
+                ensure_sheet_drawing_part_bytes(
+                    &package,
+                    sheet_part_uri,
+                    source_bytes,
+                    "drawing host sheet part",
+                )?;
+            }
             if let Some(relationships_part_uri) = support_parts.relationships_part_uri.as_deref()
                 && !package.contains(relationships_part_uri)
             {
@@ -1644,6 +1657,17 @@ impl XlsxCodec {
                         "explicit drawing host relationships part is missing: {relationships_part_uri}"
                     ),
                 ));
+            }
+            if let (Some(relationships_part_uri), Some(source_bytes)) = (
+                support_parts.relationships_part_uri.as_deref(),
+                support_parts.relationships_part_source_bytes.as_deref(),
+            ) {
+                ensure_sheet_drawing_part_bytes(
+                    &package,
+                    relationships_part_uri,
+                    source_bytes,
+                    "drawing host relationships part",
+                )?;
             }
             for drawing_part_uri in &support_parts.drawing_part_uris {
                 if !package.contains(drawing_part_uri) {
@@ -3621,6 +3645,7 @@ fn collect_sheet_drawing_support_parts(
         if drawing_relationship_ids.is_empty() {
             return Ok(SheetDrawingSupportParts {
                 sheet_part_uri: Some(sheet_part_uri.to_string()),
+                sheet_part_source_bytes: Some(sheet_part.bytes.clone()),
                 drawing_relationship_ids,
                 ..SheetDrawingSupportParts::default()
             });
@@ -3634,6 +3659,7 @@ fn collect_sheet_drawing_support_parts(
         if drawing_relationship_ids.is_empty() {
             return Ok(SheetDrawingSupportParts {
                 sheet_part_uri: Some(sheet_part_uri.to_string()),
+                sheet_part_source_bytes: Some(sheet_part.bytes.clone()),
                 drawing_relationship_ids,
                 ..SheetDrawingSupportParts::default()
             });
@@ -3867,7 +3893,9 @@ fn collect_sheet_drawing_support_parts(
 
     Ok(SheetDrawingSupportParts {
         sheet_part_uri: Some(sheet_part_uri.to_string()),
+        sheet_part_source_bytes: Some(sheet_part.bytes.clone()),
         relationships_part_uri: Some(relationships_part_uri),
+        relationships_part_source_bytes: Some(relationships_part.bytes.clone()),
         drawing_relationship_ids,
         drawing_relationships,
         drawing_part_uris,
@@ -27895,6 +27923,18 @@ mod tests {
             Some("xl/chartsheets/sheet1.xml")
         );
         assert_eq!(
+            drawing_support.sheet_part_source_bytes.as_deref(),
+            Some(chartsheet_xml.as_slice())
+        );
+        assert_eq!(
+            drawing_support.relationships_part_uri.as_deref(),
+            Some("xl/chartsheets/_rels/sheet1.xml.rels")
+        );
+        assert_eq!(
+            drawing_support.relationships_part_source_bytes.as_deref(),
+            Some(chartsheet_rels_xml.as_slice())
+        );
+        assert_eq!(
             drawing_support.drawing_relationship_ids,
             vec!["rIdChartSheetDrawing".to_string()]
         );
@@ -28201,6 +28241,32 @@ mod tests {
             "{error}"
         );
 
+        let mut host_sheet_changed_loaded = loaded.clone();
+        host_sheet_changed_loaded
+            .package
+            .replace_part_bytes(
+                "xl/chartsheets/sheet1.xml",
+                br#"<?xml version="1.0" encoding="UTF-8"?>
+<chartsheet
+  xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <drawing r:id="rIdChartSheetDrawing"/>
+</chartsheet>"#
+                    .to_vec(),
+            )
+            .expect("replace chartsheet host part");
+        let error = codec
+            .save(
+                &host_sheet_changed_loaded,
+                office_common::SaveOptions::default(),
+            )
+            .expect_err("save should reject changed drawing host sheet part");
+        assert!(
+            error.to_string().contains(
+                "explicit drawing host sheet part bytes changed: xl/chartsheets/sheet1.xml"
+            ),
+            "{error}"
+        );
+
         let mut host_rels_missing_loaded = loaded.clone();
         assert!(
             host_rels_missing_loaded
@@ -28216,6 +28282,32 @@ mod tests {
         assert!(
             error.to_string().contains(
                 "explicit drawing host relationships part is missing: xl/chartsheets/_rels/sheet1.xml.rels"
+            ),
+            "{error}"
+        );
+
+        let mut host_rels_changed_loaded = loaded.clone();
+        host_rels_changed_loaded
+            .package
+            .replace_part_bytes(
+                "xl/chartsheets/_rels/sheet1.xml.rels",
+                br#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships
+  xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rIdChartSheetDrawing" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing2.xml" />
+</Relationships>"#
+                    .to_vec(),
+            )
+            .expect("replace chartsheet host rels part");
+        let error = codec
+            .save(
+                &host_rels_changed_loaded,
+                office_common::SaveOptions::default(),
+            )
+            .expect_err("save should reject changed drawing host rels part");
+        assert!(
+            error.to_string().contains(
+                "explicit drawing host relationships part bytes changed: xl/chartsheets/_rels/sheet1.xml.rels"
             ),
             "{error}"
         );
