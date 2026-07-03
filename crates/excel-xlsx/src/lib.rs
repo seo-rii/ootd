@@ -39976,6 +39976,90 @@ mod tests {
     }
 
     #[test]
+    fn load_collects_package_level_raw_graph_inventory() {
+        let codec = XlsxCodec;
+        let input = workbook_with_styles_and_theme_bytes();
+        let original_package = OpcPackage::from_bytes(&input).expect("original package");
+
+        let loaded = codec
+            .load(input.as_slice(), CommonLoadOptions::default())
+            .expect("load workbook");
+
+        assert_eq!(
+            loaded.support_parts.content_types_source_bytes.as_deref(),
+            Some(
+                original_package
+                    .part("[Content_Types].xml")
+                    .expect("content types part")
+                    .bytes
+                    .as_slice()
+            )
+        );
+        assert_eq!(
+            loaded
+                .support_parts
+                .package_relationships_part_source_bytes
+                .as_deref(),
+            Some(
+                original_package
+                    .part("_rels/.rels")
+                    .expect("package relationships part")
+                    .bytes
+                    .as_slice()
+            )
+        );
+        assert_eq!(
+            loaded
+                .support_parts
+                .workbook_relationships_part_source_bytes
+                .as_deref(),
+            Some(
+                original_package
+                    .part(WORKBOOK_RELS_PART_NAME)
+                    .expect("workbook relationships part")
+                    .bytes
+                    .as_slice()
+            )
+        );
+
+        let package_summary = loaded
+            .support_parts
+            .package_relationships_summary
+            .as_ref()
+            .expect("package relationships summary");
+        assert_eq!(package_summary.root_name, "Relationships");
+        assert_eq!(package_summary.relationship_ids, vec!["rId1".to_string()]);
+        let package_workbook_attrs = package_summary
+            .relationship_attr_maps
+            .iter()
+            .find(|attrs| attrs.get("Id").map(String::as_str) == Some("rId1"))
+            .expect("package workbook relationship attrs");
+        assert_eq!(
+            package_workbook_attrs.get("Target").map(String::as_str),
+            Some("xl/workbook.xml")
+        );
+
+        let workbook_summary = loaded
+            .support_parts
+            .workbook_relationships_summary
+            .as_ref()
+            .expect("workbook relationships summary");
+        assert_eq!(
+            workbook_summary.relationship_ids,
+            vec!["rId1".to_string(), "rId2".to_string(), "rId3".to_string()]
+        );
+        let worksheet_attrs = workbook_summary
+            .relationship_attr_maps
+            .iter()
+            .find(|attrs| attrs.get("Id").map(String::as_str) == Some("rId1"))
+            .expect("worksheet relationship attrs");
+        assert_eq!(
+            worksheet_attrs.get("Target").map(String::as_str),
+            Some("xl/worksheets/sheet1.xml")
+        );
+    }
+
+    #[test]
     fn ensure_support_parts_present_rejects_missing_content_types_part() {
         let codec = XlsxCodec;
         let loaded = codec

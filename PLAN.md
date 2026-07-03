@@ -4556,6 +4556,8 @@
   - 범위: package-level `_rels/.rels`의 `TargetMode="External"` 계열 외부 관계가 package target part로 오인되지 않고, raw graph summary에서 target/TargetMode/extra attrs를 원문대로 보존하며 clean save 후에도 유지되는지 회귀로 고정
   - `Step 6.6b2b2b2b2b2f2b2dk DONE` dirty-save root package relationships preservation
   - 범위: dirty worksheet save에서 calcChain invalidation이 workbook rels/content types는 의도적으로 변경하더라도 root package relationships `_rels/.rels` source bytes와 structural summary는 그대로 보존되는지 회귀로 고정
+  - `Step 6.6b2b2b2b2b2f2b2dl DONE` package-level raw graph inventory parity
+  - 범위: load 시 `[Content_Types].xml`, root `_rels/.rels`, workbook relationships source bytes와 normalized structural summaries가 `WorkbookSupportParts` raw graph 표면에 직접 노출되는지 한 번에 회귀로 고정
 - 목표
   - 현재 core worksheet rewrite 이후 남아 있는 fidelity gap을 좁힌다.
   - style/theme/merge/comment/hyperlink/formula cached-value 계열 보존을 순차적으로 올린다.
