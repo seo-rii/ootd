@@ -8,6 +8,7 @@ use office_idl::{
     SupportState, TypeRef, TypeRefKind,
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CodegenSummary {
@@ -1470,6 +1471,27 @@ fn validate_capture_bundle_contract(
                 ),
             });
         }
+        let artifact =
+            fs::read(&artifact_path).map_err(|source| CanonicalOmGenerationError::Io {
+                action: "read checksum-listed artifact",
+                path: artifact_path.clone(),
+                source,
+            })?;
+        let actual_checksum = sha256_hex(&artifact);
+        let expected_checksum = checksums.get(relative_path).ok_or_else(|| {
+            CanonicalOmGenerationError::CaptureBundleContract {
+                message: format!(
+                    "output_checksums.json path {relative_path} disappeared during validation"
+                ),
+            }
+        })?;
+        if &actual_checksum != expected_checksum {
+            return Err(CanonicalOmGenerationError::CaptureBundleContract {
+                message: format!(
+                    "output_checksums.json checksum for {relative_path} was {expected_checksum}, actual {actual_checksum}"
+                ),
+            });
+        }
     }
 
     if let Some(receipt) = manifest
@@ -1617,6 +1639,15 @@ fn bundle_relative_path(bundle_root: &Path, relative_path: &str) -> Option<PathB
         path.push(component);
     }
     Some(path)
+}
+
+fn sha256_hex(contents: &[u8]) -> String {
+    let digest = Sha256::digest(contents);
+    let mut output = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        output.push_str(&format!("{byte:02x}"));
+    }
+    output
 }
 
 fn load_pia_public_surface_capture(
