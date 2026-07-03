@@ -4409,6 +4409,8 @@
   - 범위: clean save 직전에 sheet drawing support inventory가 추적하는 host sheet/rels, drawing parts/rels, drawing opaque targets, chart parts/rels, chart support parts, chart opaque targets가 package에서 사라진 경우 명시적으로 실패하게 해서 raw graph overlay가 silent data loss를 허용하지 않는지 회귀로 고정
   - `Step 6.6b2b2b2b2b2f2b2bw DONE` sheet drawing support source byte validation
   - 범위: clean save 직전에 sheet drawing support inventory가 원본 source bytes를 보유한 drawing parts/rels, drawing opaque targets, chart parts/rels, chart support parts, chart opaque targets의 bytes가 package 안에서 변경된 경우 명시적으로 실패하게 해서 raw graph overlay가 silent drift를 허용하지 않는지 회귀로 고정
+  - `Step 6.6b2b2b2b2b2f2b2bx DONE` sheet drawing support summary validation
+  - 범위: clean save 직전에 drawing/chart part를 다시 파싱해 `SheetDrawingSupportParts`의 typed drawing/chart summary와 비교하고 summary overlay가 package bytes와 달라진 경우 명시적으로 실패하게 해서 raw graph overlay의 semantic drift를 회귀로 고정
 - 목표
   - 현재 core worksheet rewrite 이후 남아 있는 fidelity gap을 좁힌다.
   - style/theme/merge/comment/hyperlink/formula cached-value 계열 보존을 순차적으로 올린다.

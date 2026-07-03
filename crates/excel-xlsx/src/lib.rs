@@ -1661,6 +1661,49 @@ impl XlsxCodec {
                     "drawing part",
                 )?;
             }
+            for (drawing_part_uri, expected_summary) in &support_parts.drawing_summaries {
+                let actual_part = package.part(drawing_part_uri).ok_or_else(|| {
+                    OmError::new(
+                        OmErrorCode::InvalidState,
+                        format!("explicit drawing part is missing: {drawing_part_uri}"),
+                    )
+                })?;
+                let drawing_relationship_entries = if let Some(drawing_relationships_part_uri) =
+                    relationships_part_uri_for_part(drawing_part_uri)
+                    && let Some(drawing_relationships_part) =
+                        package.part(&drawing_relationships_part_uri)
+                {
+                    let drawing_base_segments = drawing_part_uri
+                        .rsplit_once('/')
+                        .map(|(parent, _)| {
+                            parent
+                                .split('/')
+                                .filter(|segment| !segment.is_empty())
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default();
+                    parse_relationship_entries_with_options(
+                        drawing_relationships_part.bytes.as_slice(),
+                        &drawing_base_segments,
+                        true,
+                    )?
+                } else {
+                    Vec::new()
+                };
+                let actual_summary = parse_drawing_part_summary(
+                    actual_part.bytes.as_slice(),
+                    &drawing_relationship_entries,
+                )?;
+                if &actual_summary != expected_summary {
+                    return Err(OmError::new(
+                        OmErrorCode::InvalidState,
+                        format!(
+                            "explicit drawing summary changed for {drawing_part_uri}: expected {:?} but found {:?}",
+                            expected_summary, actual_summary
+                        ),
+                    ));
+                }
+            }
             for drawing_relationships_part_uri in &support_parts.drawing_relationships_part_uris {
                 if !package.contains(drawing_relationships_part_uri) {
                     return Err(OmError::new(
@@ -1716,6 +1759,67 @@ impl XlsxCodec {
                     source_bytes,
                     "drawing chart part",
                 )?;
+            }
+            for (chart_part_uri, expected_summary) in &support_parts.chart_summaries {
+                let actual_part = package.part(chart_part_uri).ok_or_else(|| {
+                    OmError::new(
+                        OmErrorCode::InvalidState,
+                        format!("explicit drawing chart part is missing: {chart_part_uri}"),
+                    )
+                })?;
+                let mut actual_summary = parse_chart_part_summary(actual_part.bytes.as_slice())?;
+                if let Some(chart_relationships_part_uri) =
+                    relationships_part_uri_for_part(chart_part_uri)
+                    && let Some(chart_relationships_part) =
+                        package.part(&chart_relationships_part_uri)
+                {
+                    let chart_base_segments = chart_part_uri
+                        .rsplit_once('/')
+                        .map(|(parent, _)| {
+                            parent
+                                .split('/')
+                                .filter(|segment| !segment.is_empty())
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default();
+                    let chart_relationship_entries = parse_relationship_entries_with_options(
+                        chart_relationships_part.bytes.as_slice(),
+                        &chart_base_segments,
+                        true,
+                    )?;
+                    actual_summary.relationships_part_uri = Some(chart_relationships_part_uri);
+                    for relationship in &chart_relationship_entries {
+                        if relationship.relationship_type == CHART_STYLE_RELATIONSHIP_TYPE
+                            || relationship.relationship_type == CHART_COLOR_STYLE_RELATIONSHIP_TYPE
+                        {
+                            actual_summary.support_relationships.push(
+                                ChartSupportRelationshipBinding {
+                                    relationship_id: relationship.id.clone(),
+                                    relationship_type: relationship.relationship_type.clone(),
+                                    target: relationship.target.clone(),
+                                },
+                            );
+                        } else {
+                            actual_summary.opaque_relationships.push(
+                                ChartOpaqueRelationshipSummary {
+                                    relationship_id: relationship.id.clone(),
+                                    relationship_type: relationship.relationship_type.clone(),
+                                    target: relationship.target.clone(),
+                                    target_mode: relationship.target_mode.clone(),
+                                },
+                            );
+                        }
+                    }
+                }
+                if &actual_summary != expected_summary {
+                    return Err(OmError::new(
+                        OmErrorCode::InvalidState,
+                        format!(
+                            "explicit chart summary changed for {chart_part_uri}: expected {:?} but found {:?}",
+                            expected_summary, actual_summary
+                        ),
+                    ));
+                }
             }
             for chart_relationships_part_uri in &support_parts.chart_relationships_part_uris {
                 if !package.contains(chart_relationships_part_uri) {
@@ -30501,6 +30605,29 @@ mod tests {
                 .expect("saved chart")
                 .bytes,
             chart_xml
+        );
+
+        let mut summary_changed_loaded = loaded.clone();
+        summary_changed_loaded
+            .sheet_drawing_support_parts
+            .get_mut(&sheet_id)
+            .expect("drawing support")
+            .drawing_summaries
+            .get_mut("xl/drawings/drawing1.xml")
+            .expect("drawing summary")
+            .opaque_relationships
+            .clear();
+        let error = codec
+            .save(
+                &summary_changed_loaded,
+                office_common::SaveOptions::default(),
+            )
+            .expect_err("save should reject changed drawing summary");
+        assert!(
+            error
+                .to_string()
+                .contains("explicit drawing summary changed for xl/drawings/drawing1.xml"),
+            "{error}"
         );
 
         let mut changed_loaded = loaded.clone();
