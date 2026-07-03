@@ -41177,6 +41177,62 @@ mod tests {
     }
 
     #[test]
+    fn clean_save_preserves_package_part_metadata() {
+        let codec = XlsxCodec;
+        let base_package =
+            OpcPackage::from_bytes(&workbook_with_styles_and_theme_bytes()).expect("base package");
+        let mut parts = base_package.parts().to_vec();
+        for part in &mut parts {
+            part.compression = match part.name.as_str() {
+                "[Content_Types].xml"
+                | "xl/workbook.xml"
+                | "xl/worksheets/sheet1.xml"
+                | "xl/theme/theme1.xml" => CompressionMethod::Deflated,
+                _ => CompressionMethod::Stored,
+            };
+        }
+        let input_package = OpcPackage::new(parts);
+        let input = input_package.to_bytes().expect("input package bytes");
+        let original_package = OpcPackage::from_bytes(&input).expect("original package");
+
+        let loaded = codec
+            .load(input.as_slice(), CommonLoadOptions::default())
+            .expect("load workbook");
+        let saved = codec
+            .save(&loaded, office_common::SaveOptions::default())
+            .expect("clean save workbook");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+
+        let original_part_names = original_package
+            .parts()
+            .iter()
+            .map(|part| part.name.as_str())
+            .collect::<Vec<_>>();
+        let saved_part_names = saved_package
+            .parts()
+            .iter()
+            .map(|part| part.name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(saved_part_names, original_part_names);
+
+        for original_part in original_package.parts() {
+            let saved_part = saved_package
+                .part(original_part.name.as_str())
+                .expect("saved part");
+            assert_eq!(
+                saved_part.compression, original_part.compression,
+                "{} should preserve its ZIP compression method",
+                original_part.name
+            );
+            assert_eq!(
+                saved_part.content_type, original_part.content_type,
+                "{} should preserve its resolved content type",
+                original_part.name
+            );
+        }
+    }
+
+    #[test]
     fn ensure_support_parts_present_rejects_missing_content_types_part() {
         let codec = XlsxCodec;
         let loaded = codec

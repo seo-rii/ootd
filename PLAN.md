@@ -4624,6 +4624,8 @@
   - 범위: dirty worksheet save 후 모든 package part의 resolved content type이 원본과 동일하게 유지되는지 상위 회귀로 고정
   - `Step 6.6b2b2b2b2b2f2b2es DONE` clean all package part byte preservation
   - 범위: clean load/save 경로에서 synthetic workbook의 모든 package part bytes가 원본 그대로 보존되는지 상위 회귀로 고정
+  - `Step 6.6b2b2b2b2b2f2b2et DONE` clean package part metadata preservation
+  - 범위: mixed ZIP compression method를 가진 workbook의 clean load/save 경로에서 package part entry 순서, compression method, resolved content type metadata가 원본과 동일하게 유지되는지 상위 회귀로 고정
 - 목표
   - 현재 core worksheet rewrite 이후 남아 있는 fidelity gap을 좁힌다.
   - style/theme/merge/comment/hyperlink/formula cached-value 계열 보존을 순차적으로 올린다.
