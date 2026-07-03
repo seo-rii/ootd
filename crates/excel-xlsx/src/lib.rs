@@ -1607,6 +1607,25 @@ impl XlsxCodec {
             &workbook.worksheet_support_parts,
             &worksheet_xml_rewrite_recovery_ids,
         )?;
+        let ensure_sheet_drawing_part_bytes = |package: &OpcPackage,
+                                               part_uri: &str,
+                                               expected_bytes: &[u8],
+                                               description: &str|
+         -> OmResult<()> {
+            let actual_part = package.part(part_uri).ok_or_else(|| {
+                OmError::new(
+                    OmErrorCode::InvalidState,
+                    format!("explicit {description} is missing: {part_uri}"),
+                )
+            })?;
+            if actual_part.bytes != expected_bytes {
+                return Err(OmError::new(
+                    OmErrorCode::InvalidState,
+                    format!("explicit {description} bytes changed: {part_uri}"),
+                ));
+            }
+            Ok(())
+        };
         for support_parts in workbook.sheet_drawing_support_parts.values() {
             if let Some(sheet_part_uri) = support_parts.sheet_part_uri.as_deref()
                 && !package.contains(sheet_part_uri)
@@ -1634,6 +1653,14 @@ impl XlsxCodec {
                     ));
                 }
             }
+            for (drawing_part_uri, source_bytes) in &support_parts.drawing_part_source_bytes {
+                ensure_sheet_drawing_part_bytes(
+                    &package,
+                    drawing_part_uri,
+                    source_bytes,
+                    "drawing part",
+                )?;
+            }
             for drawing_relationships_part_uri in &support_parts.drawing_relationships_part_uris {
                 if !package.contains(drawing_relationships_part_uri) {
                     return Err(OmError::new(
@@ -1643,6 +1670,16 @@ impl XlsxCodec {
                         ),
                     ));
                 }
+            }
+            for (drawing_relationships_part_uri, source_bytes) in
+                &support_parts.drawing_relationships_part_source_bytes
+            {
+                ensure_sheet_drawing_part_bytes(
+                    &package,
+                    drawing_relationships_part_uri,
+                    source_bytes,
+                    "drawing relationships part",
+                )?;
             }
             for drawing_opaque_part_uri in &support_parts.drawing_opaque_relationship_part_uris {
                 if !package.contains(drawing_opaque_part_uri) {
@@ -1654,6 +1691,16 @@ impl XlsxCodec {
                     ));
                 }
             }
+            for (drawing_opaque_part_uri, source_bytes) in
+                &support_parts.drawing_opaque_relationship_part_source_bytes
+            {
+                ensure_sheet_drawing_part_bytes(
+                    &package,
+                    drawing_opaque_part_uri,
+                    source_bytes,
+                    "drawing opaque relationship target part",
+                )?;
+            }
             for chart_part_uri in &support_parts.chart_part_uris {
                 if !package.contains(chart_part_uri) {
                     return Err(OmError::new(
@@ -1661,6 +1708,14 @@ impl XlsxCodec {
                         format!("explicit drawing chart part is missing: {chart_part_uri}"),
                     ));
                 }
+            }
+            for (chart_part_uri, source_bytes) in &support_parts.chart_part_source_bytes {
+                ensure_sheet_drawing_part_bytes(
+                    &package,
+                    chart_part_uri,
+                    source_bytes,
+                    "drawing chart part",
+                )?;
             }
             for chart_relationships_part_uri in &support_parts.chart_relationships_part_uris {
                 if !package.contains(chart_relationships_part_uri) {
@@ -1672,6 +1727,16 @@ impl XlsxCodec {
                     ));
                 }
             }
+            for (chart_relationships_part_uri, source_bytes) in
+                &support_parts.chart_relationships_part_source_bytes
+            {
+                ensure_sheet_drawing_part_bytes(
+                    &package,
+                    chart_relationships_part_uri,
+                    source_bytes,
+                    "chart relationships part",
+                )?;
+            }
             for chart_support_part_uri in &support_parts.chart_support_part_uris {
                 if !package.contains(chart_support_part_uri) {
                     return Err(OmError::new(
@@ -1679,6 +1744,16 @@ impl XlsxCodec {
                         format!("explicit chart support part is missing: {chart_support_part_uri}"),
                     ));
                 }
+            }
+            for (chart_support_part_uri, source_bytes) in
+                &support_parts.chart_support_part_source_bytes
+            {
+                ensure_sheet_drawing_part_bytes(
+                    &package,
+                    chart_support_part_uri,
+                    source_bytes,
+                    "chart support part",
+                )?;
             }
             for chart_opaque_part_uri in &support_parts.chart_opaque_relationship_part_uris {
                 if !package.contains(chart_opaque_part_uri) {
@@ -1689,6 +1764,16 @@ impl XlsxCodec {
                         ),
                     ));
                 }
+            }
+            for (chart_opaque_part_uri, source_bytes) in
+                &support_parts.chart_opaque_relationship_part_source_bytes
+            {
+                ensure_sheet_drawing_part_bytes(
+                    &package,
+                    chart_opaque_part_uri,
+                    source_bytes,
+                    "chart opaque relationship target part",
+                )?;
             }
         }
         let has_dirty_worksheets = !dirty_worksheet_ids.is_empty();
@@ -30416,6 +30501,25 @@ mod tests {
                 .expect("saved chart")
                 .bytes,
             chart_xml
+        );
+
+        let mut changed_loaded = loaded.clone();
+        changed_loaded
+            .package
+            .replace_part_bytes(
+                "xl/opaque/drawingOpaque1.xml",
+                br#"<?xml version="1.0" encoding="UTF-8"?><drawingOpaque preserve="changed"/>"#
+                    .to_vec(),
+            )
+            .expect("replace opaque drawing part");
+        let error = codec
+            .save(&changed_loaded, office_common::SaveOptions::default())
+            .expect_err("save should reject changed drawing opaque target");
+        assert!(
+            error.to_string().contains(
+                "explicit drawing opaque relationship target part bytes changed: xl/opaque/drawingOpaque1.xml"
+            ),
+            "{error}"
         );
 
         assert!(loaded.package.remove_part("xl/opaque/drawingOpaque1.xml"));
