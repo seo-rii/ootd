@@ -4357,6 +4357,8 @@
   - 범위: embedded chart가 빈 `xl/charts/_rels/chartN.xml.rels` part를 실제로 가진 경우 missing rels와 구분해 chart relationship inventory에 rels part uri/source bytes를 보존하고 clean save에서도 빈 chart rels part, content type, host worksheet/rels, drawing/chart bytes를 그대로 유지하는지 회귀로 고정
   - `Step 6.6b2b2b2b2b2f2b2bc DONE` chartsheet chart empty chart rels preservation
   - 범위: chartsheet chart가 빈 `xl/charts/_rels/chartN.xml.rels` part를 실제로 가진 경우 missing rels와 구분해 chart relationship inventory에 rels part uri/source bytes를 보존하고 clean save에서도 빈 chart rels part, chart sheet host, workbook rels, content type, drawing/chart bytes를 그대로 유지하는지 회귀로 고정
+  - `Step 6.6b2b2b2b2b2f2b2bd DONE` embedded chart opaque hyperlink relationship preservation
+  - 범위: embedded chart의 chart rels에 chart XML에서 직접 typed 참조하지 않는 external hyperlink relationship과 root/relationship opaque attrs가 있는 경우 style/color support part로 오인하지 않고 chart rels source bytes, content type, host worksheet/rels, drawing/chart bytes를 clean save에서 그대로 보존하는지 회귀로 고정
 - 목표
   - 현재 core worksheet rewrite 이후 남아 있는 fidelity gap을 좁힌다.
   - style/theme/merge/comment/hyperlink/formula cached-value 계열 보존을 순차적으로 올린다.
