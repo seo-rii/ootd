@@ -30350,6 +30350,47 @@ mod tests {
                 .bytes,
             chart_rels_xml
         );
+
+        let mut support_changed_loaded = loaded.clone();
+        support_changed_loaded
+            .package
+            .replace_part_bytes(
+                "xl/charts/style1.xml",
+                br#"<?xml version="1.0" encoding="UTF-8"?><cs:chartStyle xmlns:cs="http://schemas.microsoft.com/office/drawing/2012/chartStyle" id="999"/>"#
+                    .to_vec(),
+            )
+            .expect("replace embedded chart style part");
+        let error = codec
+            .save(
+                &support_changed_loaded,
+                office_common::SaveOptions::default(),
+            )
+            .expect_err("save should reject changed embedded chart support part");
+        assert!(
+            error
+                .to_string()
+                .contains("explicit chart support part bytes changed: xl/charts/style1.xml"),
+            "{error}"
+        );
+
+        let mut support_missing_loaded = loaded.clone();
+        assert!(
+            support_missing_loaded
+                .package
+                .remove_part("xl/charts/style1.xml")
+        );
+        let error = codec
+            .save(
+                &support_missing_loaded,
+                office_common::SaveOptions::default(),
+            )
+            .expect_err("save should reject missing embedded chart support part");
+        assert!(
+            error
+                .to_string()
+                .contains("explicit chart support part is missing: xl/charts/style1.xml"),
+            "{error}"
+        );
     }
 
     #[test]
