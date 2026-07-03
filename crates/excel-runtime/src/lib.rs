@@ -2494,6 +2494,201 @@ impl ExcelRuntime {
                 .package
                 .replace_part_bytes(chart_part_uri.as_str(), chart_xml)?;
         }
+        {
+            let package_snapshot = loaded.package.clone();
+            let part_changed =
+                |part_uri: &str, source_bytes: &[u8]| match package_snapshot.part(part_uri) {
+                    Some(part) => part.bytes != source_bytes,
+                    None => true,
+                };
+
+            if loaded
+                .support_parts
+                .content_types_source_bytes
+                .as_deref()
+                .is_some_and(|source_bytes| part_changed(CONTENT_TYPES_PART_NAME, source_bytes))
+            {
+                loaded.support_parts.content_types_source_bytes = None;
+                loaded.support_parts.content_types_summary = None;
+            }
+            if loaded
+                .support_parts
+                .package_relationships_part_source_bytes
+                .as_deref()
+                .is_some_and(|source_bytes| part_changed("_rels/.rels", source_bytes))
+            {
+                loaded.support_parts.package_relationships_part_source_bytes = None;
+                loaded.support_parts.package_relationships_summary = None;
+            }
+            if let Some(workbook_rels_part_uri) = loaded
+                .support_parts
+                .workbook_relationships_part_uri
+                .as_deref()
+                && loaded
+                    .support_parts
+                    .workbook_relationships_part_source_bytes
+                    .as_deref()
+                    .is_some_and(|source_bytes| part_changed(workbook_rels_part_uri, source_bytes))
+            {
+                loaded
+                    .support_parts
+                    .workbook_relationships_part_source_bytes = None;
+                loaded.support_parts.workbook_relationships_summary = None;
+            }
+
+            for support_parts in loaded.worksheet_support_parts.values_mut() {
+                if let Some(relationships_part_uri) =
+                    support_parts.relationships_part_uri.as_deref()
+                    && support_parts
+                        .relationships_part_source_bytes
+                        .as_deref()
+                        .is_some_and(|source_bytes| {
+                            part_changed(relationships_part_uri, source_bytes)
+                        })
+                {
+                    support_parts.relationships_part_source_bytes = None;
+                    support_parts.relationships_summary = None;
+                }
+
+                let changed_comment_parts = support_parts
+                    .comment_part_source_bytes
+                    .iter()
+                    .filter_map(|(part_uri, source_bytes)| {
+                        part_changed(part_uri, source_bytes).then(|| part_uri.clone())
+                    })
+                    .collect::<Vec<_>>();
+                for part_uri in changed_comment_parts {
+                    support_parts.comment_part_source_bytes.remove(&part_uri);
+                    support_parts.comment_summaries.remove(&part_uri);
+                    support_parts.comment_anchor_refs.remove(&part_uri);
+                }
+
+                let changed_vml_parts = support_parts
+                    .vml_drawing_part_source_bytes
+                    .iter()
+                    .filter_map(|(part_uri, source_bytes)| {
+                        part_changed(part_uri, source_bytes).then(|| part_uri.clone())
+                    })
+                    .collect::<Vec<_>>();
+                for part_uri in changed_vml_parts {
+                    support_parts
+                        .vml_drawing_part_source_bytes
+                        .remove(&part_uri);
+                    support_parts.vml_drawing_summaries.remove(&part_uri);
+                }
+            }
+
+            for support_parts in loaded.sheet_drawing_support_parts.values_mut() {
+                if support_parts
+                    .sheet_part_source_bytes
+                    .as_deref()
+                    .zip(support_parts.sheet_part_uri.as_deref())
+                    .is_some_and(|(source_bytes, part_uri)| part_changed(part_uri, source_bytes))
+                {
+                    support_parts.sheet_part_source_bytes = None;
+                }
+                if support_parts
+                    .relationships_part_source_bytes
+                    .as_deref()
+                    .zip(support_parts.relationships_part_uri.as_deref())
+                    .is_some_and(|(source_bytes, part_uri)| part_changed(part_uri, source_bytes))
+                {
+                    support_parts.relationships_part_source_bytes = None;
+                }
+
+                let changed_drawing_parts = support_parts
+                    .drawing_part_source_bytes
+                    .iter()
+                    .filter_map(|(part_uri, source_bytes)| {
+                        part_changed(part_uri, source_bytes).then(|| part_uri.clone())
+                    })
+                    .collect::<Vec<_>>();
+                for part_uri in changed_drawing_parts {
+                    support_parts.drawing_part_source_bytes.remove(&part_uri);
+                    support_parts.drawing_summaries.remove(&part_uri);
+                }
+
+                let changed_drawing_relationship_parts = support_parts
+                    .drawing_relationships_part_source_bytes
+                    .iter()
+                    .filter_map(|(part_uri, source_bytes)| {
+                        part_changed(part_uri, source_bytes).then(|| part_uri.clone())
+                    })
+                    .collect::<Vec<_>>();
+                for part_uri in changed_drawing_relationship_parts {
+                    support_parts
+                        .drawing_relationships_part_source_bytes
+                        .remove(&part_uri);
+                }
+
+                let changed_chart_parts = support_parts
+                    .chart_part_source_bytes
+                    .iter()
+                    .filter_map(|(part_uri, source_bytes)| {
+                        part_changed(part_uri, source_bytes).then(|| part_uri.clone())
+                    })
+                    .collect::<Vec<_>>();
+                for part_uri in changed_chart_parts {
+                    support_parts.chart_part_source_bytes.remove(&part_uri);
+                    support_parts.chart_summaries.remove(&part_uri);
+                }
+
+                let changed_chart_relationship_parts = support_parts
+                    .chart_relationships_part_source_bytes
+                    .iter()
+                    .filter_map(|(part_uri, source_bytes)| {
+                        part_changed(part_uri, source_bytes).then(|| part_uri.clone())
+                    })
+                    .collect::<Vec<_>>();
+                for part_uri in changed_chart_relationship_parts {
+                    support_parts
+                        .chart_relationships_part_source_bytes
+                        .remove(&part_uri);
+                    support_parts.chart_summaries.retain(|_, summary| {
+                        summary.relationships_part_uri.as_deref() != Some(part_uri.as_str())
+                    });
+                }
+
+                let changed_chart_support_parts = support_parts
+                    .chart_support_part_source_bytes
+                    .iter()
+                    .filter_map(|(part_uri, source_bytes)| {
+                        part_changed(part_uri, source_bytes).then(|| part_uri.clone())
+                    })
+                    .collect::<Vec<_>>();
+                for part_uri in changed_chart_support_parts {
+                    support_parts
+                        .chart_support_part_source_bytes
+                        .remove(&part_uri);
+                }
+
+                let changed_drawing_opaque_parts = support_parts
+                    .drawing_opaque_relationship_part_source_bytes
+                    .iter()
+                    .filter_map(|(part_uri, source_bytes)| {
+                        part_changed(part_uri, source_bytes).then(|| part_uri.clone())
+                    })
+                    .collect::<Vec<_>>();
+                for part_uri in changed_drawing_opaque_parts {
+                    support_parts
+                        .drawing_opaque_relationship_part_source_bytes
+                        .remove(&part_uri);
+                }
+
+                let changed_chart_opaque_parts = support_parts
+                    .chart_opaque_relationship_part_source_bytes
+                    .iter()
+                    .filter_map(|(part_uri, source_bytes)| {
+                        part_changed(part_uri, source_bytes).then(|| part_uri.clone())
+                    })
+                    .collect::<Vec<_>>();
+                for part_uri in changed_chart_opaque_parts {
+                    support_parts
+                        .chart_opaque_relationship_part_source_bytes
+                        .remove(&part_uri);
+                }
+            }
+        }
         self.codec.save(
             &loaded,
             SaveOptions {
