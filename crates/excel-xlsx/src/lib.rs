@@ -77603,6 +77603,14 @@ mod tests {
         package
             .replace_part_bytes("[Content_Types].xml", content_types.into_bytes())
             .expect("replace content types");
+        let expected_content_types = super::strip_calc_chain_content_type_override(
+            package
+                .part("[Content_Types].xml")
+                .expect("expected content types")
+                .bytes
+                .as_slice(),
+        )
+        .expect("strip calc chain content type override");
         let package_rels = String::from_utf8(
             package
                 .part("_rels/.rels")
@@ -77646,6 +77654,14 @@ mod tests {
         package
             .replace_part_bytes("xl/_rels/workbook.xml.rels", workbook_rels.into_bytes())
             .expect("replace workbook rels");
+        let expected_workbook_rels = super::strip_calc_chain_relationships(
+            package
+                .part("xl/_rels/workbook.xml.rels")
+                .expect("expected workbook rels")
+                .bytes
+                .as_slice(),
+        )
+        .expect("strip calc chain relationships");
         let input = package.to_bytes().expect("package bytes");
 
         let mut loaded = codec
@@ -77679,6 +77695,13 @@ mod tests {
         assert!(!saved_content_types.contains("calcChain.xml"));
         assert_eq!(
             saved_package
+                .part("[Content_Types].xml")
+                .expect("saved content types")
+                .bytes,
+            expected_content_types
+        );
+        assert_eq!(
+            saved_package
                 .part("_rels/.rels")
                 .expect("saved package rels")
                 .bytes,
@@ -77697,6 +77720,13 @@ mod tests {
         assert!(saved_workbook_rels.contains(r#"data-sheet="keep""#));
         assert!(saved_workbook_rels.contains(r#"<ext preserve="sheet"/>"#));
         assert!(!saved_workbook_rels.contains("calcChain"));
+        assert_eq!(
+            saved_package
+                .part("xl/_rels/workbook.xml.rels")
+                .expect("saved workbook rels")
+                .bytes,
+            expected_workbook_rels
+        );
     }
 
     #[test]
