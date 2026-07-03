@@ -89,6 +89,9 @@ launcher generation 이후에도 남는 작업은 Windows process spawn, exit st
 현재 `office-capture`는 capture script를 `scripts/capture.ps1`로, direct-exec launcher를 `scripts/run_capture.cmd`로 materialize하고 `manifest/execution_plan.json`, `manifest/direct_exec_status.template.json`, `manifest/execution_receipt.template.json`을 함께 쓸 수 있으며, `manifest/execution_receipt.json`이 있으면 completed manifest/checksum을 다시 닫을 수 있다.
 capture payload contract는 `raw_typelib_identity.json`, `excel_typelib_snapshot.idl`, `excel_typelib_snapshot.odl`, `excel_pia_identity.json`, `excel_pia_public_surface.json`의 5개 파일명으로 고정되어 있으며, plan summary, `execution_plan.json`, `execution_receipt.template.json`, completed `capture_manifest.json`에서 같은 목록을 노출한다.
 completion 단계에서는 receipt가 `expectedCaptureOutputs`를 명시한 경우 plan의 payload contract와 정확히 일치해야 하며, legacy receipt처럼 해당 field가 없는 경우에는 호환을 위해 허용하되 manifest-level `expectedCaptureOutputs`는 계속 plan 기준으로 기록한다.
+modern receipt는 `commandResults`와 `manualStepResults`의 각 status가 `completed`여야 한다.
+또한 `expectedCaptureOutputs`가 있는 receipt에서는 조건 없는 command result와 manual step result 이름이 `execution_plan.json`의 plan과 일치해야 하며, 조건부 fallback command는 실행되지 않을 수 있어 optional로 취급한다.
+알 수 없는 command result, 누락된 필수 command/manual step, pending/failed status는 completion error이며, 이 경우 completed manifest/checksum을 쓰지 않는다.
 `output_checksums.json`은 manifest-level `expectedCaptureOutputs`의 5개 payload 파일명을 모두 덮는 relative output path checksum set을 제공해야 한다.
 추가로 `run_execution_bundle` library path와 `--run-execution-bundle DIR` CLI mode를 통해 실제 Windows host에서 launcher를 spawn하고 `manifest/direct_exec_status.json`을 읽은 뒤 final manifest/checksum completion까지 이어지는 direct-exec orchestration을 제공한다.
 non-Windows host에서는 이 path를 명시적으로 거부하고, materialized launcher/script 누락도 preflight error로 바로 반환한다.

@@ -4675,6 +4675,8 @@
   - 범위: execution receipt의 command/manual step result가 `completed`가 아닌 경우 completion 단계가 manifest/checksum을 닫지 않고 명시적으로 실패하도록 검증해 pending/failed oracle capture 결과가 성공 bundle로 승격되지 않도록 고정
   - `Step 7.15 DONE` modern receipt result coverage validation
   - 범위: `expectedCaptureOutputs`가 있는 execution receipt는 조건 없는 command result와 manual step result 이름이 execution plan과 맞아야 completion이 진행되도록 검증해 누락되거나 알 수 없는 capture step 결과가 성공 bundle에 포함되지 않도록 고정
+  - `Step 7.16 DONE` capture receipt validation contract documentation
+  - 범위: Windows capture runner 문서가 modern receipt의 completed status requirement, command/manual result name coverage, 조건부 fallback command optional 정책, 실패 시 manifest/checksum 미생성 contract를 현재 구현과 맞게 설명하도록 갱신
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.
