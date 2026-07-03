@@ -135,7 +135,9 @@ the caller.
 
 If the runner owns the output directory, it should prefer
 `write_differential_report_and_gate_to_output_root`. That path writes both
-canonical artifacts under the output root and returns the exact paths used.
+canonical artifacts under the output root and returns the exact paths used. It
+preflights report counts and source registry context before creating the output
+directory, so context mismatch cannot leave a report-only partial artifact.
 
 ## Artifact Flow
 

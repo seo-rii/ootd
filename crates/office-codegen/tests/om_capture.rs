@@ -609,6 +609,53 @@ fn writes_differential_report_and_gate_to_canonical_output_root() {
 }
 
 #[test]
+fn output_root_writer_rejects_context_mismatch_before_materializing_artifacts() {
+    let registry_toml =
+        fs::read_to_string(repo_root().join("specs/sources.toml")).expect("source registry");
+    let source_summary = summarize_source_registry_toml(&registry_toml).expect("source summary");
+    let report_without_context = build_differential_report(
+        "Excel",
+        "16.0",
+        "excel_365",
+        vec![DifferentialCaseResult {
+            name: "Application.Version".to_string(),
+            surface: Some("Application".to_string()),
+            member: Some("Version".to_string()),
+            status: DifferentialCaseStatus::Passed,
+            expected: Some("16.0".to_string()),
+            actual: Some("16.0".to_string()),
+            message: None,
+            artifacts: BTreeMap::new(),
+        }],
+    );
+    let unique_suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time")
+        .as_nanos();
+    let output_root = std::env::temp_dir().join(format!(
+        "ootd-differential-output-root-reject-{unique_suffix}"
+    ));
+    let expected_paths = differential_artifact_paths(&output_root);
+
+    let error = write_differential_report_and_gate_to_output_root(
+        &report_without_context,
+        &source_summary,
+        &output_root,
+    )
+    .expect_err("missing context should fail before write");
+
+    match error {
+        DifferentialReportLoadError::Contract { message } => {
+            assert!(message.contains("missing source registry context"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+    assert!(!output_root.exists());
+    assert!(!expected_paths.report_path.exists());
+    assert!(!expected_paths.gate_summary_path.exists());
+}
+
+#[test]
 fn loads_differential_gate_summary_and_rejects_stale_contract() {
     let report = build_differential_report(
         "Excel",

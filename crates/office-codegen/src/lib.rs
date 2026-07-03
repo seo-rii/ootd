@@ -1805,6 +1805,8 @@ pub fn write_differential_report_and_gate_to_output_root(
     output_root: impl AsRef<Path>,
 ) -> Result<(DifferentialArtifactPaths, DifferentialGateSummary), DifferentialReportLoadError> {
     let paths = differential_artifact_paths(output_root);
+    report.validate()?;
+    report.validate_source_context(source_summary)?;
     fs::create_dir_all(&paths.output_root_path)?;
     report.write_json_path(&paths.report_path)?;
     let gate = write_differential_gate_from_report_path_with_source_context(
