@@ -4699,6 +4699,8 @@
   - 범위: `office-codegen` capture bundle loader가 completed `capture_manifest.json`의 `writableOutputs` logical key set을 canonical 5개 output key와 정확히 대조해 예상 외 writable output entry가 oracle bundle contract에 섞이지 못하도록 고정
   - `Step 7.27 DONE` codegen writable output exact path validation
   - 범위: `office-codegen` capture bundle loader가 completed `capture_manifest.json`의 `writableOutputs` logical key별 path 값을 canonical relative output path suffix와 대조해 basename만 맞는 wrong-directory writable output이 oracle bundle contract를 통과하지 못하도록 고정
+  - `Step 7.28 DONE` codegen embedded receipt duplicate result validation
+  - 범위: `office-codegen` capture bundle loader가 completed manifest의 embedded `executionReceipt.commandResults`와 `manualStepResults`에서 같은 result name이 중복되는 경우를 거부해 receipt result coverage가 set collapse로 통과하지 못하도록 고정
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.

@@ -1672,7 +1672,13 @@ fn validate_receipt_results(
                 ),
             });
         }
-        result_names.insert(name.to_string());
+        if !result_names.insert(name.to_string()) {
+            return Err(CanonicalOmGenerationError::CaptureBundleContract {
+                message: format!(
+                    "capture_manifest.json executionReceipt.{section} contained duplicate result {name}"
+                ),
+            });
+        }
     }
     Ok(result_names)
 }
