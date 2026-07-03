@@ -4321,6 +4321,8 @@
   - 범위: embedded chart/chartsheet drawing inventory clean-save 회귀에서 `xl/worksheets/_rels/sheetN.xml.rels`, `xl/chartsheets/_rels/sheetN.xml.rels`, `xl/drawings/_rels/drawingN.xml.rels`도 원본 bytes와 정확히 일치하는지 검증해서 sheet-to-drawing 및 drawing-to-chart 관계 part 보존까지 chart raw graph의 byte-preservation 표면으로 고정
   - `Step 6.6b2b2b2b2b2f2b2ak DONE` drawing part clean-save byte preservation
   - 범위: embedded chart와 chartsheet drawing inventory clean-save 회귀에서 `xl/drawings/drawingN.xml` 자체도 원본 bytes와 정확히 일치하는지 검증해서 anchor/graphicFrame/clientData/extLst 등 DrawingML placement payload의 raw preservation을 byte-level 회귀로 고정
+  - `Step 6.6b2b2b2b2b2f2b2al DONE` chartsheet part clean-save byte preservation
+  - 범위: chartsheet drawing inventory clean-save 회귀에서 `xl/chartsheets/sheetN.xml` 자체도 원본 bytes와 정확히 일치하는지 검증해서 chart sheet host part의 raw preservation을 byte-level 회귀로 고정
 - 목표
   - 현재 core worksheet rewrite 이후 남아 있는 fidelity gap을 좁힌다.
   - style/theme/merge/comment/hyperlink/formula cached-value 계열 보존을 순차적으로 올린다.

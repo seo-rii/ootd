@@ -27374,16 +27374,17 @@ mod tests {
         package
             .replace_part_bytes(WORKBOOK_RELS_PART_NAME, workbook_rels_xml.into_bytes())
             .expect("replace workbook rels");
+        let chartsheet_xml = br#"<?xml version="1.0" encoding="UTF-8"?>
+<chartsheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <drawing r:id="rIdChartSheetDrawing"/>
+</chartsheet>"#
+            .to_vec();
         package
             .add_part(OpcPart {
                 name: "xl/chartsheets/sheet1.xml".to_string(),
                 content_type: None,
                 compression: CompressionMethod::Stored,
-                bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
-<chartsheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
-  <drawing r:id="rIdChartSheetDrawing"/>
-</chartsheet>"#
-                    .to_vec(),
+                bytes: chartsheet_xml.clone(),
             })
             .expect("add chartsheet part");
         let chartsheet_rels_xml = br#"<?xml version="1.0" encoding="UTF-8"?>
@@ -27690,6 +27691,13 @@ mod tests {
                 .expect("saved chart")
                 .bytes,
             chart_xml
+        );
+        assert_eq!(
+            saved_package
+                .part("xl/chartsheets/sheet1.xml")
+                .expect("saved chartsheet")
+                .bytes,
+            chartsheet_xml
         );
         assert_eq!(
             saved_package
