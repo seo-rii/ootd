@@ -4661,6 +4661,8 @@
   - 범위: execution receipt가 `expectedCaptureOutputs`를 명시한 경우 completion 단계에서 plan의 Windows capture payload contract와 정확히 일치하지 않으면 명시적으로 실패하도록 고정
   - `Step 7.8 DONE` legacy execution receipt compatibility
   - 범위: `expectedCaptureOutputs`가 없는 기존 execution receipt JSON도 completion에서 계속 허용하되, manifest-level expected output contract는 plan 기준으로 기록되는지 회귀로 고정
+  - `Step 7.9 DONE` capture expected output contract documentation
+  - 범위: Windows capture runner 문서가 5개 payload 파일명 contract와 plan/receipt/manifest/checksum 검증 표면, legacy receipt 호환 정책을 현재 구현과 맞게 설명하도록 갱신
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.

@@ -87,6 +87,9 @@ launcher generation 이후에도 남는 작업은 Windows process spawn, exit st
 현재 script emission은 interop-derived `raw_typelib_identity.json`, `excel_pia_identity.json`, `excel_pia_public_surface.json` 자동 생성을 준비하고, `oleview` 기반 IDL/ODL snapshot export는 manual step으로 남겨 둔다.
 이 문서가 다루는 Step 2 경계는 invocation plan, script emission, execution bundle materialization, receipt-driven bundle completion까지다.
 현재 `office-capture`는 capture script를 `scripts/capture.ps1`로, direct-exec launcher를 `scripts/run_capture.cmd`로 materialize하고 `manifest/execution_plan.json`, `manifest/direct_exec_status.template.json`, `manifest/execution_receipt.template.json`을 함께 쓸 수 있으며, `manifest/execution_receipt.json`이 있으면 completed manifest/checksum을 다시 닫을 수 있다.
+capture payload contract는 `raw_typelib_identity.json`, `excel_typelib_snapshot.idl`, `excel_typelib_snapshot.odl`, `excel_pia_identity.json`, `excel_pia_public_surface.json`의 5개 파일명으로 고정되어 있으며, plan summary, `execution_plan.json`, `execution_receipt.template.json`, completed `capture_manifest.json`에서 같은 목록을 노출한다.
+completion 단계에서는 receipt가 `expectedCaptureOutputs`를 명시한 경우 plan의 payload contract와 정확히 일치해야 하며, legacy receipt처럼 해당 field가 없는 경우에는 호환을 위해 허용하되 manifest-level `expectedCaptureOutputs`는 계속 plan 기준으로 기록한다.
+`output_checksums.json`은 manifest-level `expectedCaptureOutputs`의 5개 payload 파일명을 모두 덮는 relative output path checksum set을 제공해야 한다.
 추가로 `run_execution_bundle` library path와 `--run-execution-bundle DIR` CLI mode를 통해 실제 Windows host에서 launcher를 spawn하고 `manifest/direct_exec_status.json`을 읽은 뒤 final manifest/checksum completion까지 이어지는 direct-exec orchestration을 제공한다.
 non-Windows host에서는 이 path를 명시적으로 거부하고, materialized launcher/script 누락도 preflight error로 바로 반환한다.
 `office-codegen`는 capture bundle directory를 입력으로 받아 canonical `office-idl` JSON output을 쓰는 generator path를 제공하고, synthetic bundle regression과 capture bundle validator로 Step 3 contract를 고정한다.
