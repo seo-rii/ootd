@@ -4291,6 +4291,8 @@
   - 범위: `workbook_with_blank_external_hyperlink_anchor_and_hyperlinks_container_attrs_bytes()` fallback path에서 worksheet XML의 external hyperlink `display` attr drift를 주입한 뒤, dirty save가 `hyperlinks_part_summary`의 원본 attr map을 기준으로 `display="Example"`을 복구하고 blank anchor `C3`는 reopen 후에도 비물질화 상태를 유지하는지 회귀로 검증
   - `Step 6.6b2b2b2b2b2f2b2v DONE` worksheet external hyperlink tooltip standalone recovery
   - 범위: 통합 hyperlinks summary 복구 회귀와 별도로, external hyperlink `tooltip` 단독 drift가 `hyperlinks_part_summary` 원본 attr map으로 복구되고 blank anchor `C3`가 reopen 후에도 비물질화 상태를 유지하는지 회귀로 고정
+  - `Step 6.6b2b2b2b2b2f2b2w DONE` worksheet hyperlink relationship extra-attr recovery
+  - 범위: absolute-ref external hyperlink fallback path에서 tracked `rId1` hyperlink relationship의 extra attr drift를 주입한 뒤, dirty save가 worksheet rels typed/source binding을 기준으로 `data-extra="1"`을 복구하고 blank anchor `C3`는 reopen 후에도 비물질화 상태를 유지하는지 회귀로 고정
 - 목표
   - 현재 core worksheet rewrite 이후 남아 있는 fidelity gap을 좁힌다.
   - style/theme/merge/comment/hyperlink/formula cached-value 계열 보존을 순차적으로 올린다.

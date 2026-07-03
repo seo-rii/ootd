@@ -70474,6 +70474,91 @@ mod tests {
     }
 
     #[test]
+    fn dirty_save_restores_hyperlink_relationship_extra_attr_for_blank_external_hyperlink_anchor_without_legacy_ref_lists()
+     {
+        let codec = XlsxCodec;
+        let input = workbook_with_absolute_ref_hyperlink_anchor_relationship_extra_attr_bytes();
+        let mut loaded = codec
+            .load(&input, CommonLoadOptions::default())
+            .expect("load workbook");
+        let sheet_id = loaded.state.worksheets[0].id;
+        let worksheet_support = loaded
+            .worksheet_support_parts
+            .get_mut(&sheet_id)
+            .expect("worksheet support parts");
+        worksheet_support.hyperlink_refs.clear();
+        let sheet_rels_xml = String::from_utf8(
+            loaded
+                .package
+                .part("xl/worksheets/_rels/sheet1.xml.rels")
+                .expect("sheet rels")
+                .bytes
+                .clone(),
+        )
+        .expect("sheet rels utf8")
+        .replace(r#" data-extra="1""#, r#" data-extra="2""#);
+        loaded
+            .package
+            .replace_part_bytes(
+                "xl/worksheets/_rels/sheet1.xml.rels",
+                sheet_rels_xml.into_bytes(),
+            )
+            .expect("replace sheet rels");
+        loaded.state.insert_cell(
+            sheet_id,
+            3,
+            3,
+            CellData {
+                value: CellValue::Number(4.0),
+                formula: None,
+                style_id: None,
+            },
+        );
+        loaded
+            .state
+            .set_range_values(
+                &office_common::RangeRef::single_cell(WorkbookId(0), sheet_id, 3, 3),
+                &office_common::OmArray::scalar(office_common::OmValue::Empty),
+            )
+            .expect("blank C3");
+        assert!(loaded.state.cell(sheet_id, 3, 3).is_none());
+
+        let saved = codec
+            .save(&loaded, office_common::SaveOptions::default())
+            .expect("save workbook");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let sheet_xml = String::from_utf8(
+            saved_package
+                .part("xl/worksheets/sheet1.xml")
+                .expect("sheet part")
+                .bytes
+                .clone(),
+        )
+        .expect("sheet xml utf8");
+        let sheet_rels_xml = String::from_utf8(
+            saved_package
+                .part("xl/worksheets/_rels/sheet1.xml.rels")
+                .expect("sheet rels")
+                .bytes
+                .clone(),
+        )
+        .expect("sheet rels utf8");
+
+        assert!(sheet_xml.contains(r#"<c r="C3"/>"#));
+        assert!(sheet_xml.contains(r#"<hyperlink ref="$C$3" r:id="rId1"/>"#));
+        assert!(sheet_rels_xml.contains(r#"Target="https://example.com""#));
+        assert!(sheet_rels_xml.contains(r#"TargetMode="External""#));
+        assert!(sheet_rels_xml.contains(r#"data-extra="1""#));
+        assert!(!sheet_rels_xml.contains(r#"data-extra="2""#));
+
+        let reopened = codec
+            .load(&saved, CommonLoadOptions::default())
+            .expect("reopen workbook");
+        let reopened_sheet_id = reopened.state.worksheets[0].id;
+        assert!(reopened.state.cell(reopened_sheet_id, 3, 3).is_none());
+    }
+
+    #[test]
     fn dirty_save_inserts_multiple_anchor_placeholders_in_segment_order_without_legacy_ref_lists() {
         let codec = XlsxCodec;
         let input =
@@ -127079,6 +127164,28 @@ mod tests {
             },
         ]);
 
+        package.to_bytes().expect("package bytes")
+    }
+
+    fn workbook_with_absolute_ref_hyperlink_anchor_relationship_extra_attr_bytes() -> Vec<u8> {
+        let mut package =
+            OpcPackage::from_bytes(&workbook_with_absolute_ref_hyperlink_anchor_bytes())
+                .expect("base workbook package");
+        let rels_xml = String::from_utf8(
+            package
+                .part("xl/worksheets/_rels/sheet1.xml.rels")
+                .expect("sheet rels")
+                .bytes
+                .clone(),
+        )
+        .expect("sheet rels utf8")
+        .replace(
+            r#"TargetMode="External""#,
+            r#"TargetMode="External" data-extra="1""#,
+        );
+        package
+            .replace_part_bytes("xl/worksheets/_rels/sheet1.xml.rels", rels_xml.into_bytes())
+            .expect("replace sheet rels");
         package.to_bytes().expect("package bytes")
     }
 
