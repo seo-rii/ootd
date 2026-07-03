@@ -4341,6 +4341,8 @@
   - 범위: embedded chart XML의 `c:userShapes r:id`와 chart rels의 opaque `chartUserShapes` relationship/userShapes part가 style/color support part로 typed 수집되지 않아도 chart rels source bytes, userShapes part, content type, host worksheet/rels, drawing/chart bytes를 clean save에서 그대로 보존하는지 회귀로 고정
   - `Step 6.6b2b2b2b2b2f2b2au DONE` chartsheet chart user-shapes relationship preservation
   - 범위: chartsheet chart XML의 `c:userShapes r:id`와 chart rels의 opaque `chartUserShapes` relationship/userShapes part가 style/color support part로 typed 수집되지 않아도 chart sheet host, workbook rels, chart rels source bytes, userShapes part, content type, drawing/chart bytes를 clean save에서 그대로 보존하는지 회귀로 고정
+  - `Step 6.6b2b2b2b2b2f2b2av DONE` embedded chart external-data relationship preservation
+  - 범위: embedded chart XML의 `c:externalData r:id`와 chart rels의 opaque externalLink relationship/externalLink part가 style/color support part로 typed 수집되지 않아도 chart rels source bytes, externalLink part, content type, host worksheet/rels, drawing/chart bytes를 clean save에서 그대로 보존하는지 회귀로 고정
 - 목표
   - 현재 core worksheet rewrite 이후 남아 있는 fidelity gap을 좁힌다.
   - style/theme/merge/comment/hyperlink/formula cached-value 계열 보존을 순차적으로 올린다.
