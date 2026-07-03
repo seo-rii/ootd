@@ -27759,8 +27759,9 @@ mod tests {
             "</worksheet>",
             r#"<drawing r:id="rIdChartDrawing"/></worksheet>"#,
         );
+        let sheet_xml_bytes = sheet_xml.into_bytes();
         package
-            .replace_part_bytes("xl/worksheets/sheet1.xml", sheet_xml.into_bytes())
+            .replace_part_bytes("xl/worksheets/sheet1.xml", sheet_xml_bytes.clone())
             .expect("replace sheet xml");
         let worksheet_rels_xml = br#"<?xml version="1.0" encoding="UTF-8"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
@@ -28585,6 +28586,13 @@ mod tests {
                 .expect("saved chart")
                 .bytes,
             chart_xml
+        );
+        assert_eq!(
+            saved_package
+                .part("xl/worksheets/sheet1.xml")
+                .expect("saved worksheet")
+                .bytes,
+            sheet_xml_bytes
         );
         assert_eq!(
             saved_package
