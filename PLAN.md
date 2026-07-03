@@ -4705,6 +4705,8 @@
   - 범위: `office-codegen` capture bundle loader가 completed manifest와 embedded `executionReceipt`의 `expectedCaptureOutputs`에서 duplicate payload name을 거부해 expected output coverage가 set collapse로 통과하지 못하도록 고정
   - `Step 7.30 DONE` capture manifest/checksum exact output contract regression
   - 범위: `office-capture`가 생성하는 completed `capture_manifest.json`과 `output_checksums.json` 테스트가 payload/known auxiliary writable output logical key set, canonical path suffix, payload plus `capture.log` checksum filename set을 expected output contract와 exact match로 검증하도록 강화하고, `office-codegen` validator가 known auxiliary writable/checksum output은 허용하되 payload key/path는 계속 exact 검증하도록 정렬
+  - `Step 7.31 DONE` capture completion duplicate command result validation
+  - 범위: `office-capture` completion 단계가 modern receipt `commandResults`에서 같은 command name이 중복되는 경우를 result mismatch로 거부해 duplicate command result가 required command coverage로 접혀 completed bundle로 승격되지 못하도록 고정
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.

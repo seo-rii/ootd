@@ -863,13 +863,18 @@ impl CapturePlan {
                 .iter()
                 .map(|command| command.name.clone())
                 .collect::<Vec<_>>();
+            let actual_command_name_set = actual_command_names
+                .iter()
+                .cloned()
+                .collect::<std::collections::BTreeSet<_>>();
+            let has_duplicate_command = actual_command_name_set.len() != actual_command_names.len();
             let has_unknown_command = actual_command_names
                 .iter()
                 .any(|name| !known_command_names.contains(name));
             let has_all_required_commands = required_command_names
                 .iter()
                 .all(|name| actual_command_names.contains(name));
-            if has_unknown_command || !has_all_required_commands {
+            if has_duplicate_command || has_unknown_command || !has_all_required_commands {
                 return Err(CaptureBundleCompletionError::ReceiptResultsMismatch {
                     section: "commandResults",
                     expected: required_command_names,
@@ -3111,6 +3116,14 @@ mod tests {
             (
                 "commandResults",
                 vec!["powershell_capture_reflection", "unknown_capture_step"],
+                true,
+            ),
+            (
+                "commandResults",
+                vec![
+                    "powershell_capture_reflection",
+                    "powershell_capture_reflection",
+                ],
                 true,
             ),
             ("manualStepResults", Vec::<&str>::new(), false),
