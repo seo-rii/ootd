@@ -40110,6 +40110,74 @@ mod tests {
     }
 
     #[test]
+    fn load_collects_package_external_relationships_structural_summary() {
+        let codec = XlsxCodec;
+        let mut package = OpcPackage::from_bytes(&workbook_with_styles_and_theme_bytes())
+            .expect("base workbook package");
+        let package_rels = String::from_utf8(
+            package
+                .part("_rels/.rels")
+                .expect("package rels part")
+                .bytes
+                .clone(),
+        )
+        .expect("package rels utf8")
+        .replace(
+            "</Relationships>",
+            concat!(
+                r#"  <Relationship Id="rIdExternal" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://example.com/package" TargetMode="ExTeRnAl" data-external="keep"/>"#,
+                "\n</Relationships>"
+            ),
+        );
+        package
+            .replace_part_bytes("_rels/.rels", package_rels.into_bytes())
+            .expect("replace package rels");
+        let bytes = package.to_bytes().expect("package bytes");
+
+        let loaded = codec
+            .load(bytes.as_slice(), CommonLoadOptions::default())
+            .expect("load workbook");
+        let summary = loaded
+            .support_parts
+            .package_relationships_summary
+            .as_ref()
+            .expect("package relationships summary");
+        let external_attrs = summary
+            .relationship_attr_maps
+            .iter()
+            .find(|attrs| attrs.get("Id").map(String::as_str) == Some("rIdExternal"))
+            .expect("external relationship attrs");
+
+        assert_eq!(
+            external_attrs.get("Target").map(String::as_str),
+            Some("https://example.com/package")
+        );
+        assert_eq!(
+            external_attrs.get("TargetMode").map(String::as_str),
+            Some("ExTeRnAl")
+        );
+        assert_eq!(
+            external_attrs.get("data-external").map(String::as_str),
+            Some("keep")
+        );
+
+        let saved = codec
+            .save(&loaded, office_common::SaveOptions::default())
+            .expect("clean save workbook");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_package_rels = String::from_utf8(
+            saved_package
+                .part("_rels/.rels")
+                .expect("saved package rels")
+                .bytes
+                .clone(),
+        )
+        .expect("saved package rels utf8");
+        assert!(saved_package_rels.contains(r#"TargetMode="ExTeRnAl""#));
+        assert!(saved_package_rels.contains(r#"data-external="keep""#));
+    }
+
+    #[test]
     fn ensure_support_parts_present_rejects_workbook_relationships_summary_drift() {
         let codec = XlsxCodec;
         let loaded = codec

@@ -4552,6 +4552,8 @@
   - 범위: workbook support raw graph가 추적하는 `[Content_Types].xml` part가 clean validation 직전에 삭제된 경우 missing part 오류로 명시 실패하도록 회귀로 고정하고, validation 옵션 이름을 package source-byte 범위에 맞게 정리
   - `Step 6.6b2b2b2b2b2f2b2di DONE` root package relationships source and summary validation
   - 범위: package-level `_rels/.rels` source bytes와 structural summary를 `WorkbookSupportParts` raw graph에 올리고, clean validation 직전에 missing/source-byte drift/summary drift를 명시적으로 실패시키도록 회귀로 고정
+  - `Step 6.6b2b2b2b2b2f2b2dj DONE` root package external relationship summary preservation
+  - 범위: package-level `_rels/.rels`의 `TargetMode="External"` 계열 외부 관계가 package target part로 오인되지 않고, raw graph summary에서 target/TargetMode/extra attrs를 원문대로 보존하며 clean save 후에도 유지되는지 회귀로 고정
 - 목표
   - 현재 core worksheet rewrite 이후 남아 있는 fidelity gap을 좁힌다.
   - style/theme/merge/comment/hyperlink/formula cached-value 계열 보존을 순차적으로 올린다.
