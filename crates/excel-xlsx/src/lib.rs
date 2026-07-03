@@ -30351,6 +30351,58 @@ mod tests {
             chart_rels_xml
         );
 
+        let mut chart_rels_changed_loaded = loaded.clone();
+        chart_rels_changed_loaded
+            .package
+            .replace_part_bytes(
+                "xl/charts/_rels/chart1.xml.rels",
+                br#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships
+  xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rIdStyle1" Type="http://schemas.microsoft.com/office/2011/relationships/chartStyle" Target="style1.xml" />
+  <Relationship Id="rIdColors1" Type="http://schemas.microsoft.com/office/2011/relationships/chartColorStyle" Target="colors1.xml" />
+</Relationships>"#
+                    .to_vec(),
+            )
+            .expect("replace embedded chart rels part");
+        let error = codec
+            .save(
+                &chart_rels_changed_loaded,
+                office_common::SaveOptions::default(),
+            )
+            .expect_err("save should reject changed embedded chart rels part");
+        assert!(
+            error.to_string().contains(
+                "explicit chart relationships part bytes changed: xl/charts/_rels/chart1.xml.rels"
+            ),
+            "{error}"
+        );
+
+        let mut chart_rels_missing_loaded = loaded.clone();
+        chart_rels_missing_loaded
+            .sheet_drawing_support_parts
+            .get_mut(&sheet_id)
+            .expect("drawing support")
+            .chart_summaries
+            .remove("xl/charts/chart1.xml");
+        assert!(
+            chart_rels_missing_loaded
+                .package
+                .remove_part("xl/charts/_rels/chart1.xml.rels")
+        );
+        let error = codec
+            .save(
+                &chart_rels_missing_loaded,
+                office_common::SaveOptions::default(),
+            )
+            .expect_err("save should reject missing embedded chart rels part");
+        assert!(
+            error.to_string().contains(
+                "explicit chart relationships part is missing: xl/charts/_rels/chart1.xml.rels"
+            ),
+            "{error}"
+        );
+
         let mut support_changed_loaded = loaded.clone();
         support_changed_loaded
             .package
