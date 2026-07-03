@@ -1389,6 +1389,17 @@ impl DifferentialReport {
     }
 }
 
+impl DifferentialGateSummary {
+    pub fn write_json_path(
+        &self,
+        path: impl AsRef<Path>,
+    ) -> Result<(), DifferentialReportLoadError> {
+        let payload = serde_json::to_vec_pretty(self)?;
+        fs::write(path, payload)?;
+        Ok(())
+    }
+}
+
 impl DifferentialReportContext {
     pub fn from_source_registry_summary(summary: &SourceRegistrySummary) -> Self {
         Self {
@@ -1671,6 +1682,23 @@ pub fn load_differential_gate_from_path_with_source_context(
 ) -> Result<DifferentialGateSummary, DifferentialReportLoadError> {
     let report = DifferentialReport::from_json_path(path)?;
     summarize_differential_gate_with_source_context(&report, source_summary)
+}
+
+pub fn write_differential_gate_to_path(
+    gate: &DifferentialGateSummary,
+    path: impl AsRef<Path>,
+) -> Result<(), DifferentialReportLoadError> {
+    gate.write_json_path(path)
+}
+
+pub fn write_differential_gate_from_report_path_with_source_context(
+    report_path: impl AsRef<Path>,
+    source_summary: &SourceRegistrySummary,
+    gate_path: impl AsRef<Path>,
+) -> Result<DifferentialGateSummary, DifferentialReportLoadError> {
+    let gate = load_differential_gate_from_path_with_source_context(report_path, source_summary)?;
+    gate.write_json_path(gate_path)?;
+    Ok(gate)
 }
 
 pub fn write_differential_report_to_path(

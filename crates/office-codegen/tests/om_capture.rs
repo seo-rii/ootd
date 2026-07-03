@@ -19,7 +19,9 @@ use office_codegen::{
     summarize_capture_bundle, summarize_differential_gate,
     summarize_differential_gate_with_source_context, summarize_om_sources,
     summarize_om_sources_toml, summarize_source_registry, summarize_source_registry_toml,
-    validate_differential_report_source_context, write_differential_report_to_path,
+    validate_differential_report_source_context,
+    write_differential_gate_from_report_path_with_source_context, write_differential_gate_to_path,
+    write_differential_report_to_path,
 };
 use office_idl::{AccessMode, CaptureOriginKind, InterfaceKind, OfficeIdlDocument};
 use sha2::{Digest, Sha256};
@@ -434,6 +436,77 @@ fn loads_differential_gate_from_path_with_source_registry_context() {
     }
 
     let _ = fs::remove_file(path);
+}
+
+#[test]
+fn writes_differential_gate_from_report_path_with_source_registry_context() {
+    let registry_toml =
+        fs::read_to_string(repo_root().join("specs/sources.toml")).expect("source registry");
+    let source_summary = summarize_source_registry_toml(&registry_toml).expect("source summary");
+    let report = build_differential_report_with_source_context(
+        "Excel",
+        "16.0",
+        &source_summary,
+        vec![
+            DifferentialCaseResult {
+                name: "Application.Name".to_string(),
+                surface: Some("Application".to_string()),
+                member: Some("Name".to_string()),
+                status: DifferentialCaseStatus::Passed,
+                expected: Some("Microsoft Excel".to_string()),
+                actual: Some("Microsoft Excel".to_string()),
+                message: None,
+                artifacts: BTreeMap::new(),
+            },
+            DifferentialCaseResult {
+                name: "Range.Value2 multi-area".to_string(),
+                surface: Some("Range".to_string()),
+                member: Some("Value2".to_string()),
+                status: DifferentialCaseStatus::Failed,
+                expected: Some("[[1],[2]]".to_string()),
+                actual: Some("1".to_string()),
+                message: Some("runtime collapsed the reference to the first scalar".to_string()),
+                artifacts: BTreeMap::new(),
+            },
+        ],
+    );
+    let unique_suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time")
+        .as_nanos();
+    let report_path = std::env::temp_dir().join(format!(
+        "ootd-differential-report-gate-{unique_suffix}.json"
+    ));
+    let gate_path =
+        std::env::temp_dir().join(format!("ootd-differential-gate-{unique_suffix}.json"));
+    write_differential_report_to_path(&report, &report_path).expect("write report");
+
+    let gate = write_differential_gate_from_report_path_with_source_context(
+        &report_path,
+        &source_summary,
+        &gate_path,
+    )
+    .expect("write context-aware gate");
+
+    assert!(!gate.passed);
+    assert_eq!(
+        gate.blocking_cases,
+        vec!["Range.Value2 multi-area".to_string()]
+    );
+    let gate_json = fs::read_to_string(&gate_path).expect("gate json");
+    assert!(gate_json.contains(r#""passed": false"#));
+    assert!(gate_json.contains(r#""blockingCaseCount": 1"#));
+    assert!(gate_json.contains(r#""failedCaseCount": 1"#));
+
+    let copied_gate_path =
+        std::env::temp_dir().join(format!("ootd-differential-gate-copy-{unique_suffix}.json"));
+    write_differential_gate_to_path(&gate, &copied_gate_path).expect("write copied gate");
+    let copied_gate_json = fs::read_to_string(&copied_gate_path).expect("copied gate json");
+    assert_eq!(copied_gate_json, gate_json);
+
+    fs::remove_file(&report_path).expect("remove report");
+    fs::remove_file(&gate_path).expect("remove gate");
+    fs::remove_file(&copied_gate_path).expect("remove copied gate");
 }
 
 #[test]
