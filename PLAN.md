@@ -4270,6 +4270,8 @@
   - 범위: `fmtScheme` nested child 중 `<a:ln>`과 bgFill의 `<a:solidFill>` name drift, 제거, 중복 추가 회귀를 더해 nested child sibling drift 전반이 fail-fast 되는지 고정
   - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1929 DONE` theme fmtScheme fill-color first transform duplicate reject parity
   - 범위: `fmtScheme` fill color transform sequence에서 첫 transform `<a:tint>` 중복 추가 회귀를 명시적으로 더해 first-transform sibling drift도 dirty save에서 fail-fast 되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1930 DONE` theme fmtScheme fill-color second transform duplicate reject parity
+  - 범위: `fmtScheme` fill color transform sequence에서 두 번째 transform `<a:satMod>` 중복 추가 회귀를 명시적으로 더해 second-transform sibling drift도 dirty save에서 fail-fast 되는지 고정
   - `Step 6.6a DONE` worksheet hyperlink-ref integrity regression
   - 범위: worksheet support가 추적한 hyperlink `ref` 목록을 load assertion과 dirty save 회귀로 고정하고, hyperlink `ref` drift/삭제를 fail-fast로 막음
   - `Step 6.6b1 DONE` worksheet-local relationship binding integrity
