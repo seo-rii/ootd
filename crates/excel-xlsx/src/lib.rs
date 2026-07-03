@@ -75428,6 +75428,19 @@ mod tests {
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
+        let original_workbook_rels_summary = loaded
+            .support_parts
+            .workbook_relationships_summary
+            .as_ref()
+            .expect("workbook relationships summary")
+            .clone();
+        assert!(
+            original_workbook_rels_summary
+                .relationship_attr_maps
+                .iter()
+                .any(|attrs| attrs.get("Type").map(String::as_str)
+                    == Some(super::CALC_CHAIN_RELATIONSHIP_TYPE))
+        );
         let sheet_id = loaded.state.worksheets[0].id;
         loaded
             .state
@@ -75465,6 +75478,23 @@ mod tests {
         )
         .expect("saved workbook rels utf8");
         assert!(!saved_workbook_rels.contains("calcChain"));
+        let saved_workbook_rels_summary = super::parse_worksheet_relationships_part_summary(
+            saved_package
+                .part("xl/_rels/workbook.xml.rels")
+                .expect("saved workbook rels")
+                .bytes
+                .as_slice(),
+            &["xl"],
+        )
+        .expect("saved workbook rels summary");
+        assert_ne!(saved_workbook_rels_summary, original_workbook_rels_summary);
+        assert!(
+            saved_workbook_rels_summary
+                .relationship_attr_maps
+                .iter()
+                .all(|attrs| attrs.get("Type").map(String::as_str)
+                    != Some(super::CALC_CHAIN_RELATIONSHIP_TYPE))
+        );
         let saved_content_types = String::from_utf8(
             saved_package
                 .part("[Content_Types].xml")
