@@ -645,6 +645,9 @@ fn loads_differential_artifacts_from_canonical_output_root() {
     assert_eq!(loaded.paths, paths);
     assert_eq!(loaded.report, report);
     assert_eq!(loaded.gate_summary, gate);
+    assert!(loaded.passed());
+    assert_eq!(loaded.blocking_case_count(), 0);
+    assert!(loaded.blocking_cases().is_empty());
 
     let mut drifted_gate = gate.clone();
     drifted_gate.skipped_case_count += 1;
@@ -661,6 +664,48 @@ fn loads_differential_artifacts_from_canonical_output_root() {
         }
         other => panic!("unexpected error: {other:?}"),
     }
+
+    fs::remove_dir_all(output_root).expect("remove output root");
+}
+
+#[test]
+fn validated_differential_artifact_bundle_reports_blocking_outcome() {
+    let registry_toml =
+        fs::read_to_string(repo_root().join("specs/sources.toml")).expect("source registry");
+    let source_summary = summarize_source_registry_toml(&registry_toml).expect("source summary");
+    let report = build_differential_report_with_source_context(
+        "Excel",
+        "16.0",
+        &source_summary,
+        vec![DifferentialCaseResult {
+            name: "Chart.SetSourceData".to_string(),
+            surface: Some("Chart".to_string()),
+            member: Some("SetSourceData".to_string()),
+            status: DifferentialCaseStatus::MissingRuntime,
+            expected: Some("series attached".to_string()),
+            actual: None,
+            message: Some("runtime chart setter is not implemented".to_string()),
+            artifacts: BTreeMap::new(),
+        }],
+    );
+    let unique_suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time")
+        .as_nanos();
+    let output_root =
+        std::env::temp_dir().join(format!("ootd-differential-output-blocking-{unique_suffix}"));
+    write_differential_report_and_gate_to_output_root(&report, &source_summary, &output_root)
+        .expect("write report and gate");
+
+    let loaded = load_differential_artifacts_from_output_root(&output_root, &source_summary)
+        .expect("load output root artifacts");
+
+    assert!(!loaded.passed());
+    assert_eq!(loaded.blocking_case_count(), 1);
+    assert_eq!(
+        loaded.blocking_cases(),
+        &["Chart.SetSourceData".to_string()]
+    );
 
     fs::remove_dir_all(output_root).expect("remove output root");
 }

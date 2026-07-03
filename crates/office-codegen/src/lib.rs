@@ -1299,6 +1299,20 @@ impl DifferentialArtifactPaths {
     }
 }
 
+impl DifferentialArtifactBundle {
+    pub fn passed(&self) -> bool {
+        self.gate_summary.passed
+    }
+
+    pub fn blocking_case_count(&self) -> usize {
+        self.gate_summary.blocking_case_count
+    }
+
+    pub fn blocking_cases(&self) -> &[String] {
+        &self.gate_summary.blocking_cases
+    }
+}
+
 impl DifferentialStatusCounts {
     pub fn record(&mut self, status: DifferentialCaseStatus) {
         match status {
