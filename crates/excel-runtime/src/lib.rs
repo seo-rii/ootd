@@ -2348,6 +2348,7 @@ impl ExcelRuntime {
                         relationship_id: source.relationship_id.clone(),
                         relationship_type: source.relationship_type.clone(),
                         target: target_part_uri.clone(),
+                        target_mode: None,
                     });
                     target_support_part_bytes.insert(target_part_uri, source.bytes.clone());
                 }
@@ -30909,6 +30910,7 @@ impl ExcelRuntime {
                                 relationship_id: relationship_id.clone(),
                                 relationship_type: relationship_type.clone(),
                                 target: target_part_uri.clone(),
+                                target_mode: None,
                             });
                             target_support_part_bytes
                                 .insert(target_part_uri.clone(), source_bytes.clone());
