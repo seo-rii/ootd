@@ -4209,6 +4209,8 @@
   - 범위: base `color/tint` nested child에 loaded extra attr를 주입한 뒤 dirty save 전에 제거하는 회귀를 추가해서 `FontSummary.nested_child_attr_maps`가 nested font child attr omission도 fail-fast로 막는지 고정
   - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1899 DONE` stylesheet border nested-child extra-attr reject parity
   - 범위: base `left/color` nested child에 loaded extra attr를 주입한 뒤 dirty save 전에 제거하는 회귀를 추가해서 `BorderSummary.nested_child_attr_maps`가 nested border child attr omission도 fail-fast로 막는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1900 DONE` stylesheet dxf nested-child extra-attr reject parity
+  - 범위: base `font/color` dxf nested child에 loaded extra attr를 주입한 뒤 dirty save 전에 제거하는 회귀를 추가해서 `DxfSummary.nested_child_attr_maps`가 nested dxf child attr omission도 fail-fast로 막는지 고정
   - `Step 6.6a DONE` worksheet hyperlink-ref integrity regression
   - 범위: worksheet support가 추적한 hyperlink `ref` 목록을 load assertion과 dirty save 회귀로 고정하고, hyperlink `ref` drift/삭제를 fail-fast로 막음
   - `Step 6.6b1 DONE` worksheet-local relationship binding integrity
