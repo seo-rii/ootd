@@ -28429,6 +28429,57 @@ mod tests {
             "{error}"
         );
 
+        let mut drawing_rels_changed_loaded = loaded.clone();
+        drawing_rels_changed_loaded
+            .package
+            .replace_part_bytes(
+                "xl/drawings/_rels/drawing2.xml.rels",
+                br#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships
+  xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rIdChart2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart2.xml" />
+</Relationships>"#
+                    .to_vec(),
+            )
+            .expect("replace chartsheet drawing rels part");
+        let error = codec
+            .save(
+                &drawing_rels_changed_loaded,
+                office_common::SaveOptions::default(),
+            )
+            .expect_err("save should reject changed chartsheet drawing rels part");
+        assert!(
+            error.to_string().contains(
+                "explicit drawing relationships part bytes changed: xl/drawings/_rels/drawing2.xml.rels"
+            ),
+            "{error}"
+        );
+
+        let mut drawing_rels_missing_loaded = loaded.clone();
+        drawing_rels_missing_loaded
+            .sheet_drawing_support_parts
+            .get_mut(&sheet_id)
+            .expect("drawing support")
+            .drawing_summaries
+            .remove("xl/drawings/drawing2.xml");
+        assert!(
+            drawing_rels_missing_loaded
+                .package
+                .remove_part("xl/drawings/_rels/drawing2.xml.rels")
+        );
+        let error = codec
+            .save(
+                &drawing_rels_missing_loaded,
+                office_common::SaveOptions::default(),
+            )
+            .expect_err("save should reject missing chartsheet drawing rels part");
+        assert!(
+            error.to_string().contains(
+                "explicit drawing relationships part is missing: xl/drawings/_rels/drawing2.xml.rels"
+            ),
+            "{error}"
+        );
+
         let mut chart_rels_changed_loaded = loaded.clone();
         chart_rels_changed_loaded
             .package

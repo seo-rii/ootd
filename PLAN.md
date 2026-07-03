@@ -4532,6 +4532,8 @@
   - 범위: chartsheet drawing support inventory가 추적하는 chart summary와 chart part가 save 직전에 drift되거나 삭제된 경우 clean save가 명시적으로 실패하는지 회귀로 고정해서 embedded chart part validation과 맞춤
   - `Step 6.6b2b2b2b2b2f2b2cz DONE` chartsheet drawing part save validation parity
   - 범위: chartsheet drawing support inventory가 추적하는 drawing summary와 drawing part가 save 직전에 drift되거나 삭제된 경우 clean save가 명시적으로 실패하는지 회귀로 고정해서 embedded drawing part validation과 맞춤
+  - `Step 6.6b2b2b2b2b2f2b2d DONE` chartsheet drawing relationships save validation parity
+  - 범위: chartsheet drawing support inventory가 추적하는 drawing relationships part가 save 직전에 drift되거나 삭제된 경우 clean save가 명시적으로 실패하는지 회귀로 고정해서 embedded drawing relationships validation과 맞춤
 - 목표
   - 현재 core worksheet rewrite 이후 남아 있는 fidelity gap을 좁힌다.
   - style/theme/merge/comment/hyperlink/formula cached-value 계열 보존을 순차적으로 올린다.
