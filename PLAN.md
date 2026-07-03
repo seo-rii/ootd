@@ -4433,6 +4433,8 @@
   - 범위: drawing 관계가 없는 worksheet에서도 host sheet source bytes는 수집하되, host bytes만으로는 sheet drawing support inventory가 non-empty가 되지 않는다는 invariant를 회귀로 고정
   - `Step 6.6b2b2b2b2b2f2b2ci DONE` embedded drawing host source byte inventory parity
   - 범위: embedded chart drawing support inventory도 chartsheet와 동일하게 host worksheet part와 host relationships part source bytes를 typed/raw graph 표면에 노출하는지 기존 embedded chart fixture에서 직접 회귀로 고정
+  - `Step 6.6b2b2b2b2b2f2b2cj DONE` chartsheet drawing relationship source byte inventory parity
+  - 범위: chartsheet drawing inventory fixture에서 drawing rels와 chart rels source bytes가 `SheetDrawingSupportParts` raw graph 표면에 직접 노출되는지 고정해서 host/chart/drawing part bytes와 relationship part bytes 검증 표면을 맞춤
 - 목표
   - 현재 core worksheet rewrite 이후 남아 있는 fidelity gap을 좁힌다.
   - style/theme/merge/comment/hyperlink/formula cached-value 계열 보존을 순차적으로 올린다.

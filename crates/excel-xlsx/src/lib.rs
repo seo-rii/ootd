@@ -27943,8 +27943,26 @@ mod tests {
             vec!["xl/drawings/drawing2.xml".to_string()]
         );
         assert_eq!(
+            drawing_support.drawing_relationships_part_uris,
+            vec!["xl/drawings/_rels/drawing2.xml.rels".to_string()]
+        );
+        assert_eq!(
+            drawing_support
+                .drawing_relationships_part_source_bytes
+                .get("xl/drawings/_rels/drawing2.xml.rels")
+                .expect("chartsheet drawing rels bytes"),
+            &drawing_rels_xml
+        );
+        assert_eq!(
             drawing_support.chart_part_uris,
             vec!["xl/charts/chart2.xml".to_string()]
+        );
+        assert_eq!(
+            drawing_support
+                .chart_relationships_part_source_bytes
+                .get("xl/charts/_rels/chart2.xml.rels")
+                .expect("chartsheet chart rels bytes"),
+            &chart_rels_xml
         );
         let drawing_summary = drawing_support
             .drawing_summaries
