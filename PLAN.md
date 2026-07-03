@@ -4262,6 +4262,8 @@
   - 범위: `fontScheme` nested child 중 `<a:latin>` 중복 추가 회귀를 더해 기존 `<a:font>` 중복 추가 drift와 대칭적으로 fail-fast 되는지 고정
   - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1925 DONE` theme fmtScheme first direct child name/set/add reject parity
   - 범위: `fmtScheme` direct child 중 `<a:fillStyleLst>`의 name drift, 제거, 중복 추가 회귀를 더해 기존 `<a:bgFillStyleLst>` 중심 direct child drift와 대칭적으로 fail-fast 되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1926 DONE` theme fmtScheme middle direct child name/set/add reject parity
+  - 범위: `fmtScheme` direct child 중 `<a:lnStyleLst>`와 `<a:effectStyleLst>`의 name drift, 제거, 중복 추가 회귀를 더해 direct child sequence의 중간 sibling drift도 fail-fast 되는지 고정
   - `Step 6.6a DONE` worksheet hyperlink-ref integrity regression
   - 범위: worksheet support가 추적한 hyperlink `ref` 목록을 load assertion과 dirty save 회귀로 고정하고, hyperlink `ref` drift/삭제를 fail-fast로 막음
   - `Step 6.6b1 DONE` worksheet-local relationship binding integrity
