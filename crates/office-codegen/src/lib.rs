@@ -1447,6 +1447,7 @@ fn validate_capture_bundle_contract(
             ),
         });
     }
+    let required_output_relative_paths = required_capture_payload_paths();
     for expected_output_name in &expected_output_names {
         let matching_relative_paths = checksums
             .keys()
@@ -1473,6 +1474,16 @@ fn validate_capture_bundle_contract(
                     "output_checksums.json path {relative_path} was not bundle-relative"
                 ),
             })?;
+        let expected_relative_path = required_output_relative_paths
+            .get(expected_output_name.as_str())
+            .expect("required output names and paths are in sync");
+        if relative_path != expected_relative_path {
+            return Err(CanonicalOmGenerationError::CaptureBundleContract {
+                message: format!(
+                    "output_checksums.json path {relative_path} for {expected_output_name} did not match required {expected_relative_path}"
+                ),
+            });
+        }
         if !artifact_path.exists() {
             return Err(CanonicalOmGenerationError::CaptureBundleContract {
                 message: format!(
@@ -1635,6 +1646,27 @@ fn validate_receipt_results(
         result_names.insert(name.to_string());
     }
     Ok(result_names)
+}
+
+fn required_capture_payload_paths() -> BTreeMap<&'static str, &'static str> {
+    [
+        ("raw_typelib_identity.json", "raw/raw_typelib_identity.json"),
+        (
+            "excel_typelib_snapshot.idl",
+            "snapshots/excel_typelib_snapshot.idl",
+        ),
+        (
+            "excel_typelib_snapshot.odl",
+            "snapshots/excel_typelib_snapshot.odl",
+        ),
+        ("excel_pia_identity.json", "raw/excel_pia_identity.json"),
+        (
+            "excel_pia_public_surface.json",
+            "snapshots/excel_pia_public_surface.json",
+        ),
+    ]
+    .into_iter()
+    .collect()
 }
 
 fn bundle_relative_path(bundle_root: &Path, relative_path: &str) -> Option<PathBuf> {
