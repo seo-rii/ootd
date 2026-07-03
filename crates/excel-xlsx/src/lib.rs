@@ -30630,6 +30630,29 @@ mod tests {
             "{error}"
         );
 
+        let mut chart_summary_changed_loaded = loaded.clone();
+        chart_summary_changed_loaded
+            .sheet_drawing_support_parts
+            .get_mut(&sheet_id)
+            .expect("drawing support")
+            .chart_summaries
+            .get_mut("xl/charts/chart1.xml")
+            .expect("chart summary")
+            .chart_type_names
+            .clear();
+        let error = codec
+            .save(
+                &chart_summary_changed_loaded,
+                office_common::SaveOptions::default(),
+            )
+            .expect_err("save should reject changed chart summary");
+        assert!(
+            error
+                .to_string()
+                .contains("explicit chart summary changed for xl/charts/chart1.xml"),
+            "{error}"
+        );
+
         let mut changed_loaded = loaded.clone();
         changed_loaded
             .package
