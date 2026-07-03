@@ -117895,6 +117895,102 @@ mod tests {
     }
 
     #[test]
+    fn save_rejects_stylesheet_when_indexed_colors_grandchild_extra_attr_is_removed() {
+        let codec = XlsxCodec;
+        let mut package =
+            OpcPackage::from_bytes(&workbook_with_stylesheet_color_entry_grandchildren_bytes())
+                .expect("base workbook package");
+        let seeded_styles_xml = String::from_utf8(
+            package
+                .part("xl/styles.xml")
+                .expect("styles part")
+                .bytes
+                .clone(),
+        )
+        .expect("styles xml utf8")
+        .replace(
+            r#"<tint val="-0.25"/>"#,
+            r#"<tint val="-0.25" custom="entry"/>"#,
+        );
+        package
+            .replace_part_bytes("xl/styles.xml", seeded_styles_xml.into_bytes())
+            .expect("replace styles part");
+        let input = package.to_bytes().expect("package bytes");
+        let mut loaded = codec
+            .load(&input, CommonLoadOptions::default())
+            .expect("load workbook");
+        let styles_xml = String::from_utf8(
+            loaded
+                .package
+                .part("xl/styles.xml")
+                .expect("styles part")
+                .bytes
+                .clone(),
+        )
+        .expect("styles xml utf8")
+        .replace(r#" custom="entry""#, "");
+        loaded
+            .package
+            .replace_part_bytes("xl/styles.xml", styles_xml.into_bytes())
+            .expect("replace styles part");
+
+        let error = codec
+            .save(&loaded, office_common::SaveOptions::default())
+            .expect_err("save should fail when indexed colors grandchild extra attr is removed");
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("typed styles summary drifted"));
+        assert!(error.message.contains("xl/styles.xml"));
+    }
+
+    #[test]
+    fn save_rejects_stylesheet_when_mru_colors_grandchild_extra_attr_is_removed() {
+        let codec = XlsxCodec;
+        let mut package =
+            OpcPackage::from_bytes(&workbook_with_stylesheet_color_entry_grandchildren_bytes())
+                .expect("base workbook package");
+        let seeded_styles_xml = String::from_utf8(
+            package
+                .part("xl/styles.xml")
+                .expect("styles part")
+                .bytes
+                .clone(),
+        )
+        .expect("styles xml utf8")
+        .replace(
+            r#"<tint val="0.5"/>"#,
+            r#"<tint val="0.5" custom="entry"/>"#,
+        );
+        package
+            .replace_part_bytes("xl/styles.xml", seeded_styles_xml.into_bytes())
+            .expect("replace styles part");
+        let input = package.to_bytes().expect("package bytes");
+        let mut loaded = codec
+            .load(&input, CommonLoadOptions::default())
+            .expect("load workbook");
+        let styles_xml = String::from_utf8(
+            loaded
+                .package
+                .part("xl/styles.xml")
+                .expect("styles part")
+                .bytes
+                .clone(),
+        )
+        .expect("styles xml utf8")
+        .replace(r#" custom="entry""#, "");
+        loaded
+            .package
+            .replace_part_bytes("xl/styles.xml", styles_xml.into_bytes())
+            .expect("replace styles part");
+
+        let error = codec
+            .save(&loaded, office_common::SaveOptions::default())
+            .expect_err("save should fail when mru colors grandchild extra attr is removed");
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("typed styles summary drifted"));
+        assert!(error.message.contains("xl/styles.xml"));
+    }
+
+    #[test]
     fn save_rejects_stylesheet_when_colors_grandchild_name_drifts() {
         let codec = XlsxCodec;
         let input = workbook_with_stylesheet_color_entry_grandchildren_bytes();

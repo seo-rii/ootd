@@ -4179,6 +4179,8 @@
   - 범위: `workbook_with_stylesheet_color_entry_grandchildren_bytes()` 기반 save-reject 회귀를 확장해서 `tint` element name drift, sibling addition, sibling removal이 모두 `colors_grandchild_names`/set summary drift로 fail-fast 되는지 고정
   - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1889c DONE` stylesheet colors nested entry extra-attr reject parity
   - 범위: `workbook_with_stylesheet_color_entries_bytes()` 기반 seed input에 indexed `rgbColor`와 mru `color` entry extra attr를 주입한 뒤 제거하는 save-reject 회귀를 추가해서 `colors_nested_child_attr_maps`가 loaded extra attr omission도 fail-fast로 막는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1889d DONE` stylesheet colors grandchild extra-attr reject parity
+  - 범위: `workbook_with_stylesheet_color_entry_grandchildren_bytes()` 기반 seed input에 indexed/mru `tint` grandchild extra attr를 주입한 뒤 제거하는 save-reject 회귀를 추가해서 `colors_grandchild_attr_maps`가 loaded extra attr omission도 fail-fast로 막는지 고정
   - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1890 DONE` stylesheet colors great-grandchild tracking
   - 범위: `StylesheetSummary`가 `colors` child 아래 nested great-grandchild name/attr/text를 추적하도록 확장하고, `workbook_with_stylesheet_color_entry_great_grandchildren_bytes()` 기반 load/dirty-save/save-reject 회귀로 `<colors><indexedColors><rgbColor><tint><alpha>...</alpha></tint></rgbColor></indexedColors><mruColors><color><tint><alpha>...</alpha></tint></color></mruColors></colors>` deeper descendant drift가 summary drift에서 빠지던 공백을 고정
   - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1890b DONE` stylesheet colors great-grandchild name/set reject parity
