@@ -815,6 +815,8 @@ pub struct SheetDrawingSupportParts {
     pub chart_relationships_part_source_bytes: BTreeMap<String, Vec<u8>>,
     pub chart_support_part_uris: Vec<String>,
     pub chart_support_part_source_bytes: BTreeMap<String, Vec<u8>>,
+    pub chart_opaque_relationship_part_uris: Vec<String>,
+    pub chart_opaque_relationship_part_source_bytes: BTreeMap<String, Vec<u8>>,
     pub chart_summaries: BTreeMap<String, ChartPartSummary>,
 }
 
@@ -824,6 +826,7 @@ impl SheetDrawingSupportParts {
             && self.drawing_part_uris.is_empty()
             && self.chart_part_uris.is_empty()
             && self.chart_support_part_uris.is_empty()
+            && self.chart_opaque_relationship_part_uris.is_empty()
     }
 }
 
@@ -3417,6 +3420,8 @@ fn collect_sheet_drawing_support_parts(
     let mut chart_relationships_part_source_bytes = BTreeMap::new();
     let mut chart_support_part_uris = Vec::new();
     let mut chart_support_part_source_bytes = BTreeMap::new();
+    let mut chart_opaque_relationship_part_uris = Vec::new();
+    let mut chart_opaque_relationship_part_source_bytes = BTreeMap::new();
     let mut chart_summaries = BTreeMap::new();
 
     for drawing_part_uri in &drawing_part_uris {
@@ -3515,6 +3520,18 @@ fn collect_sheet_drawing_support_parts(
                 if relationship.relationship_type != CHART_STYLE_RELATIONSHIP_TYPE
                     && relationship.relationship_type != CHART_COLOR_STYLE_RELATIONSHIP_TYPE
                 {
+                    if !matches!(relationship.target_mode.as_deref(), Some("External"))
+                        && let Some(opaque_part) = package.part(&relationship.target)
+                    {
+                        if chart_opaque_relationship_part_uris
+                            .iter()
+                            .all(|existing| existing != &relationship.target)
+                        {
+                            chart_opaque_relationship_part_uris.push(relationship.target.clone());
+                        }
+                        chart_opaque_relationship_part_source_bytes
+                            .insert(relationship.target.clone(), opaque_part.bytes.clone());
+                    }
                     chart_summary
                         .opaque_relationships
                         .push(ChartOpaqueRelationshipSummary {
@@ -3570,6 +3587,8 @@ fn collect_sheet_drawing_support_parts(
         chart_relationships_part_source_bytes,
         chart_support_part_uris,
         chart_support_part_source_bytes,
+        chart_opaque_relationship_part_uris,
+        chart_opaque_relationship_part_source_bytes,
         chart_summaries,
     })
 }
@@ -27706,6 +27725,17 @@ mod tests {
                 .get("xl/charts/colors2.xml")
                 .expect("chartsheet chart colors bytes"),
             &chart_colors_xml
+        );
+        assert_eq!(
+            drawing_support.chart_opaque_relationship_part_uris,
+            vec!["customXml/chartInventoryOpaque2.xml".to_string()]
+        );
+        assert_eq!(
+            drawing_support
+                .chart_opaque_relationship_part_source_bytes
+                .get("customXml/chartInventoryOpaque2.xml")
+                .expect("chartsheet chart inventory opaque bytes"),
+            &chart_inventory_opaque_xml
         );
         assert_eq!(loaded.state.charts.len(), 1);
         let (chart_id, chart_model) = loaded.state.charts.iter().next().expect("chart model");
