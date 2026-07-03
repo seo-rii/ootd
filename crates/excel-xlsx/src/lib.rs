@@ -31694,6 +31694,41 @@ mod tests {
                 .bytes,
             chart_xml
         );
+
+        let mut changed_loaded = loaded.clone();
+        changed_loaded
+            .package
+            .replace_part_bytes(
+                "xl/opaque/drawingOpaque2.xml",
+                br#"<?xml version="1.0" encoding="UTF-8"?><drawingOpaque preserve="changed"/>"#
+                    .to_vec(),
+            )
+            .expect("replace chartsheet opaque drawing part");
+        let error = codec
+            .save(&changed_loaded, office_common::SaveOptions::default())
+            .expect_err("save should reject changed chartsheet drawing opaque target");
+        assert!(
+            error.to_string().contains(
+                "explicit drawing opaque relationship target part bytes changed: xl/opaque/drawingOpaque2.xml"
+            ),
+            "{error}"
+        );
+
+        let mut missing_loaded = loaded.clone();
+        assert!(
+            missing_loaded
+                .package
+                .remove_part("xl/opaque/drawingOpaque2.xml")
+        );
+        let error = codec
+            .save(&missing_loaded, office_common::SaveOptions::default())
+            .expect_err("save should reject missing chartsheet drawing opaque target");
+        assert!(
+            error.to_string().contains(
+                "explicit drawing opaque relationship target part is missing: xl/opaque/drawingOpaque2.xml"
+            ),
+            "{error}"
+        );
     }
 
     #[test]
