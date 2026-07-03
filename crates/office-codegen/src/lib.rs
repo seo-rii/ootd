@@ -377,6 +377,7 @@ pub struct OmCaptureSummary {
     pub secondary_artifact: String,
     pub ready_for_windows_capture: bool,
     pub machine_readable_artifact_count: usize,
+    pub pending_outputs: Vec<String>,
     pub pending_output_count: usize,
     pub behavior_doc_count: usize,
     pub unresolved_target_fields: Vec<&'static str>,
@@ -896,18 +897,22 @@ impl OmCaptureSummary {
                         .excel_primary_interop_assembly
                         .machine_readable,
                 );
-        let pending_output_count = manifest
+        let mut pending_outputs = manifest
             .artifacts
             .excel_type_library
             .capture
             .required_outputs
-            .len()
-            + manifest
+            .clone();
+        pending_outputs.extend(
+            manifest
                 .artifacts
                 .excel_primary_interop_assembly
                 .capture
                 .required_outputs
-                .len();
+                .iter()
+                .cloned(),
+        );
+        let pending_output_count = pending_outputs.len();
         let behavior_doc_count = usize::from(manifest.docs.excel_vba_reference.is_some())
             + usize::from(manifest.docs.office_library_reference.is_some())
             + usize::from(manifest.docs.interop_namespace.is_some());
@@ -920,6 +925,7 @@ impl OmCaptureSummary {
                 && manifest.acquisition.requires_windows_sdk
                 && manifest.acquisition.requires_dotnet_framework_tooling,
             machine_readable_artifact_count,
+            pending_outputs,
             pending_output_count,
             behavior_doc_count,
             unresolved_target_fields,

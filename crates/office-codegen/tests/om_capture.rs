@@ -107,6 +107,16 @@ fn loads_pinned_om_sources_manifest_and_reports_pending_capture() {
     assert!(summary.ready_for_windows_capture);
     assert_eq!(summary.machine_readable_artifact_count, 2);
     assert_eq!(summary.pending_output_count, 5);
+    assert_eq!(
+        summary.pending_outputs,
+        vec![
+            "raw_typelib_identity.json".to_string(),
+            "excel_typelib_snapshot.idl".to_string(),
+            "excel_typelib_snapshot.odl".to_string(),
+            "excel_pia_identity.json".to_string(),
+            "excel_pia_public_surface.json".to_string(),
+        ]
+    );
     assert_eq!(summary.behavior_doc_count, 3);
     assert_eq!(
         summary.unresolved_target_fields,
@@ -1275,6 +1285,16 @@ fn reports_manifest_not_ready_when_windows_capture_requirements_are_missing() {
     let summary = summarize_om_sources_toml(&manifest_toml).expect("manifest summary");
 
     assert!(!summary.ready_for_windows_capture);
+    assert_eq!(
+        summary.pending_outputs,
+        vec![
+            "raw_typelib_identity.json".to_string(),
+            "excel_typelib_snapshot.idl".to_string(),
+            "excel_typelib_snapshot.odl".to_string(),
+            "excel_pia_identity.json".to_string(),
+            "excel_pia_public_surface.json".to_string(),
+        ]
+    );
     assert_eq!(
         summary.unresolved_target_fields,
         vec![
