@@ -29166,6 +29166,17 @@ mod tests {
                 target_mode: None,
             }]
         );
+        assert_eq!(
+            drawing_support.chart_opaque_relationship_part_uris,
+            vec!["xl/externalLinks/externalLink2.xml".to_string()]
+        );
+        assert_eq!(
+            drawing_support
+                .chart_opaque_relationship_part_source_bytes
+                .get("xl/externalLinks/externalLink2.xml")
+                .expect("chartsheet chart opaque external link bytes"),
+            &external_link_xml
+        );
         assert!(drawing_support.chart_support_part_uris.is_empty());
         assert_eq!(loaded.state.charts.len(), 1);
 
@@ -29235,6 +29246,41 @@ mod tests {
                 .expect("saved external link")
                 .bytes,
             external_link_xml
+        );
+
+        let mut changed_loaded = loaded.clone();
+        changed_loaded
+            .package
+            .replace_part_bytes(
+                "xl/externalLinks/externalLink2.xml",
+                br#"<?xml version="1.0" encoding="UTF-8"?><externalLink xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" data-root="changed"><externalBook><sheetNames><sheetName val="ChartData"/></sheetNames></externalBook></externalLink>"#
+                    .to_vec(),
+            )
+            .expect("replace chartsheet chart external data target");
+        let error = codec
+            .save(&changed_loaded, office_common::SaveOptions::default())
+            .expect_err("save should reject changed chartsheet chart external data target");
+        assert!(
+            error.to_string().contains(
+                "explicit chart opaque relationship target part bytes changed: xl/externalLinks/externalLink2.xml"
+            ),
+            "{error}"
+        );
+
+        let mut missing_loaded = loaded.clone();
+        assert!(
+            missing_loaded
+                .package
+                .remove_part("xl/externalLinks/externalLink2.xml")
+        );
+        let error = codec
+            .save(&missing_loaded, office_common::SaveOptions::default())
+            .expect_err("save should reject missing chartsheet chart external data target");
+        assert!(
+            error.to_string().contains(
+                "explicit chart opaque relationship target part is missing: xl/externalLinks/externalLink2.xml"
+            ),
+            "{error}"
         );
     }
 
@@ -32638,6 +32684,17 @@ mod tests {
                 target_mode: None,
             }]
         );
+        assert_eq!(
+            drawing_support.chart_opaque_relationship_part_uris,
+            vec!["xl/externalLinks/externalLink1.xml".to_string()]
+        );
+        assert_eq!(
+            drawing_support
+                .chart_opaque_relationship_part_source_bytes
+                .get("xl/externalLinks/externalLink1.xml")
+                .expect("embedded chart opaque external link bytes"),
+            &external_link_xml
+        );
         assert!(drawing_support.chart_support_part_uris.is_empty());
         assert_eq!(loaded.state.charts.len(), 1);
 
@@ -32700,6 +32757,41 @@ mod tests {
                 .expect("saved external link")
                 .bytes,
             external_link_xml
+        );
+
+        let mut changed_loaded = loaded.clone();
+        changed_loaded
+            .package
+            .replace_part_bytes(
+                "xl/externalLinks/externalLink1.xml",
+                br#"<?xml version="1.0" encoding="UTF-8"?><externalLink xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" data-root="changed"><externalBook><sheetNames><sheetName val="Sheet1"/></sheetNames></externalBook></externalLink>"#
+                    .to_vec(),
+            )
+            .expect("replace embedded chart external data target");
+        let error = codec
+            .save(&changed_loaded, office_common::SaveOptions::default())
+            .expect_err("save should reject changed embedded chart external data target");
+        assert!(
+            error.to_string().contains(
+                "explicit chart opaque relationship target part bytes changed: xl/externalLinks/externalLink1.xml"
+            ),
+            "{error}"
+        );
+
+        let mut missing_loaded = loaded.clone();
+        assert!(
+            missing_loaded
+                .package
+                .remove_part("xl/externalLinks/externalLink1.xml")
+        );
+        let error = codec
+            .save(&missing_loaded, office_common::SaveOptions::default())
+            .expect_err("save should reject missing embedded chart external data target");
+        assert!(
+            error.to_string().contains(
+                "explicit chart opaque relationship target part is missing: xl/externalLinks/externalLink1.xml"
+            ),
+            "{error}"
         );
     }
 
