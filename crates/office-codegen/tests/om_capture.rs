@@ -10,10 +10,10 @@ use office_codegen::{
     DifferentialReportLoadError, OmCaptureBundleError, OmSourcesManifest, PiaCaptureClass,
     PiaCaptureInterface, PiaPublicSurfaceCapture, SourceRegistryManifest, TypelibIdentityCapture,
     build_coverage_report, build_coverage_report_from_json, build_coverage_report_from_path,
-    build_differential_report, build_focus_surface_registry,
-    build_focus_surface_registry_from_json, build_focus_surface_registry_from_path,
-    generate_canonical_office_idl_from_dir, load_capture_bundle,
-    load_differential_report_from_json, load_differential_report_from_path,
+    build_differential_report, build_differential_report_with_source_context,
+    build_focus_surface_registry, build_focus_surface_registry_from_json,
+    build_focus_surface_registry_from_path, generate_canonical_office_idl_from_dir,
+    load_capture_bundle, load_differential_report_from_json, load_differential_report_from_path,
     normalize_capture_bundle, normalize_capture_bundle_from_dir, normalize_pia_capture_json,
     summarize_capture_bundle, summarize_differential_gate, summarize_om_sources,
     summarize_om_sources_toml, summarize_source_registry, summarize_source_registry_toml,
@@ -200,6 +200,61 @@ fn loads_source_registry_and_reports_enabled_test_corpus() {
         ]
     );
     assert_eq!(summary.profile_count, 3);
+}
+
+#[test]
+fn builds_differential_report_with_source_registry_context() {
+    let registry_toml =
+        fs::read_to_string(repo_root().join("specs/sources.toml")).expect("source registry");
+    let source_summary = summarize_source_registry_toml(&registry_toml).expect("source summary");
+    let report = build_differential_report_with_source_context(
+        "Excel",
+        "16.0",
+        &source_summary,
+        vec![DifferentialCaseResult {
+            name: "Range.Areas.Count".to_string(),
+            surface: Some("Range".to_string()),
+            member: Some("Areas".to_string()),
+            status: DifferentialCaseStatus::Passed,
+            expected: Some("2".to_string()),
+            actual: Some("2".to_string()),
+            message: None,
+            artifacts: BTreeMap::new(),
+        }],
+    );
+
+    let context = report.context.as_ref().expect("report context");
+    assert_eq!(report.profile, "excel_365");
+    assert_eq!(context.project_name, "excel-compat-core");
+    assert_eq!(context.default_profile, "excel_365");
+    assert_eq!(context.default_mode, "lossless");
+    assert_eq!(context.primary_om_artifact, "excel_type_library");
+    assert_eq!(context.primary_ooxml_source, "ecma_376");
+    assert_eq!(
+        context.enabled_corpus_groups,
+        vec![
+            "official_ms".to_string(),
+            "open_source".to_string(),
+            "synthetic".to_string(),
+            "real_world".to_string(),
+        ]
+    );
+    assert_eq!(context.enabled_corpus_source_count, 10);
+    assert_eq!(
+        context.validation_modes,
+        vec![
+            "openxml_validator".to_string(),
+            "excel_oracle".to_string(),
+            "render_snapshot".to_string(),
+            "fuzz".to_string(),
+        ]
+    );
+
+    let json = serde_json::to_string(&report).expect("report json");
+    assert!(json.contains(r#""context""#));
+    assert!(json.contains(r#""projectName":"excel-compat-core""#));
+    let loaded = load_differential_report_from_json(&json).expect("load report");
+    assert_eq!(loaded, report);
 }
 
 #[test]

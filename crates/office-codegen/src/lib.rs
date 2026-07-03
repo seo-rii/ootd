@@ -301,10 +301,25 @@ pub struct DifferentialCaseResult {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct DifferentialReportContext {
+    pub project_name: String,
+    pub default_profile: String,
+    pub default_mode: String,
+    pub primary_om_artifact: String,
+    pub primary_ooxml_source: String,
+    pub enabled_corpus_groups: Vec<String>,
+    pub enabled_corpus_source_count: usize,
+    pub validation_modes: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DifferentialReport {
     pub library: String,
     pub version: String,
     pub profile: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<DifferentialReportContext>,
     pub case_count: usize,
     pub status_counts: DifferentialStatusCounts,
     pub cases: Vec<DifferentialCaseResult>,
@@ -1260,10 +1275,16 @@ impl DifferentialReport {
             library: library.into(),
             version: version.into(),
             profile: profile.into(),
+            context: None,
             case_count: cases.len(),
             status_counts,
             cases,
         }
+    }
+
+    pub fn with_context(mut self, context: DifferentialReportContext) -> Self {
+        self.context = Some(context);
+        self
     }
 
     pub fn validate(&self) -> Result<(), DifferentialReportLoadError> {
@@ -1335,6 +1356,21 @@ impl DifferentialReport {
             failed_case_count: self.status_counts.failed,
             unsupported_case_count: self.status_counts.unsupported,
             skipped_case_count: self.status_counts.skipped,
+        }
+    }
+}
+
+impl DifferentialReportContext {
+    pub fn from_source_registry_summary(summary: &SourceRegistrySummary) -> Self {
+        Self {
+            project_name: summary.project_name.clone(),
+            default_profile: summary.default_profile.clone(),
+            default_mode: summary.default_mode.clone(),
+            primary_om_artifact: summary.primary_om_artifact.clone(),
+            primary_ooxml_source: summary.primary_ooxml_source.clone(),
+            enabled_corpus_groups: summary.enabled_corpus_groups.clone(),
+            enabled_corpus_source_count: summary.enabled_corpus_source_count,
+            validation_modes: summary.validation_modes.clone(),
         }
     }
 }
@@ -1557,6 +1593,23 @@ pub fn build_differential_report(
     cases: Vec<DifferentialCaseResult>,
 ) -> DifferentialReport {
     DifferentialReport::from_cases(library, version, profile, cases)
+}
+
+pub fn build_differential_report_with_source_context(
+    library: impl Into<String>,
+    version: impl Into<String>,
+    source_summary: &SourceRegistrySummary,
+    cases: Vec<DifferentialCaseResult>,
+) -> DifferentialReport {
+    DifferentialReport::from_cases(
+        library,
+        version,
+        source_summary.default_profile.clone(),
+        cases,
+    )
+    .with_context(DifferentialReportContext::from_source_registry_summary(
+        source_summary,
+    ))
 }
 
 pub fn load_differential_report_from_json(
