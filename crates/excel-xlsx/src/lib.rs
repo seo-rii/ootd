@@ -275,6 +275,9 @@ pub struct FillSummary {
     pub grandchild_names: Vec<Vec<Vec<String>>>,
     pub grandchild_attr_maps: Vec<Vec<Vec<BTreeMap<String, String>>>>,
     pub grandchild_texts: Vec<Vec<Vec<Option<String>>>>,
+    pub great_grandchild_names: Vec<Vec<Vec<Vec<String>>>>,
+    pub great_grandchild_attr_maps: Vec<Vec<Vec<Vec<BTreeMap<String, String>>>>>,
+    pub great_grandchild_texts: Vec<Vec<Vec<Vec<Option<String>>>>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -5355,6 +5358,9 @@ fn parse_stylesheet_summary(styles_xml: &[u8]) -> OmResult<StylesheetSummary> {
                             grandchild_names: Vec::new(),
                             grandchild_attr_maps: Vec::new(),
                             grandchild_texts: Vec::new(),
+                            great_grandchild_names: Vec::new(),
+                            great_grandchild_attr_maps: Vec::new(),
+                            great_grandchild_texts: Vec::new(),
                         });
                         section_depth += 1;
                     }
@@ -6126,6 +6132,9 @@ fn parse_stylesheet_summary(styles_xml: &[u8]) -> OmResult<StylesheetSummary> {
                         current_fill.grandchild_names.push(Vec::new());
                         current_fill.grandchild_attr_maps.push(Vec::new());
                         current_fill.grandchild_texts.push(Vec::new());
+                        current_fill.great_grandchild_names.push(Vec::new());
+                        current_fill.great_grandchild_attr_maps.push(Vec::new());
+                        current_fill.great_grandchild_texts.push(Vec::new());
                         section_depth += 1;
                     }
                     _ if current_section == Some(StylesheetSection::Fills)
@@ -6197,6 +6206,36 @@ fn parse_stylesheet_summary(styles_xml: &[u8]) -> OmResult<StylesheetSummary> {
                                 )
                             })?
                             .push(Vec::new());
+                        current_fill
+                            .great_grandchild_names
+                            .last_mut()
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered nested fill child before direct fill child",
+                                )
+                            })?
+                            .push(Vec::new());
+                        current_fill
+                            .great_grandchild_attr_maps
+                            .last_mut()
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered nested fill child before direct fill child",
+                                )
+                            })?
+                            .push(Vec::new());
+                        current_fill
+                            .great_grandchild_texts
+                            .last_mut()
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered nested fill child before direct fill child",
+                                )
+                            })?
+                            .push(Vec::new());
                         section_depth += 1;
                     }
                     _ if current_section == Some(StylesheetSection::Fills)
@@ -6238,6 +6277,86 @@ fn parse_stylesheet_summary(styles_xml: &[u8]) -> OmResult<StylesheetSummary> {
                                 OmError::new(
                                     OmErrorCode::InvalidState,
                                     "styles.xml encountered fill grandchild before nested fill child",
+                                )
+                            })?
+                            .push(None);
+                        current_fill
+                            .great_grandchild_names
+                            .last_mut()
+                            .and_then(|nested| nested.last_mut())
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered fill grandchild before nested fill child",
+                                )
+                            })?
+                            .push(Vec::new());
+                        current_fill
+                            .great_grandchild_attr_maps
+                            .last_mut()
+                            .and_then(|nested| nested.last_mut())
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered fill grandchild before nested fill child",
+                                )
+                            })?
+                            .push(Vec::new());
+                        current_fill
+                            .great_grandchild_texts
+                            .last_mut()
+                            .and_then(|nested| nested.last_mut())
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered fill grandchild before nested fill child",
+                                )
+                            })?
+                            .push(Vec::new());
+                        section_depth += 1;
+                    }
+                    _ if current_section == Some(StylesheetSection::Fills)
+                        && section_depth == 5 =>
+                    {
+                        let current_fill = fills.last_mut().ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "styles.xml encountered fill great-grandchild outside tracked fill child",
+                            )
+                        })?;
+                        current_fill
+                            .great_grandchild_names
+                            .last_mut()
+                            .and_then(|nested| nested.last_mut())
+                            .and_then(|grandchildren| grandchildren.last_mut())
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered fill great-grandchild before fill grandchild",
+                                )
+                            })?
+                            .push(local_name.clone());
+                        current_fill
+                            .great_grandchild_attr_maps
+                            .last_mut()
+                            .and_then(|nested| nested.last_mut())
+                            .and_then(|grandchildren| grandchildren.last_mut())
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered fill great-grandchild before fill grandchild",
+                                )
+                            })?
+                            .push(parse_child_attrs(&element, reader.decoder())?);
+                        current_fill
+                            .great_grandchild_texts
+                            .last_mut()
+                            .and_then(|nested| nested.last_mut())
+                            .and_then(|grandchildren| grandchildren.last_mut())
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered fill great-grandchild before fill grandchild",
                                 )
                             })?
                             .push(None);
@@ -7006,6 +7125,9 @@ fn parse_stylesheet_summary(styles_xml: &[u8]) -> OmResult<StylesheetSummary> {
                             grandchild_names: Vec::new(),
                             grandchild_attr_maps: Vec::new(),
                             grandchild_texts: Vec::new(),
+                            great_grandchild_names: Vec::new(),
+                            great_grandchild_attr_maps: Vec::new(),
+                            great_grandchild_texts: Vec::new(),
                         });
                     }
                     b"border"
@@ -7780,6 +7902,9 @@ fn parse_stylesheet_summary(styles_xml: &[u8]) -> OmResult<StylesheetSummary> {
                         current_fill.grandchild_names.push(Vec::new());
                         current_fill.grandchild_attr_maps.push(Vec::new());
                         current_fill.grandchild_texts.push(Vec::new());
+                        current_fill.great_grandchild_names.push(Vec::new());
+                        current_fill.great_grandchild_attr_maps.push(Vec::new());
+                        current_fill.great_grandchild_texts.push(Vec::new());
                     }
                     _ if current_section == Some(StylesheetSection::Fills)
                         && section_depth == 3 =>
@@ -7856,6 +7981,36 @@ fn parse_stylesheet_summary(styles_xml: &[u8]) -> OmResult<StylesheetSummary> {
                                 )
                             })?
                             .push(Vec::new());
+                        current_fill
+                            .great_grandchild_names
+                            .last_mut()
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered nested fill child before direct fill child",
+                                )
+                            })?
+                            .push(Vec::new());
+                        current_fill
+                            .great_grandchild_attr_maps
+                            .last_mut()
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered nested fill child before direct fill child",
+                                )
+                            })?
+                            .push(Vec::new());
+                        current_fill
+                            .great_grandchild_texts
+                            .last_mut()
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered nested fill child before direct fill child",
+                                )
+                            })?
+                            .push(Vec::new());
                     }
                     _ if current_section == Some(StylesheetSection::Fills)
                         && section_depth == 4 =>
@@ -7902,6 +8057,91 @@ fn parse_stylesheet_summary(styles_xml: &[u8]) -> OmResult<StylesheetSummary> {
                                 OmError::new(
                                     OmErrorCode::InvalidState,
                                     "styles.xml encountered fill grandchild before nested fill child",
+                                )
+                            })?
+                            .push(None);
+                        current_fill
+                            .great_grandchild_names
+                            .last_mut()
+                            .and_then(|nested| nested.last_mut())
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered fill grandchild before nested fill child",
+                                )
+                            })?
+                            .push(Vec::new());
+                        current_fill
+                            .great_grandchild_attr_maps
+                            .last_mut()
+                            .and_then(|nested| nested.last_mut())
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered fill grandchild before nested fill child",
+                                )
+                            })?
+                            .push(Vec::new());
+                        current_fill
+                            .great_grandchild_texts
+                            .last_mut()
+                            .and_then(|nested| nested.last_mut())
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered fill grandchild before nested fill child",
+                                )
+                            })?
+                            .push(Vec::new());
+                    }
+                    _ if current_section == Some(StylesheetSection::Fills)
+                        && section_depth == 5 =>
+                    {
+                        let current_fill = fills.last_mut().ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "styles.xml encountered fill great-grandchild outside tracked fill child",
+                            )
+                        })?;
+                        current_fill
+                            .great_grandchild_names
+                            .last_mut()
+                            .and_then(|nested| nested.last_mut())
+                            .and_then(|grandchildren| grandchildren.last_mut())
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered fill great-grandchild before fill grandchild",
+                                )
+                            })?
+                            .push(
+                                String::from_utf8_lossy(element.name().as_ref())
+                                    .rsplit(':')
+                                    .next()
+                                    .unwrap_or_default()
+                                    .to_string(),
+                            );
+                        current_fill
+                            .great_grandchild_attr_maps
+                            .last_mut()
+                            .and_then(|nested| nested.last_mut())
+                            .and_then(|grandchildren| grandchildren.last_mut())
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered fill great-grandchild before fill grandchild",
+                                )
+                            })?
+                            .push(parse_child_attrs(&element, reader.decoder())?);
+                        current_fill
+                            .great_grandchild_texts
+                            .last_mut()
+                            .and_then(|nested| nested.last_mut())
+                            .and_then(|grandchildren| grandchildren.last_mut())
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered fill great-grandchild before fill grandchild",
                                 )
                             })?
                             .push(None);
@@ -8457,6 +8697,26 @@ fn parse_stylesheet_summary(styles_xml: &[u8]) -> OmResult<StylesheetSummary> {
                             })?,
                         &content,
                     );
+                } else if element_stack.len() == 7
+                    && element_stack.first().map(String::as_str) == Some("styleSheet")
+                    && element_stack.get(1).map(String::as_str) == Some("fills")
+                    && element_stack.get(2).map(String::as_str) == Some("fill")
+                {
+                    append_summary_text(
+                        fills
+                            .last_mut()
+                            .and_then(|fill| fill.great_grandchild_texts.last_mut())
+                            .and_then(|nested| nested.last_mut())
+                            .and_then(|grandchildren| grandchildren.last_mut())
+                            .and_then(|great_grandchildren| great_grandchildren.last_mut())
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered fill great-grandchild text before fill great-grandchild",
+                                )
+                            })?,
+                        &content,
+                    );
                 } else if element_stack.len() == 4
                     && element_stack.first().map(String::as_str) == Some("styleSheet")
                     && element_stack.get(1).map(String::as_str) == Some("cellStyles")
@@ -8995,6 +9255,26 @@ fn parse_stylesheet_summary(styles_xml: &[u8]) -> OmResult<StylesheetSummary> {
                                 OmError::new(
                                     OmErrorCode::InvalidState,
                                     "styles.xml encountered fill grandchild text before fill grandchild",
+                                )
+                            })?,
+                        &content,
+                    );
+                } else if element_stack.len() == 7
+                    && element_stack.first().map(String::as_str) == Some("styleSheet")
+                    && element_stack.get(1).map(String::as_str) == Some("fills")
+                    && element_stack.get(2).map(String::as_str) == Some("fill")
+                {
+                    append_summary_text(
+                        fills
+                            .last_mut()
+                            .and_then(|fill| fill.great_grandchild_texts.last_mut())
+                            .and_then(|nested| nested.last_mut())
+                            .and_then(|grandchildren| grandchildren.last_mut())
+                            .and_then(|great_grandchildren| great_grandchildren.last_mut())
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered fill great-grandchild text before fill great-grandchild",
                                 )
                             })?,
                         &content,
@@ -50022,6 +50302,9 @@ mod tests {
                     grandchild_names: vec![Vec::new()],
                     grandchild_attr_maps: vec![Vec::new()],
                     grandchild_texts: vec![Vec::new()],
+                    great_grandchild_names: vec![Vec::new()],
+                    great_grandchild_attr_maps: vec![Vec::new()],
+                    great_grandchild_texts: vec![Vec::new()],
                 },
                 FillSummary {
                     child_names: vec!["patternFill".to_string()],
@@ -50036,6 +50319,9 @@ mod tests {
                     grandchild_names: vec![Vec::new()],
                     grandchild_attr_maps: vec![Vec::new()],
                     grandchild_texts: vec![Vec::new()],
+                    great_grandchild_names: vec![Vec::new()],
+                    great_grandchild_attr_maps: vec![Vec::new()],
+                    great_grandchild_texts: vec![Vec::new()],
                 },
             ]
         );
@@ -50086,6 +50372,9 @@ mod tests {
                     grandchild_names: vec![Vec::new()],
                     grandchild_attr_maps: vec![Vec::new()],
                     grandchild_texts: vec![Vec::new()],
+                    great_grandchild_names: vec![Vec::new()],
+                    great_grandchild_attr_maps: vec![Vec::new()],
+                    great_grandchild_texts: vec![Vec::new()],
                 },
                 FillSummary {
                     child_names: vec!["patternFill".to_string()],
@@ -50097,6 +50386,9 @@ mod tests {
                     grandchild_names: vec![Vec::new()],
                     grandchild_attr_maps: vec![Vec::new()],
                     grandchild_texts: vec![Vec::new()],
+                    great_grandchild_names: vec![Vec::new()],
+                    great_grandchild_attr_maps: vec![Vec::new()],
+                    great_grandchild_texts: vec![Vec::new()],
                 },
             ]
         );
@@ -50133,6 +50425,9 @@ mod tests {
                     grandchild_names: vec![Vec::new()],
                     grandchild_attr_maps: vec![Vec::new()],
                     grandchild_texts: vec![Vec::new()],
+                    great_grandchild_names: vec![Vec::new()],
+                    great_grandchild_attr_maps: vec![Vec::new()],
+                    great_grandchild_texts: vec![Vec::new()],
                 },
                 FillSummary {
                     child_names: vec!["gradientFill".to_string()],
@@ -50147,6 +50442,9 @@ mod tests {
                     grandchild_names: vec![Vec::new()],
                     grandchild_attr_maps: vec![Vec::new()],
                     grandchild_texts: vec![Vec::new()],
+                    great_grandchild_names: vec![Vec::new()],
+                    great_grandchild_attr_maps: vec![Vec::new()],
+                    great_grandchild_texts: vec![Vec::new()],
                 },
             ]
         );
@@ -50199,6 +50497,9 @@ mod tests {
                 grandchild_names: vec![Vec::new(), Vec::new()],
                 grandchild_attr_maps: vec![Vec::new(), Vec::new()],
                 grandchild_texts: vec![Vec::new(), Vec::new()],
+                great_grandchild_names: vec![Vec::new(), Vec::new()],
+                great_grandchild_attr_maps: vec![Vec::new(), Vec::new()],
+                great_grandchild_texts: vec![Vec::new(), Vec::new()],
             }
         );
     }
@@ -50236,6 +50537,9 @@ mod tests {
                 grandchild_names: vec![vec![Vec::new(), Vec::new()]],
                 grandchild_attr_maps: vec![vec![Vec::new(), Vec::new()]],
                 grandchild_texts: vec![vec![Vec::new(), Vec::new()]],
+                great_grandchild_names: vec![vec![Vec::new(), Vec::new()]],
+                great_grandchild_attr_maps: vec![vec![Vec::new(), Vec::new()]],
+                great_grandchild_texts: vec![vec![Vec::new(), Vec::new()]],
             }
         );
     }
@@ -50287,6 +50591,9 @@ mod tests {
                 grandchild_names: vec![vec![Vec::new(), Vec::new()]],
                 grandchild_attr_maps: vec![vec![Vec::new(), Vec::new()]],
                 grandchild_texts: vec![vec![Vec::new(), Vec::new()]],
+                great_grandchild_names: vec![vec![Vec::new(), Vec::new()]],
+                great_grandchild_attr_maps: vec![vec![Vec::new(), Vec::new()]],
+                great_grandchild_texts: vec![vec![Vec::new(), Vec::new()]],
             }
         );
     }
@@ -50326,6 +50633,9 @@ mod tests {
                 grandchild_names: vec![vec![Vec::new(), Vec::new()]],
                 grandchild_attr_maps: vec![vec![Vec::new(), Vec::new()]],
                 grandchild_texts: vec![vec![Vec::new(), Vec::new()]],
+                great_grandchild_names: vec![vec![Vec::new(), Vec::new()]],
+                great_grandchild_attr_maps: vec![vec![Vec::new(), Vec::new()]],
+                great_grandchild_texts: vec![vec![Vec::new(), Vec::new()]],
             }
         );
     }
@@ -50385,6 +50695,9 @@ mod tests {
                 grandchild_names: vec![vec![Vec::new(), Vec::new(), Vec::new()]],
                 grandchild_attr_maps: vec![vec![Vec::new(), Vec::new(), Vec::new()]],
                 grandchild_texts: vec![vec![Vec::new(), Vec::new(), Vec::new()]],
+                great_grandchild_names: vec![vec![Vec::new(), Vec::new(), Vec::new()]],
+                great_grandchild_attr_maps: vec![vec![Vec::new(), Vec::new(), Vec::new()]],
+                great_grandchild_texts: vec![vec![Vec::new(), Vec::new(), Vec::new()]],
             }
         );
     }
@@ -50422,6 +50735,9 @@ mod tests {
                     "FFFF0000".to_string(),
                 )])]]],
                 grandchild_texts: vec![vec![vec![None]]],
+                great_grandchild_names: vec![vec![vec![Vec::new()]]],
+                great_grandchild_attr_maps: vec![vec![vec![Vec::new()]]],
+                great_grandchild_texts: vec![vec![vec![Vec::new()]]],
             }
         );
     }
@@ -50470,6 +50786,9 @@ mod tests {
                 grandchild_names: vec![vec![vec!["color".to_string()]]],
                 grandchild_attr_maps: vec![vec![vec![BTreeMap::new()]]],
                 grandchild_texts: vec![vec![vec![None]]],
+                great_grandchild_names: vec![vec![vec![Vec::new()]]],
+                great_grandchild_attr_maps: vec![vec![vec![Vec::new()]]],
+                great_grandchild_texts: vec![vec![vec![Vec::new()]]],
             }
         );
     }
@@ -50518,6 +50837,9 @@ mod tests {
                     "FFFF0000".to_string(),
                 )])]]],
                 grandchild_texts: vec![vec![vec![None]]],
+                great_grandchild_names: vec![vec![vec![Vec::new()]]],
+                great_grandchild_attr_maps: vec![vec![vec![Vec::new()]]],
+                great_grandchild_texts: vec![vec![vec![Vec::new()]]],
             }
         );
     }
@@ -50555,7 +50877,42 @@ mod tests {
                     "FFFF0000".to_string(),
                 )])]]],
                 grandchild_texts: vec![vec![vec![Some("alphabeta".to_string())]]],
+                great_grandchild_names: vec![vec![vec![Vec::new()]]],
+                great_grandchild_attr_maps: vec![vec![vec![Vec::new()]]],
+                great_grandchild_texts: vec![vec![vec![Vec::new()]]],
             }
+        );
+    }
+
+    #[test]
+    fn load_collects_fill_great_grandchild_summary_in_styles_summary() {
+        let codec = XlsxCodec;
+        let loaded = codec
+            .load(
+                &workbook_with_fill_gradient_stop_color_tint_bytes(),
+                CommonLoadOptions::default(),
+            )
+            .expect("load workbook");
+        let styles_summary = loaded
+            .support_parts
+            .styles_summary
+            .as_ref()
+            .expect("typed styles summary");
+
+        assert_eq!(
+            styles_summary.fills[1].great_grandchild_names,
+            vec![vec![vec![vec!["tint".to_string()]]]]
+        );
+        assert_eq!(
+            styles_summary.fills[1].great_grandchild_attr_maps,
+            vec![vec![vec![vec![BTreeMap::from([(
+                "val".to_string(),
+                "-0.25".to_string()
+            )])]]]]
+        );
+        assert_eq!(
+            styles_summary.fills[1].great_grandchild_texts,
+            vec![vec![vec![vec![Some("alphabeta".to_string())]]]]
         );
     }
 
@@ -68185,6 +68542,13 @@ mod tests {
     }
 
     #[test]
+    fn dirty_save_preserves_fill_great_grandchild_summary_in_styles_xml() {
+        assert_dirty_save_preserves_styles_xml_for_mutated_input(
+            workbook_with_fill_gradient_stop_color_tint_bytes(),
+        );
+    }
+
+    #[test]
     fn dirty_save_preserves_border_nested_child_texts() {
         assert_dirty_save_preserves_styles_xml_for_mutated_input(
             workbook_with_border_color_text_bytes(),
@@ -85417,6 +85781,82 @@ mod tests {
         let error = codec
             .save(&loaded, office_common::SaveOptions::default())
             .expect_err("save should fail when fill gradient stop color cdata text drifts");
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("typed styles summary drifted"));
+        assert!(error.message.contains("xl/styles.xml"));
+    }
+
+    #[test]
+    fn save_rejects_stylesheet_when_fill_great_grandchild_attr_drifts() {
+        let codec = XlsxCodec;
+        let input = workbook_with_fill_gradient_stop_color_tint_bytes();
+        let mut loaded = codec
+            .load(&input, CommonLoadOptions::default())
+            .expect("load workbook");
+        let sheet_id = loaded.state.worksheets[0].id;
+        let styles_xml = String::from_utf8(
+            loaded
+                .package
+                .part("xl/styles.xml")
+                .expect("styles part")
+                .bytes
+                .clone(),
+        )
+        .expect("styles xml utf8")
+        .replace(r#"tint val="-0.25""#, r#"tint val="-0.5""#);
+        loaded
+            .package
+            .replace_part_bytes("xl/styles.xml", styles_xml.into_bytes())
+            .expect("replace styles part");
+        loaded
+            .state
+            .set_range_values(
+                &office_common::RangeRef::single_cell(WorkbookId(0), sheet_id, 1, 1),
+                &office_common::OmArray::scalar(office_common::OmValue::Number(9.0)),
+            )
+            .expect("set value");
+
+        let error = codec
+            .save(&loaded, office_common::SaveOptions::default())
+            .expect_err("save should fail when fill great-grandchild attrs drift");
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("typed styles summary drifted"));
+        assert!(error.message.contains("xl/styles.xml"));
+    }
+
+    #[test]
+    fn save_rejects_stylesheet_when_fill_great_grandchild_text_drifts() {
+        let codec = XlsxCodec;
+        let input = workbook_with_fill_gradient_stop_color_tint_bytes();
+        let mut loaded = codec
+            .load(&input, CommonLoadOptions::default())
+            .expect("load workbook");
+        let sheet_id = loaded.state.worksheets[0].id;
+        let styles_xml = String::from_utf8(
+            loaded
+                .package
+                .part("xl/styles.xml")
+                .expect("styles part")
+                .bytes
+                .clone(),
+        )
+        .expect("styles xml utf8")
+        .replace("alpha<![CDATA[beta]]>", "changed<![CDATA[beta]]>");
+        loaded
+            .package
+            .replace_part_bytes("xl/styles.xml", styles_xml.into_bytes())
+            .expect("replace styles part");
+        loaded
+            .state
+            .set_range_values(
+                &office_common::RangeRef::single_cell(WorkbookId(0), sheet_id, 1, 1),
+                &office_common::OmArray::scalar(office_common::OmValue::Number(9.0)),
+            )
+            .expect("set value");
+
+        let error = codec
+            .save(&loaded, office_common::SaveOptions::default())
+            .expect_err("save should fail when fill great-grandchild text drifts");
         assert_eq!(error.code, OmErrorCode::InvalidState);
         assert!(error.message.contains("typed styles summary drifted"));
         assert!(error.message.contains("xl/styles.xml"));
@@ -119185,6 +119625,27 @@ mod tests {
         .replace(
             r#"<color rgb="FFFF0000"/>"#,
             r#"<color rgb="FFFF0000">alpha<![CDATA[beta]]></color>"#,
+        );
+        package
+            .replace_part_bytes("xl/styles.xml", styles_xml.into_bytes())
+            .expect("replace styles part");
+        package.to_bytes().expect("package bytes")
+    }
+
+    fn workbook_with_fill_gradient_stop_color_tint_bytes() -> Vec<u8> {
+        let mut package = OpcPackage::from_bytes(&workbook_with_fill_gradient_stop_color_bytes())
+            .expect("base workbook package");
+        let styles_xml = String::from_utf8(
+            package
+                .part("xl/styles.xml")
+                .expect("styles part")
+                .bytes
+                .clone(),
+        )
+        .expect("styles xml utf8")
+        .replace(
+            r#"<color rgb="FFFF0000"/>"#,
+            r#"<color rgb="FFFF0000"><tint val="-0.25">alpha<![CDATA[beta]]></tint></color>"#,
         );
         package
             .replace_part_bytes("xl/styles.xml", styles_xml.into_bytes())
