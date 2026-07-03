@@ -4405,6 +4405,8 @@
   - 범위: chart rels의 non-style/color internal opaque relationship target이 package 안에 존재하는 경우 `SheetDrawingSupportParts`가 URI와 source bytes를 별도 inventory로 노출해서 raw graph overlay가 전체 package clone뿐 아니라 chart support summary 표면에서도 opaque target part를 추적하는지 회귀로 고정
   - `Step 6.6b2b2b2b2b2f2b2bu DONE` drawing opaque relationship target inventory
   - 범위: drawing rels의 non-chart internal opaque relationship target이 package 안에 존재하는 경우 `SheetDrawingSupportParts`가 URI와 source bytes를 별도 inventory로 노출해서 embedded worksheet와 chartsheet drawing raw graph overlay가 opaque target part를 직접 추적하는지 회귀로 고정
+  - `Step 6.6b2b2b2b2b2f2b2bv DONE` sheet drawing support save validation
+  - 범위: clean save 직전에 sheet drawing support inventory가 추적하는 host sheet/rels, drawing parts/rels, drawing opaque targets, chart parts/rels, chart support parts, chart opaque targets가 package에서 사라진 경우 명시적으로 실패하게 해서 raw graph overlay가 silent data loss를 허용하지 않는지 회귀로 고정
 - 목표
   - 현재 core worksheet rewrite 이후 남아 있는 fidelity gap을 좁힌다.
   - style/theme/merge/comment/hyperlink/formula cached-value 계열 보존을 순차적으로 올린다.

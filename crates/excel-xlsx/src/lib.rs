@@ -1607,6 +1607,90 @@ impl XlsxCodec {
             &workbook.worksheet_support_parts,
             &worksheet_xml_rewrite_recovery_ids,
         )?;
+        for support_parts in workbook.sheet_drawing_support_parts.values() {
+            if let Some(sheet_part_uri) = support_parts.sheet_part_uri.as_deref()
+                && !package.contains(sheet_part_uri)
+            {
+                return Err(OmError::new(
+                    OmErrorCode::InvalidState,
+                    format!("explicit drawing host sheet part is missing: {sheet_part_uri}"),
+                ));
+            }
+            if let Some(relationships_part_uri) = support_parts.relationships_part_uri.as_deref()
+                && !package.contains(relationships_part_uri)
+            {
+                return Err(OmError::new(
+                    OmErrorCode::InvalidState,
+                    format!(
+                        "explicit drawing host relationships part is missing: {relationships_part_uri}"
+                    ),
+                ));
+            }
+            for drawing_part_uri in &support_parts.drawing_part_uris {
+                if !package.contains(drawing_part_uri) {
+                    return Err(OmError::new(
+                        OmErrorCode::InvalidState,
+                        format!("explicit drawing part is missing: {drawing_part_uri}"),
+                    ));
+                }
+            }
+            for drawing_relationships_part_uri in &support_parts.drawing_relationships_part_uris {
+                if !package.contains(drawing_relationships_part_uri) {
+                    return Err(OmError::new(
+                        OmErrorCode::InvalidState,
+                        format!(
+                            "explicit drawing relationships part is missing: {drawing_relationships_part_uri}"
+                        ),
+                    ));
+                }
+            }
+            for drawing_opaque_part_uri in &support_parts.drawing_opaque_relationship_part_uris {
+                if !package.contains(drawing_opaque_part_uri) {
+                    return Err(OmError::new(
+                        OmErrorCode::InvalidState,
+                        format!(
+                            "explicit drawing opaque relationship target part is missing: {drawing_opaque_part_uri}"
+                        ),
+                    ));
+                }
+            }
+            for chart_part_uri in &support_parts.chart_part_uris {
+                if !package.contains(chart_part_uri) {
+                    return Err(OmError::new(
+                        OmErrorCode::InvalidState,
+                        format!("explicit drawing chart part is missing: {chart_part_uri}"),
+                    ));
+                }
+            }
+            for chart_relationships_part_uri in &support_parts.chart_relationships_part_uris {
+                if !package.contains(chart_relationships_part_uri) {
+                    return Err(OmError::new(
+                        OmErrorCode::InvalidState,
+                        format!(
+                            "explicit chart relationships part is missing: {chart_relationships_part_uri}"
+                        ),
+                    ));
+                }
+            }
+            for chart_support_part_uri in &support_parts.chart_support_part_uris {
+                if !package.contains(chart_support_part_uri) {
+                    return Err(OmError::new(
+                        OmErrorCode::InvalidState,
+                        format!("explicit chart support part is missing: {chart_support_part_uri}"),
+                    ));
+                }
+            }
+            for chart_opaque_part_uri in &support_parts.chart_opaque_relationship_part_uris {
+                if !package.contains(chart_opaque_part_uri) {
+                    return Err(OmError::new(
+                        OmErrorCode::InvalidState,
+                        format!(
+                            "explicit chart opaque relationship target part is missing: {chart_opaque_part_uri}"
+                        ),
+                    ));
+                }
+            }
+        }
         let has_dirty_worksheets = !dirty_worksheet_ids.is_empty();
 
         for worksheet in &workbook.state.worksheets {
@@ -30235,7 +30319,7 @@ mod tests {
             .expect("add chart");
         let bytes = package.to_bytes().expect("package bytes");
 
-        let loaded = codec
+        let mut loaded = codec
             .load(bytes.as_slice(), CommonLoadOptions::default())
             .expect("load workbook with drawing unknown rels");
         let sheet_id = loaded.state.worksheets[0].id;
@@ -30332,6 +30416,17 @@ mod tests {
                 .expect("saved chart")
                 .bytes,
             chart_xml
+        );
+
+        assert!(loaded.package.remove_part("xl/opaque/drawingOpaque1.xml"));
+        let error = codec
+            .save(&loaded, office_common::SaveOptions::default())
+            .expect_err("save should reject missing drawing opaque target");
+        assert!(
+            error
+                .to_string()
+                .contains("explicit drawing opaque relationship target part is missing: xl/opaque/drawingOpaque1.xml"),
+            "{error}"
         );
     }
 
