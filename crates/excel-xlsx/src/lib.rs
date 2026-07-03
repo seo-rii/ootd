@@ -30942,6 +30942,97 @@ mod tests {
             chart_xml
         );
 
+        let mut host_sheet_missing_loaded = loaded.clone();
+        assert!(
+            host_sheet_missing_loaded
+                .package
+                .remove_part("xl/worksheets/sheet1.xml")
+        );
+        let error = codec
+            .save(
+                &host_sheet_missing_loaded,
+                office_common::SaveOptions::default(),
+            )
+            .expect_err("save should reject missing embedded drawing host sheet part");
+        assert!(
+            error
+                .to_string()
+                .contains("explicit worksheet part is missing: xl/worksheets/sheet1.xml"),
+            "{error}"
+        );
+
+        let mut host_sheet_changed_loaded = loaded.clone();
+        host_sheet_changed_loaded
+            .package
+            .replace_part_bytes(
+                "xl/worksheets/sheet1.xml",
+                br#"<?xml version="1.0" encoding="UTF-8"?>
+<worksheet
+  xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheetData/>
+  <drawing r:id="rIdChartDrawing"/>
+</worksheet>"#
+                    .to_vec(),
+            )
+            .expect("replace embedded drawing host sheet part");
+        let error = codec
+            .save(
+                &host_sheet_changed_loaded,
+                office_common::SaveOptions::default(),
+            )
+            .expect_err("save should reject changed embedded drawing host sheet part");
+        assert!(
+            error.to_string().contains(
+                "explicit drawing host sheet part bytes changed: xl/worksheets/sheet1.xml"
+            ),
+            "{error}"
+        );
+
+        let mut host_rels_missing_loaded = loaded.clone();
+        assert!(
+            host_rels_missing_loaded
+                .package
+                .remove_part("xl/worksheets/_rels/sheet1.xml.rels")
+        );
+        let error = codec
+            .save(
+                &host_rels_missing_loaded,
+                office_common::SaveOptions::default(),
+            )
+            .expect_err("save should reject missing embedded drawing host rels part");
+        assert!(
+            error.to_string().contains(
+                "explicit worksheet relationships part is missing: xl/worksheets/_rels/sheet1.xml.rels"
+            ),
+            "{error}"
+        );
+
+        let mut host_rels_changed_loaded = loaded.clone();
+        host_rels_changed_loaded
+            .package
+            .replace_part_bytes(
+                "xl/worksheets/_rels/sheet1.xml.rels",
+                br#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships
+  xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rIdChartDrawing" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml" />
+</Relationships>"#
+                    .to_vec(),
+            )
+            .expect("replace embedded drawing host rels part");
+        let error = codec
+            .save(
+                &host_rels_changed_loaded,
+                office_common::SaveOptions::default(),
+            )
+            .expect_err("save should reject changed embedded drawing host rels part");
+        assert!(
+            error.to_string().contains(
+                "explicit drawing host relationships part bytes changed: xl/worksheets/_rels/sheet1.xml.rels"
+            ),
+            "{error}"
+        );
+
         let mut summary_changed_loaded = loaded.clone();
         summary_changed_loaded
             .sheet_drawing_support_parts
