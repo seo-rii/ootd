@@ -4329,6 +4329,8 @@
   - 범위: chartsheet drawing inventory clean-save 회귀에서 `xl/_rels/workbook.xml.rels`의 chartsheet relationship rewrite 결과가 저장 후에도 원본 bytes와 정확히 일치하는지 검증해서 workbook-to-chartsheet binding table의 raw preservation을 byte-level 회귀로 고정
   - `Step 6.6b2b2b2b2b2f2b2ao DONE` chartsheet chart content-types clean-save byte preservation
   - 범위: chartsheet drawing inventory clean-save 회귀에서 chartsheet/drawing/chart/chartStyle/chartColorStyle content type override를 포함한 `[Content_Types].xml`이 저장 후에도 원본 bytes와 정확히 일치하는지 검증해서 chart raw graph의 package-level content type table 보존을 byte-level 회귀로 고정
+  - `Step 6.6b2b2b2b2b2f2b2ap DONE` embedded chart content-types clean-save byte preservation
+  - 범위: embedded chart drawing inventory clean-save 회귀에서 drawing/chart/chartStyle/chartColorStyle content type override를 포함한 `[Content_Types].xml`이 저장 후에도 원본 bytes와 정확히 일치하는지 검증해서 embedded chart raw graph의 package-level content type table 보존을 byte-level 회귀로 고정
 - 목표
   - 현재 core worksheet rewrite 이후 남아 있는 fidelity gap을 좁힌다.
   - style/theme/merge/comment/hyperlink/formula cached-value 계열 보존을 순차적으로 올린다.
