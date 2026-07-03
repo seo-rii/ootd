@@ -117988,6 +117988,99 @@ mod tests {
     }
 
     #[test]
+    fn save_rejects_stylesheet_when_colors_great_grandchild_name_drifts() {
+        let codec = XlsxCodec;
+        let input = workbook_with_stylesheet_color_entry_great_grandchildren_bytes();
+        let mut loaded = codec
+            .load(&input, CommonLoadOptions::default())
+            .expect("load workbook");
+        let styles_xml = String::from_utf8(
+            loaded
+                .package
+                .part("xl/styles.xml")
+                .expect("styles part")
+                .bytes
+                .clone(),
+        )
+        .expect("styles xml utf8")
+        .replace("alpha val=\"50000\"", "shade val=\"50000\"");
+        loaded
+            .package
+            .replace_part_bytes("xl/styles.xml", styles_xml.into_bytes())
+            .expect("replace styles part");
+
+        let error = codec
+            .save(&loaded, office_common::SaveOptions::default())
+            .expect_err("save should fail when colors great-grandchild name drifts");
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("typed styles summary drifted"));
+        assert!(error.message.contains("xl/styles.xml"));
+    }
+
+    #[test]
+    fn save_rejects_stylesheet_when_colors_great_grandchild_set_grows() {
+        let codec = XlsxCodec;
+        let input = workbook_with_stylesheet_color_entry_great_grandchildren_bytes();
+        let mut loaded = codec
+            .load(&input, CommonLoadOptions::default())
+            .expect("load workbook");
+        let styles_xml = String::from_utf8(
+            loaded
+                .package
+                .part("xl/styles.xml")
+                .expect("styles part")
+                .bytes
+                .clone(),
+        )
+        .expect("styles xml utf8")
+        .replace(
+            r#"<alpha val="50000"/>"#,
+            r#"<alpha val="50000"/><shade val="25000"/>"#,
+        );
+        loaded
+            .package
+            .replace_part_bytes("xl/styles.xml", styles_xml.into_bytes())
+            .expect("replace styles part");
+
+        let error = codec
+            .save(&loaded, office_common::SaveOptions::default())
+            .expect_err("save should fail when colors great-grandchild set grows");
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("typed styles summary drifted"));
+        assert!(error.message.contains("xl/styles.xml"));
+    }
+
+    #[test]
+    fn save_rejects_stylesheet_when_colors_great_grandchild_set_shrinks() {
+        let codec = XlsxCodec;
+        let input = workbook_with_stylesheet_color_entry_great_grandchildren_bytes();
+        let mut loaded = codec
+            .load(&input, CommonLoadOptions::default())
+            .expect("load workbook");
+        let styles_xml = String::from_utf8(
+            loaded
+                .package
+                .part("xl/styles.xml")
+                .expect("styles part")
+                .bytes
+                .clone(),
+        )
+        .expect("styles xml utf8")
+        .replace(r#"<alpha val="50000"/>"#, "");
+        loaded
+            .package
+            .replace_part_bytes("xl/styles.xml", styles_xml.into_bytes())
+            .expect("replace styles part");
+
+        let error = codec
+            .save(&loaded, office_common::SaveOptions::default())
+            .expect_err("save should fail when colors great-grandchild set shrinks");
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("typed styles summary drifted"));
+        assert!(error.message.contains("xl/styles.xml"));
+    }
+
+    #[test]
     fn save_rejects_stylesheet_when_colors_great_grandchild_text_drifts() {
         let codec = XlsxCodec;
         let input = workbook_with_stylesheet_color_entry_great_grandchild_text_bytes();
