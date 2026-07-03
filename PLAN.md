@@ -4649,6 +4649,8 @@
   - 범위: `OmCaptureSummary`가 Windows capture runner가 materialize해야 하는 pending output 파일명을 순서대로 노출하고, pinned `om_sources.toml` regression이 count뿐 아니라 exact output contract를 검증하도록 고정
   - `Step 7.2 DONE` office-capture pending output summary
   - 범위: `office-capture` plan/JSON summary가 manifest/log/checksum을 제외한 실제 Windows capture payload 파일명 5개를 순서대로 노출해 `om_sources.toml` pending output contract와 runner materialization surface를 연결하도록 고정
+  - `Step 7.3 DONE` execution plan pending output contract
+  - 범위: materialized `execution_plan.json`과 in-memory `CaptureExecutionPlan`이 Windows capture payload 파일명 5개를 순서대로 노출해 execution bundle 검증 표면에서도 pending output contract를 직접 확인하도록 고정
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.

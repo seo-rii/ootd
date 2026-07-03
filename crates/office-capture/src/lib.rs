@@ -167,6 +167,7 @@ pub struct CaptureExecutionPlan {
     pub direct_exec_launcher_path: String,
     pub direct_exec_status_path: String,
     pub generated_interop_assembly: String,
+    pub pending_capture_outputs: Vec<String>,
     pub manual_steps: Vec<CaptureManualStep>,
     pub commands: Vec<CaptureCommand>,
 }
@@ -931,6 +932,7 @@ impl CapturePlan {
             direct_exec_launcher_path: self.direct_exec_launcher_path(),
             direct_exec_status_path: self.artifact_path(direct_exec_status_relative_path()),
             generated_interop_assembly: generated_interop_assembly.clone(),
+            pending_capture_outputs: self.summary().pending_capture_outputs,
             manual_steps: vec![CaptureManualStep {
                 name: "oleview_snapshot_export".to_string(),
                 instructions: format!(
@@ -2552,6 +2554,16 @@ mod tests {
             "C:\\capture\\excel-om\\excel_om_windows_capture\\manifest\\direct_exec_status.json"
         );
         assert_eq!(execution_plan["commands"][0]["name"], "tlbimp_fallback");
+        assert_eq!(
+            execution_plan["pending_capture_outputs"],
+            serde_json::json!([
+                "raw_typelib_identity.json",
+                "excel_typelib_snapshot.idl",
+                "excel_typelib_snapshot.odl",
+                "excel_pia_identity.json",
+                "excel_pia_public_surface.json"
+            ])
+        );
 
         let direct_exec_status_template: serde_json::Value = serde_json::from_slice(
             &fs::read(&result.direct_exec_status_template_path)
@@ -2928,6 +2940,16 @@ mod tests {
         assert_eq!(
             execution_plan.direct_exec_status_path,
             "C:\\capture\\excel-om\\excel_om_windows_capture\\manifest\\direct_exec_status.json"
+        );
+        assert_eq!(
+            execution_plan.pending_capture_outputs,
+            vec![
+                "raw_typelib_identity.json".to_string(),
+                "excel_typelib_snapshot.idl".to_string(),
+                "excel_typelib_snapshot.odl".to_string(),
+                "excel_pia_identity.json".to_string(),
+                "excel_pia_public_surface.json".to_string(),
+            ]
         );
         assert_eq!(execution_plan.manual_steps.len(), 1);
         assert_eq!(
