@@ -4737,6 +4737,8 @@
   - 범위: `office-codegen`이 context-aware differential report artifact를 gate summary JSON으로 저장하는 writer API를 제공해 CI/oracle runner가 검증된 report에서 pass/fail 요약 artifact를 생성하고 downstream job이 동일한 pretty JSON contract를 소비하도록 고정
   - `Step 7.46 DONE` codegen differential gate summary import validation
   - 범위: `office-codegen`이 gate summary JSON/path artifact를 다시 로드하면서 `blockingCaseCount`, `blockingCases`, `passed` invariant를 검증하도록 추가해 downstream CI job이 stale 또는 손상된 gate artifact를 pass/fail 판단 입력으로 쓰지 못하도록 고정
+  - `Step 7.47 DONE` differential regression artifact contract documentation
+  - 범위: `docs/specs/differential_regression_reports.md`에 source registry context, differential report JSON, gate summary JSON, context-aware report-to-gate artifact flow, contract error와 compatibility failure 구분을 문서화해 후속 CI/oracle runner가 Step 7.37~7.46 API를 같은 입출력 계약으로 구현하도록 고정
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.

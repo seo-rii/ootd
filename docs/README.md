@@ -20,6 +20,7 @@ Some detailed implementation notes currently remain in Korean because they were 
 - [Spec roots](spec_roots.md): source-of-truth references for XLSX, OPC, and Excel object model intake.
 - [OM source acquisition](specs/om_source_acquisition.md): how Excel COM type library and PIA inputs are pinned and normalized.
 - [Windows capture runner](specs/windows_capture_runner.md): capture bundle layout, output contract, and current execution boundary.
+- [Differential regression reports](specs/differential_regression_reports.md): Oracle/runtime comparison report and gate summary JSON contracts.
 
 ## Repository Data Sources
 
