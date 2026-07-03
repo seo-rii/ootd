@@ -2489,6 +2489,31 @@ mod tests {
             .iter()
             .map(|value| value.as_str().expect("expected output name").to_string())
             .collect::<std::collections::BTreeSet<_>>();
+        let writable_output_names = manifest["writableOutputs"]
+            .as_object()
+            .expect("writable outputs")
+            .iter()
+            .filter_map(|(logical_name, value)| {
+                matches!(
+                    logical_name.as_str(),
+                    "raw_typelib_identity"
+                        | "excel_typelib_snapshot_idl"
+                        | "excel_typelib_snapshot_odl"
+                        | "excel_pia_identity"
+                        | "excel_pia_public_surface"
+                )
+                .then(|| {
+                    value
+                        .as_str()
+                        .expect("writable output path")
+                        .rsplit(|ch| ch == '\\' || ch == '/')
+                        .next()
+                        .expect("writable output file name")
+                        .to_string()
+                })
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(writable_output_names, expected_output_names);
         assert!(checksum_output_names.is_superset(&expected_output_names));
         assert_eq!(result.written_paths.len(), 8);
         assert!(result.manifest_path.is_some());
