@@ -29427,7 +29427,27 @@ mod tests {
                 .expect("chart rels source"),
             &chart_rels_xml
         );
+        assert_eq!(
+            drawing_support
+                .chart_summaries
+                .get("xl/charts/chart2.xml")
+                .expect("chart summary")
+                .opaque_relationships,
+            vec![ChartOpaqueRelationshipSummary {
+                relationship_id: "rIdExternalWorkbook2".to_string(),
+                relationship_type:
+                    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/externalLink"
+                        .to_string(),
+                target: "https://example.com/External.xlsx".to_string(),
+                target_mode: Some("External".to_string()),
+            }]
+        );
         assert!(drawing_support.chart_support_part_uris.is_empty());
+        assert!(
+            drawing_support
+                .chart_opaque_relationship_part_uris
+                .is_empty()
+        );
         assert_eq!(loaded.state.charts.len(), 1);
 
         let saved = codec
@@ -32923,7 +32943,27 @@ mod tests {
                 .expect("chart rels source"),
             &chart_rels_xml
         );
+        assert_eq!(
+            drawing_support
+                .chart_summaries
+                .get("xl/charts/chart1.xml")
+                .expect("chart summary")
+                .opaque_relationships,
+            vec![ChartOpaqueRelationshipSummary {
+                relationship_id: "rIdExternalWorkbook1".to_string(),
+                relationship_type:
+                    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/externalLink"
+                        .to_string(),
+                target: "https://example.com/External.xlsx".to_string(),
+                target_mode: Some("External".to_string()),
+            }]
+        );
         assert!(drawing_support.chart_support_part_uris.is_empty());
+        assert!(
+            drawing_support
+                .chart_opaque_relationship_part_uris
+                .is_empty()
+        );
         assert_eq!(loaded.state.charts.len(), 1);
 
         let saved = codec
