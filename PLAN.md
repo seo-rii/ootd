@@ -4727,6 +4727,8 @@
   - 범위: `office-codegen`이 differential report를 validate 후 pretty JSON artifact로 저장하고 다시 import 가능한지 검증하는 writer API를 추가해 후속 oracle/corpus runner가 report 생성/검증/게이트까지 같은 contract로 연결할 수 있도록 고정
   - `Step 7.41 DONE` codegen differential report source context
   - 범위: `office-codegen` differential report에 source registry 기반 project/profile/corpus/validation context를 선택적으로 부착하는 builder를 추가해 후속 oracle/corpus runner의 report artifact가 어떤 source contract에서 생성됐는지 추적 가능하도록 고정
+  - `Step 7.42 DONE` codegen differential report context validation
+  - 범위: `office-codegen`이 differential report의 source registry context를 현재 `SourceRegistrySummary`와 대조하고 context 누락 또는 profile/corpus/validation drift를 contract error로 거부하도록 추가해 다른 registry에서 생성된 report가 같은 CI gate에 섞이지 못하도록 고정
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.

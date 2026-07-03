@@ -17,7 +17,7 @@ use office_codegen::{
     normalize_capture_bundle, normalize_capture_bundle_from_dir, normalize_pia_capture_json,
     summarize_capture_bundle, summarize_differential_gate, summarize_om_sources,
     summarize_om_sources_toml, summarize_source_registry, summarize_source_registry_toml,
-    write_differential_report_to_path,
+    validate_differential_report_source_context, write_differential_report_to_path,
 };
 use office_idl::{AccessMode, CaptureOriginKind, InterfaceKind, OfficeIdlDocument};
 use sha2::{Digest, Sha256};
@@ -255,6 +255,55 @@ fn builds_differential_report_with_source_registry_context() {
     assert!(json.contains(r#""projectName":"excel-compat-core""#));
     let loaded = load_differential_report_from_json(&json).expect("load report");
     assert_eq!(loaded, report);
+}
+
+#[test]
+fn validates_differential_report_source_registry_context() {
+    let registry_toml =
+        fs::read_to_string(repo_root().join("specs/sources.toml")).expect("source registry");
+    let source_summary = summarize_source_registry_toml(&registry_toml).expect("source summary");
+    let report = build_differential_report_with_source_context(
+        "Excel",
+        "16.0",
+        &source_summary,
+        vec![DifferentialCaseResult {
+            name: "Application.Version".to_string(),
+            surface: Some("Application".to_string()),
+            member: Some("Version".to_string()),
+            status: DifferentialCaseStatus::Passed,
+            expected: Some("16.0".to_string()),
+            actual: Some("16.0".to_string()),
+            message: None,
+            artifacts: BTreeMap::new(),
+        }],
+    );
+
+    validate_differential_report_source_context(&report, &source_summary)
+        .expect("matching source context");
+
+    let report_without_context =
+        build_differential_report("Excel", "16.0", "excel_365", report.cases.clone());
+    let error =
+        validate_differential_report_source_context(&report_without_context, &source_summary)
+            .expect_err("missing context should fail");
+    match error {
+        DifferentialReportLoadError::Contract { message } => {
+            assert!(message.contains("missing source registry context"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    let mut mismatched_summary = source_summary.clone();
+    mismatched_summary.default_profile = "excel_2021".to_string();
+    let error = validate_differential_report_source_context(&report, &mismatched_summary)
+        .expect_err("mismatched context should fail");
+    match error {
+        DifferentialReportLoadError::Contract { message } => {
+            assert!(message.contains("source context"));
+            assert!(message.contains("excel_2021"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
 }
 
 #[test]

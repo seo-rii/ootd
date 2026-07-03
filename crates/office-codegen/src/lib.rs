@@ -1312,6 +1312,35 @@ impl DifferentialReport {
         Ok(())
     }
 
+    pub fn validate_source_context(
+        &self,
+        summary: &SourceRegistrySummary,
+    ) -> Result<(), DifferentialReportLoadError> {
+        let Some(context) = self.context.as_ref() else {
+            return Err(DifferentialReportLoadError::Contract {
+                message: "differential report missing source registry context".to_string(),
+            });
+        };
+        let expected_context = DifferentialReportContext::from_source_registry_summary(summary);
+        if context != &expected_context {
+            return Err(DifferentialReportLoadError::Contract {
+                message: format!(
+                    "differential report source context {:?} did not match registry {:?}",
+                    context, expected_context
+                ),
+            });
+        }
+        if self.profile != summary.default_profile {
+            return Err(DifferentialReportLoadError::Contract {
+                message: format!(
+                    "differential report profile {} did not match registry default profile {}",
+                    self.profile, summary.default_profile
+                ),
+            });
+        }
+        Ok(())
+    }
+
     pub fn from_json_str(input: &str) -> Result<Self, DifferentialReportLoadError> {
         let report = serde_json::from_str::<Self>(input)?;
         report.validate()?;
@@ -1633,6 +1662,13 @@ pub fn write_differential_report_to_path(
     path: impl AsRef<Path>,
 ) -> Result<(), DifferentialReportLoadError> {
     report.write_json_path(path)
+}
+
+pub fn validate_differential_report_source_context(
+    report: &DifferentialReport,
+    source_summary: &SourceRegistrySummary,
+) -> Result<(), DifferentialReportLoadError> {
+    report.validate_source_context(source_summary)
 }
 
 pub fn normalize_pia_capture_json(input: &str) -> Result<OfficeIdlDocument, PiaCaptureLoadError> {
