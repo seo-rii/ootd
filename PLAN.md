@@ -4558,6 +4558,8 @@
   - 범위: dirty worksheet save에서 calcChain invalidation이 workbook rels/content types는 의도적으로 변경하더라도 root package relationships `_rels/.rels` source bytes와 structural summary는 그대로 보존되는지 회귀로 고정
   - `Step 6.6b2b2b2b2b2f2b2dl DONE` package-level raw graph inventory parity
   - 범위: load 시 `[Content_Types].xml`, root `_rels/.rels`, workbook relationships source bytes와 normalized structural summaries가 `WorkbookSupportParts` raw graph 표면에 직접 노출되는지 한 번에 회귀로 고정
+  - `Step 6.6b2b2b2b2b2f2b2dm DONE` content types structural summary overlay
+  - 범위: `[Content_Types].xml`의 root attrs, child order, Default/Override attrs를 `ContentTypesPartSummary`로 추적하고 clean validation에서 source-byte drift와 structural summary drift를 분리해 실패하도록 회귀로 고정
 - 목표
   - 현재 core worksheet rewrite 이후 남아 있는 fidelity gap을 좁힌다.
   - style/theme/merge/comment/hyperlink/formula cached-value 계열 보존을 순차적으로 올린다.

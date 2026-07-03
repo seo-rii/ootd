@@ -75,6 +75,7 @@ pub struct XlsxCodec;
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct WorkbookSupportParts {
     pub content_types_source_bytes: Option<Vec<u8>>,
+    pub content_types_summary: Option<ContentTypesPartSummary>,
     pub package_relationships_part_source_bytes: Option<Vec<u8>>,
     pub package_relationships_summary: Option<WorksheetRelationshipsPartSummary>,
     pub workbook_relationships_part_uri: Option<String>,
@@ -88,6 +89,18 @@ pub struct WorkbookSupportParts {
     pub theme_summaries: BTreeMap<String, ThemePartSummary>,
     pub calc_chain_relationship: Option<WorkbookSupportRelationship>,
     pub calc_chain_part_uri: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContentTypesPartSummary {
+    pub root_name: String,
+    pub root_attr_map: BTreeMap<String, String>,
+    pub root_child_names: Vec<String>,
+    pub root_extra_child_xmls: Vec<String>,
+    pub default_extensions: Vec<String>,
+    pub default_attr_maps: Vec<BTreeMap<String, String>>,
+    pub override_part_names: Vec<String>,
+    pub override_attr_maps: Vec<BTreeMap<String, String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3287,6 +3300,230 @@ fn parse_worksheet_relationships_part_summary(
     })
 }
 
+fn parse_content_types_part_summary(content_types_xml: &[u8]) -> OmResult<ContentTypesPartSummary> {
+    let mut reader = Reader::from_reader(Cursor::new(content_types_xml));
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+    let mut root_name = None::<String>;
+    let mut root_attr_map = BTreeMap::new();
+    let mut root_child_names = Vec::new();
+    let mut root_extra_child_xmls = Vec::new();
+    let mut default_extensions = Vec::new();
+    let mut default_attr_maps = Vec::new();
+    let mut override_part_names = Vec::new();
+    let mut override_attr_maps = Vec::new();
+    let mut current_root_extra_writer = None::<Writer<Cursor<Vec<u8>>>>;
+    let mut current_root_extra_depth = 0usize;
+    let mut element_depth = 0usize;
+    let parse_attrs = |element: &BytesStart<'_>,
+                       decoder: quick_xml::encoding::Decoder|
+     -> OmResult<BTreeMap<String, String>> {
+        let mut attr_map = BTreeMap::new();
+        for attr in element.attributes() {
+            let attr = attr.map_err(xml_error)?;
+            let key = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
+            let value = attr
+                .decode_and_unescape_value(decoder)
+                .map_err(xml_error)?
+                .into_owned();
+            attr_map.insert(key, value);
+        }
+        Ok(attr_map)
+    };
+
+    loop {
+        match reader.read_event_into(&mut buffer) {
+            Ok(Event::Start(element)) => {
+                let qualified_name = String::from_utf8_lossy(element.name().as_ref()).into_owned();
+                let local_name = qualified_name
+                    .rsplit(':')
+                    .next()
+                    .unwrap_or(qualified_name.as_str());
+                if element_depth == 0 {
+                    root_name = Some(qualified_name);
+                    root_attr_map = parse_attrs(&element, reader.decoder())?;
+                    element_depth += 1;
+                    buffer.clear();
+                    continue;
+                }
+                if current_root_extra_depth > 0 {
+                    current_root_extra_writer
+                        .as_mut()
+                        .ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "content types parser lost root extra child writer state",
+                            )
+                        })?
+                        .write_event(Event::Start(element.into_owned()))
+                        .map_err(xml_error)?;
+                    current_root_extra_depth += 1;
+                    element_depth += 1;
+                    buffer.clear();
+                    continue;
+                }
+                if element_depth == 1 {
+                    root_child_names.push(qualified_name.clone());
+                    let attr_map = parse_attrs(&element, reader.decoder())?;
+                    match local_name {
+                        "Default" => {
+                            default_extensions
+                                .push(attr_map.get("Extension").cloned().unwrap_or_default());
+                            default_attr_maps.push(attr_map);
+                        }
+                        "Override" => {
+                            override_part_names
+                                .push(attr_map.get("PartName").cloned().unwrap_or_default());
+                            override_attr_maps.push(attr_map);
+                        }
+                        _ => {
+                            current_root_extra_writer = Some(Writer::new(Cursor::new(Vec::new())));
+                            current_root_extra_writer
+                                .as_mut()
+                                .ok_or_else(|| {
+                                    OmError::new(
+                                        OmErrorCode::InvalidState,
+                                        "content types parser lost root extra child writer state",
+                                    )
+                                })?
+                                .write_event(Event::Start(element.into_owned()))
+                                .map_err(xml_error)?;
+                            current_root_extra_depth = 1;
+                        }
+                    }
+                }
+                element_depth += 1;
+            }
+            Ok(Event::Empty(element)) => {
+                let qualified_name = String::from_utf8_lossy(element.name().as_ref()).into_owned();
+                let local_name = qualified_name
+                    .rsplit(':')
+                    .next()
+                    .unwrap_or(qualified_name.as_str());
+                if current_root_extra_depth > 0 {
+                    current_root_extra_writer
+                        .as_mut()
+                        .ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "content types parser lost root extra child writer state",
+                            )
+                        })?
+                        .write_event(Event::Empty(element.into_owned()))
+                        .map_err(xml_error)?;
+                    buffer.clear();
+                    continue;
+                }
+                if element_depth == 1 {
+                    root_child_names.push(qualified_name.clone());
+                    let attr_map = parse_attrs(&element, reader.decoder())?;
+                    match local_name {
+                        "Default" => {
+                            default_extensions
+                                .push(attr_map.get("Extension").cloned().unwrap_or_default());
+                            default_attr_maps.push(attr_map);
+                        }
+                        "Override" => {
+                            override_part_names
+                                .push(attr_map.get("PartName").cloned().unwrap_or_default());
+                            override_attr_maps.push(attr_map);
+                        }
+                        _ => {
+                            let mut writer = Writer::new(Cursor::new(Vec::new()));
+                            writer
+                                .write_event(Event::Empty(element.into_owned()))
+                                .map_err(xml_error)?;
+                            root_extra_child_xmls.push(
+                                String::from_utf8(writer.into_inner().into_inner())
+                                    .map_err(xml_error)?,
+                            );
+                        }
+                    }
+                }
+            }
+            Ok(Event::Text(text)) => {
+                if current_root_extra_depth > 0 {
+                    current_root_extra_writer
+                        .as_mut()
+                        .ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "content types parser lost root extra child writer state",
+                            )
+                        })?
+                        .write_event(Event::Text(text.into_owned()))
+                        .map_err(xml_error)?;
+                }
+            }
+            Ok(Event::Comment(comment)) => {
+                if current_root_extra_depth > 0 {
+                    current_root_extra_writer
+                        .as_mut()
+                        .ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "content types parser lost root extra child writer state",
+                            )
+                        })?
+                        .write_event(Event::Comment(comment.into_owned()))
+                        .map_err(xml_error)?;
+                }
+            }
+            Ok(Event::End(element)) => {
+                if current_root_extra_depth > 0 {
+                    current_root_extra_writer
+                        .as_mut()
+                        .ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "content types parser lost root extra child writer state",
+                            )
+                        })?
+                        .write_event(Event::End(element.into_owned()))
+                        .map_err(xml_error)?;
+                    current_root_extra_depth -= 1;
+                    if current_root_extra_depth == 0 {
+                        let bytes = current_root_extra_writer
+                            .take()
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "content types parser lost root extra child writer state",
+                                )
+                            })?
+                            .into_inner()
+                            .into_inner();
+                        root_extra_child_xmls.push(String::from_utf8(bytes).map_err(xml_error)?);
+                    }
+                    if element_depth > 0 {
+                        element_depth -= 1;
+                    }
+                    buffer.clear();
+                    continue;
+                }
+                if element_depth > 0 {
+                    element_depth -= 1;
+                }
+            }
+            Ok(Event::Eof) => break,
+            Ok(_) => {}
+            Err(error) => return Err(xml_error(error)),
+        }
+        buffer.clear();
+    }
+
+    Ok(ContentTypesPartSummary {
+        root_name: root_name.unwrap_or_default(),
+        root_attr_map,
+        root_child_names,
+        root_extra_child_xmls,
+        default_extensions,
+        default_attr_maps,
+        override_part_names,
+        override_attr_maps,
+    })
+}
+
 fn collect_workbook_support_parts(
     relationships: &[RelationshipEntry],
     package: &OpcPackage,
@@ -3294,6 +3531,10 @@ fn collect_workbook_support_parts(
     let content_types_source_bytes = package
         .part("[Content_Types].xml")
         .map(|part| part.bytes.clone());
+    let content_types_summary = content_types_source_bytes
+        .as_deref()
+        .map(parse_content_types_part_summary)
+        .transpose()?;
     let package_relationships_part_source_bytes =
         package.part("_rels/.rels").map(|part| part.bytes.clone());
     let package_relationships_summary = package_relationships_part_source_bytes
@@ -3390,6 +3631,7 @@ fn collect_workbook_support_parts(
 
     let support_parts = WorkbookSupportParts {
         content_types_source_bytes,
+        content_types_summary,
         package_relationships_part_source_bytes,
         package_relationships_summary,
         workbook_relationships_part_uri,
@@ -4836,8 +5078,10 @@ fn ensure_support_parts_present_with_options(
     support_parts: &WorkbookSupportParts,
     validate_package_source_bytes: bool,
 ) -> OmResult<()> {
-    if let Some(source_bytes) = support_parts.content_types_source_bytes.as_deref()
-        && validate_package_source_bytes
+    if let (Some(source_bytes), Some(expected_summary)) = (
+        support_parts.content_types_source_bytes.as_deref(),
+        support_parts.content_types_summary.as_ref(),
+    ) && validate_package_source_bytes
     {
         let actual_part = package.part("[Content_Types].xml").ok_or_else(|| {
             OmError::new(
@@ -4845,6 +5089,22 @@ fn ensure_support_parts_present_with_options(
                 "explicit content types part is missing: [Content_Types].xml",
             )
         })?;
+        let actual_summary = parse_content_types_part_summary(actual_part.bytes.as_slice())
+            .map_err(|error| {
+                OmError::new(
+                    error.code,
+                    format!("[Content_Types].xml: {}", error.message),
+                )
+            })?;
+        if &actual_summary != expected_summary {
+            return Err(OmError::new(
+                OmErrorCode::InvalidState,
+                format!(
+                    "explicit content types summary changed for [Content_Types].xml: expected {:?} but found {:?}",
+                    expected_summary, actual_summary
+                ),
+            ));
+        }
         if actual_part.bytes != source_bytes {
             return Err(OmError::new(
                 OmErrorCode::InvalidState,
@@ -39956,8 +40216,8 @@ mod tests {
         )
         .expect("content types utf8")
         .replace(
-            r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">"#,
-            r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types" data-preserve="changed">"#,
+            r#"<?xml version="1.0" encoding="UTF-8"?>"#,
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#,
         );
         package
             .replace_part_bytes("[Content_Types].xml", content_types.into_bytes())
@@ -39971,6 +40231,44 @@ mod tests {
             error
                 .message
                 .contains("explicit content types part bytes changed")
+        );
+        assert!(error.message.contains("[Content_Types].xml"));
+    }
+
+    #[test]
+    fn ensure_support_parts_present_rejects_content_types_summary_drift() {
+        let codec = XlsxCodec;
+        let loaded = codec
+            .load(
+                &workbook_with_styles_and_theme_bytes(),
+                CommonLoadOptions::default(),
+            )
+            .expect("load workbook");
+        let mut package = loaded.package.clone();
+        let content_types = String::from_utf8(
+            package
+                .part("[Content_Types].xml")
+                .expect("content types part")
+                .bytes
+                .clone(),
+        )
+        .expect("content types utf8")
+        .replace(
+            r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">"#,
+            r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types" data-preserve="changed">"#,
+        );
+        package
+            .replace_part_bytes("[Content_Types].xml", content_types.into_bytes())
+            .expect("replace content types");
+
+        let error = super::ensure_support_parts_present(&package, &loaded.support_parts)
+            .expect_err("ensure should fail when content types summary drifts");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(
+            error
+                .message
+                .contains("explicit content types summary changed")
         );
         assert!(error.message.contains("[Content_Types].xml"));
     }
@@ -40020,6 +40318,26 @@ mod tests {
                     .bytes
                     .as_slice()
             )
+        );
+
+        let content_types_summary = loaded
+            .support_parts
+            .content_types_summary
+            .as_ref()
+            .expect("content types summary");
+        assert_eq!(content_types_summary.root_name, "Types");
+        assert_eq!(
+            content_types_summary.default_extensions,
+            vec!["rels".to_string(), "xml".to_string()]
+        );
+        assert_eq!(
+            content_types_summary.override_part_names,
+            vec![
+                "/xl/workbook.xml".to_string(),
+                "/xl/worksheets/sheet1.xml".to_string(),
+                "/xl/styles.xml".to_string(),
+                "/xl/theme/theme1.xml".to_string()
+            ]
         );
 
         let package_summary = loaded
