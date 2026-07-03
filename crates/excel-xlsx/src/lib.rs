@@ -40274,6 +40274,103 @@ mod tests {
     }
 
     #[test]
+    fn load_collects_content_types_structural_summary() {
+        let codec = XlsxCodec;
+        let mut package = OpcPackage::from_bytes(&workbook_with_styles_and_theme_bytes())
+            .expect("base workbook package");
+        let content_types = String::from_utf8(
+            package
+                .part("[Content_Types].xml")
+                .expect("content types part")
+                .bytes
+                .clone(),
+        )
+        .expect("content types utf8")
+        .replace(
+            r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">"#,
+            r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types" data-root="keep"><ext preserve="1"/>"#,
+        )
+        .replace(
+            r#"<Default Extension="xml" ContentType="application/xml"/>"#,
+            r#"<Default Extension="xml" ContentType="application/xml" data-default="keep"/>"#,
+        )
+        .replace(
+            r#"<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>"#,
+            r#"<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml" data-style="keep"/>"#,
+        );
+        package
+            .replace_part_bytes("[Content_Types].xml", content_types.into_bytes())
+            .expect("replace content types");
+        let bytes = package.to_bytes().expect("package bytes");
+
+        let loaded = codec
+            .load(bytes.as_slice(), CommonLoadOptions::default())
+            .expect("load workbook");
+        let summary = loaded
+            .support_parts
+            .content_types_summary
+            .as_ref()
+            .expect("content types summary");
+
+        assert_eq!(summary.root_name, "Types");
+        assert_eq!(
+            summary.root_attr_map.get("data-root").map(String::as_str),
+            Some("keep")
+        );
+        assert_eq!(
+            summary.root_extra_child_xmls,
+            vec![r#"<ext preserve="1"/>"#.to_string()]
+        );
+        assert_eq!(
+            summary.root_child_names,
+            vec![
+                "ext".to_string(),
+                "Default".to_string(),
+                "Default".to_string(),
+                "Override".to_string(),
+                "Override".to_string(),
+                "Override".to_string(),
+                "Override".to_string()
+            ]
+        );
+        let xml_default_attrs = summary
+            .default_attr_maps
+            .iter()
+            .find(|attrs| attrs.get("Extension").map(String::as_str) == Some("xml"))
+            .expect("xml default attrs");
+        assert_eq!(
+            xml_default_attrs.get("data-default").map(String::as_str),
+            Some("keep")
+        );
+        let styles_override_attrs = summary
+            .override_attr_maps
+            .iter()
+            .find(|attrs| attrs.get("PartName").map(String::as_str) == Some("/xl/styles.xml"))
+            .expect("styles override attrs");
+        assert_eq!(
+            styles_override_attrs.get("data-style").map(String::as_str),
+            Some("keep")
+        );
+
+        let saved = codec
+            .save(&loaded, office_common::SaveOptions::default())
+            .expect("clean save workbook");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_content_types = String::from_utf8(
+            saved_package
+                .part("[Content_Types].xml")
+                .expect("saved content types")
+                .bytes
+                .clone(),
+        )
+        .expect("saved content types utf8");
+        assert!(saved_content_types.contains(r#"data-root="keep""#));
+        assert!(saved_content_types.contains(r#"<ext preserve="1"/>"#));
+        assert!(saved_content_types.contains(r#"data-default="keep""#));
+        assert!(saved_content_types.contains(r#"data-style="keep""#));
+    }
+
+    #[test]
     fn load_collects_package_level_raw_graph_inventory() {
         let codec = XlsxCodec;
         let input = workbook_with_styles_and_theme_bytes();
