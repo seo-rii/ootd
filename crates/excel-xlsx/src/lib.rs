@@ -30776,6 +30776,22 @@ mod tests {
             .get(&sheet_id)
             .expect("drawing support");
         assert_eq!(
+            drawing_support.sheet_part_uri.as_deref(),
+            Some("xl/worksheets/sheet1.xml")
+        );
+        assert_eq!(
+            drawing_support.sheet_part_source_bytes.as_deref(),
+            Some(sheet_xml_bytes.as_slice())
+        );
+        assert_eq!(
+            drawing_support.relationships_part_uri.as_deref(),
+            Some("xl/worksheets/_rels/sheet1.xml.rels")
+        );
+        assert_eq!(
+            drawing_support.relationships_part_source_bytes.as_deref(),
+            Some(worksheet_rels_xml.as_slice())
+        );
+        assert_eq!(
             drawing_support.chart_part_uris,
             vec!["xl/charts/chart1.xml".to_string()]
         );
