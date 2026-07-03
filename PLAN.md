@@ -4343,6 +4343,8 @@
   - 범위: embedded chart drawing rels가 chart anchor와 무관한 `TargetMode="External"` unknown relationship을 함께 가진 경우 대상 part가 없어도 missing part로 오판하지 않고 drawing rels source bytes, content type, host worksheet/rels, drawing/chart bytes를 clean save에서 그대로 보존하는지 회귀로 고정
   - `Step 6.6b2b2b2b2b2f2b2aq6 DONE` chartsheet chart drawing external unknown relationship preservation
   - 범위: chartsheet chart drawing rels가 chart anchor와 무관한 `TargetMode="External"` unknown relationship을 함께 가진 경우 대상 part가 없어도 missing part로 오판하지 않고 drawing rels source bytes, workbook rels, chartsheet/rels, content type, drawing/chart bytes를 clean save에서 그대로 보존하는지 회귀로 고정
+  - `Step 6.6b2b2b2b2b2f2b2aq7 DONE` drawing opaque relationship summary overlay
+  - 범위: drawing rels의 non-chart internal/external relationship을 `DrawingPartSummary::opaque_relationships`에 입력 순서대로 typed summary로 올리고, internal target은 package URI로 정규화하며 external target과 `TargetMode`는 그대로 보존해서 향후 dirty-save drift 감지 기반을 회귀로 고정
   - `Step 6.6b2b2b2b2b2f2b2ar DONE` embedded chart drawing image relationship preservation
   - 범위: embedded chart drawing에 chart anchor와 picture anchor가 같이 있고 drawing rels에 image relationship/media part가 공존하는 경우 chart inventory는 chart part만 typed로 수집하면서도 opaque image relationship, media bytes, content type, host worksheet/rels, drawing/chart bytes를 clean save에서 그대로 보존하는지 회귀로 고정
   - `Step 6.6b2b2b2b2b2f2b2as DONE` chartsheet drawing image relationship preservation

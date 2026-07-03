@@ -832,6 +832,15 @@ pub struct DrawingPartSummary {
     pub anchors: Vec<DrawingAnchorSummary>,
     pub chart_relationship_ids: Vec<String>,
     pub chart_relationships: Vec<WorksheetRelationshipBinding>,
+    pub opaque_relationships: Vec<DrawingOpaqueRelationshipSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DrawingOpaqueRelationshipSummary {
+    pub relationship_id: String,
+    pub relationship_type: String,
+    pub target: String,
+    pub target_mode: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3432,7 +3441,11 @@ fn collect_sheet_drawing_support_parts(
                                     .collect::<Vec<_>>()
                             })
                             .unwrap_or_default();
-                        parse_relationship_entries(part.bytes.as_slice(), &drawing_base_segments)
+                        parse_relationship_entries_with_options(
+                            part.bytes.as_slice(),
+                            &drawing_base_segments,
+                            true,
+                        )
                     })
                     .transpose()?
                     .unwrap_or_default()
@@ -20462,11 +20475,22 @@ fn parse_drawing_part_summary(
             target: relationship.target.clone(),
         });
     }
+    let opaque_relationships = relationship_entries
+        .iter()
+        .filter(|relationship| relationship.relationship_type != CHART_RELATIONSHIP_TYPE)
+        .map(|relationship| DrawingOpaqueRelationshipSummary {
+            relationship_id: relationship.id.clone(),
+            relationship_type: relationship.relationship_type.clone(),
+            target: relationship.target.clone(),
+            target_mode: relationship.target_mode.clone(),
+        })
+        .collect();
 
     Ok(DrawingPartSummary {
         anchors,
         chart_relationship_ids,
         chart_relationships,
+        opaque_relationships,
     })
 }
 
@@ -26511,12 +26535,12 @@ mod tests {
         ChartSeriesSummary, ChartSourceLiteralPointSummary, ChartSourceLiteralSummary,
         ChartSupportRelationshipBinding, ChartTickLabelPosition, ChartTickMark, ChartView3DModel,
         CommentPartSummary, DrawingAnchorKind, DrawingAnchorSummary, DrawingCellMarkerSummary,
-        DrawingPointSummary, DrawingSizeSummary, DxfSummary, FileFormat, FillSummary, FontSummary,
-        HYPERLINK_RELATIONSHIP_TYPE, OpcPackage, STYLES_RELATIONSHIP_TYPE, THEME_RELATIONSHIP_TYPE,
-        VML_DRAWING_RELATIONSHIP_TYPE, WORKBOOK_RELS_PART_NAME, WorksheetCommentSummary,
-        WorksheetData, WorksheetHyperlinkBinding, WorksheetHyperlinkSummary,
-        WorksheetRelationshipBinding, WorksheetSupportParts, XlsxCodec, chart_object_anchor_xml,
-        collect_support_part_dimension_coords, compute_dimension_ref,
+        DrawingOpaqueRelationshipSummary, DrawingPointSummary, DrawingSizeSummary, DxfSummary,
+        FileFormat, FillSummary, FontSummary, HYPERLINK_RELATIONSHIP_TYPE, OpcPackage,
+        STYLES_RELATIONSHIP_TYPE, THEME_RELATIONSHIP_TYPE, VML_DRAWING_RELATIONSHIP_TYPE,
+        WORKBOOK_RELS_PART_NAME, WorksheetCommentSummary, WorksheetData, WorksheetHyperlinkBinding,
+        WorksheetHyperlinkSummary, WorksheetRelationshipBinding, WorksheetSupportParts, XlsxCodec,
+        chart_object_anchor_xml, collect_support_part_dimension_coords, compute_dimension_ref,
         compute_dimension_ref_with_preserved, parse_shared_strings, parse_workbook,
         parse_workbook_relationships, parse_worksheet_cells, rewrite_worksheet_xml,
     };
@@ -30095,6 +30119,19 @@ mod tests {
                 .expect("drawing rels source"),
             &drawing_rels_xml
         );
+        assert_eq!(
+            drawing_support
+                .drawing_summaries
+                .get("xl/drawings/drawing1.xml")
+                .expect("drawing summary")
+                .opaque_relationships,
+            vec![DrawingOpaqueRelationshipSummary {
+                relationship_id: "rIdDrawingOpaque1".to_string(),
+                relationship_type: "https://example.com/relationships/drawingOpaque".to_string(),
+                target: "xl/opaque/drawingOpaque1.xml".to_string(),
+                target_mode: None,
+            }]
+        );
         assert_eq!(loaded.state.charts.len(), 1);
 
         let saved = codec
@@ -30298,6 +30335,19 @@ mod tests {
                 .expect("drawing rels source"),
             &drawing_rels_xml
         );
+        assert_eq!(
+            drawing_support
+                .drawing_summaries
+                .get("xl/drawings/drawing2.xml")
+                .expect("drawing summary")
+                .opaque_relationships,
+            vec![DrawingOpaqueRelationshipSummary {
+                relationship_id: "rIdDrawingOpaque2".to_string(),
+                relationship_type: "https://example.com/relationships/drawingOpaque".to_string(),
+                target: "xl/opaque/drawingOpaque2.xml".to_string(),
+                target_mode: None,
+            }]
+        );
         assert_eq!(loaded.state.charts.len(), 1);
 
         let saved = codec
@@ -30476,6 +30526,19 @@ mod tests {
                 .get("xl/drawings/_rels/drawing1.xml.rels")
                 .expect("drawing rels source"),
             &drawing_rels_xml
+        );
+        assert_eq!(
+            drawing_support
+                .drawing_summaries
+                .get("xl/drawings/drawing1.xml")
+                .expect("drawing summary")
+                .opaque_relationships,
+            vec![DrawingOpaqueRelationshipSummary {
+                relationship_id: "rIdDrawingExternal1".to_string(),
+                relationship_type: "https://example.com/relationships/drawingExternal".to_string(),
+                target: "https://example.com/drawing-meta/1".to_string(),
+                target_mode: Some("External".to_string()),
+            }]
         );
         assert_eq!(loaded.state.charts.len(), 1);
 
@@ -30656,6 +30719,19 @@ mod tests {
                 .get("xl/drawings/_rels/drawing2.xml.rels")
                 .expect("drawing rels source"),
             &drawing_rels_xml
+        );
+        assert_eq!(
+            drawing_support
+                .drawing_summaries
+                .get("xl/drawings/drawing2.xml")
+                .expect("drawing summary")
+                .opaque_relationships,
+            vec![DrawingOpaqueRelationshipSummary {
+                relationship_id: "rIdDrawingExternal2".to_string(),
+                relationship_type: "https://example.com/relationships/drawingExternal".to_string(),
+                target: "https://example.com/drawing-meta/2".to_string(),
+                target_mode: Some("External".to_string()),
+            }]
         );
         assert_eq!(loaded.state.charts.len(), 1);
 
