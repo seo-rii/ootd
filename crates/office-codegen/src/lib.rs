@@ -1448,15 +1448,25 @@ fn validate_capture_bundle_contract(
         });
     }
     for expected_output_name in &expected_output_names {
-        let relative_path = checksums
+        let matching_relative_paths = checksums
             .keys()
-            .find(|relative_path| {
+            .filter(|relative_path| {
                 relative_path
                     .rsplit(['\\', '/'])
                     .next()
                     .is_some_and(|file_name| file_name == expected_output_name)
             })
-            .expect("checksum coverage already proved expected output path");
+            .collect::<Vec<_>>();
+        if matching_relative_paths.len() != 1 {
+            return Err(CanonicalOmGenerationError::CaptureBundleContract {
+                message: format!(
+                    "output_checksums.json expected payload {expected_output_name} matched {} checksum paths {:?}, expected exactly one",
+                    matching_relative_paths.len(),
+                    matching_relative_paths
+                ),
+            });
+        }
+        let relative_path = matching_relative_paths[0];
         let artifact_path = bundle_relative_path(&bundle_paths.bundle_root_path, relative_path)
             .ok_or_else(|| CanonicalOmGenerationError::CaptureBundleContract {
                 message: format!(
