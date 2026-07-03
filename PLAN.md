@@ -4679,6 +4679,8 @@
   - 범위: Windows capture runner 문서가 modern receipt의 completed status requirement, command/manual result name coverage, 조건부 fallback command optional 정책, 실패 시 manifest/checksum 미생성 contract를 현재 구현과 맞게 설명하도록 갱신
   - `Step 7.17 DONE` codegen capture manifest contract validation
   - 범위: `office-codegen` capture bundle loader가 completed `capture_manifest.json`과 `output_checksums.json`이 있으면 expected payload, writable output basename, checksum coverage contract를 검증해 incomplete oracle capture bundle이 canonical `office-idl` 생성 입력으로 승격되지 않도록 고정
+  - `Step 7.18 DONE` codegen embedded receipt contract validation
+  - 범위: `office-codegen` capture bundle loader가 completed manifest의 embedded `executionReceipt`를 재검증해 expected payload mismatch, unknown/missing result name, pending/failed command/manual status가 canonical `office-idl` 생성 입력으로 통과하지 않도록 고정
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.

@@ -1445,7 +1445,137 @@ fn validate_capture_bundle_contract(
         });
     }
 
+    if let Some(receipt) = manifest
+        .get("executionReceipt")
+        .and_then(|value| value.as_object())
+    {
+        if let Some(receipt_expected_outputs) = receipt
+            .get("expectedCaptureOutputs")
+            .filter(|value| !value.is_null())
+        {
+            let receipt_expected_output_names = receipt_expected_outputs
+                .as_array()
+                .ok_or_else(|| CanonicalOmGenerationError::CaptureBundleContract {
+                    message:
+                        "capture_manifest.json executionReceipt.expectedCaptureOutputs was not an array"
+                            .to_string(),
+                })?
+                .iter()
+                .map(|value| {
+                    value.as_str().map(str::to_string).ok_or_else(|| {
+                        CanonicalOmGenerationError::CaptureBundleContract {
+                            message: "capture_manifest.json executionReceipt.expectedCaptureOutputs contains non-string entry".to_string(),
+                        }
+                    })
+                })
+                .collect::<Result<BTreeSet<_>, _>>()?;
+            if receipt_expected_output_names != expected_output_names {
+                return Err(CanonicalOmGenerationError::CaptureBundleContract {
+                    message: format!(
+                        "capture_manifest.json executionReceipt expected outputs {:?} did not match manifest {:?}",
+                        receipt_expected_output_names, expected_output_names
+                    ),
+                });
+            }
+
+            let command_results = receipt
+                .get("commandResults")
+                .and_then(|value| value.as_array())
+                .ok_or_else(|| CanonicalOmGenerationError::CaptureBundleContract {
+                    message: "capture_manifest.json executionReceipt missing commandResults array"
+                        .to_string(),
+                })?;
+            let command_names = validate_receipt_results(
+                "commandResults",
+                command_results,
+                &["tlbimp_fallback", "powershell_capture_reflection"],
+            )?;
+            if !command_names.contains("powershell_capture_reflection") {
+                return Err(CanonicalOmGenerationError::CaptureBundleContract {
+                    message:
+                        "capture_manifest.json executionReceipt commandResults missing powershell_capture_reflection"
+                            .to_string(),
+                });
+            }
+
+            let manual_step_results = receipt
+                .get("manualStepResults")
+                .and_then(|value| value.as_array())
+                .ok_or_else(|| CanonicalOmGenerationError::CaptureBundleContract {
+                    message:
+                        "capture_manifest.json executionReceipt missing manualStepResults array"
+                            .to_string(),
+                })?;
+            let manual_step_names = validate_receipt_results(
+                "manualStepResults",
+                manual_step_results,
+                &["oleview_snapshot_export"],
+            )?;
+            let expected_manual_step_names = ["oleview_snapshot_export".to_string()]
+                .into_iter()
+                .collect::<BTreeSet<_>>();
+            if manual_step_names != expected_manual_step_names {
+                return Err(CanonicalOmGenerationError::CaptureBundleContract {
+                    message: format!(
+                        "capture_manifest.json executionReceipt manualStepResults {:?} did not match expected oleview snapshot export",
+                        manual_step_names
+                    ),
+                });
+            }
+        }
+    }
+
     Ok(())
+}
+
+fn validate_receipt_results(
+    section: &'static str,
+    results: &[serde_json::Value],
+    known_names: &[&str],
+) -> Result<BTreeSet<String>, CanonicalOmGenerationError> {
+    let known_names = known_names.iter().copied().collect::<BTreeSet<_>>();
+    let mut result_names = BTreeSet::new();
+    for result in results {
+        let result = result.as_object().ok_or_else(|| {
+            CanonicalOmGenerationError::CaptureBundleContract {
+                message: format!(
+                    "capture_manifest.json executionReceipt.{section} contains non-object entry"
+                ),
+            }
+        })?;
+        let name = result
+            .get("name")
+            .and_then(|value| value.as_str())
+            .ok_or_else(|| CanonicalOmGenerationError::CaptureBundleContract {
+                message: format!(
+                    "capture_manifest.json executionReceipt.{section} entry missing string name"
+                ),
+            })?;
+        if !known_names.contains(name) {
+            return Err(CanonicalOmGenerationError::CaptureBundleContract {
+                message: format!(
+                    "capture_manifest.json executionReceipt.{section} contained unknown result {name}"
+                ),
+            });
+        }
+        let status = result
+            .get("status")
+            .and_then(|value| value.as_str())
+            .ok_or_else(|| CanonicalOmGenerationError::CaptureBundleContract {
+                message: format!(
+                    "capture_manifest.json executionReceipt.{section}.{name} missing string status"
+                ),
+            })?;
+        if status != "completed" {
+            return Err(CanonicalOmGenerationError::CaptureBundleContract {
+                message: format!(
+                    "capture_manifest.json executionReceipt.{section}.{name} was {status}, not completed"
+                ),
+            });
+        }
+        result_names.insert(name.to_string());
+    }
+    Ok(result_names)
 }
 
 fn load_pia_public_surface_capture(

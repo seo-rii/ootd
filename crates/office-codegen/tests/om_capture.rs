@@ -1592,6 +1592,90 @@ fn normalize_capture_bundle_from_dir_validates_manifest_checksum_contract() {
 }
 
 #[test]
+fn normalize_capture_bundle_from_dir_validates_embedded_receipt_contract() {
+    let unique_suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time")
+        .as_nanos();
+    let bundle_root = std::env::temp_dir().join(format!("ootd-step3-receipt-{unique_suffix}"));
+    let raw_dir = bundle_root.join("raw");
+    let snapshots_dir = bundle_root.join("snapshots");
+    let manifest_dir = bundle_root.join("manifest");
+
+    fs::create_dir_all(&raw_dir).expect("raw dir");
+    fs::create_dir_all(&snapshots_dir).expect("snapshots dir");
+    fs::create_dir_all(&manifest_dir).expect("manifest dir");
+    fs::write(
+        raw_dir.join("raw_typelib_identity.json"),
+        fs::read_to_string(repo_root().join("specs/pinned/raw_typelib_identity.template.json"))
+            .expect("typelib template"),
+    )
+    .expect("write typelib");
+    fs::write(
+        snapshots_dir.join("excel_pia_public_surface.json"),
+        fs::read_to_string(repo_root().join("specs/pinned/excel_pia_public_surface.template.json"))
+            .expect("pia template"),
+    )
+    .expect("write pia surface");
+    fs::write(
+        manifest_dir.join("capture_manifest.json"),
+        r#"{
+  "expectedCaptureOutputs": [
+    "raw_typelib_identity.json",
+    "excel_typelib_snapshot.idl",
+    "excel_typelib_snapshot.odl",
+    "excel_pia_identity.json",
+    "excel_pia_public_surface.json"
+  ],
+  "writableOutputs": {
+    "raw_typelib_identity": "C:\\capture\\raw\\raw_typelib_identity.json",
+    "excel_typelib_snapshot_idl": "C:\\capture\\snapshots\\excel_typelib_snapshot.idl",
+    "excel_typelib_snapshot_odl": "C:\\capture\\snapshots\\excel_typelib_snapshot.odl",
+    "excel_pia_identity": "C:\\capture\\raw\\excel_pia_identity.json",
+    "excel_pia_public_surface": "C:\\capture\\snapshots\\excel_pia_public_surface.json"
+  },
+  "executionReceipt": {
+    "expectedCaptureOutputs": [
+      "raw_typelib_identity.json",
+      "excel_typelib_snapshot.idl",
+      "excel_typelib_snapshot.odl",
+      "excel_pia_identity.json",
+      "excel_pia_public_surface.json"
+    ],
+    "commandResults": [
+      { "name": "powershell_capture_reflection", "status": "completed" }
+    ],
+    "manualStepResults": [
+      { "name": "oleview_snapshot_export", "status": "pending" }
+    ]
+  }
+}"#,
+    )
+    .expect("write manifest");
+    fs::write(
+        manifest_dir.join("output_checksums.json"),
+        r#"{
+  "raw/raw_typelib_identity.json": "sha",
+  "snapshots/excel_typelib_snapshot.idl": "sha",
+  "snapshots/excel_typelib_snapshot.odl": "sha",
+  "raw/excel_pia_identity.json": "sha",
+  "snapshots/excel_pia_public_surface.json": "sha"
+}"#,
+    )
+    .expect("write checksums");
+
+    let error = normalize_capture_bundle_from_dir(&bundle_root)
+        .expect_err("pending embedded receipt should fail");
+    match error {
+        CanonicalOmGenerationError::CaptureBundleContract { message } => {
+            assert!(message.contains("manualStepResults.oleview_snapshot_export"));
+            assert!(message.contains("not completed"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
 fn writes_canonical_office_idl_json_from_bundle_inputs() {
     let unique_suffix = SystemTime::now()
         .duration_since(UNIX_EPOCH)
