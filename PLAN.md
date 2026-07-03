@@ -4355,6 +4355,8 @@
   - 범위: chartsheet chart가 drawing rels로 chart part에 연결되어 있지만 `xl/charts/_rels/chartN.xml.rels`가 원본 package에 없는 경우 chart relationship inventory가 빈 상태로 유지되고 clean save가 chart rels part를 새로 만들지 않으며 chart sheet host, workbook rels, content type, drawing/chart bytes를 그대로 보존하는지 회귀로 고정
   - `Step 6.6b2b2b2b2b2f2b2bb DONE` embedded chart empty chart rels preservation
   - 범위: embedded chart가 빈 `xl/charts/_rels/chartN.xml.rels` part를 실제로 가진 경우 missing rels와 구분해 chart relationship inventory에 rels part uri/source bytes를 보존하고 clean save에서도 빈 chart rels part, content type, host worksheet/rels, drawing/chart bytes를 그대로 유지하는지 회귀로 고정
+  - `Step 6.6b2b2b2b2b2f2b2bc DONE` chartsheet chart empty chart rels preservation
+  - 범위: chartsheet chart가 빈 `xl/charts/_rels/chartN.xml.rels` part를 실제로 가진 경우 missing rels와 구분해 chart relationship inventory에 rels part uri/source bytes를 보존하고 clean save에서도 빈 chart rels part, chart sheet host, workbook rels, content type, drawing/chart bytes를 그대로 유지하는지 회귀로 고정
 - 목표
   - 현재 core worksheet rewrite 이후 남아 있는 fidelity gap을 좁힌다.
   - style/theme/merge/comment/hyperlink/formula cached-value 계열 보존을 순차적으로 올린다.
