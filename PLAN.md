@@ -4240,6 +4240,8 @@
   - 범위: `clrScheme` nested color child 중 `<a:srgbClr>` leaf의 name drift 및 제거 회귀를 추가해서 기존 `<a:sysClr>` 중심 name/set drift와 대칭적으로 color nested child drift가 fail-fast 되는지 고정
   - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1914 DONE` theme clrScheme first direct child name/set reject parity
   - 범위: `clrScheme` direct child 중 첫 `<a:dk1>`의 name drift 및 제거 회귀를 추가해서 trailing `<a:folHlink>` 중심 name/set drift와 대칭적으로 direct child drift가 fail-fast 되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1915 DONE` theme clrScheme second direct child name/set reject parity
+  - 범위: `clrScheme` direct child 중 두 번째 `<a:lt1>`의 name drift 및 제거 회귀를 추가해서 `<a:dk1>`/`<a:folHlink>` 중심 name/set drift와 대칭적으로 direct child drift가 fail-fast 되는지 고정
   - `Step 6.6a DONE` worksheet hyperlink-ref integrity regression
   - 범위: worksheet support가 추적한 hyperlink `ref` 목록을 load assertion과 dirty save 회귀로 고정하고, hyperlink `ref` drift/삭제를 fail-fast로 막음
   - `Step 6.6b1 DONE` worksheet-local relationship binding integrity
