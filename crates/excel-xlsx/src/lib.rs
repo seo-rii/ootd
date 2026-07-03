@@ -41150,6 +41150,33 @@ mod tests {
     }
 
     #[test]
+    fn clean_save_preserves_all_package_part_bytes() {
+        let codec = XlsxCodec;
+        let input = workbook_with_styles_and_theme_bytes();
+        let original_package = OpcPackage::from_bytes(&input).expect("original package");
+
+        let loaded = codec
+            .load(input.as_slice(), CommonLoadOptions::default())
+            .expect("load workbook");
+        let saved = codec
+            .save(&loaded, office_common::SaveOptions::default())
+            .expect("clean save workbook");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+
+        for original_part in original_package.parts() {
+            assert_eq!(
+                saved_package
+                    .part(original_part.name.as_str())
+                    .expect("saved part")
+                    .bytes,
+                original_part.bytes,
+                "{} should be byte-preserved on clean save",
+                original_part.name
+            );
+        }
+    }
+
+    #[test]
     fn ensure_support_parts_present_rejects_missing_content_types_part() {
         let codec = XlsxCodec;
         let loaded = codec
