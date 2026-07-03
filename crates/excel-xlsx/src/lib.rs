@@ -27421,6 +27421,7 @@ mod tests {
                 r#"<Override PartName="/xl/charts/chart2.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/>"#,
                 r#"<Override PartName="/xl/charts/style2.xml" ContentType="application/vnd.ms-office.chartstyle+xml"/>"#,
                 r#"<Override PartName="/xl/charts/colors2.xml" ContentType="application/vnd.ms-office.chartcolorstyle+xml"/>"#,
+                r#"<Override PartName="/customXml/chartInventoryOpaque2.xml" ContentType="application/xml"/>"#,
                 "</Types>"
             ),
         );
@@ -27517,6 +27518,7 @@ mod tests {
         let chart_rels_xml = br#"<?xml version="1.0" encoding="UTF-8"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rIdStyle2" Type="http://schemas.microsoft.com/office/2011/relationships/chartStyle" Target="style2.xml"/>
+  <Relationship Id="rIdChartInventoryOpaque2" Type="https://example.com/relationships/chartInventoryOpaque" Target="../../customXml/chartInventoryOpaque2.xml" data-opaque="1"/>
   <Relationship Id="rIdColors2" Type="http://schemas.microsoft.com/office/2011/relationships/chartColorStyle" Target="colors2.xml"/>
 </Relationships>"#
             .to_vec();
@@ -27534,6 +27536,9 @@ mod tests {
         let chart_colors_xml = br#"<?xml version="1.0" encoding="UTF-8"?>
 <cs:colorStyle xmlns:cs="http://schemas.microsoft.com/office/drawing/2012/chartStyle" id="202"/>"#
             .to_vec();
+        let chart_inventory_opaque_xml =
+            br#"<?xml version="1.0" encoding="UTF-8"?><chartInventoryOpaque preserve="1"/>"#
+                .to_vec();
         package
             .add_part(OpcPart {
                 name: "xl/charts/style2.xml".to_string(),
@@ -27550,6 +27555,14 @@ mod tests {
                 bytes: chart_colors_xml.clone(),
             })
             .expect("add chart colors");
+        package
+            .add_part(OpcPart {
+                name: "customXml/chartInventoryOpaque2.xml".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: chart_inventory_opaque_xml.clone(),
+            })
+            .expect("add chart inventory opaque part");
         let bytes = package.to_bytes().expect("package bytes");
 
         let loaded = codec
@@ -27658,6 +27671,16 @@ mod tests {
                     target: "xl/charts/colors2.xml".to_string(),
                 },
             ]
+        );
+        assert_eq!(
+            chart_summary.opaque_relationships,
+            vec![ChartOpaqueRelationshipSummary {
+                relationship_id: "rIdChartInventoryOpaque2".to_string(),
+                relationship_type: "https://example.com/relationships/chartInventoryOpaque"
+                    .to_string(),
+                target: "customXml/chartInventoryOpaque2.xml".to_string(),
+                target_mode: None,
+            }]
         );
         assert_eq!(
             drawing_support.chart_relationships_part_uris,
@@ -27824,6 +27847,13 @@ mod tests {
                 .expect("saved chartsheet chart colors")
                 .bytes,
             chart_colors_xml
+        );
+        assert_eq!(
+            saved_package
+                .part("customXml/chartInventoryOpaque2.xml")
+                .expect("saved chart inventory opaque part")
+                .bytes,
+            chart_inventory_opaque_xml
         );
     }
 
