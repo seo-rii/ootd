@@ -4659,6 +4659,8 @@
   - 범위: `output_checksums.json`의 relative output path set이 manifest의 `expectedCaptureOutputs` payload 파일명 전체를 덮는지 회귀로 고정
   - `Step 7.7 DONE` completion receipt expected output validation
   - 범위: execution receipt가 `expectedCaptureOutputs`를 명시한 경우 completion 단계에서 plan의 Windows capture payload contract와 정확히 일치하지 않으면 명시적으로 실패하도록 고정
+  - `Step 7.8 DONE` legacy execution receipt compatibility
+  - 범위: `expectedCaptureOutputs`가 없는 기존 execution receipt JSON도 completion에서 계속 허용하되, manifest-level expected output contract는 plan 기준으로 기록되는지 회귀로 고정
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.

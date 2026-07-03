@@ -2857,6 +2857,81 @@ mod tests {
     }
 
     #[test]
+    fn completion_accepts_legacy_receipt_without_expected_outputs() {
+        let plan = CapturePlan::from_toml_str(resolved_template()).expect("plan");
+        let tempdir = TempDir::new().expect("tempdir");
+        plan.materialize_execution_bundle(tempdir.path())
+            .expect("materialize execution bundle");
+
+        fs::write(tempdir.path().join("logs/capture.log"), "capture log").expect("capture log");
+        fs::write(
+            tempdir.path().join("raw/raw_typelib_identity.json"),
+            r#"{"library":"Excel"}"#,
+        )
+        .expect("raw typelib identity");
+        fs::write(
+            tempdir.path().join("snapshots/excel_typelib_snapshot.idl"),
+            "library Excel {}",
+        )
+        .expect("snapshot idl");
+        fs::write(
+            tempdir.path().join("snapshots/excel_typelib_snapshot.odl"),
+            "odl Excel {}",
+        )
+        .expect("snapshot odl");
+        fs::write(
+            tempdir.path().join("raw/excel_pia_identity.json"),
+            r#"{"assembly":"Microsoft.Office.Interop.Excel"}"#,
+        )
+        .expect("pia identity");
+        fs::write(
+            tempdir
+                .path()
+                .join("snapshots/excel_pia_public_surface.json"),
+            r#"{"library":"Excel","interfaces":[]}"#,
+        )
+        .expect("pia public surface");
+        fs::write(
+            tempdir.path().join("manifest/execution_receipt.json"),
+            r#"{
+  "host": { "computerName": "WIN-EXCEL" },
+  "commandResults": [
+    { "name": "powershell_capture_reflection", "status": "completed" }
+  ],
+  "manualStepResults": [
+    { "name": "oleview_snapshot_export", "status": "completed" }
+  ]
+}"#,
+        )
+        .expect("legacy execution receipt");
+
+        let result = plan
+            .complete_execution_bundle(tempdir.path())
+            .expect("legacy receipt should complete");
+
+        assert_eq!(result.write_result.checksums.len(), 6);
+        let manifest: serde_json::Value = serde_json::from_slice(
+            &fs::read(tempdir.path().join("manifest/capture_manifest.json"))
+                .expect("manifest file"),
+        )
+        .expect("manifest json");
+        assert_eq!(
+            manifest["executionReceipt"]["expectedCaptureOutputs"],
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            manifest["expectedCaptureOutputs"],
+            serde_json::json!([
+                "raw_typelib_identity.json",
+                "excel_typelib_snapshot.idl",
+                "excel_typelib_snapshot.odl",
+                "excel_pia_identity.json",
+                "excel_pia_public_surface.json"
+            ])
+        );
+    }
+
+    #[test]
     fn completion_requires_materialized_capture_log_artifact() {
         let plan = CapturePlan::from_toml_str(resolved_template()).expect("plan");
         let tempdir = TempDir::new().expect("tempdir");
