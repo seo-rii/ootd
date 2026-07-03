@@ -30555,6 +30555,170 @@ mod tests {
     }
 
     #[test]
+    fn clean_save_preserves_embedded_chart_without_chart_relationship_part() {
+        let codec = XlsxCodec;
+        let mut package = OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("package");
+        let content_types_xml = std::str::from_utf8(
+            package
+                .part("[Content_Types].xml")
+                .expect("content types")
+                .bytes
+                .as_slice(),
+        )
+        .expect("content types utf8")
+        .replace(
+            "</Types>",
+            concat!(
+                r#"<Override PartName="/xl/drawings/drawing1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/>"#,
+                r#"<Override PartName="/xl/charts/chart1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/>"#,
+                "</Types>"
+            ),
+        );
+        let content_types_xml_bytes = content_types_xml.into_bytes();
+        package
+            .replace_part_bytes("[Content_Types].xml", content_types_xml_bytes.clone())
+            .expect("replace content types");
+        let sheet_xml = String::from_utf8(
+            package
+                .part("xl/worksheets/sheet1.xml")
+                .expect("sheet part")
+                .bytes
+                .clone(),
+        )
+        .expect("sheet xml utf8")
+        .replace(
+            "</worksheet>",
+            r#"<drawing r:id="rIdChartDrawing"/></worksheet>"#,
+        );
+        let sheet_xml_bytes = sheet_xml.into_bytes();
+        package
+            .replace_part_bytes("xl/worksheets/sheet1.xml", sheet_xml_bytes.clone())
+            .expect("replace sheet xml");
+        let worksheet_rels_xml = br#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rIdChartDrawing" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/>
+</Relationships>"#
+            .to_vec();
+        package
+            .add_part(OpcPart {
+                name: "xl/worksheets/_rels/sheet1.xml.rels".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: worksheet_rels_xml.clone(),
+            })
+            .expect("add worksheet rels");
+        let drawing_xml = br#"<?xml version="1.0" encoding="UTF-8"?>
+<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <xdr:twoCellAnchor>
+    <xdr:from><xdr:col>0</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>0</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>
+    <xdr:to><xdr:col>4</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>8</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>
+    <xdr:graphicFrame><xdr:nvGraphicFramePr><xdr:cNvPr id="2" name="Chart 1"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr><xdr:xfrm/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart r:id="rIdChart1"/></a:graphicData></a:graphic></xdr:graphicFrame>
+    <xdr:clientData/>
+  </xdr:twoCellAnchor>
+</xdr:wsDr>"#
+            .to_vec();
+        package
+            .add_part(OpcPart {
+                name: "xl/drawings/drawing1.xml".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: drawing_xml.clone(),
+            })
+            .expect("add drawing");
+        let drawing_rels_xml = br#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rIdChart1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart1.xml"/>
+</Relationships>"#
+            .to_vec();
+        package
+            .add_part(OpcPart {
+                name: "xl/drawings/_rels/drawing1.xml.rels".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: drawing_rels_xml.clone(),
+            })
+            .expect("add drawing rels");
+        let chart_xml = br#"<?xml version="1.0" encoding="UTF-8"?>
+<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart">
+  <c:chart><c:plotArea><c:barChart><c:ser><c:idx val="0"/><c:order val="0"/><c:val><c:numRef><c:f>Sheet1!$A$1:$A$1</c:f></c:numRef></c:val></c:ser></c:barChart></c:plotArea></c:chart>
+</c:chartSpace>"#
+            .to_vec();
+        package
+            .add_part(OpcPart {
+                name: "xl/charts/chart1.xml".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: chart_xml.clone(),
+            })
+            .expect("add chart");
+        let bytes = package.to_bytes().expect("package bytes");
+
+        let loaded = codec
+            .load(bytes.as_slice(), CommonLoadOptions::default())
+            .expect("load workbook with chart without chart rels");
+        let sheet_id = loaded.state.worksheets[0].id;
+        let drawing_support = loaded
+            .sheet_drawing_support_parts
+            .get(&sheet_id)
+            .expect("drawing support");
+        assert!(drawing_support.chart_relationships_part_uris.is_empty());
+        assert!(
+            drawing_support
+                .chart_relationships_part_source_bytes
+                .is_empty()
+        );
+        assert_eq!(loaded.state.charts.len(), 1);
+
+        let saved = codec
+            .save(&loaded, office_common::SaveOptions::default())
+            .expect("clean save");
+        let saved_package = OpcPackage::from_bytes(saved.as_slice()).expect("saved package");
+        assert_eq!(
+            saved_package
+                .part("[Content_Types].xml")
+                .expect("saved content types")
+                .bytes,
+            content_types_xml_bytes
+        );
+        assert_eq!(
+            saved_package
+                .part("xl/worksheets/sheet1.xml")
+                .expect("saved worksheet")
+                .bytes,
+            sheet_xml_bytes
+        );
+        assert_eq!(
+            saved_package
+                .part("xl/worksheets/_rels/sheet1.xml.rels")
+                .expect("saved worksheet rels")
+                .bytes,
+            worksheet_rels_xml
+        );
+        assert_eq!(
+            saved_package
+                .part("xl/drawings/drawing1.xml")
+                .expect("saved drawing")
+                .bytes,
+            drawing_xml
+        );
+        assert_eq!(
+            saved_package
+                .part("xl/drawings/_rels/drawing1.xml.rels")
+                .expect("saved drawing rels")
+                .bytes,
+            drawing_rels_xml
+        );
+        assert_eq!(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart")
+                .bytes,
+            chart_xml
+        );
+        assert!(!saved_package.contains("xl/charts/_rels/chart1.xml.rels"));
+    }
+
+    #[test]
     fn parse_chart_part_summary_maps_series_to_secondary_axis_group() {
         let chart_xml = br#"<?xml version="1.0" encoding="UTF-8"?>
 <c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart">

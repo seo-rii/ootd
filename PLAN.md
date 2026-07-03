@@ -4349,6 +4349,8 @@
   - 범위: embedded chart XML의 `c:externalData r:id`가 chart rels에서 `TargetMode="External"` externalLink relationship을 직접 가리키는 경우 대상 part가 없어도 missing part로 오판하지 않고 chart rels source bytes, content type, host worksheet/rels, drawing/chart bytes를 clean save에서 그대로 보존하는지 회귀로 고정
   - `Step 6.6b2b2b2b2b2f2b2ay DONE` chartsheet chart external TargetMode relationship preservation
   - 범위: chartsheet chart XML의 `c:externalData r:id`가 chart rels에서 `TargetMode="External"` externalLink relationship을 직접 가리키는 경우 대상 part가 없어도 missing part로 오판하지 않고 chart sheet host, workbook rels, chart rels source bytes, content type, drawing/chart bytes를 clean save에서 그대로 보존하는지 회귀로 고정
+  - `Step 6.6b2b2b2b2b2f2b2az DONE` embedded chart missing chart rels preservation
+  - 범위: embedded chart가 drawing rels로 chart part에 연결되어 있지만 `xl/charts/_rels/chartN.xml.rels`가 원본 package에 없는 경우 chart relationship inventory가 빈 상태로 유지되고 clean save가 chart rels part를 새로 만들지 않으며 content type, host worksheet/rels, drawing/chart bytes를 그대로 보존하는지 회귀로 고정
 - 목표
   - 현재 core worksheet rewrite 이후 남아 있는 fidelity gap을 좁힌다.
   - style/theme/merge/comment/hyperlink/formula cached-value 계열 보존을 순차적으로 올린다.
