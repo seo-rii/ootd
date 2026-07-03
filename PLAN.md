@@ -4333,6 +4333,8 @@
   - 범위: embedded chart drawing inventory clean-save 회귀에서 drawing/chart/chartStyle/chartColorStyle content type override를 포함한 `[Content_Types].xml`이 저장 후에도 원본 bytes와 정확히 일치하는지 검증해서 embedded chart raw graph의 package-level content type table 보존을 byte-level 회귀로 고정
   - `Step 6.6b2b2b2b2b2f2b2aq DONE` embedded chart drawing raw shape object preservation
   - 범위: embedded chart drawing에 chart anchor와 non-chart shape anchor가 같이 있는 경우 drawing inventory가 chart는 `ChartFrame`, shape는 `UnsupportedRaw`로 유지하고, clean save 후 `xl/drawings/drawingN.xml`/drawing rels/chart part bytes가 그대로 보존되는지 회귀로 고정
+  - `Step 6.6b2b2b2b2b2f2b2aq2 DONE` chartsheet chart drawing raw shape object preservation
+  - 범위: chartsheet drawing에 chart anchor와 non-chart shape anchor가 같이 있는 경우 chart sheet host에서 drawing inventory가 chart는 `ChartFrame`, shape는 `UnsupportedRaw`로 유지하고, clean save 후 workbook rels/chartsheet/drawing/drawing rels/chart/content type bytes가 그대로 보존되는지 회귀로 고정
   - `Step 6.6b2b2b2b2b2f2b2ar DONE` embedded chart drawing image relationship preservation
   - 범위: embedded chart drawing에 chart anchor와 picture anchor가 같이 있고 drawing rels에 image relationship/media part가 공존하는 경우 chart inventory는 chart part만 typed로 수집하면서도 opaque image relationship, media bytes, content type, host worksheet/rels, drawing/chart bytes를 clean save에서 그대로 보존하는지 회귀로 고정
   - `Step 6.6b2b2b2b2b2f2b2as DONE` chartsheet drawing image relationship preservation
