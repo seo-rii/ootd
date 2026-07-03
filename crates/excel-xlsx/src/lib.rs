@@ -30782,6 +30782,58 @@ mod tests {
             "{error}"
         );
 
+        let mut drawing_rels_changed_loaded = loaded.clone();
+        drawing_rels_changed_loaded
+            .package
+            .replace_part_bytes(
+                "xl/drawings/_rels/drawing1.xml.rels",
+                br#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships
+  xmlns="http://schemas.openxmlformats.org/package/2006/relationships" data-root="drawing">
+  <Relationship Id="rIdDrawingOpaque1" Type="https://example.com/relationships/drawingOpaque" Target="../opaque/drawingOpaque1.xml" data-opaque="1" />
+  <Relationship Id="rIdChart1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart1.xml" />
+</Relationships>"#
+                    .to_vec(),
+            )
+            .expect("replace drawing rels part");
+        let error = codec
+            .save(
+                &drawing_rels_changed_loaded,
+                office_common::SaveOptions::default(),
+            )
+            .expect_err("save should reject changed drawing rels part");
+        assert!(
+            error.to_string().contains(
+                "explicit drawing relationships part bytes changed: xl/drawings/_rels/drawing1.xml.rels"
+            ),
+            "{error}"
+        );
+
+        let mut drawing_rels_missing_loaded = loaded.clone();
+        drawing_rels_missing_loaded
+            .sheet_drawing_support_parts
+            .get_mut(&sheet_id)
+            .expect("drawing support")
+            .drawing_summaries
+            .remove("xl/drawings/drawing1.xml");
+        assert!(
+            drawing_rels_missing_loaded
+                .package
+                .remove_part("xl/drawings/_rels/drawing1.xml.rels")
+        );
+        let error = codec
+            .save(
+                &drawing_rels_missing_loaded,
+                office_common::SaveOptions::default(),
+            )
+            .expect_err("save should reject missing drawing rels part");
+        assert!(
+            error.to_string().contains(
+                "explicit drawing relationships part is missing: xl/drawings/_rels/drawing1.xml.rels"
+            ),
+            "{error}"
+        );
+
         let mut changed_loaded = loaded.clone();
         changed_loaded
             .package
