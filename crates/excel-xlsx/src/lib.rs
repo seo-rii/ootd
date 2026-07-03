@@ -40762,6 +40762,59 @@ mod tests {
     }
 
     #[test]
+    fn ensure_support_parts_present_rejects_package_relationships_inner_xml_drift() {
+        let codec = XlsxCodec;
+        let mut package = OpcPackage::from_bytes(&workbook_with_styles_and_theme_bytes())
+            .expect("base workbook package");
+        let package_rels = String::from_utf8(
+            package
+                .part("_rels/.rels")
+                .expect("package rels part")
+                .bytes
+                .clone(),
+        )
+        .expect("package rels utf8")
+        .replace(
+            r#"<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>"#,
+            r#"<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"><ext preserve="original"/></Relationship>"#,
+        );
+        package
+            .replace_part_bytes("_rels/.rels", package_rels.into_bytes())
+            .expect("replace package rels");
+        let bytes = package.to_bytes().expect("package bytes");
+        let loaded = codec
+            .load(bytes.as_slice(), CommonLoadOptions::default())
+            .expect("load workbook");
+        let mut package = loaded.package.clone();
+        let package_rels = String::from_utf8(
+            package
+                .part("_rels/.rels")
+                .expect("package rels part")
+                .bytes
+                .clone(),
+        )
+        .expect("package rels utf8")
+        .replace(
+            r#"<ext preserve="original"/>"#,
+            r#"<ext preserve="changed"/>"#,
+        );
+        package
+            .replace_part_bytes("_rels/.rels", package_rels.into_bytes())
+            .expect("replace package rels");
+
+        let error = super::ensure_support_parts_present(&package, &loaded.support_parts)
+            .expect_err("ensure should fail when package rels inner XML drifts");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(
+            error
+                .message
+                .contains("explicit package relationships summary changed")
+        );
+        assert!(error.message.contains("_rels/.rels"));
+    }
+
+    #[test]
     fn load_collects_package_external_relationships_structural_summary() {
         let codec = XlsxCodec;
         let mut package = OpcPackage::from_bytes(&workbook_with_styles_and_theme_bytes())
