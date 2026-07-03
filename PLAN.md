@@ -4254,6 +4254,8 @@
   - 범위: `clrScheme` direct child 중 `<a:accent5>`와 `<a:accent6>`의 name drift 및 제거 회귀를 함께 추가해서 accent child sequence의 남은 trailing sibling drift도 fail-fast 되는지 고정
   - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1921 DONE` theme clrScheme hlink direct child name/set reject parity
   - 범위: `clrScheme` direct child 중 `<a:hlink>`의 name drift 및 제거 회귀를 추가해서 기존 `<a:folHlink>` 중심 hyperlink child drift와 대칭적으로 fail-fast 되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1922 DONE` theme fontScheme first direct child name/set reject parity
+  - 범위: `fontScheme` direct child 중 `<a:majorFont>`의 name drift 및 제거 회귀를 추가해서 기존 `<a:minorFont>` 중심 direct child drift와 대칭적으로 fail-fast 되는지 고정
   - `Step 6.6a DONE` worksheet hyperlink-ref integrity regression
   - 범위: worksheet support가 추적한 hyperlink `ref` 목록을 load assertion과 dirty save 회귀로 고정하고, hyperlink `ref` drift/삭제를 fail-fast로 막음
   - `Step 6.6b1 DONE` worksheet-local relationship binding integrity
