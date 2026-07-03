@@ -108687,6 +108687,60 @@ mod tests {
     }
 
     #[test]
+    fn save_rejects_theme_part_when_font_scheme_child_extra_attr_is_removed() {
+        let codec = XlsxCodec;
+        let mut package = OpcPackage::from_bytes(&workbook_with_theme_font_scheme_children_bytes())
+            .expect("base workbook package");
+        let theme_xml = String::from_utf8(
+            package
+                .part("xl/theme/theme1.xml")
+                .expect("theme part")
+                .bytes
+                .clone(),
+        )
+        .expect("theme xml utf8")
+        .replace("<a:majorFont/>", r#"<a:majorFont custom="major"/>"#);
+        package
+            .replace_part_bytes("xl/theme/theme1.xml", theme_xml.into_bytes())
+            .expect("replace theme part");
+        let mut loaded = codec
+            .load(
+                &package.to_bytes().expect("package bytes"),
+                CommonLoadOptions::default(),
+            )
+            .expect("load workbook");
+        let sheet_id = loaded.state.worksheets[0].id;
+        let theme_xml = String::from_utf8(
+            loaded
+                .package
+                .part("xl/theme/theme1.xml")
+                .expect("theme part")
+                .bytes
+                .clone(),
+        )
+        .expect("theme xml utf8")
+        .replace(r#" custom="major""#, "");
+        loaded
+            .package
+            .replace_part_bytes("xl/theme/theme1.xml", theme_xml.into_bytes())
+            .expect("replace theme part");
+        loaded
+            .state
+            .set_range_values(
+                &office_common::RangeRef::single_cell(WorkbookId(0), sheet_id, 1, 1),
+                &office_common::OmArray::scalar(office_common::OmValue::Number(9.0)),
+            )
+            .expect("set value");
+
+        let error = codec
+            .save(&loaded, office_common::SaveOptions::default())
+            .expect_err("save should fail when fontScheme child extra attr is removed");
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("typed theme summary drifted"));
+        assert!(error.message.contains("xl/theme/theme1.xml"));
+    }
+
+    #[test]
     fn save_rejects_theme_part_when_font_scheme_name_drifts() {
         let codec = XlsxCodec;
         let input = workbook_with_theme_font_scheme_children_bytes();
@@ -109479,6 +109533,61 @@ mod tests {
         let error = codec
             .save(&loaded, office_common::SaveOptions::default())
             .expect_err("save should fail when fmtScheme child cdata text drifts");
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("typed theme summary drifted"));
+        assert!(error.message.contains("xl/theme/theme1.xml"));
+    }
+
+    #[test]
+    fn save_rejects_theme_part_when_format_scheme_child_extra_attr_is_removed() {
+        let codec = XlsxCodec;
+        let mut package =
+            OpcPackage::from_bytes(&workbook_with_theme_format_scheme_children_bytes())
+                .expect("base workbook package");
+        let theme_xml = String::from_utf8(
+            package
+                .part("xl/theme/theme1.xml")
+                .expect("theme part")
+                .bytes
+                .clone(),
+        )
+        .expect("theme xml utf8")
+        .replace("<a:fillStyleLst/>", r#"<a:fillStyleLst custom="fills"/>"#);
+        package
+            .replace_part_bytes("xl/theme/theme1.xml", theme_xml.into_bytes())
+            .expect("replace theme part");
+        let mut loaded = codec
+            .load(
+                &package.to_bytes().expect("package bytes"),
+                CommonLoadOptions::default(),
+            )
+            .expect("load workbook");
+        let sheet_id = loaded.state.worksheets[0].id;
+        let theme_xml = String::from_utf8(
+            loaded
+                .package
+                .part("xl/theme/theme1.xml")
+                .expect("theme part")
+                .bytes
+                .clone(),
+        )
+        .expect("theme xml utf8")
+        .replace(r#" custom="fills""#, "");
+        loaded
+            .package
+            .replace_part_bytes("xl/theme/theme1.xml", theme_xml.into_bytes())
+            .expect("replace theme part");
+        loaded
+            .state
+            .set_range_values(
+                &office_common::RangeRef::single_cell(WorkbookId(0), sheet_id, 1, 1),
+                &office_common::OmArray::scalar(office_common::OmValue::Number(9.0)),
+            )
+            .expect("set value");
+
+        let error = codec
+            .save(&loaded, office_common::SaveOptions::default())
+            .expect_err("save should fail when fmtScheme child extra attr is removed");
         assert_eq!(error.code, OmErrorCode::InvalidState);
         assert!(error.message.contains("typed theme summary drifted"));
         assert!(error.message.contains("xl/theme/theme1.xml"));

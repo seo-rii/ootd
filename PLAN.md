@@ -4216,6 +4216,8 @@
   - 범위: `objectDefaults` child/nested/grandchild/great-grandchild/great-great-grandchild에 loaded extra attr가 있는 seed input에서 dirty save 직전 해당 attr를 제거하는 회귀를 추가해서 `object_defaults_child_attr_maps` 계열 summary가 descendant attr omission도 fail-fast로 막는지 고정
   - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1902 DONE` theme clrScheme child attr omission reject parity
   - 범위: `clrScheme` direct child에 로드된 extra attr가 dirty save 직전 제거되는 회귀를 추가해서 기존 nested `sysClr`/`srgbClr` attr-removal coverage와 함께 `clr_scheme_child_attr_maps`가 direct child attr omission도 fail-fast로 막는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1903 DONE` theme font/fmtScheme child attr omission reject parity
+  - 범위: `fontScheme` direct child와 `fmtScheme` direct child에 로드된 extra attr가 dirty save 직전 제거되는 회귀를 추가해서 `font_scheme_child_attr_maps`/`format_scheme_child_attr_maps`가 direct scheme child attr omission도 fail-fast로 막는지 고정
   - `Step 6.6a DONE` worksheet hyperlink-ref integrity regression
   - 범위: worksheet support가 추적한 hyperlink `ref` 목록을 load assertion과 dirty save 회귀로 고정하고, hyperlink `ref` drift/삭제를 fail-fast로 막음
   - `Step 6.6b1 DONE` worksheet-local relationship binding integrity
