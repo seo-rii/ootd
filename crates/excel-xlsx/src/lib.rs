@@ -72683,6 +72683,33 @@ mod tests {
     }
 
     #[test]
+    fn collect_sheet_drawing_support_parts_remains_empty_when_only_host_bytes_are_tracked() {
+        let package =
+            OpcPackage::from_bytes(&workbook_with_blank_internal_hyperlink_anchor_bytes())
+                .expect("base workbook package");
+        let sheet_part = package
+            .part("xl/worksheets/sheet1.xml")
+            .expect("sheet part");
+
+        let support_parts =
+            super::collect_sheet_drawing_support_parts("xl/worksheets/sheet1.xml", &package)
+                .expect("sheet drawing support parts");
+
+        assert_eq!(
+            support_parts.sheet_part_uri.as_deref(),
+            Some("xl/worksheets/sheet1.xml")
+        );
+        assert_eq!(
+            support_parts.sheet_part_source_bytes.as_deref(),
+            Some(sheet_part.bytes.as_slice())
+        );
+        assert!(support_parts.relationships_part_uri.is_none());
+        assert!(support_parts.relationships_part_source_bytes.is_none());
+        assert!(support_parts.drawing_relationship_ids.is_empty());
+        assert!(support_parts.is_empty());
+    }
+
+    #[test]
     fn ensure_single_worksheet_support_parts_present_rejects_missing_explicit_relationships_part() {
         let codec = XlsxCodec;
         let loaded = codec
