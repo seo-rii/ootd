@@ -11,8 +11,9 @@ use office_codegen::{
     build_coverage_report, build_coverage_report_from_json, build_coverage_report_from_path,
     build_focus_surface_registry, build_focus_surface_registry_from_json,
     build_focus_surface_registry_from_path, generate_canonical_office_idl_from_dir,
-    normalize_capture_bundle, normalize_capture_bundle_from_dir, normalize_pia_capture_json,
-    summarize_capture_bundle, summarize_om_sources, summarize_om_sources_toml,
+    load_capture_bundle, normalize_capture_bundle, normalize_capture_bundle_from_dir,
+    normalize_pia_capture_json, summarize_capture_bundle, summarize_om_sources,
+    summarize_om_sources_toml,
 };
 use office_idl::{AccessMode, CaptureOriginKind, InterfaceKind, OfficeIdlDocument};
 use sha2::{Digest, Sha256};
@@ -1731,6 +1732,114 @@ fn normalize_capture_bundle_from_dir_rejects_unexpected_writable_output_keys() {
   "snapshots/excel_typelib_snapshot.idl": "{}",
   "snapshots/excel_typelib_snapshot.odl": "{}",
   "raw/excel_pia_identity.json": "{}",
+  "snapshots/excel_pia_public_surface.json": "{}",
+  "logs/capture.log": "{}"
+}}"#,
+            sha256_hex(
+                fs::read(raw_dir.join("raw_typelib_identity.json"))
+                    .expect("typelib")
+                    .as_slice()
+            ),
+            sha256_hex(b"library Excel {}"),
+            sha256_hex(b"odl Excel {}"),
+            sha256_hex(br#"{"assembly":"Excel"}"#),
+            sha256_hex(
+                fs::read(snapshots_dir.join("excel_pia_public_surface.json"))
+                    .expect("pia")
+                    .as_slice()
+            ),
+            sha256_hex(b"capture log")
+        ),
+    )
+    .expect("write checksums");
+
+    let error = normalize_capture_bundle_from_dir(&bundle_root)
+        .expect_err("unexpected writable output key should fail");
+    match error {
+        CanonicalOmGenerationError::CaptureBundleContract { message } => {
+            assert!(message.contains("writableOutputs keys"));
+            assert!(message.contains("unplanned_payload"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn load_capture_bundle_allows_known_auxiliary_writable_output_keys() {
+    let unique_suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time")
+        .as_nanos();
+    let bundle_root =
+        std::env::temp_dir().join(format!("ootd-step3-aux-writable-output-{unique_suffix}"));
+    let raw_dir = bundle_root.join("raw");
+    let snapshots_dir = bundle_root.join("snapshots");
+    let manifest_dir = bundle_root.join("manifest");
+    let logs_dir = bundle_root.join("logs");
+
+    fs::create_dir_all(&raw_dir).expect("raw dir");
+    fs::create_dir_all(&snapshots_dir).expect("snapshots dir");
+    fs::create_dir_all(&manifest_dir).expect("manifest dir");
+    fs::create_dir_all(&logs_dir).expect("logs dir");
+    fs::write(
+        raw_dir.join("raw_typelib_identity.json"),
+        fs::read_to_string(repo_root().join("specs/pinned/raw_typelib_identity.template.json"))
+            .expect("typelib template"),
+    )
+    .expect("write typelib");
+    fs::write(
+        raw_dir.join("excel_pia_identity.json"),
+        r#"{"assembly":"Excel"}"#,
+    )
+    .expect("write pia identity");
+    fs::write(
+        snapshots_dir.join("excel_typelib_snapshot.idl"),
+        "library Excel {}",
+    )
+    .expect("write idl");
+    fs::write(
+        snapshots_dir.join("excel_typelib_snapshot.odl"),
+        "odl Excel {}",
+    )
+    .expect("write odl");
+    fs::write(
+        snapshots_dir.join("excel_pia_public_surface.json"),
+        fs::read_to_string(repo_root().join("specs/pinned/excel_pia_public_surface.template.json"))
+            .expect("pia template"),
+    )
+    .expect("write pia surface");
+    fs::write(logs_dir.join("capture.log"), "capture log").expect("write log");
+    fs::write(
+        manifest_dir.join("capture_manifest.json"),
+        r#"{
+  "expectedCaptureOutputs": [
+    "raw_typelib_identity.json",
+    "excel_typelib_snapshot.idl",
+    "excel_typelib_snapshot.odl",
+    "excel_pia_identity.json",
+    "excel_pia_public_surface.json"
+  ],
+  "writableOutputs": {
+    "raw_typelib_identity": "C:\\capture\\raw\\raw_typelib_identity.json",
+    "excel_typelib_snapshot_idl": "C:\\capture\\snapshots\\excel_typelib_snapshot.idl",
+    "excel_typelib_snapshot_odl": "C:\\capture\\snapshots\\excel_typelib_snapshot.odl",
+    "excel_pia_identity": "C:\\capture\\raw\\excel_pia_identity.json",
+    "excel_pia_public_surface": "C:\\capture\\snapshots\\excel_pia_public_surface.json",
+    "capture_log": "C:\\capture\\logs\\capture.log",
+    "capture_manifest": "C:\\capture\\manifest\\capture_manifest.json",
+    "output_checksums": "C:\\capture\\manifest\\output_checksums.json"
+  }
+}"#,
+    )
+    .expect("write manifest");
+    fs::write(
+        manifest_dir.join("output_checksums.json"),
+        format!(
+            r#"{{
+  "raw/raw_typelib_identity.json": "{}",
+  "snapshots/excel_typelib_snapshot.idl": "{}",
+  "snapshots/excel_typelib_snapshot.odl": "{}",
+  "raw/excel_pia_identity.json": "{}",
   "snapshots/excel_pia_public_surface.json": "{}"
 }}"#,
             sha256_hex(
@@ -1750,15 +1859,7 @@ fn normalize_capture_bundle_from_dir_rejects_unexpected_writable_output_keys() {
     )
     .expect("write checksums");
 
-    let error = normalize_capture_bundle_from_dir(&bundle_root)
-        .expect_err("unexpected writable output key should fail");
-    match error {
-        CanonicalOmGenerationError::CaptureBundleContract { message } => {
-            assert!(message.contains("writableOutputs keys"));
-            assert!(message.contains("unplanned_payload"));
-        }
-        other => panic!("unexpected error: {other:?}"),
-    }
+    load_capture_bundle(&bundle_root).expect("known auxiliary writable outputs should pass");
 }
 
 #[test]
@@ -2805,7 +2906,7 @@ fn normalize_capture_bundle_from_dir_rejects_unexpected_checksum_payload_names()
     match error {
         CanonicalOmGenerationError::CaptureBundleContract { message } => {
             assert!(message.contains("unplanned_payload.json"));
-            assert!(message.contains("did not match expectedCaptureOutputs"));
+            assert!(message.contains("outside allowed"));
         }
         other => panic!("unexpected error: {other:?}"),
     }

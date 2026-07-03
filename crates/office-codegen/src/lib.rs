@@ -1379,29 +1379,34 @@ fn validate_capture_bundle_contract(
             message: "capture_manifest.json missing writableOutputs object".to_string(),
         })?;
     let writable_output_logical_names = writable_outputs.keys().cloned().collect::<BTreeSet<_>>();
-    let required_writable_output_logical_names = [
-        "raw_typelib_identity",
-        "excel_typelib_snapshot_idl",
-        "excel_typelib_snapshot_odl",
-        "excel_pia_identity",
-        "excel_pia_public_surface",
-    ]
-    .into_iter()
-    .map(str::to_string)
-    .collect::<BTreeSet<_>>();
-    if writable_output_logical_names != required_writable_output_logical_names {
+    let required_writable_output_logical_names = required_writable_output_paths()
+        .keys()
+        .map(|key| (*key).to_string())
+        .collect::<BTreeSet<_>>();
+    let allowed_writable_output_logical_names = allowed_writable_output_logical_names();
+    if !allowed_writable_output_logical_names.is_superset(&writable_output_logical_names) {
         return Err(CanonicalOmGenerationError::CaptureBundleContract {
             message: format!(
-                "capture_manifest.json writableOutputs keys {:?} did not match required {:?}",
+                "capture_manifest.json writableOutputs keys {:?} contained entries outside allowed {:?}",
+                writable_output_logical_names, allowed_writable_output_logical_names
+            ),
+        });
+    }
+    if !writable_output_logical_names.is_superset(&required_writable_output_logical_names) {
+        return Err(CanonicalOmGenerationError::CaptureBundleContract {
+            message: format!(
+                "capture_manifest.json writableOutputs keys {:?} did not cover required payload keys {:?}",
                 writable_output_logical_names, required_writable_output_logical_names
             ),
         });
     }
     let required_writable_output_paths = required_writable_output_paths();
-    let writable_output_names = writable_outputs
+    let writable_output_names = required_writable_output_paths
         .iter()
-        .map(|(logical_name, value)| {
-            value
+        .map(|(logical_name, expected_relative_path)| {
+            writable_outputs
+                .get(*logical_name)
+                .expect("required writable output key coverage was already validated")
                 .as_str()
                 .ok_or_else(|| CanonicalOmGenerationError::CaptureBundleContract {
                     message: format!(
@@ -1409,9 +1414,6 @@ fn validate_capture_bundle_contract(
                     ),
                 })
                 .and_then(|path| {
-                    let expected_relative_path = required_writable_output_paths
-                        .get(logical_name.as_str())
-                        .expect("required writable output names and paths are in sync");
                     if !path_has_relative_suffix(path, expected_relative_path) {
                         return Err(CanonicalOmGenerationError::CaptureBundleContract {
                             message: format!(
@@ -1459,10 +1461,19 @@ fn validate_capture_bundle_contract(
         .filter_map(|relative_path| relative_path.rsplit(['\\', '/']).next())
         .map(str::to_string)
         .collect::<BTreeSet<_>>();
-    if checksum_output_names != expected_output_names {
+    let allowed_checksum_output_names = allowed_checksum_output_names();
+    if !allowed_checksum_output_names.is_superset(&checksum_output_names) {
         return Err(CanonicalOmGenerationError::CaptureBundleContract {
             message: format!(
-                "output_checksums.json payload names {:?} did not match expectedCaptureOutputs {:?}",
+                "output_checksums.json payload names {:?} contained entries outside allowed {:?}",
+                checksum_output_names, allowed_checksum_output_names
+            ),
+        });
+    }
+    if !checksum_output_names.is_superset(&expected_output_names) {
+        return Err(CanonicalOmGenerationError::CaptureBundleContract {
+            message: format!(
+                "output_checksums.json payload names {:?} did not cover expectedCaptureOutputs {:?}",
                 checksum_output_names, expected_output_names
             ),
         });
@@ -1728,6 +1739,36 @@ fn required_writable_output_paths() -> BTreeMap<&'static str, &'static str> {
         ),
     ]
     .into_iter()
+    .collect()
+}
+
+fn allowed_writable_output_logical_names() -> BTreeSet<String> {
+    [
+        "raw_typelib_identity",
+        "excel_typelib_snapshot_idl",
+        "excel_typelib_snapshot_odl",
+        "excel_pia_identity",
+        "excel_pia_public_surface",
+        "capture_log",
+        "capture_manifest",
+        "output_checksums",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
+}
+
+fn allowed_checksum_output_names() -> BTreeSet<String> {
+    [
+        "raw_typelib_identity.json",
+        "excel_typelib_snapshot.idl",
+        "excel_typelib_snapshot.odl",
+        "excel_pia_identity.json",
+        "excel_pia_public_surface.json",
+        "capture.log",
+    ]
+    .into_iter()
+    .map(str::to_string)
     .collect()
 }
 
