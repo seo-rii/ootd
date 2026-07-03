@@ -4723,6 +4723,8 @@
   - 범위: `office-codegen`이 differential report JSON/path를 다시 로드하면서 `caseCount`와 `statusCounts`가 실제 case list와 일치하는지 검증하도록 추가해 후속 runner가 생성한 stale/malformed regression report가 downstream gate를 통과하지 못하도록 고정
   - `Step 7.39 DONE` codegen differential report gate summary
   - 범위: `office-codegen`이 differential report에서 failed/missing-oracle/missing-runtime case를 blocking regression으로 분류하고 unsupported/skipped는 별도 non-blocking count로 노출하는 gate summary를 제공해 후속 CI/oracle runner가 동일한 pass/fail 기준을 재사용할 수 있도록 고정
+  - `Step 7.40 DONE` codegen differential report export path
+  - 범위: `office-codegen`이 differential report를 validate 후 pretty JSON artifact로 저장하고 다시 import 가능한지 검증하는 writer API를 추가해 후속 oracle/corpus runner가 report 생성/검증/게이트까지 같은 contract로 연결할 수 있도록 고정
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.

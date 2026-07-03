@@ -17,6 +17,7 @@ use office_codegen::{
     normalize_capture_bundle, normalize_capture_bundle_from_dir, normalize_pia_capture_json,
     summarize_capture_bundle, summarize_differential_gate, summarize_om_sources,
     summarize_om_sources_toml, summarize_source_registry, summarize_source_registry_toml,
+    write_differential_report_to_path,
 };
 use office_idl::{AccessMode, CaptureOriginKind, InterfaceKind, OfficeIdlDocument};
 use sha2::{Digest, Sha256};
@@ -510,6 +511,83 @@ fn loads_differential_report_from_path_wrapper() {
     assert_eq!(loaded, report);
 
     fs::remove_file(&path).expect("remove temp report");
+}
+
+#[test]
+fn writes_differential_report_to_path_and_reloads_it() {
+    let report = build_differential_report(
+        "Excel",
+        "16.0",
+        "excel_365",
+        vec![DifferentialCaseResult {
+            name: "Range.Areas.Count".to_string(),
+            surface: Some("Range".to_string()),
+            member: Some("Areas".to_string()),
+            status: DifferentialCaseStatus::Passed,
+            expected: Some("2".to_string()),
+            actual: Some("2".to_string()),
+            message: None,
+            artifacts: BTreeMap::from([(
+                "fixture".to_string(),
+                "corpus/range_multi_area.xlsx".to_string(),
+            )]),
+        }],
+    );
+    let unique_suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time")
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!(
+        "ootd-differential-report-write-{unique_suffix}.json"
+    ));
+
+    write_differential_report_to_path(&report, &path).expect("write report");
+    let loaded = load_differential_report_from_path(&path).expect("reload report");
+    let json = fs::read_to_string(&path).expect("read written report");
+
+    assert_eq!(loaded, report);
+    assert!(json.contains('\n'));
+    assert!(json.contains(r#""caseCount": 1"#));
+
+    fs::remove_file(&path).expect("remove temp report");
+}
+
+#[test]
+fn write_differential_report_rejects_stale_summary_counts() {
+    let mut report = build_differential_report(
+        "Excel",
+        "16.0",
+        "excel_365",
+        vec![DifferentialCaseResult {
+            name: "Application.Name".to_string(),
+            surface: Some("Application".to_string()),
+            member: Some("Name".to_string()),
+            status: DifferentialCaseStatus::Passed,
+            expected: Some("Microsoft Excel".to_string()),
+            actual: Some("Microsoft Excel".to_string()),
+            message: None,
+            artifacts: BTreeMap::new(),
+        }],
+    );
+    report.case_count = 2;
+    let unique_suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time")
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!(
+        "ootd-differential-report-stale-{unique_suffix}.json"
+    ));
+
+    let error =
+        write_differential_report_to_path(&report, &path).expect_err("stale report should fail");
+
+    match error {
+        DifferentialReportLoadError::Contract { message } => {
+            assert!(message.contains("caseCount 2 did not match cases length 1"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+    assert!(!path.exists());
 }
 
 #[test]

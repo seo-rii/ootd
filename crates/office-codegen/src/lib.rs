@@ -1302,6 +1302,16 @@ impl DifferentialReport {
         Self::from_json_str(&input)
     }
 
+    pub fn write_json_path(
+        &self,
+        path: impl AsRef<Path>,
+    ) -> Result<(), DifferentialReportLoadError> {
+        self.validate()?;
+        let payload = serde_json::to_vec_pretty(self)?;
+        fs::write(path, payload)?;
+        Ok(())
+    }
+
     pub fn gate_summary(&self) -> DifferentialGateSummary {
         let blocking_cases = self
             .cases
@@ -1563,6 +1573,13 @@ pub fn load_differential_report_from_path(
 
 pub fn summarize_differential_gate(report: &DifferentialReport) -> DifferentialGateSummary {
     report.gate_summary()
+}
+
+pub fn write_differential_report_to_path(
+    report: &DifferentialReport,
+    path: impl AsRef<Path>,
+) -> Result<(), DifferentialReportLoadError> {
+    report.write_json_path(path)
 }
 
 pub fn normalize_pia_capture_json(input: &str) -> Result<OfficeIdlDocument, PiaCaptureLoadError> {
