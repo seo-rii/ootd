@@ -75801,6 +75801,18 @@ mod tests {
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
+        let original_package_rels_source_bytes = loaded
+            .support_parts
+            .package_relationships_part_source_bytes
+            .as_ref()
+            .expect("package relationships source bytes")
+            .clone();
+        let original_package_rels_summary = loaded
+            .support_parts
+            .package_relationships_summary
+            .as_ref()
+            .expect("package relationships summary")
+            .clone();
         let original_content_types_source_bytes = loaded
             .support_parts
             .content_types_source_bytes
@@ -75892,6 +75904,23 @@ mod tests {
             saved_content_types.as_bytes(),
             original_content_types_source_bytes
         );
+        assert_eq!(
+            saved_package
+                .part("_rels/.rels")
+                .expect("saved package rels")
+                .bytes,
+            original_package_rels_source_bytes
+        );
+        let saved_package_rels_summary = super::parse_worksheet_relationships_part_summary(
+            saved_package
+                .part("_rels/.rels")
+                .expect("saved package rels")
+                .bytes
+                .as_slice(),
+            &[],
+        )
+        .expect("saved package rels summary");
+        assert_eq!(saved_package_rels_summary, original_package_rels_summary);
         assert_eq!(
             saved_package
                 .part("xl/worksheets/_rels/sheet1.xml.rels")
