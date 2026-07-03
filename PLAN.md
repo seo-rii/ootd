@@ -4526,6 +4526,8 @@
   - 범위: embedded/chartsheet chart style/color support 관계가 `TargetMode="External"`일 때 `ChartSupportRelationshipBinding`에 target mode를 보존하되 internal chart support part inventory에는 올리지 않는다는 invariant를 회귀로 고정
   - `Step 6.6b2b2b2b2b2f2b2cw DONE` chart support TargetMode case-insensitive external handling
   - 범위: embedded/chartsheet chart style/color support 관계가 mixed-case `TargetMode` external 값을 쓰더라도 원문 target mode는 summary에 보존하고 외부 target은 internal chart support part로 로드하지 않는다는 invariant를 회귀로 고정
+  - `Step 6.6b2b2b2b2b2f2b2cx DONE` chart/drawing opaque TargetMode case-insensitive external handling
+  - 범위: embedded/chartsheet chart externalLink와 drawing opaque external 관계가 mixed-case `TargetMode` external 값을 쓰더라도 원문 target mode는 summary에 보존하고 외부 target은 internal opaque target part inventory에 올리지 않는다는 invariant를 회귀로 고정
 - 목표
   - 현재 core worksheet rewrite 이후 남아 있는 fidelity gap을 좁힌다.
   - style/theme/merge/comment/hyperlink/formula cached-value 계열 보존을 순차적으로 올린다.

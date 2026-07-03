@@ -29410,7 +29410,7 @@ mod tests {
             .expect("add chart");
         let chart_rels_xml = br#"<?xml version="1.0" encoding="UTF-8"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships" data-root="chartsheet-chart">
-  <Relationship Id="rIdExternalWorkbook2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/externalLink" Target="https://example.com/External.xlsx" TargetMode="External" data-opaque="1"/>
+  <Relationship Id="rIdExternalWorkbook2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/externalLink" Target="https://example.com/External.xlsx" TargetMode="ExTeRnAl" data-opaque="1"/>
   <Relationship Id="rIdExternalStyle2" Type="http://schemas.microsoft.com/office/2011/relationships/chartStyle" Target="https://example.com/chart-style2.xml" TargetMode="ExTeRnAl" data-style="1"/>
   <Relationship Id="rIdExternalColors2" Type="http://schemas.microsoft.com/office/2011/relationships/chartColorStyle" Target="https://example.com/chart-colors2.xml" TargetMode="external" data-colors="1"/>
 </Relationships>"#
@@ -29453,7 +29453,7 @@ mod tests {
                     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/externalLink"
                         .to_string(),
                 target: "https://example.com/External.xlsx".to_string(),
-                target_mode: Some("External".to_string()),
+                target_mode: Some("ExTeRnAl".to_string()),
             }]
         );
         assert_eq!(
@@ -31841,7 +31841,7 @@ mod tests {
             .expect("add drawing");
         let drawing_rels_xml = br#"<?xml version="1.0" encoding="UTF-8"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships" data-root="drawing">
-  <Relationship Id="rIdDrawingExternal1" Type="https://example.com/relationships/drawingExternal" Target="https://example.com/drawing-meta/1" TargetMode="External" data-opaque="1"/>
+  <Relationship Id="rIdDrawingExternal1" Type="https://example.com/relationships/drawingExternal" Target="https://example.com/drawing-meta/1" TargetMode="ExTeRnAl" data-opaque="1"/>
   <Relationship Id="rIdChart1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart1.xml"/>
 </Relationships>"#
             .to_vec();
@@ -31893,7 +31893,7 @@ mod tests {
                 relationship_id: "rIdDrawingExternal1".to_string(),
                 relationship_type: "https://example.com/relationships/drawingExternal".to_string(),
                 target: "https://example.com/drawing-meta/1".to_string(),
-                target_mode: Some("External".to_string()),
+                target_mode: Some("ExTeRnAl".to_string()),
             }]
         );
         assert!(
@@ -32038,7 +32038,7 @@ mod tests {
             .expect("add drawing");
         let drawing_rels_xml = br#"<?xml version="1.0" encoding="UTF-8"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships" data-root="chartsheet-drawing">
-  <Relationship Id="rIdDrawingExternal2" Type="https://example.com/relationships/drawingExternal" Target="https://example.com/drawing-meta/2" TargetMode="External" data-opaque="1"/>
+  <Relationship Id="rIdDrawingExternal2" Type="https://example.com/relationships/drawingExternal" Target="https://example.com/drawing-meta/2" TargetMode="external" data-opaque="1"/>
   <Relationship Id="rIdChart2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart2.xml"/>
 </Relationships>"#
             .to_vec();
@@ -32091,7 +32091,7 @@ mod tests {
                 relationship_id: "rIdDrawingExternal2".to_string(),
                 relationship_type: "https://example.com/relationships/drawingExternal".to_string(),
                 target: "https://example.com/drawing-meta/2".to_string(),
-                target_mode: Some("External".to_string()),
+                target_mode: Some("external".to_string()),
             }]
         );
         assert!(
@@ -32997,7 +32997,7 @@ mod tests {
             .expect("add chart");
         let chart_rels_xml = br#"<?xml version="1.0" encoding="UTF-8"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships" data-root="chart">
-  <Relationship Id="rIdExternalWorkbook1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/externalLink" Target="https://example.com/External.xlsx" TargetMode="External" data-opaque="1"/>
+  <Relationship Id="rIdExternalWorkbook1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/externalLink" Target="https://example.com/External.xlsx" TargetMode="external" data-opaque="1"/>
   <Relationship Id="rIdExternalStyle1" Type="http://schemas.microsoft.com/office/2011/relationships/chartStyle" Target="https://example.com/chart-style1.xml" TargetMode="ExTeRnAl" data-style="1"/>
   <Relationship Id="rIdExternalColors1" Type="http://schemas.microsoft.com/office/2011/relationships/chartColorStyle" Target="https://example.com/chart-colors1.xml" TargetMode="external" data-colors="1"/>
 </Relationships>"#
@@ -33039,7 +33039,7 @@ mod tests {
                     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/externalLink"
                         .to_string(),
                 target: "https://example.com/External.xlsx".to_string(),
-                target_mode: Some("External".to_string()),
+                target_mode: Some("external".to_string()),
             }]
         );
         assert_eq!(
