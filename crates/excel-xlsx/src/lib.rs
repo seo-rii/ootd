@@ -74,6 +74,7 @@ pub struct XlsxCodec;
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct WorkbookSupportParts {
+    pub content_types_source_bytes: Option<Vec<u8>>,
     pub workbook_relationships_part_uri: Option<String>,
     pub workbook_relationships_part_source_bytes: Option<Vec<u8>>,
     pub workbook_relationships_summary: Option<WorksheetRelationshipsPartSummary>,
@@ -3288,6 +3289,9 @@ fn collect_workbook_support_parts(
     relationships: &[RelationshipEntry],
     package: &OpcPackage,
 ) -> OmResult<WorkbookSupportParts> {
+    let content_types_source_bytes = package
+        .part("[Content_Types].xml")
+        .map(|part| part.bytes.clone());
     let workbook_relationships_part_uri = package
         .contains(WORKBOOK_RELS_PART_NAME)
         .then(|| WORKBOOK_RELS_PART_NAME.to_string());
@@ -3377,6 +3381,7 @@ fn collect_workbook_support_parts(
         });
 
     let support_parts = WorkbookSupportParts {
+        content_types_source_bytes,
         workbook_relationships_part_uri,
         workbook_relationships_part_source_bytes,
         workbook_relationships_summary,
@@ -4821,6 +4826,22 @@ fn ensure_support_parts_present_with_options(
     support_parts: &WorkbookSupportParts,
     validate_workbook_relationships_source_bytes: bool,
 ) -> OmResult<()> {
+    if let Some(source_bytes) = support_parts.content_types_source_bytes.as_deref()
+        && validate_workbook_relationships_source_bytes
+    {
+        let actual_part = package.part("[Content_Types].xml").ok_or_else(|| {
+            OmError::new(
+                OmErrorCode::InvalidState,
+                "explicit content types part is missing: [Content_Types].xml",
+            )
+        })?;
+        if actual_part.bytes != source_bytes {
+            return Err(OmError::new(
+                OmErrorCode::InvalidState,
+                "explicit content types part bytes changed: [Content_Types].xml",
+            ));
+        }
+    }
     let workbook_relationships = if let Some(workbook_rels) =
         &support_parts.workbook_relationships_part_uri
     {
@@ -39870,6 +39891,45 @@ mod tests {
                 .contains("explicit workbook relationships part bytes changed")
         );
         assert!(error.message.contains("xl/_rels/workbook.xml.rels"));
+    }
+
+    #[test]
+    fn ensure_support_parts_present_rejects_content_types_source_bytes_drift() {
+        let codec = XlsxCodec;
+        let loaded = codec
+            .load(
+                &workbook_with_styles_and_theme_bytes(),
+                CommonLoadOptions::default(),
+            )
+            .expect("load workbook");
+        assert!(loaded.support_parts.content_types_source_bytes.is_some());
+        let mut package = loaded.package.clone();
+        let content_types = String::from_utf8(
+            package
+                .part("[Content_Types].xml")
+                .expect("content types part")
+                .bytes
+                .clone(),
+        )
+        .expect("content types utf8")
+        .replace(
+            r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">"#,
+            r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types" data-preserve="changed">"#,
+        );
+        package
+            .replace_part_bytes("[Content_Types].xml", content_types.into_bytes())
+            .expect("replace content types");
+
+        let error = super::ensure_support_parts_present(&package, &loaded.support_parts)
+            .expect_err("ensure should fail when content types bytes drift");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(
+            error
+                .message
+                .contains("explicit content types part bytes changed")
+        );
+        assert!(error.message.contains("[Content_Types].xml"));
     }
 
     #[test]
@@ -75496,6 +75556,17 @@ mod tests {
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
+        let original_content_types_source_bytes = loaded
+            .support_parts
+            .content_types_source_bytes
+            .as_ref()
+            .expect("content types source bytes")
+            .clone();
+        assert!(
+            String::from_utf8(original_content_types_source_bytes.clone())
+                .expect("content types source utf8")
+                .contains("/xl/calcChain.xml")
+        );
         let original_workbook_rels_summary = loaded
             .support_parts
             .workbook_relationships_summary
@@ -75572,6 +75643,10 @@ mod tests {
         )
         .expect("saved content types utf8");
         assert!(!saved_content_types.contains("/xl/calcChain.xml"));
+        assert_ne!(
+            saved_content_types.as_bytes(),
+            original_content_types_source_bytes
+        );
         assert_eq!(
             saved_package
                 .part("xl/worksheets/_rels/sheet1.xml.rels")
