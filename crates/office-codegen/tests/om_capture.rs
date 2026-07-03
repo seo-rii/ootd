@@ -13,13 +13,13 @@ use office_codegen::{
     build_differential_report, build_differential_report_with_source_context,
     build_focus_surface_registry, build_focus_surface_registry_from_json,
     build_focus_surface_registry_from_path, generate_canonical_office_idl_from_dir,
-    load_capture_bundle, load_differential_gate_from_path_with_source_context,
-    load_differential_report_from_json, load_differential_report_from_path,
-    normalize_capture_bundle, normalize_capture_bundle_from_dir, normalize_pia_capture_json,
-    summarize_capture_bundle, summarize_differential_gate,
-    summarize_differential_gate_with_source_context, summarize_om_sources,
-    summarize_om_sources_toml, summarize_source_registry, summarize_source_registry_toml,
-    validate_differential_report_source_context,
+    load_capture_bundle, load_differential_gate_from_json, load_differential_gate_from_path,
+    load_differential_gate_from_path_with_source_context, load_differential_report_from_json,
+    load_differential_report_from_path, normalize_capture_bundle,
+    normalize_capture_bundle_from_dir, normalize_pia_capture_json, summarize_capture_bundle,
+    summarize_differential_gate, summarize_differential_gate_with_source_context,
+    summarize_om_sources, summarize_om_sources_toml, summarize_source_registry,
+    summarize_source_registry_toml, validate_differential_report_source_context,
     write_differential_gate_from_report_path_with_source_context, write_differential_gate_to_path,
     write_differential_report_to_path,
 };
@@ -507,6 +507,75 @@ fn writes_differential_gate_from_report_path_with_source_registry_context() {
     fs::remove_file(&report_path).expect("remove report");
     fs::remove_file(&gate_path).expect("remove gate");
     fs::remove_file(&copied_gate_path).expect("remove copied gate");
+}
+
+#[test]
+fn loads_differential_gate_summary_and_rejects_stale_contract() {
+    let report = build_differential_report(
+        "Excel",
+        "16.0",
+        "excel_365",
+        vec![DifferentialCaseResult {
+            name: "Range.Value2 multi-area".to_string(),
+            surface: Some("Range".to_string()),
+            member: Some("Value2".to_string()),
+            status: DifferentialCaseStatus::Failed,
+            expected: Some("[[1],[2]]".to_string()),
+            actual: Some("1".to_string()),
+            message: Some("runtime collapsed the reference to the first scalar".to_string()),
+            artifacts: BTreeMap::new(),
+        }],
+    );
+    let gate = summarize_differential_gate(&report);
+    let unique_suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time")
+        .as_nanos();
+    let path =
+        std::env::temp_dir().join(format!("ootd-differential-gate-load-{unique_suffix}.json"));
+    write_differential_gate_to_path(&gate, &path).expect("write gate");
+
+    let gate_json = fs::read_to_string(&path).expect("gate json");
+    let loaded_from_json = load_differential_gate_from_json(&gate_json).expect("load gate json");
+    let loaded_from_path = load_differential_gate_from_path(&path).expect("load gate path");
+
+    assert_eq!(loaded_from_json, gate);
+    assert_eq!(loaded_from_path, gate);
+
+    let stale_count = gate_json.replace(r#""blockingCaseCount": 1"#, r#""blockingCaseCount": 2"#);
+    let error = load_differential_gate_from_json(&stale_count)
+        .expect_err("stale blocking count should fail");
+    match error {
+        DifferentialReportLoadError::Contract { message } => {
+            assert!(message.contains("blockingCaseCount 2"));
+            assert!(message.contains("blockingCases length 1"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    let stale_passed = gate_json.replace(r#""passed": false"#, r#""passed": true"#);
+    let error =
+        load_differential_gate_from_json(&stale_passed).expect_err("stale passed should fail");
+    match error {
+        DifferentialReportLoadError::Contract { message } => {
+            assert!(message.contains("passed true"));
+            assert!(message.contains("blockingCaseCount 1"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    let mut stale_gate = gate;
+    stale_gate.blocking_case_count += 1;
+    let write_error = write_differential_gate_to_path(&stale_gate, &path)
+        .expect_err("stale gate should not write");
+    match write_error {
+        DifferentialReportLoadError::Contract { message } => {
+            assert!(message.contains("blockingCaseCount 2"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    fs::remove_file(path).expect("remove gate");
 }
 
 #[test]

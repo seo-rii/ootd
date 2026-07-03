@@ -1390,10 +1390,43 @@ impl DifferentialReport {
 }
 
 impl DifferentialGateSummary {
+    pub fn validate(&self) -> Result<(), DifferentialReportLoadError> {
+        if self.blocking_case_count != self.blocking_cases.len() {
+            return Err(DifferentialReportLoadError::Contract {
+                message: format!(
+                    "differential gate blockingCaseCount {} did not match blockingCases length {}",
+                    self.blocking_case_count,
+                    self.blocking_cases.len()
+                ),
+            });
+        }
+        if self.passed != (self.blocking_case_count == 0) {
+            return Err(DifferentialReportLoadError::Contract {
+                message: format!(
+                    "differential gate passed {} did not match blockingCaseCount {}",
+                    self.passed, self.blocking_case_count
+                ),
+            });
+        }
+        Ok(())
+    }
+
+    pub fn from_json_str(input: &str) -> Result<Self, DifferentialReportLoadError> {
+        let gate = serde_json::from_str::<Self>(input)?;
+        gate.validate()?;
+        Ok(gate)
+    }
+
+    pub fn from_json_path(path: impl AsRef<Path>) -> Result<Self, DifferentialReportLoadError> {
+        let input = fs::read_to_string(path)?;
+        Self::from_json_str(&input)
+    }
+
     pub fn write_json_path(
         &self,
         path: impl AsRef<Path>,
     ) -> Result<(), DifferentialReportLoadError> {
+        self.validate()?;
         let payload = serde_json::to_vec_pretty(self)?;
         fs::write(path, payload)?;
         Ok(())
@@ -1682,6 +1715,18 @@ pub fn load_differential_gate_from_path_with_source_context(
 ) -> Result<DifferentialGateSummary, DifferentialReportLoadError> {
     let report = DifferentialReport::from_json_path(path)?;
     summarize_differential_gate_with_source_context(&report, source_summary)
+}
+
+pub fn load_differential_gate_from_json(
+    input: &str,
+) -> Result<DifferentialGateSummary, DifferentialReportLoadError> {
+    DifferentialGateSummary::from_json_str(input)
+}
+
+pub fn load_differential_gate_from_path(
+    path: impl AsRef<Path>,
+) -> Result<DifferentialGateSummary, DifferentialReportLoadError> {
+    DifferentialGateSummary::from_json_path(path)
 }
 
 pub fn write_differential_gate_to_path(
