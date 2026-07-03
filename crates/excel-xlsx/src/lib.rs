@@ -76,6 +76,7 @@ pub struct XlsxCodec;
 pub struct WorkbookSupportParts {
     pub workbook_relationships_part_uri: Option<String>,
     pub workbook_relationships_part_source_bytes: Option<Vec<u8>>,
+    pub workbook_relationships_summary: Option<WorksheetRelationshipsPartSummary>,
     pub styles_relationship: Option<WorkbookSupportRelationship>,
     pub styles_part_uri: Option<String>,
     pub styles_summary: Option<StylesheetSummary>,
@@ -3294,6 +3295,10 @@ fn collect_workbook_support_parts(
         .as_deref()
         .and_then(|workbook_rels| package.part(workbook_rels))
         .map(|part| part.bytes.clone());
+    let workbook_relationships_summary = workbook_relationships_part_source_bytes
+        .as_deref()
+        .map(|source_bytes| parse_worksheet_relationships_part_summary(source_bytes, &["xl"]))
+        .transpose()?;
     let styles_relationship = relationships
         .iter()
         .find(|relationship| relationship.relationship_type == STYLES_RELATIONSHIP_TYPE)
@@ -3374,6 +3379,7 @@ fn collect_workbook_support_parts(
     let support_parts = WorkbookSupportParts {
         workbook_relationships_part_uri,
         workbook_relationships_part_source_bytes,
+        workbook_relationships_summary,
         styles_relationship,
         styles_part_uri,
         styles_summary,
@@ -39838,6 +39844,69 @@ mod tests {
                 .contains("explicit workbook relationships part bytes changed")
         );
         assert!(error.message.contains("xl/_rels/workbook.xml.rels"));
+    }
+
+    #[test]
+    fn load_collects_workbook_relationships_structural_summary() {
+        let codec = XlsxCodec;
+        let mut package = OpcPackage::from_bytes(&workbook_with_styles_and_theme_bytes())
+            .expect("base workbook package");
+        let workbook_rels = String::from_utf8(
+            package
+                .part(WORKBOOK_RELS_PART_NAME)
+                .expect("workbook rels part")
+                .bytes
+                .clone(),
+        )
+        .expect("workbook rels utf8")
+        .replace(
+            r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">"#,
+            r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships" data-root="keep"><ext preserve="1"/>"#,
+        )
+        .replace(
+            r#"Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml""#,
+            r#"Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml" data-style="keep""#,
+        );
+        package
+            .replace_part_bytes(WORKBOOK_RELS_PART_NAME, workbook_rels.into_bytes())
+            .expect("replace workbook rels");
+        let bytes = package.to_bytes().expect("package bytes");
+
+        let loaded = codec
+            .load(bytes.as_slice(), CommonLoadOptions::default())
+            .expect("load workbook");
+        let summary = loaded
+            .support_parts
+            .workbook_relationships_summary
+            .as_ref()
+            .expect("workbook relationships summary");
+
+        assert_eq!(summary.root_name, "Relationships");
+        assert_eq!(
+            summary.root_attr_map.get("data-root").map(String::as_str),
+            Some("keep")
+        );
+        assert_eq!(
+            summary.root_extra_child_xmls,
+            vec![r#"<ext preserve="1"/>"#.to_string()]
+        );
+        assert_eq!(
+            summary.relationship_ids,
+            vec!["rId1".to_string(), "rId2".to_string(), "rId3".to_string()]
+        );
+        let styles_attrs = summary
+            .relationship_attr_maps
+            .iter()
+            .find(|attrs| attrs.get("Id").map(String::as_str) == Some("rId2"))
+            .expect("styles relationship attrs");
+        assert_eq!(
+            styles_attrs.get("Target").map(String::as_str),
+            Some("xl/styles.xml")
+        );
+        assert_eq!(
+            styles_attrs.get("data-style").map(String::as_str),
+            Some("keep")
+        );
     }
 
     #[test]
