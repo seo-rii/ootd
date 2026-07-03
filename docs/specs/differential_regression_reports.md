@@ -141,6 +141,12 @@ Canonical artifact filenames are exposed by
 - `differential_report.json`
 - `differential_gate_summary.json`
 
+Runners can derive both paths under an output directory with
+`differential_artifact_paths(output_root)`. This returns:
+
+- `reportPath = output_root / differential_report.json`
+- `gateSummaryPath = output_root / differential_gate_summary.json`
+
 The intended flow is:
 
 1. Load [sources.toml](/home/seorii/dev/hancomac/ootd/specs/sources.toml).

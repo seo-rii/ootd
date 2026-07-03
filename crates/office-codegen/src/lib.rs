@@ -599,6 +599,13 @@ pub struct DifferentialArtifactContract {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DifferentialArtifactPaths {
+    pub output_root_path: PathBuf,
+    pub report_path: PathBuf,
+    pub gate_summary_path: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OmCaptureSummary {
     pub primary_artifact: String,
     pub secondary_artifact: String,
@@ -1268,6 +1275,21 @@ impl DifferentialArtifactContract {
             ],
         }
     }
+
+    pub fn paths_under(&self, output_root: impl AsRef<Path>) -> DifferentialArtifactPaths {
+        let output_root_path = output_root.as_ref().to_path_buf();
+        DifferentialArtifactPaths {
+            report_path: output_root_path.join(&self.report_artifact),
+            gate_summary_path: output_root_path.join(&self.gate_summary_artifact),
+            output_root_path,
+        }
+    }
+}
+
+impl DifferentialArtifactPaths {
+    pub fn canonical(output_root: impl AsRef<Path>) -> Self {
+        DifferentialArtifactContract::canonical().paths_under(output_root)
+    }
 }
 
 impl DifferentialStatusCounts {
@@ -1684,6 +1706,10 @@ pub fn summarize_source_registry_toml(
 
 pub fn differential_artifact_contract() -> DifferentialArtifactContract {
     DifferentialArtifactContract::canonical()
+}
+
+pub fn differential_artifact_paths(output_root: impl AsRef<Path>) -> DifferentialArtifactPaths {
+    DifferentialArtifactPaths::canonical(output_root)
 }
 
 pub fn build_differential_report(

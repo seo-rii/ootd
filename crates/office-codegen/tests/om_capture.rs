@@ -13,14 +13,14 @@ use office_codegen::{
     build_differential_report, build_differential_report_with_source_context,
     build_focus_surface_registry, build_focus_surface_registry_from_json,
     build_focus_surface_registry_from_path, differential_artifact_contract,
-    generate_canonical_office_idl_from_dir, load_capture_bundle, load_differential_gate_from_json,
-    load_differential_gate_from_path, load_differential_gate_from_path_with_source_context,
-    load_differential_report_from_json, load_differential_report_from_path,
-    normalize_capture_bundle, normalize_capture_bundle_from_dir, normalize_pia_capture_json,
-    summarize_capture_bundle, summarize_differential_gate,
-    summarize_differential_gate_with_source_context, summarize_om_sources,
-    summarize_om_sources_toml, summarize_source_registry, summarize_source_registry_toml,
-    validate_differential_report_source_context,
+    differential_artifact_paths, generate_canonical_office_idl_from_dir, load_capture_bundle,
+    load_differential_gate_from_json, load_differential_gate_from_path,
+    load_differential_gate_from_path_with_source_context, load_differential_report_from_json,
+    load_differential_report_from_path, normalize_capture_bundle,
+    normalize_capture_bundle_from_dir, normalize_pia_capture_json, summarize_capture_bundle,
+    summarize_differential_gate, summarize_differential_gate_with_source_context,
+    summarize_om_sources, summarize_om_sources_toml, summarize_source_registry,
+    summarize_source_registry_toml, validate_differential_report_source_context,
     write_differential_gate_from_report_path_with_source_context, write_differential_gate_to_path,
     write_differential_report_to_path,
 };
@@ -222,6 +222,29 @@ fn reports_canonical_differential_artifact_names() {
             "differential_report.json".to_string(),
             "differential_gate_summary.json".to_string(),
         ]
+    );
+}
+
+#[test]
+fn reports_canonical_differential_artifact_paths() {
+    let output_root = PathBuf::from("reports").join("excel_365");
+    let contract = differential_artifact_contract();
+    let paths = differential_artifact_paths(&output_root);
+    let paths_from_contract = contract.paths_under(&output_root);
+
+    assert_eq!(paths, paths_from_contract);
+    assert_eq!(paths.output_root_path, output_root);
+    assert_eq!(
+        paths.report_path,
+        PathBuf::from("reports")
+            .join("excel_365")
+            .join("differential_report.json")
+    );
+    assert_eq!(
+        paths.gate_summary_path,
+        PathBuf::from("reports")
+            .join("excel_365")
+            .join("differential_gate_summary.json")
     );
 }
 
