@@ -28409,6 +28409,74 @@ mod tests {
             "{error}"
         );
 
+        let mut chart_summary_changed_loaded = loaded.clone();
+        chart_summary_changed_loaded
+            .sheet_drawing_support_parts
+            .get_mut(&sheet_id)
+            .expect("drawing support")
+            .chart_summaries
+            .get_mut("xl/charts/chart2.xml")
+            .expect("chart summary")
+            .chart_type_names
+            .clear();
+        let error = codec
+            .save(
+                &chart_summary_changed_loaded,
+                office_common::SaveOptions::default(),
+            )
+            .expect_err("save should reject changed chartsheet chart summary");
+        assert!(
+            error
+                .to_string()
+                .contains("explicit chart summary changed for xl/charts/chart2.xml"),
+            "{error}"
+        );
+
+        let mut chart_changed_loaded = loaded.clone();
+        chart_changed_loaded
+            .package
+            .replace_part_bytes(
+                "xl/charts/chart2.xml",
+                br#"<?xml version="1.0" encoding="UTF-8"?>
+<c:chartSpace
+  xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart">
+  <c:chart><c:plotArea><c:lineChart><c:ser><c:idx val="0"/><c:order val="0"/><c:val><c:numRef><c:f>Sheet1!$A$1:$A$3</c:f></c:numRef></c:val></c:ser></c:lineChart></c:plotArea></c:chart>
+</c:chartSpace>"#
+                    .to_vec(),
+            )
+            .expect("replace chartsheet chart part");
+        let error = codec
+            .save(&chart_changed_loaded, office_common::SaveOptions::default())
+            .expect_err("save should reject changed chartsheet chart part");
+        assert!(
+            error
+                .to_string()
+                .contains("explicit drawing chart part bytes changed: xl/charts/chart2.xml"),
+            "{error}"
+        );
+
+        let mut chart_missing_loaded = loaded.clone();
+        chart_missing_loaded
+            .sheet_drawing_support_parts
+            .get_mut(&sheet_id)
+            .expect("drawing support")
+            .chart_summaries
+            .remove("xl/charts/chart2.xml");
+        assert!(
+            chart_missing_loaded
+                .package
+                .remove_part("xl/charts/chart2.xml")
+        );
+        let error = codec
+            .save(&chart_missing_loaded, office_common::SaveOptions::default())
+            .expect_err("save should reject missing chartsheet chart part");
+        assert!(
+            error
+                .to_string()
+                .contains("explicit drawing chart part is missing: xl/charts/chart2.xml"),
+            "{error}"
+        );
+
         let mut support_changed_loaded = loaded.clone();
         support_changed_loaded
             .package
