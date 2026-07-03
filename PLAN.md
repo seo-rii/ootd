@@ -4222,6 +4222,8 @@
   - 범위: `extraClrSchemeLst` great-great-grandchild `<a:lumMod val="75000">`의 loaded `val` attr가 dirty save 직전 제거되는 회귀를 추가해서 `extra_color_scheme_list_great_great_grandchild_attr_maps`가 deeper descendant attr omission도 fail-fast로 막는지 고정
   - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1905 DONE` theme custClrLst great-grandchild attr omission reject parity
   - 범위: `custClrLst` great-grandchild `<a:lumMod val="75000">`의 loaded `val` attr가 dirty save 직전 제거되는 회귀를 추가해서 `custom_color_list_great_grandchild_attr_maps`가 deeper descendant attr omission도 fail-fast로 막는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1906 DONE` theme optional color deep descendant name/set reject parity
+  - 범위: `extraClrSchemeLst` great-great-grandchild와 `custClrLst` great-grandchild의 `<a:lumMod>` leaf name drift 및 leaf 제거 회귀를 추가해서 optional color-list deeper descendant `*_names`/set drift도 attr/text drift와 대칭적으로 fail-fast 되는지 고정
   - `Step 6.6a DONE` worksheet hyperlink-ref integrity regression
   - 범위: worksheet support가 추적한 hyperlink `ref` 목록을 load assertion과 dirty save 회귀로 고정하고, hyperlink `ref` drift/삭제를 fail-fast로 막음
   - `Step 6.6b1 DONE` worksheet-local relationship binding integrity

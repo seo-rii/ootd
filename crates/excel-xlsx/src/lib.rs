@@ -118560,6 +118560,93 @@ mod tests {
     }
 
     #[test]
+    fn save_rejects_theme_part_when_extra_color_scheme_list_great_great_grandchild_name_drifts() {
+        let codec = XlsxCodec;
+        let input = workbook_with_theme_extra_color_scheme_list_great_great_grandchildren_bytes();
+        let mut loaded = codec
+            .load(&input, CommonLoadOptions::default())
+            .expect("load workbook");
+        let sheet_id = loaded.state.worksheets[0].id;
+        let original_theme_xml = String::from_utf8(
+            loaded
+                .package
+                .part("xl/theme/theme1.xml")
+                .expect("theme part")
+                .bytes
+                .clone(),
+        )
+        .expect("theme xml utf8");
+        let theme_xml = original_theme_xml
+            .replace("<a:lumMod val=\"75000\">", "<a:lumOff val=\"75000\">")
+            .replace("</a:lumMod>", "</a:lumOff>");
+        assert_ne!(theme_xml, original_theme_xml);
+        loaded
+            .package
+            .replace_part_bytes("xl/theme/theme1.xml", theme_xml.into_bytes())
+            .expect("replace theme part");
+        loaded
+            .state
+            .set_range_values(
+                &office_common::RangeRef::single_cell(WorkbookId(0), sheet_id, 1, 1),
+                &office_common::OmArray::scalar(office_common::OmValue::Number(9.0)),
+            )
+            .expect("set value");
+
+        let error = codec
+            .save(&loaded, office_common::SaveOptions::default())
+            .expect_err(
+                "save should fail when extraClrSchemeLst great-great-grandchild name drifts",
+            );
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("typed theme summary drifted"));
+        assert!(error.message.contains("xl/theme/theme1.xml"));
+    }
+
+    #[test]
+    fn save_rejects_theme_part_when_extra_color_scheme_list_great_great_grandchild_set_drifts() {
+        let codec = XlsxCodec;
+        let input = workbook_with_theme_extra_color_scheme_list_great_great_grandchildren_bytes();
+        let mut loaded = codec
+            .load(&input, CommonLoadOptions::default())
+            .expect("load workbook");
+        let sheet_id = loaded.state.worksheets[0].id;
+        let original_theme_xml = String::from_utf8(
+            loaded
+                .package
+                .part("xl/theme/theme1.xml")
+                .expect("theme part")
+                .bytes
+                .clone(),
+        )
+        .expect("theme xml utf8");
+        let theme_xml = original_theme_xml.replace(
+            "<a:lumMod val=\"75000\">alpha<![CDATA[beta]]></a:lumMod>",
+            "",
+        );
+        assert_ne!(theme_xml, original_theme_xml);
+        loaded
+            .package
+            .replace_part_bytes("xl/theme/theme1.xml", theme_xml.into_bytes())
+            .expect("replace theme part");
+        loaded
+            .state
+            .set_range_values(
+                &office_common::RangeRef::single_cell(WorkbookId(0), sheet_id, 1, 1),
+                &office_common::OmArray::scalar(office_common::OmValue::Number(9.0)),
+            )
+            .expect("set value");
+
+        let error = codec
+            .save(&loaded, office_common::SaveOptions::default())
+            .expect_err(
+                "save should fail when extraClrSchemeLst great-great-grandchild set drifts",
+            );
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("typed theme summary drifted"));
+        assert!(error.message.contains("xl/theme/theme1.xml"));
+    }
+
+    #[test]
     fn save_rejects_theme_part_when_extra_color_scheme_list_grandchild_text_drifts() {
         let codec = XlsxCodec;
         let input = workbook_with_theme_extra_color_scheme_list_grandchild_text_bytes();
@@ -120363,6 +120450,89 @@ mod tests {
         let error = codec
             .save(&loaded, office_common::SaveOptions::default())
             .expect_err("save should fail when custClrLst great-grandchild extra attr is removed");
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("typed theme summary drifted"));
+        assert!(error.message.contains("xl/theme/theme1.xml"));
+    }
+
+    #[test]
+    fn save_rejects_theme_part_when_custom_color_list_great_grandchild_name_drifts() {
+        let codec = XlsxCodec;
+        let input = workbook_with_theme_custom_color_list_great_grandchildren_bytes();
+        let mut loaded = codec
+            .load(&input, CommonLoadOptions::default())
+            .expect("load workbook");
+        let sheet_id = loaded.state.worksheets[0].id;
+        let original_theme_xml = String::from_utf8(
+            loaded
+                .package
+                .part("xl/theme/theme1.xml")
+                .expect("theme part")
+                .bytes
+                .clone(),
+        )
+        .expect("theme xml utf8");
+        let theme_xml = original_theme_xml
+            .replace("<a:lumMod val=\"75000\">", "<a:lumOff val=\"75000\">")
+            .replace("</a:lumMod>", "</a:lumOff>");
+        assert_ne!(theme_xml, original_theme_xml);
+        loaded
+            .package
+            .replace_part_bytes("xl/theme/theme1.xml", theme_xml.into_bytes())
+            .expect("replace theme part");
+        loaded
+            .state
+            .set_range_values(
+                &office_common::RangeRef::single_cell(WorkbookId(0), sheet_id, 1, 1),
+                &office_common::OmArray::scalar(office_common::OmValue::Number(9.0)),
+            )
+            .expect("set value");
+
+        let error = codec
+            .save(&loaded, office_common::SaveOptions::default())
+            .expect_err("save should fail when custClrLst great-grandchild name drifts");
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("typed theme summary drifted"));
+        assert!(error.message.contains("xl/theme/theme1.xml"));
+    }
+
+    #[test]
+    fn save_rejects_theme_part_when_custom_color_list_great_grandchild_set_drifts() {
+        let codec = XlsxCodec;
+        let input = workbook_with_theme_custom_color_list_great_grandchildren_bytes();
+        let mut loaded = codec
+            .load(&input, CommonLoadOptions::default())
+            .expect("load workbook");
+        let sheet_id = loaded.state.worksheets[0].id;
+        let original_theme_xml = String::from_utf8(
+            loaded
+                .package
+                .part("xl/theme/theme1.xml")
+                .expect("theme part")
+                .bytes
+                .clone(),
+        )
+        .expect("theme xml utf8");
+        let theme_xml = original_theme_xml.replace(
+            "<a:lumMod val=\"75000\">alpha<![CDATA[beta]]></a:lumMod>",
+            "",
+        );
+        assert_ne!(theme_xml, original_theme_xml);
+        loaded
+            .package
+            .replace_part_bytes("xl/theme/theme1.xml", theme_xml.into_bytes())
+            .expect("replace theme part");
+        loaded
+            .state
+            .set_range_values(
+                &office_common::RangeRef::single_cell(WorkbookId(0), sheet_id, 1, 1),
+                &office_common::OmArray::scalar(office_common::OmValue::Number(9.0)),
+            )
+            .expect("set value");
+
+        let error = codec
+            .save(&loaded, office_common::SaveOptions::default())
+            .expect_err("save should fail when custClrLst great-grandchild set drifts");
         assert_eq!(error.code, OmErrorCode::InvalidState);
         assert!(error.message.contains("typed theme summary drifted"));
         assert!(error.message.contains("xl/theme/theme1.xml"));
