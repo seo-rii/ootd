@@ -4586,6 +4586,8 @@
   - 범위: clean validation에서 workbook relationships part root의 unknown child drift가 source-byte drift 이전의 structural summary drift로 명시 실패하는지 회귀로 고정
   - `Step 6.6b2b2b2b2b2f2b2dz DONE` content types entry-attr validation
   - 범위: clean validation에서 `[Content_Types].xml`의 `Default`/`Override` entry-local extra attr drift가 source-byte drift 이전의 structural summary drift로 명시 실패하는지 회귀로 고정
+  - `Step 6.6b2b2b2b2b2f2b2ea DONE` package relationships entry-attr validation
+  - 범위: clean validation에서 root package relationships `_rels/.rels`의 relationship entry-local extra attr drift가 source-byte drift 이전의 structural summary drift로 명시 실패하는지 회귀로 고정
 - 목표
   - 현재 core worksheet rewrite 이후 남아 있는 fidelity gap을 좁힌다.
   - style/theme/merge/comment/hyperlink/formula cached-value 계열 보존을 순차적으로 올린다.
