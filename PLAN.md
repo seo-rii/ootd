@@ -4423,6 +4423,8 @@
   - 범위: drawing relationship part 자체가 package 안에서 bytes drift되거나 삭제된 경우 clean save가 `explicit drawing relationships part ...` 오류로 실패하는지 직접 회귀로 고정해서 drawing rels source-byte/missing save gate를 테스트로 덮음
   - `Step 6.6b2b2b2b2b2f2b2cd DONE` drawing part save validation regression
   - 범위: drawing part 자체가 package 안에서 bytes drift되거나 삭제된 경우 clean save가 `explicit drawing part ...` 오류로 실패하는지 직접 회귀로 고정해서 drawing part source-byte/missing save gate를 테스트로 덮음
+  - `Step 6.6b2b2b2b2b2f2b2ce DONE` chart part save validation regression
+  - 범위: chart part 자체가 package 안에서 bytes drift되거나 삭제된 경우 clean save가 `explicit drawing chart part ...` 오류로 실패하는지 직접 회귀로 고정해서 chart part source-byte/missing save gate를 테스트로 덮음
 - 목표
   - 현재 core worksheet rewrite 이후 남아 있는 fidelity gap을 좁힌다.
   - style/theme/merge/comment/hyperlink/formula cached-value 계열 보존을 순차적으로 올린다.
