@@ -29581,8 +29581,36 @@ mod tests {
             vec!["xl/drawings/drawing1.xml".to_string()]
         );
         assert_eq!(
+            drawing_support
+                .drawing_part_source_bytes
+                .get("xl/drawings/drawing1.xml")
+                .expect("drawing part source bytes"),
+            &drawing_xml
+        );
+        assert_eq!(
+            drawing_support
+                .drawing_relationships_part_source_bytes
+                .get("xl/drawings/_rels/drawing1.xml.rels")
+                .expect("drawing relationships source bytes"),
+            &drawing_rels_xml
+        );
+        assert_eq!(
             drawing_support.chart_part_uris,
             vec!["xl/charts/chart1.xml".to_string()]
+        );
+        assert_eq!(
+            drawing_support
+                .chart_part_source_bytes
+                .get("xl/charts/chart1.xml")
+                .expect("chart part source bytes"),
+            &chart_xml
+        );
+        assert_eq!(
+            drawing_support
+                .chart_relationships_part_source_bytes
+                .get("xl/charts/_rels/chart1.xml.rels")
+                .expect("chart relationships source bytes"),
+            &chart_rels_xml
         );
         assert_eq!(
             drawing_support
