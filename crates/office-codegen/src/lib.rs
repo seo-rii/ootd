@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -54,12 +54,17 @@ pub enum CanonicalOmGenerationError {
         source: serde_json::Error,
     },
     Normalize(OmCaptureBundleError),
+    CaptureBundleContract {
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CaptureBundlePaths {
     pub raw_typelib_identity_path: PathBuf,
     pub excel_pia_public_surface_path: PathBuf,
+    pub capture_manifest_path: PathBuf,
+    pub output_checksums_path: PathBuf,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -856,6 +861,8 @@ impl CaptureBundlePaths {
             raw_typelib_identity_path: bundle_root.join("raw/raw_typelib_identity.json"),
             excel_pia_public_surface_path: bundle_root
                 .join("snapshots/excel_pia_public_surface.json"),
+            capture_manifest_path: bundle_root.join("manifest/capture_manifest.json"),
+            output_checksums_path: bundle_root.join("manifest/output_checksums.json"),
         }
     }
 }
@@ -1226,6 +1233,7 @@ pub fn load_capture_bundle(
     CanonicalOmGenerationError,
 > {
     let bundle_paths = CaptureBundlePaths::from_bundle_root(bundle_root);
+    validate_capture_bundle_contract(&bundle_paths)?;
     let typelib = load_typelib_identity_capture(&bundle_paths.raw_typelib_identity_path)?;
     let pia = load_pia_public_surface_capture(&bundle_paths.excel_pia_public_surface_path)?;
     Ok((typelib, pia, bundle_paths))
@@ -1311,6 +1319,133 @@ fn load_typelib_identity_capture(
         path: path.to_path_buf(),
         source,
     })
+}
+
+fn validate_capture_bundle_contract(
+    bundle_paths: &CaptureBundlePaths,
+) -> Result<(), CanonicalOmGenerationError> {
+    if !bundle_paths.capture_manifest_path.exists() {
+        return Ok(());
+    }
+
+    let manifest_input =
+        fs::read_to_string(&bundle_paths.capture_manifest_path).map_err(|source| {
+            CanonicalOmGenerationError::Io {
+                action: "read capture manifest",
+                path: bundle_paths.capture_manifest_path.clone(),
+                source,
+            }
+        })?;
+    let manifest: serde_json::Value = serde_json::from_str(&manifest_input).map_err(|source| {
+        CanonicalOmGenerationError::Json {
+            path: bundle_paths.capture_manifest_path.clone(),
+            source,
+        }
+    })?;
+    let expected_output_names = manifest
+        .get("expectedCaptureOutputs")
+        .and_then(|value| value.as_array())
+        .ok_or_else(|| CanonicalOmGenerationError::CaptureBundleContract {
+            message: "capture_manifest.json missing expectedCaptureOutputs array".to_string(),
+        })?
+        .iter()
+        .map(|value| {
+            value.as_str().map(str::to_string).ok_or_else(|| {
+                CanonicalOmGenerationError::CaptureBundleContract {
+                    message:
+                        "capture_manifest.json expectedCaptureOutputs contains non-string entry"
+                            .to_string(),
+                }
+            })
+        })
+        .collect::<Result<BTreeSet<_>, _>>()?;
+    let required_output_names = [
+        "raw_typelib_identity.json",
+        "excel_typelib_snapshot.idl",
+        "excel_typelib_snapshot.odl",
+        "excel_pia_identity.json",
+        "excel_pia_public_surface.json",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect::<BTreeSet<_>>();
+    if expected_output_names != required_output_names {
+        return Err(CanonicalOmGenerationError::CaptureBundleContract {
+            message: format!(
+                "capture_manifest.json expectedCaptureOutputs {:?} did not match required {:?}",
+                expected_output_names, required_output_names
+            ),
+        });
+    }
+
+    let writable_output_names = manifest
+        .get("writableOutputs")
+        .and_then(|value| value.as_object())
+        .ok_or_else(|| CanonicalOmGenerationError::CaptureBundleContract {
+            message: "capture_manifest.json missing writableOutputs object".to_string(),
+        })?
+        .iter()
+        .filter_map(|(logical_name, value)| {
+            matches!(
+                logical_name.as_str(),
+                "raw_typelib_identity"
+                    | "excel_typelib_snapshot_idl"
+                    | "excel_typelib_snapshot_odl"
+                    | "excel_pia_identity"
+                    | "excel_pia_public_surface"
+            )
+            .then(|| {
+                value
+                    .as_str()
+                    .and_then(|path| path.rsplit(['\\', '/']).next())
+                    .map(str::to_string)
+                    .ok_or_else(|| CanonicalOmGenerationError::CaptureBundleContract {
+                        message: format!(
+                            "capture_manifest.json writableOutputs.{logical_name} was not a path string"
+                        ),
+                    })
+            })
+        })
+        .collect::<Result<BTreeSet<_>, _>>()?;
+    if writable_output_names != expected_output_names {
+        return Err(CanonicalOmGenerationError::CaptureBundleContract {
+            message: format!(
+                "capture_manifest.json writableOutputs payload names {:?} did not match expectedCaptureOutputs {:?}",
+                writable_output_names, expected_output_names
+            ),
+        });
+    }
+
+    let checksums_input =
+        fs::read_to_string(&bundle_paths.output_checksums_path).map_err(|source| {
+            CanonicalOmGenerationError::Io {
+                action: "read output checksums",
+                path: bundle_paths.output_checksums_path.clone(),
+                source,
+            }
+        })?;
+    let checksums: BTreeMap<String, String> =
+        serde_json::from_str(&checksums_input).map_err(|source| {
+            CanonicalOmGenerationError::Json {
+                path: bundle_paths.output_checksums_path.clone(),
+                source,
+            }
+        })?;
+    let checksum_output_names = checksums
+        .keys()
+        .filter_map(|relative_path| relative_path.rsplit(['\\', '/']).next())
+        .map(str::to_string)
+        .collect::<BTreeSet<_>>();
+    if !checksum_output_names.is_superset(&expected_output_names) {
+        return Err(CanonicalOmGenerationError::CaptureBundleContract {
+            message: format!(
+                "output_checksums.json payload names {:?} did not cover expectedCaptureOutputs {:?}",
+                checksum_output_names, expected_output_names
+            ),
+        });
+    }
+
+    Ok(())
 }
 
 fn load_pia_public_surface_capture(
