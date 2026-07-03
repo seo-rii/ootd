@@ -27440,17 +27440,18 @@ mod tests {
                 bytes: chart_xml.clone(),
             })
             .expect("add chart");
+        let chart_rels_xml = br#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rIdStyle2" Type="http://schemas.microsoft.com/office/2011/relationships/chartStyle" Target="style2.xml"/>
+  <Relationship Id="rIdColors2" Type="http://schemas.microsoft.com/office/2011/relationships/chartColorStyle" Target="colors2.xml"/>
+</Relationships>"#
+            .to_vec();
         package
             .add_part(OpcPart {
                 name: "xl/charts/_rels/chart2.xml.rels".to_string(),
                 content_type: None,
                 compression: CompressionMethod::Stored,
-                bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rIdStyle2" Type="http://schemas.microsoft.com/office/2011/relationships/chartStyle" Target="style2.xml"/>
-  <Relationship Id="rIdColors2" Type="http://schemas.microsoft.com/office/2011/relationships/chartColorStyle" Target="colors2.xml"/>
-</Relationships>"#
-                    .to_vec(),
+                bytes: chart_rels_xml.clone(),
             })
             .expect("add chart rels");
         let chart_style_xml = br#"<?xml version="1.0" encoding="UTF-8"?>
@@ -27690,7 +27691,13 @@ mod tests {
         assert!(saved_package.contains("xl/chartsheets/_rels/sheet1.xml.rels"));
         assert!(saved_package.contains("xl/drawings/drawing2.xml"));
         assert!(saved_package.contains("xl/drawings/_rels/drawing2.xml.rels"));
-        assert!(saved_package.contains("xl/charts/_rels/chart2.xml.rels"));
+        assert_eq!(
+            saved_package
+                .part("xl/charts/_rels/chart2.xml.rels")
+                .expect("saved chartsheet chart rels")
+                .bytes,
+            chart_rels_xml
+        );
         assert_eq!(
             saved_package
                 .part("xl/charts/style2.xml")
@@ -27820,17 +27827,18 @@ mod tests {
                 bytes: chart_xml.clone(),
             })
             .expect("add chart");
+        let chart_rels_xml = br#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rIdStyle1" Type="http://schemas.microsoft.com/office/2011/relationships/chartStyle" Target="style1.xml"/>
+  <Relationship Id="rIdColors1" Type="http://schemas.microsoft.com/office/2011/relationships/chartColorStyle" Target="colors1.xml"/>
+</Relationships>"#
+            .to_vec();
         package
             .add_part(OpcPart {
                 name: "xl/charts/_rels/chart1.xml.rels".to_string(),
                 content_type: None,
                 compression: CompressionMethod::Stored,
-                bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rIdStyle1" Type="http://schemas.microsoft.com/office/2011/relationships/chartStyle" Target="style1.xml"/>
-  <Relationship Id="rIdColors1" Type="http://schemas.microsoft.com/office/2011/relationships/chartColorStyle" Target="colors1.xml"/>
-</Relationships>"#
-                    .to_vec(),
+                bytes: chart_rels_xml.clone(),
             })
             .expect("add chart rels");
         let chart_style_xml = br#"<?xml version="1.0" encoding="UTF-8"?>
@@ -28562,7 +28570,13 @@ mod tests {
                 .bytes,
             chart_colors_xml
         );
-        assert!(saved_package.contains("xl/charts/_rels/chart1.xml.rels"));
+        assert_eq!(
+            saved_package
+                .part("xl/charts/_rels/chart1.xml.rels")
+                .expect("saved chart rels")
+                .bytes,
+            chart_rels_xml
+        );
     }
 
     #[test]

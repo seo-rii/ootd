@@ -4315,6 +4315,8 @@
   - 범위: external hyperlink blank-anchor fallback path에서 worksheet `<hyperlinks>` container의 root extra child drift를 주입한 뒤, dirty save가 `hyperlinks_part_summary` 원본 구조를 기준으로 `<extLst>` payload를 복구하고 blank anchor `C3`는 reopen 후에도 비물질화 상태를 유지하는지 회귀로 고정
   - `Step 6.6b2b2b2b2b2f2b2ah DONE` worksheet hyperlinks child-order recovery
   - 범위: external hyperlink blank-anchor fallback path에서 worksheet `<hyperlinks>` container child order drift를 주입한 뒤, dirty save가 `hyperlinks_part_summary` 원본 구조를 기준으로 `<hyperlink>` before `<extLst>` 순서를 복구하고 blank anchor `C3`는 reopen 후에도 비물질화 상태를 유지하는지 회귀로 고정
+  - `Step 6.6b2b2b2b2b2f2b2ai DONE` chart relationships clean-save byte preservation
+  - 범위: embedded chart와 chartsheet drawing inventory clean-save 회귀에서 chart support style/color 관계를 담은 `xl/charts/_rels/chartN.xml.rels`도 원본 bytes와 정확히 일치하는지 검증해서 chart support part 자체뿐 아니라 chart relationship part까지 lossless 보존 표면으로 고정
 - 목표
   - 현재 core worksheet rewrite 이후 남아 있는 fidelity gap을 좁힌다.
   - style/theme/merge/comment/hyperlink/formula cached-value 계열 보존을 순차적으로 올린다.
