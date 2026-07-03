@@ -4234,6 +4234,8 @@
   - 범위: `fontScheme` nested child 중 첫 `<a:latin>` leaf의 name drift 및 제거 회귀를 추가해서 뒤쪽 `<a:font>` 중심 name/set drift와 대칭적으로 `font_scheme_nested_child_names`/set drift가 fail-fast 되는지 고정
   - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1911 DONE` themeElements immediate child name reject parity
   - 범위: `themeElements` immediate child `<a:clrScheme>`의 tag name drift 회귀를 추가해서 기존 child order/set drift와 대칭적으로 `theme_elements_child_names` drift가 dirty save에서 fail-fast 되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1912 DONE` themeElements required child name drift symmetry
+  - 범위: `themeElements` immediate child `<a:fontScheme>` 및 `<a:fmtScheme>` tag name drift 회귀를 추가해서 필수 child 3종 모두 name drift가 parser-level structural validation에서 fail-fast 되는지 고정
   - `Step 6.6a DONE` worksheet hyperlink-ref integrity regression
   - 범위: worksheet support가 추적한 hyperlink `ref` 목록을 load assertion과 dirty save 회귀로 고정하고, hyperlink `ref` drift/삭제를 fail-fast로 막음
   - `Step 6.6b1 DONE` worksheet-local relationship binding integrity
