@@ -4536,6 +4536,8 @@
   - 범위: chartsheet drawing support inventory가 추적하는 drawing relationships part가 save 직전에 drift되거나 삭제된 경우 clean save가 명시적으로 실패하는지 회귀로 고정해서 embedded drawing relationships validation과 맞춤
   - `Step 6.6b2b2b2b2b2f2b2da DONE` chart colors support part save validation parity
   - 범위: embedded/chartsheet chart drawing support inventory가 추적하는 chart color style support part가 save 직전에 drift되거나 삭제된 경우 clean save가 명시적으로 실패하는지 회귀로 고정해서 chart style support validation과 맞춤
+  - `Step 6.6b2b2b2b2b2f2b2db DONE` workbook relationships source byte save validation
+  - 범위: workbook-level relationship graph가 save 직전에 source bytes drift된 경우 clean save가 명시적으로 실패하도록 `WorkbookSupportParts`에 workbook rels source bytes를 보존하고 회귀로 고정
 - 목표
   - 현재 core worksheet rewrite 이후 남아 있는 fidelity gap을 좁힌다.
   - style/theme/merge/comment/hyperlink/formula cached-value 계열 보존을 순차적으로 올린다.
