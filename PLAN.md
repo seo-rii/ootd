@@ -4594,6 +4594,8 @@
   - 범위: clean validation에서 `[Content_Types].xml`, root package relationships `_rels/.rels`, workbook relationships part의 loaded root extra attr drift가 source-byte drift 이전의 structural summary drift로 명시 실패하는지 회귀로 고정
   - `Step 6.6b2b2b2b2b2f2b2ed DONE` package raw graph loaded root-child validation
   - 범위: clean validation에서 `[Content_Types].xml`, root package relationships `_rels/.rels`, workbook relationships part의 loaded root extra child drift가 source-byte drift 이전의 structural summary drift로 명시 실패하는지 회귀로 고정
+  - `Step 6.6b2b2b2b2b2f2b2ee DONE` relationships root preservation
+  - 범위: load/clean-save 경로에서 root package relationships `_rels/.rels` 및 workbook relationships part의 root extra attr, root extra child, relationship extra attr가 structural summary와 원문 보존 양쪽에 남는지 회귀로 고정
 - 목표
   - 현재 core worksheet rewrite 이후 남아 있는 fidelity gap을 좁힌다.
   - style/theme/merge/comment/hyperlink/formula cached-value 계열 보존을 순차적으로 올린다.
