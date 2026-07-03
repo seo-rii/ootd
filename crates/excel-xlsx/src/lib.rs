@@ -808,6 +808,8 @@ pub struct SheetDrawingSupportParts {
     pub drawing_part_source_bytes: BTreeMap<String, Vec<u8>>,
     pub drawing_relationships_part_uris: Vec<String>,
     pub drawing_relationships_part_source_bytes: BTreeMap<String, Vec<u8>>,
+    pub drawing_opaque_relationship_part_uris: Vec<String>,
+    pub drawing_opaque_relationship_part_source_bytes: BTreeMap<String, Vec<u8>>,
     pub drawing_summaries: BTreeMap<String, DrawingPartSummary>,
     pub chart_part_uris: Vec<String>,
     pub chart_part_source_bytes: BTreeMap<String, Vec<u8>>,
@@ -824,6 +826,7 @@ impl SheetDrawingSupportParts {
     pub fn is_empty(&self) -> bool {
         self.drawing_relationship_ids.is_empty()
             && self.drawing_part_uris.is_empty()
+            && self.drawing_opaque_relationship_part_uris.is_empty()
             && self.chart_part_uris.is_empty()
             && self.chart_support_part_uris.is_empty()
             && self.chart_opaque_relationship_part_uris.is_empty()
@@ -3413,6 +3416,8 @@ fn collect_sheet_drawing_support_parts(
     let mut drawing_part_source_bytes = BTreeMap::new();
     let mut drawing_relationships_part_uris = Vec::new();
     let mut drawing_relationships_part_source_bytes = BTreeMap::new();
+    let mut drawing_opaque_relationship_part_uris = Vec::new();
+    let mut drawing_opaque_relationship_part_source_bytes = BTreeMap::new();
     let mut drawing_summaries = BTreeMap::new();
     let mut chart_part_uris = Vec::new();
     let mut chart_part_source_bytes = BTreeMap::new();
@@ -3476,6 +3481,22 @@ fn collect_sheet_drawing_support_parts(
                 .all(|existing| existing != &chart_relationship.target)
             {
                 chart_part_uris.push(chart_relationship.target.clone());
+            }
+        }
+        for opaque_relationship in &drawing_summary.opaque_relationships {
+            if !matches!(opaque_relationship.target_mode.as_deref(), Some("External"))
+                && let Some(opaque_part) = package.part(&opaque_relationship.target)
+            {
+                if drawing_opaque_relationship_part_uris
+                    .iter()
+                    .all(|existing| existing != &opaque_relationship.target)
+                {
+                    drawing_opaque_relationship_part_uris.push(opaque_relationship.target.clone());
+                }
+                drawing_opaque_relationship_part_source_bytes.insert(
+                    opaque_relationship.target.clone(),
+                    opaque_part.bytes.clone(),
+                );
             }
         }
         drawing_summaries.insert(drawing_part_uri.clone(), drawing_summary);
@@ -3580,6 +3601,8 @@ fn collect_sheet_drawing_support_parts(
         drawing_part_source_bytes,
         drawing_relationships_part_uris,
         drawing_relationships_part_source_bytes,
+        drawing_opaque_relationship_part_uris,
+        drawing_opaque_relationship_part_source_bytes,
         drawing_summaries,
         chart_part_uris,
         chart_part_source_bytes,
@@ -30244,6 +30267,17 @@ mod tests {
                 target_mode: None,
             }]
         );
+        assert_eq!(
+            drawing_support.drawing_opaque_relationship_part_uris,
+            vec!["xl/opaque/drawingOpaque1.xml".to_string()]
+        );
+        assert_eq!(
+            drawing_support
+                .drawing_opaque_relationship_part_source_bytes
+                .get("xl/opaque/drawingOpaque1.xml")
+                .expect("drawing opaque bytes"),
+            &opaque_xml
+        );
         assert_eq!(loaded.state.charts.len(), 1);
 
         let saved = codec
@@ -30459,6 +30493,17 @@ mod tests {
                 target: "xl/opaque/drawingOpaque2.xml".to_string(),
                 target_mode: None,
             }]
+        );
+        assert_eq!(
+            drawing_support.drawing_opaque_relationship_part_uris,
+            vec!["xl/opaque/drawingOpaque2.xml".to_string()]
+        );
+        assert_eq!(
+            drawing_support
+                .drawing_opaque_relationship_part_source_bytes
+                .get("xl/opaque/drawingOpaque2.xml")
+                .expect("chartsheet drawing opaque bytes"),
+            &opaque_xml
         );
         assert_eq!(loaded.state.charts.len(), 1);
 
