@@ -4258,6 +4258,8 @@
   - 범위: `fontScheme` direct child 중 `<a:majorFont>`의 name drift 및 제거 회귀를 추가해서 기존 `<a:minorFont>` 중심 direct child drift와 대칭적으로 fail-fast 되는지 고정
   - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1923 DONE` theme fontScheme first direct child add reject parity
   - 범위: `fontScheme` direct child 중 `<a:majorFont>` 중복 추가 회귀를 더해 기존 `<a:minorFont>` 중복 추가 drift와 대칭적으로 fail-fast 되는지 고정
+  - `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1924 DONE` theme fontScheme first nested child add reject parity
+  - 범위: `fontScheme` nested child 중 `<a:latin>` 중복 추가 회귀를 더해 기존 `<a:font>` 중복 추가 drift와 대칭적으로 fail-fast 되는지 고정
   - `Step 6.6a DONE` worksheet hyperlink-ref integrity regression
   - 범위: worksheet support가 추적한 hyperlink `ref` 목록을 load assertion과 dirty save 회귀로 고정하고, hyperlink `ref` drift/삭제를 fail-fast로 막음
   - `Step 6.6b1 DONE` worksheet-local relationship binding integrity
