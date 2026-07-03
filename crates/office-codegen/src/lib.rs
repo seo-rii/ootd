@@ -1381,33 +1381,43 @@ fn validate_capture_bundle_contract(
         });
     }
 
-    let writable_output_names = manifest
+    let writable_outputs = manifest
         .get("writableOutputs")
         .and_then(|value| value.as_object())
         .ok_or_else(|| CanonicalOmGenerationError::CaptureBundleContract {
             message: "capture_manifest.json missing writableOutputs object".to_string(),
-        })?
+        })?;
+    let writable_output_logical_names = writable_outputs.keys().cloned().collect::<BTreeSet<_>>();
+    let required_writable_output_logical_names = [
+        "raw_typelib_identity",
+        "excel_typelib_snapshot_idl",
+        "excel_typelib_snapshot_odl",
+        "excel_pia_identity",
+        "excel_pia_public_surface",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect::<BTreeSet<_>>();
+    if writable_output_logical_names != required_writable_output_logical_names {
+        return Err(CanonicalOmGenerationError::CaptureBundleContract {
+            message: format!(
+                "capture_manifest.json writableOutputs keys {:?} did not match required {:?}",
+                writable_output_logical_names, required_writable_output_logical_names
+            ),
+        });
+    }
+    let writable_output_names = writable_outputs
         .iter()
-        .filter_map(|(logical_name, value)| {
-            matches!(
-                logical_name.as_str(),
-                "raw_typelib_identity"
-                    | "excel_typelib_snapshot_idl"
-                    | "excel_typelib_snapshot_odl"
-                    | "excel_pia_identity"
-                    | "excel_pia_public_surface"
-            )
-            .then(|| {
-                value
-                    .as_str()
-                    .and_then(|path| path.rsplit(['\\', '/']).next())
-                    .map(str::to_string)
-                    .ok_or_else(|| CanonicalOmGenerationError::CaptureBundleContract {
-                        message: format!(
-                            "capture_manifest.json writableOutputs.{logical_name} was not a path string"
-                        ),
-                    })
-            })
+        .map(|(logical_name, value)| {
+            value
+                .as_str()
+                .and_then(|path| path.rsplit(['\\', '/']).next())
+                .map(str::to_string)
+                .ok_or_else(|| CanonicalOmGenerationError::CaptureBundleContract {
+                    message: format!(
+                        "capture_manifest.json writableOutputs.{logical_name} was not a path string"
+                    ),
+                })
         })
         .collect::<Result<BTreeSet<_>, _>>()?;
     if writable_output_names != expected_output_names {
