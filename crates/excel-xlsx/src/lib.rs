@@ -28642,6 +28642,47 @@ mod tests {
             "{error}"
         );
 
+        let mut colors_changed_loaded = loaded.clone();
+        colors_changed_loaded
+            .package
+            .replace_part_bytes(
+                "xl/charts/colors2.xml",
+                br#"<?xml version="1.0" encoding="UTF-8"?><cs:colorStyle xmlns:cs="http://schemas.microsoft.com/office/drawing/2012/chartStyle" id="999"/>"#
+                    .to_vec(),
+            )
+            .expect("replace chart colors part");
+        let error = codec
+            .save(
+                &colors_changed_loaded,
+                office_common::SaveOptions::default(),
+            )
+            .expect_err("save should reject changed chart colors support part");
+        assert!(
+            error
+                .to_string()
+                .contains("explicit chart support part bytes changed: xl/charts/colors2.xml"),
+            "{error}"
+        );
+
+        let mut colors_missing_loaded = loaded.clone();
+        assert!(
+            colors_missing_loaded
+                .package
+                .remove_part("xl/charts/colors2.xml")
+        );
+        let error = codec
+            .save(
+                &colors_missing_loaded,
+                office_common::SaveOptions::default(),
+            )
+            .expect_err("save should reject missing chart colors support part");
+        assert!(
+            error
+                .to_string()
+                .contains("explicit chart support part is missing: xl/charts/colors2.xml"),
+            "{error}"
+        );
+
         let mut changed_loaded = loaded.clone();
         changed_loaded
             .package
@@ -30782,6 +30823,47 @@ mod tests {
             error
                 .to_string()
                 .contains("explicit chart support part is missing: xl/charts/style1.xml"),
+            "{error}"
+        );
+
+        let mut colors_changed_loaded = loaded.clone();
+        colors_changed_loaded
+            .package
+            .replace_part_bytes(
+                "xl/charts/colors1.xml",
+                br#"<?xml version="1.0" encoding="UTF-8"?><cs:colorStyle xmlns:cs="http://schemas.microsoft.com/office/drawing/2012/chartStyle" id="999"/>"#
+                    .to_vec(),
+            )
+            .expect("replace embedded chart colors part");
+        let error = codec
+            .save(
+                &colors_changed_loaded,
+                office_common::SaveOptions::default(),
+            )
+            .expect_err("save should reject changed embedded chart colors support part");
+        assert!(
+            error
+                .to_string()
+                .contains("explicit chart support part bytes changed: xl/charts/colors1.xml"),
+            "{error}"
+        );
+
+        let mut colors_missing_loaded = loaded.clone();
+        assert!(
+            colors_missing_loaded
+                .package
+                .remove_part("xl/charts/colors1.xml")
+        );
+        let error = codec
+            .save(
+                &colors_missing_loaded,
+                office_common::SaveOptions::default(),
+            )
+            .expect_err("save should reject missing embedded chart colors support part");
+        assert!(
+            error
+                .to_string()
+                .contains("explicit chart support part is missing: xl/charts/colors1.xml"),
             "{error}"
         );
     }
