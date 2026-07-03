@@ -1628,12 +1628,15 @@ fn validate_receipt_results(
 }
 
 fn bundle_relative_path(bundle_root: &Path, relative_path: &str) -> Option<PathBuf> {
+    if relative_path.starts_with(['/', '\\']) {
+        return None;
+    }
     let mut path = bundle_root.to_path_buf();
     for component in relative_path.split(['\\', '/']) {
         if component.is_empty() || component == "." {
             continue;
         }
-        if component == ".." {
+        if component == ".." || component.contains(':') {
             return None;
         }
         path.push(component);
