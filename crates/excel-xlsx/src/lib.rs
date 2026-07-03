@@ -77380,6 +77380,40 @@ mod tests {
     }
 
     #[test]
+    fn clean_save_preserves_explicit_worksheet_support_part_bytes() {
+        let codec = XlsxCodec;
+        let input = workbook_with_hyperlink_comment_and_calc_chain_bytes();
+        let original_package = OpcPackage::from_bytes(&input).expect("original package");
+
+        let loaded = codec
+            .load(&input, CommonLoadOptions::default())
+            .expect("load workbook");
+        let saved = codec
+            .save(&loaded, office_common::SaveOptions::default())
+            .expect("save workbook");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+
+        for part_name in [
+            "xl/worksheets/sheet1.xml",
+            "xl/worksheets/_rels/sheet1.xml.rels",
+            "xl/comments1.xml",
+            "xl/drawings/vmlDrawing1.vml",
+        ] {
+            assert_eq!(
+                saved_package
+                    .part(part_name)
+                    .expect("saved worksheet support part")
+                    .bytes,
+                original_package
+                    .part(part_name)
+                    .expect("original worksheet support part")
+                    .bytes,
+                "{part_name} should be byte-preserved on clean save"
+            );
+        }
+    }
+
+    #[test]
     fn invalidates_calc_chain_but_preserves_hyperlink_and_comment_artifacts_during_dirty_save() {
         let codec = XlsxCodec;
         let input = workbook_with_hyperlink_comment_and_calc_chain_bytes();
