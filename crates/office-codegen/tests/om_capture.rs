@@ -6,15 +6,15 @@ use std::{
 };
 
 use office_codegen::{
-    CanonicalOmGenerationError, CodegenSummary, OmCaptureBundleError, OmSourcesManifest,
-    PiaCaptureClass, PiaCaptureInterface, PiaPublicSurfaceCapture, SourceRegistryManifest,
-    TypelibIdentityCapture, build_coverage_report, build_coverage_report_from_json,
-    build_coverage_report_from_path, build_focus_surface_registry,
-    build_focus_surface_registry_from_json, build_focus_surface_registry_from_path,
-    generate_canonical_office_idl_from_dir, load_capture_bundle, normalize_capture_bundle,
-    normalize_capture_bundle_from_dir, normalize_pia_capture_json, summarize_capture_bundle,
-    summarize_om_sources, summarize_om_sources_toml, summarize_source_registry,
-    summarize_source_registry_toml,
+    CanonicalOmGenerationError, CodegenSummary, DifferentialCaseResult, DifferentialCaseStatus,
+    OmCaptureBundleError, OmSourcesManifest, PiaCaptureClass, PiaCaptureInterface,
+    PiaPublicSurfaceCapture, SourceRegistryManifest, TypelibIdentityCapture, build_coverage_report,
+    build_coverage_report_from_json, build_coverage_report_from_path, build_differential_report,
+    build_focus_surface_registry, build_focus_surface_registry_from_json,
+    build_focus_surface_registry_from_path, generate_canonical_office_idl_from_dir,
+    load_capture_bundle, normalize_capture_bundle, normalize_capture_bundle_from_dir,
+    normalize_pia_capture_json, summarize_capture_bundle, summarize_om_sources,
+    summarize_om_sources_toml, summarize_source_registry, summarize_source_registry_toml,
 };
 use office_idl::{AccessMode, CaptureOriginKind, InterfaceKind, OfficeIdlDocument};
 use sha2::{Digest, Sha256};
@@ -197,6 +197,95 @@ fn loads_source_registry_and_reports_enabled_test_corpus() {
         ]
     );
     assert_eq!(summary.profile_count, 3);
+}
+
+#[test]
+fn builds_differential_report_with_stable_status_counts() {
+    let cases = vec![
+        DifferentialCaseResult {
+            name: "Application.Version".to_string(),
+            surface: Some("Application".to_string()),
+            member: Some("Version".to_string()),
+            status: DifferentialCaseStatus::Passed,
+            expected: Some("16.0".to_string()),
+            actual: Some("16.0".to_string()),
+            message: None,
+            artifacts: BTreeMap::new(),
+        },
+        DifferentialCaseResult {
+            name: "Range.Value2 multi-area".to_string(),
+            surface: Some("Range".to_string()),
+            member: Some("Value2".to_string()),
+            status: DifferentialCaseStatus::Failed,
+            expected: Some("[[1],[2]]".to_string()),
+            actual: Some("1".to_string()),
+            message: Some("runtime collapsed the reference to the first scalar".to_string()),
+            artifacts: BTreeMap::from([(
+                "runtimeTrace".to_string(),
+                "reports/range_value2_runtime.json".to_string(),
+            )]),
+        },
+        DifferentialCaseResult {
+            name: "Chart.SetSourceData".to_string(),
+            surface: Some("Chart".to_string()),
+            member: Some("SetSourceData".to_string()),
+            status: DifferentialCaseStatus::MissingOracle,
+            expected: None,
+            actual: Some("completed".to_string()),
+            message: Some("Excel oracle result was not captured".to_string()),
+            artifacts: BTreeMap::new(),
+        },
+        DifferentialCaseResult {
+            name: "PivotChart refresh".to_string(),
+            surface: Some("Chart".to_string()),
+            member: Some("Refresh".to_string()),
+            status: DifferentialCaseStatus::Unsupported,
+            expected: None,
+            actual: None,
+            message: Some("pivot charts are preserve-only".to_string()),
+            artifacts: BTreeMap::new(),
+        },
+        DifferentialCaseResult {
+            name: "External link update".to_string(),
+            surface: Some("Workbook".to_string()),
+            member: Some("UpdateLink".to_string()),
+            status: DifferentialCaseStatus::Skipped,
+            expected: None,
+            actual: None,
+            message: Some("external workbook fixture is unavailable".to_string()),
+            artifacts: BTreeMap::new(),
+        },
+        DifferentialCaseResult {
+            name: "WorksheetFunction.XLookup".to_string(),
+            surface: Some("WorksheetFunction".to_string()),
+            member: Some("XLookup".to_string()),
+            status: DifferentialCaseStatus::MissingRuntime,
+            expected: Some("matched".to_string()),
+            actual: None,
+            message: Some("runtime function is not implemented".to_string()),
+            artifacts: BTreeMap::new(),
+        },
+    ];
+
+    let report = build_differential_report("Excel", "16.0", "excel_365", cases);
+
+    assert_eq!(report.library, "Excel");
+    assert_eq!(report.version, "16.0");
+    assert_eq!(report.profile, "excel_365");
+    assert_eq!(report.case_count, 6);
+    assert_eq!(report.status_counts.passed, 1);
+    assert_eq!(report.status_counts.failed, 1);
+    assert_eq!(report.status_counts.missing_oracle, 1);
+    assert_eq!(report.status_counts.missing_runtime, 1);
+    assert_eq!(report.status_counts.unsupported, 1);
+    assert_eq!(report.status_counts.skipped, 1);
+    assert_eq!(report.cases[0].name, "Application.Version");
+
+    let json = serde_json::to_string(&report).expect("report json");
+    assert!(json.contains(r#""caseCount":6"#));
+    assert!(json.contains(r#""missingOracle":1"#));
+    assert!(json.contains(r#""missingRuntime":1"#));
+    assert!(json.contains(r#""runtimeTrace":"reports/range_value2_runtime.json""#));
 }
 
 #[test]

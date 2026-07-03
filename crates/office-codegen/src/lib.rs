@@ -251,6 +251,58 @@ pub struct OmCoverageReport {
     pub missing_focus_surfaces: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DifferentialCaseStatus {
+    Passed,
+    Failed,
+    MissingOracle,
+    MissingRuntime,
+    Unsupported,
+    Skipped,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DifferentialStatusCounts {
+    pub passed: usize,
+    pub failed: usize,
+    pub missing_oracle: usize,
+    pub missing_runtime: usize,
+    pub unsupported: usize,
+    pub skipped: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DifferentialCaseResult {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub surface: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub member: Option<String>,
+    pub status: DifferentialCaseStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expected: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub actual: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub artifacts: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DifferentialReport {
+    pub library: String,
+    pub version: String,
+    pub profile: String,
+    pub case_count: usize,
+    pub status_counts: DifferentialStatusCounts,
+    pub cases: Vec<DifferentialCaseResult>,
+}
+
 impl From<std::io::Error> for OmSourcesLoadError {
     fn from(value: std::io::Error) -> Self {
         Self::Io(value)
@@ -1147,6 +1199,41 @@ impl SourceRegistrySummary {
     }
 }
 
+impl DifferentialStatusCounts {
+    pub fn record(&mut self, status: DifferentialCaseStatus) {
+        match status {
+            DifferentialCaseStatus::Passed => self.passed += 1,
+            DifferentialCaseStatus::Failed => self.failed += 1,
+            DifferentialCaseStatus::MissingOracle => self.missing_oracle += 1,
+            DifferentialCaseStatus::MissingRuntime => self.missing_runtime += 1,
+            DifferentialCaseStatus::Unsupported => self.unsupported += 1,
+            DifferentialCaseStatus::Skipped => self.skipped += 1,
+        }
+    }
+}
+
+impl DifferentialReport {
+    pub fn from_cases(
+        library: impl Into<String>,
+        version: impl Into<String>,
+        profile: impl Into<String>,
+        cases: Vec<DifferentialCaseResult>,
+    ) -> Self {
+        let mut status_counts = DifferentialStatusCounts::default();
+        for case in &cases {
+            status_counts.record(case.status);
+        }
+        Self {
+            library: library.into(),
+            version: version.into(),
+            profile: profile.into(),
+            case_count: cases.len(),
+            status_counts,
+            cases,
+        }
+    }
+}
+
 pub fn summarize(document: &OfficeIdlDocument) -> CodegenSummary {
     CodegenSummary::from_document(document)
 }
@@ -1356,6 +1443,15 @@ pub fn summarize_source_registry_toml(
 ) -> Result<SourceRegistrySummary, OmSourcesLoadError> {
     let manifest = SourceRegistryManifest::from_toml_str(input)?;
     Ok(SourceRegistrySummary::from_manifest(&manifest))
+}
+
+pub fn build_differential_report(
+    library: impl Into<String>,
+    version: impl Into<String>,
+    profile: impl Into<String>,
+    cases: Vec<DifferentialCaseResult>,
+) -> DifferentialReport {
+    DifferentialReport::from_cases(library, version, profile, cases)
 }
 
 pub fn normalize_pia_capture_json(input: &str) -> Result<OfficeIdlDocument, PiaCaptureLoadError> {

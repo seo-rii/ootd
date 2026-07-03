@@ -4717,6 +4717,8 @@
   - 범위: `office-capture` completed bundle 테스트가 writable output logical key/suffix와 payload writable key mapping을 `writable_output_map()` 및 `payload_writable_output_keys()` helper에서 가져오도록 정리해 manifest/checksum output contract 회귀가 코드 경로별 inline 목록과 drift되지 않도록 보강
   - `Step 7.36 DONE` codegen source registry test corpus summary
   - 범위: `specs/sources.toml` registry를 valid TOML schema로 정리하고, `office-codegen`이 enabled official/open-source/synthetic/real-world corpus와 validation mode를 typed summary로 읽어 후속 oracle/corpus runner가 같은 source contract를 재사용할 수 있도록 고정
+  - `Step 7.37 DONE` codegen differential report model
+  - 범위: `office-codegen`에 Excel oracle 결과와 runtime 결과를 비교한 case-level outcome, status counts, artifact links를 담는 serde 가능한 `DifferentialReport` 모델과 builder를 추가해 후속 oracle/corpus runner가 동일한 regression report contract를 출력할 수 있도록 고정
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.
