@@ -38035,6 +38035,34 @@ mod tests {
     }
 
     #[test]
+    fn strip_calc_chain_relationships_preserves_unrelated_structure() {
+        let rels_xml = br#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships" data-root="keep">
+  <ext preserve="1"/>
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml" data-sheet="keep"><ext preserve="sheet"/></Relationship>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/calcChain" Target="calcChain.xml"><ext preserve="drop"/></Relationship>
+  <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml" data-style="keep"/>
+</Relationships>"#;
+
+        let stripped = String::from_utf8(
+            super::strip_calc_chain_relationships(rels_xml)
+                .expect("strip calc chain relationships"),
+        )
+        .expect("relationships xml utf8");
+
+        assert!(stripped.contains(r#"data-root="keep""#));
+        assert!(stripped.contains(r#"<ext preserve="1"/>"#));
+        assert!(stripped.contains(r#"Id="rId1""#));
+        assert!(stripped.contains(r#"data-sheet="keep""#));
+        assert!(stripped.contains(r#"<ext preserve="sheet"/>"#));
+        assert!(stripped.contains(r#"Id="rId3""#));
+        assert!(stripped.contains(r#"data-style="keep""#));
+        assert!(!stripped.contains(r#"Id="rId2""#));
+        assert!(!stripped.contains("calcChain.xml"));
+        assert!(!stripped.contains(r#"preserve="drop""#));
+    }
+
+    #[test]
     fn strip_calc_chain_content_type_override_removes_calc_chain_entries() {
         let content_types_xml = br#"<?xml version="1.0" encoding="UTF-8"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
