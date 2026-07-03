@@ -28878,6 +28878,17 @@ mod tests {
                 target_mode: None,
             }]
         );
+        assert_eq!(
+            drawing_support.chart_opaque_relationship_part_uris,
+            vec!["xl/drawings/userShapes2.xml".to_string()]
+        );
+        assert_eq!(
+            drawing_support
+                .chart_opaque_relationship_part_source_bytes
+                .get("xl/drawings/userShapes2.xml")
+                .expect("chartsheet chart opaque user shapes bytes"),
+            &user_shapes_xml
+        );
         assert!(drawing_support.chart_support_part_uris.is_empty());
         assert_eq!(loaded.state.charts.len(), 1);
 
@@ -28947,6 +28958,41 @@ mod tests {
                 .expect("saved user shapes")
                 .bytes,
             user_shapes_xml
+        );
+
+        let mut changed_loaded = loaded.clone();
+        changed_loaded
+            .package
+            .replace_part_bytes(
+                "xl/drawings/userShapes2.xml",
+                br#"<?xml version="1.0" encoding="UTF-8"?><c:userShapes xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" custom="changed"><c:shape id="2"/></c:userShapes>"#
+                    .to_vec(),
+            )
+            .expect("replace chartsheet chart opaque target");
+        let error = codec
+            .save(&changed_loaded, office_common::SaveOptions::default())
+            .expect_err("save should reject changed chartsheet chart opaque target");
+        assert!(
+            error.to_string().contains(
+                "explicit chart opaque relationship target part bytes changed: xl/drawings/userShapes2.xml"
+            ),
+            "{error}"
+        );
+
+        let mut missing_loaded = loaded.clone();
+        assert!(
+            missing_loaded
+                .package
+                .remove_part("xl/drawings/userShapes2.xml")
+        );
+        let error = codec
+            .save(&missing_loaded, office_common::SaveOptions::default())
+            .expect_err("save should reject missing chartsheet chart opaque target");
+        assert!(
+            error.to_string().contains(
+                "explicit chart opaque relationship target part is missing: xl/drawings/userShapes2.xml"
+            ),
+            "{error}"
         );
     }
 
