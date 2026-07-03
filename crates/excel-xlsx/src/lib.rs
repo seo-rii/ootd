@@ -38056,6 +38056,33 @@ mod tests {
     }
 
     #[test]
+    fn strip_calc_chain_content_type_override_preserves_unrelated_structure() {
+        let content_types_xml = br#"<?xml version="1.0" encoding="UTF-8"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types" data-root="keep">
+  <ext preserve="1"/>
+  <Default Extension="xml" ContentType="application/xml" data-default="keep"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml" data-workbook="keep"/>
+  <Override PartName="/xl/calcChain.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.calcChain+xml"><ext preserve="drop"/></Override>
+  <Override PartName="/xl/charts/style1.xml" ContentType="application/vnd.ms-office.chartstyle+xml" data-style="keep"/>
+</Types>"#;
+
+        let stripped = String::from_utf8(
+            super::strip_calc_chain_content_type_override(content_types_xml)
+                .expect("strip calc chain content type override"),
+        )
+        .expect("content types xml utf8");
+
+        assert!(stripped.contains(r#"data-root="keep""#));
+        assert!(stripped.contains(r#"<ext preserve="1"/>"#));
+        assert!(stripped.contains(r#"data-default="keep""#));
+        assert!(stripped.contains(r#"data-workbook="keep""#));
+        assert!(stripped.contains(r#"/xl/charts/style1.xml"#));
+        assert!(stripped.contains(r#"data-style="keep""#));
+        assert!(!stripped.contains("calcChain.xml"));
+        assert!(!stripped.contains(r#"preserve="drop""#));
+    }
+
+    #[test]
     fn invalidate_calc_chain_artifacts_removes_calc_chain_part_and_metadata() {
         let mut package =
             OpcPackage::from_bytes(&workbook_with_hyperlink_comment_and_calc_chain_bytes())

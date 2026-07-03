@@ -4562,6 +4562,8 @@
   - 범위: `[Content_Types].xml`의 root attrs, child order, Default/Override attrs를 `ContentTypesPartSummary`로 추적하고 clean validation에서 source-byte drift와 structural summary drift를 분리해 실패하도록 회귀로 고정
   - `Step 6.6b2b2b2b2b2f2b2dn DONE` content types structural inventory regression
   - 범위: `[Content_Types].xml` root extra child, Default/Override extra attrs, child order가 `ContentTypesPartSummary`에 직접 노출되고 clean save에서 원문대로 보존되는지 회귀로 고정
+  - `Step 6.6b2b2b2b2b2f2b2do DONE` calcChain content types strip preservation
+  - 범위: dirty calcChain invalidation이 `[Content_Types].xml`에서 calcChain override만 제거하고 root attrs, unknown root child, 다른 Default/Override extra attrs 및 chart style override는 그대로 보존하는지 회귀로 고정
 - 목표
   - 현재 core worksheet rewrite 이후 남아 있는 fidelity gap을 좁힌다.
   - style/theme/merge/comment/hyperlink/formula cached-value 계열 보존을 순차적으로 올린다.
