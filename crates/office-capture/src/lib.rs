@@ -335,6 +335,11 @@ pub enum CaptureBundleCompletionError {
         expected: Vec<String>,
         actual: Vec<String>,
     },
+    ReceiptStatusNotCompleted {
+        section: &'static str,
+        name: String,
+        status: String,
+    },
     Write(CaptureWriteError),
 }
 
@@ -834,6 +839,24 @@ impl CapturePlan {
                 expected: expected_capture_outputs,
                 actual: execution_receipt.expected_capture_outputs,
             });
+        }
+        for command_result in &execution_receipt.command_results {
+            if command_result.status != "completed" {
+                return Err(CaptureBundleCompletionError::ReceiptStatusNotCompleted {
+                    section: "commandResults",
+                    name: command_result.name.clone(),
+                    status: command_result.status.clone(),
+                });
+            }
+        }
+        for manual_step_result in &execution_receipt.manual_step_results {
+            if manual_step_result.status != "completed" {
+                return Err(CaptureBundleCompletionError::ReceiptStatusNotCompleted {
+                    section: "manualStepResults",
+                    name: manual_step_result.name.clone(),
+                    status: manual_step_result.status.clone(),
+                });
+            }
         }
         let artifacts = self.read_materialized_artifacts(host_root)?;
         let write_result = self
@@ -1646,6 +1669,15 @@ impl fmt::Display for CaptureBundleCompletionError {
                 "execution receipt expected capture outputs {:?} did not match plan {:?}",
                 actual, expected
             ),
+            CaptureBundleCompletionError::ReceiptStatusNotCompleted {
+                section,
+                name,
+                status,
+            } => write!(
+                f,
+                "execution receipt {} entry {} was {}, not completed",
+                section, name, status
+            ),
             CaptureBundleCompletionError::Write(source) => write!(f, "{source}"),
         }
     }
@@ -1658,6 +1690,7 @@ impl std::error::Error for CaptureBundleCompletionError {
             CaptureBundleCompletionError::Json { source, .. } => Some(source),
             CaptureBundleCompletionError::MissingArtifact { .. } => None,
             CaptureBundleCompletionError::ExpectedOutputsMismatch { .. } => None,
+            CaptureBundleCompletionError::ReceiptStatusNotCompleted { .. } => None,
             CaptureBundleCompletionError::Write(source) => Some(source),
         }
     }
@@ -2894,6 +2927,59 @@ mod tests {
                 );
             }
             other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn completion_rejects_non_completed_receipt_statuses() {
+        let cases = [
+            (
+                "commandResults",
+                "powershell_capture_reflection",
+                "failed",
+                true,
+            ),
+            (
+                "manualStepResults",
+                "oleview_snapshot_export",
+                "pending",
+                false,
+            ),
+        ];
+
+        for (expected_section, expected_name, status, command_case) in cases {
+            let plan = CapturePlan::from_toml_str(resolved_template()).expect("plan");
+            let tempdir = TempDir::new().expect("tempdir");
+            plan.write_artifacts(tempdir.path(), &sample_artifacts())
+                .expect("materialized artifacts");
+
+            let mut receipt = sample_execution_receipt();
+            if command_case {
+                receipt.command_results[0].status = status.to_string();
+            } else {
+                receipt.manual_step_results[0].status = status.to_string();
+            }
+            fs::write(
+                tempdir.path().join("manifest/execution_receipt.json"),
+                serde_json::to_vec_pretty(&receipt).expect("receipt payload"),
+            )
+            .expect("execution receipt");
+
+            let error = plan
+                .complete_execution_bundle(tempdir.path())
+                .expect_err("non-completed receipt status should fail");
+            match error {
+                CaptureBundleCompletionError::ReceiptStatusNotCompleted {
+                    section,
+                    name,
+                    status: actual_status,
+                } => {
+                    assert_eq!(section, expected_section);
+                    assert_eq!(name, expected_name);
+                    assert_eq!(actual_status, status);
+                }
+                other => panic!("unexpected error for {expected_section}: {other:?}"),
+            }
         }
     }
 

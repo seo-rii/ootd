@@ -4671,6 +4671,8 @@
   - 범위: `direct_exec_status.template.json`의 capture script, receipt, manifest, checksum 경로가 materialized execution bundle의 canonical path contract와 일치하는지 회귀로 고정해 direct launcher 결과와 completion 입력이 같은 파일들을 가리키도록 검증
   - `Step 7.13 DONE` completion missing payload artifact validation
   - 범위: completion 단계가 5개 Windows capture payload 파일 각각의 누락을 `MissingArtifact`와 정확한 logical name으로 실패시키는지 회귀로 고정해 incomplete oracle capture bundle이 manifest/checksum으로 닫히지 않도록 검증
+  - `Step 7.14 DONE` completion receipt status validation
+  - 범위: execution receipt의 command/manual step result가 `completed`가 아닌 경우 completion 단계가 manifest/checksum을 닫지 않고 명시적으로 실패하도록 검증해 pending/failed oracle capture 결과가 성공 bundle로 승격되지 않도록 고정
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.
