@@ -27399,12 +27399,7 @@ mod tests {
                 bytes: chartsheet_rels_xml.clone(),
             })
             .expect("add chartsheet rels");
-        package
-            .add_part(OpcPart {
-                name: "xl/drawings/drawing2.xml".to_string(),
-                content_type: None,
-                compression: CompressionMethod::Stored,
-                bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
+        let drawing_xml = br#"<?xml version="1.0" encoding="UTF-8"?>
 <xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
   <xdr:absoluteAnchor>
     <xdr:pos x="0" y="0" pg:tag="keep" xmlns:pg="urn:pos"/>
@@ -27413,7 +27408,13 @@ mod tests {
     <xdr:clientData/>
   </xdr:absoluteAnchor>
 </xdr:wsDr>"#
-                    .to_vec(),
+            .to_vec();
+        package
+            .add_part(OpcPart {
+                name: "xl/drawings/drawing2.xml".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: drawing_xml.clone(),
             })
             .expect("add drawing");
         let drawing_rels_xml = br#"<?xml version="1.0" encoding="UTF-8"?>
@@ -27697,7 +27698,13 @@ mod tests {
                 .bytes,
             chartsheet_rels_xml
         );
-        assert!(saved_package.contains("xl/drawings/drawing2.xml"));
+        assert_eq!(
+            saved_package
+                .part("xl/drawings/drawing2.xml")
+                .expect("saved chartsheet drawing")
+                .bytes,
+            drawing_xml
+        );
         assert_eq!(
             saved_package
                 .part("xl/drawings/_rels/drawing2.xml.rels")
@@ -27760,12 +27767,7 @@ mod tests {
                 bytes: worksheet_rels_xml.clone(),
             })
             .expect("add worksheet rels");
-        package
-            .add_part(OpcPart {
-                name: "xl/drawings/drawing1.xml".to_string(),
-                content_type: None,
-                compression: CompressionMethod::Stored,
-                bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
+        let drawing_xml = br#"<?xml version="1.0" encoding="UTF-8"?>
 <xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
   <xdr:twoCellAnchor ar:tag="keep" xmlns:ar="urn:anchor-root">
     <xdr:from fm:tag="keep" xmlns:fm="urn:from"><xdr:col fc:tag="keep" xmlns:fc="urn:from-col">0</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>0</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>
@@ -27775,7 +27777,13 @@ mod tests {
     <xdr:extLst><xdr:ext uri="urn:anchor"><xdr14:creationId xmlns:xdr14="http://schemas.microsoft.com/office/drawing/2010/spreadsheetDrawing" id="{11111111-2222-3333-4444-555555555555}"/></xdr:ext></xdr:extLst>
   </xdr:twoCellAnchor>
 </xdr:wsDr>"#
-                    .to_vec(),
+            .to_vec();
+        package
+            .add_part(OpcPart {
+                name: "xl/drawings/drawing1.xml".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: drawing_xml.clone(),
             })
             .expect("add drawing");
         let drawing_rels_xml = br#"<?xml version="1.0" encoding="UTF-8"?>
@@ -28570,7 +28578,13 @@ mod tests {
                 .bytes,
             chart_xml
         );
-        assert!(saved_package.contains("xl/drawings/drawing1.xml"));
+        assert_eq!(
+            saved_package
+                .part("xl/drawings/drawing1.xml")
+                .expect("saved drawing")
+                .bytes,
+            drawing_xml
+        );
         assert_eq!(
             saved_package
                 .part("xl/worksheets/_rels/sheet1.xml.rels")
