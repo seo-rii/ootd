@@ -4667,6 +4667,8 @@
   - 범위: `capture_manifest.json`의 `writableOutputs` payload 경로 basename 집합이 `expectedCaptureOutputs`와 정확히 일치하는지 회귀로 고정해 manifest가 실행자가 써야 하는 실제 output path contract를 빠짐없이 노출하도록 검증
   - `Step 7.11 DONE` execution plan declared output coverage
   - 범위: `execution_plan.json`의 command/manual step output basename 집합이 `pending_capture_outputs` payload contract를 정확히 덮는지 회귀로 고정해 실행 계획과 capture payload contract가 분리되어 drift되지 않도록 검증
+  - `Step 7.12 DONE` direct exec status path contract
+  - 범위: `direct_exec_status.template.json`의 capture script, receipt, manifest, checksum 경로가 materialized execution bundle의 canonical path contract와 일치하는지 회귀로 고정해 direct launcher 결과와 completion 입력이 같은 파일들을 가리키도록 검증
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.

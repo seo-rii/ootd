@@ -2658,6 +2658,22 @@ mod tests {
             direct_exec_status_template["launcherPath"],
             "C:\\capture\\excel-om\\excel_om_windows_capture\\scripts\\run_capture.cmd"
         );
+        assert_eq!(
+            direct_exec_status_template["captureScriptPath"],
+            execution_plan["script_path"]
+        );
+        assert_eq!(
+            direct_exec_status_template["executionReceiptPath"],
+            "C:\\capture\\excel-om\\excel_om_windows_capture\\manifest\\execution_receipt.json"
+        );
+        assert_eq!(
+            direct_exec_status_template["captureManifestPath"],
+            "C:\\capture\\excel-om\\excel_om_windows_capture\\manifest\\capture_manifest.json"
+        );
+        assert_eq!(
+            direct_exec_status_template["outputChecksumsPath"],
+            "C:\\capture\\excel-om\\excel_om_windows_capture\\manifest\\output_checksums.json"
+        );
 
         let receipt_template: serde_json::Value = serde_json::from_slice(
             &fs::read(&result.execution_receipt_template_path).expect("receipt template file"),
