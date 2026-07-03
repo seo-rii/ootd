@@ -1665,6 +1665,14 @@ pub fn summarize_differential_gate_with_source_context(
     Ok(report.gate_summary())
 }
 
+pub fn load_differential_gate_from_path_with_source_context(
+    path: impl AsRef<Path>,
+    source_summary: &SourceRegistrySummary,
+) -> Result<DifferentialGateSummary, DifferentialReportLoadError> {
+    let report = DifferentialReport::from_json_path(path)?;
+    summarize_differential_gate_with_source_context(&report, source_summary)
+}
+
 pub fn write_differential_report_to_path(
     report: &DifferentialReport,
     path: impl AsRef<Path>,

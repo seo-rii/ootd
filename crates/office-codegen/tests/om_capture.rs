@@ -13,7 +13,8 @@ use office_codegen::{
     build_differential_report, build_differential_report_with_source_context,
     build_focus_surface_registry, build_focus_surface_registry_from_json,
     build_focus_surface_registry_from_path, generate_canonical_office_idl_from_dir,
-    load_capture_bundle, load_differential_report_from_json, load_differential_report_from_path,
+    load_capture_bundle, load_differential_gate_from_path_with_source_context,
+    load_differential_report_from_json, load_differential_report_from_path,
     normalize_capture_bundle, normalize_capture_bundle_from_dir, normalize_pia_capture_json,
     summarize_capture_bundle, summarize_differential_gate,
     summarize_differential_gate_with_source_context, summarize_om_sources,
@@ -359,6 +360,80 @@ fn summarizes_differential_gate_with_source_registry_context() {
         }
         other => panic!("unexpected error: {other:?}"),
     }
+}
+
+#[test]
+fn loads_differential_gate_from_path_with_source_registry_context() {
+    let registry_toml =
+        fs::read_to_string(repo_root().join("specs/sources.toml")).expect("source registry");
+    let source_summary = summarize_source_registry_toml(&registry_toml).expect("source summary");
+    let report = build_differential_report_with_source_context(
+        "Excel",
+        "16.0",
+        &source_summary,
+        vec![DifferentialCaseResult {
+            name: "Application.Version".to_string(),
+            surface: Some("Application".to_string()),
+            member: Some("Version".to_string()),
+            status: DifferentialCaseStatus::Passed,
+            expected: Some("16.0".to_string()),
+            actual: Some("16.0".to_string()),
+            message: None,
+            artifacts: BTreeMap::new(),
+        }],
+    );
+    let unique_suffix = format!(
+        "{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("time")
+            .as_nanos()
+    );
+    let path = std::env::temp_dir().join(format!(
+        "ootd-differential-gate-context-{unique_suffix}.json"
+    ));
+    write_differential_report_to_path(&report, &path).expect("write report");
+
+    let gate = load_differential_gate_from_path_with_source_context(&path, &source_summary)
+        .expect("load context-aware gate");
+
+    assert!(gate.passed);
+    assert_eq!(gate.blocking_case_count, 0);
+
+    let mut missing_context = report.clone();
+    missing_context.context = None;
+    fs::write(
+        &path,
+        serde_json::to_vec_pretty(&missing_context).expect("missing context json"),
+    )
+    .expect("rewrite missing context report");
+    let error = load_differential_gate_from_path_with_source_context(&path, &source_summary)
+        .expect_err("missing context should fail");
+    match error {
+        DifferentialReportLoadError::Contract { message } => {
+            assert!(message.contains("missing source registry context"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    let mut stale_report = report;
+    stale_report.case_count += 1;
+    fs::write(
+        &path,
+        serde_json::to_vec_pretty(&stale_report).expect("stale report json"),
+    )
+    .expect("rewrite stale report");
+    let error = load_differential_gate_from_path_with_source_context(&path, &source_summary)
+        .expect_err("stale report should fail");
+    match error {
+        DifferentialReportLoadError::Contract { message } => {
+            assert!(message.contains("caseCount"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    let _ = fs::remove_file(path);
 }
 
 #[test]
