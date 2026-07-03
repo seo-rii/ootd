@@ -4544,6 +4544,8 @@
   - 범위: clean save validation에서 workbook relationships structural summary drift를 source-byte drift와 분리해 명시적으로 실패시키고, XML declaration 같은 summary-equivalent byte drift는 기존 source-byte gate가 계속 잡도록 회귀로 고정
   - `Step 6.6b2b2b2b2b2f2b2de DONE` dirty-save workbook relationships summary bypass regression
   - 범위: dirty worksheet save에서 calcChain invalidation이 workbook relationships summary/source bytes를 의도적으로 바꾸는 경우 final save validation이 strict summary/source-byte gate로 오판하지 않고, saved rels summary에서 calcChain 관계가 제거되는지 회귀로 고정
+  - `Step 6.6b2b2b2b2b2f2b2df DONE` workbook external relationship summary preservation
+  - 범위: workbook-level relationships part의 `TargetMode="External"` 계열 외부 관계가 package target part로 오인되지 않고, raw graph summary에서 target/TargetMode/extra attrs를 원문대로 보존하며 clean save 후에도 유지되는지 회귀로 고정
 - 목표
   - 현재 core worksheet rewrite 이후 남아 있는 fidelity gap을 좁힌다.
   - style/theme/merge/comment/hyperlink/formula cached-value 계열 보존을 순차적으로 올린다.
