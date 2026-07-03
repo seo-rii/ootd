@@ -40329,6 +40329,56 @@ mod tests {
     }
 
     #[test]
+    fn ensure_support_parts_present_rejects_content_types_root_attr_drift() {
+        let codec = XlsxCodec;
+        let mut package = OpcPackage::from_bytes(&workbook_with_styles_and_theme_bytes())
+            .expect("base workbook package");
+        let content_types = String::from_utf8(
+            package
+                .part("[Content_Types].xml")
+                .expect("content types part")
+                .bytes
+                .clone(),
+        )
+        .expect("content types utf8")
+        .replace(
+            r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">"#,
+            r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types" data-root="original">"#,
+        );
+        package
+            .replace_part_bytes("[Content_Types].xml", content_types.into_bytes())
+            .expect("replace content types");
+        let bytes = package.to_bytes().expect("package bytes");
+        let loaded = codec
+            .load(bytes.as_slice(), CommonLoadOptions::default())
+            .expect("load workbook");
+        let mut package = loaded.package.clone();
+        let content_types = String::from_utf8(
+            package
+                .part("[Content_Types].xml")
+                .expect("content types part")
+                .bytes
+                .clone(),
+        )
+        .expect("content types utf8")
+        .replace(r#"data-root="original""#, r#"data-root="changed""#);
+        package
+            .replace_part_bytes("[Content_Types].xml", content_types.into_bytes())
+            .expect("replace content types");
+
+        let error = super::ensure_support_parts_present(&package, &loaded.support_parts)
+            .expect_err("ensure should fail when content types root attr drifts");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(
+            error
+                .message
+                .contains("explicit content types summary changed")
+        );
+        assert!(error.message.contains("[Content_Types].xml"));
+    }
+
+    #[test]
     fn ensure_support_parts_present_rejects_content_types_child_order_drift() {
         let codec = XlsxCodec;
         let loaded = codec
@@ -40797,6 +40847,56 @@ mod tests {
     }
 
     #[test]
+    fn ensure_support_parts_present_rejects_package_relationships_root_attr_drift() {
+        let codec = XlsxCodec;
+        let mut package = OpcPackage::from_bytes(&workbook_with_styles_and_theme_bytes())
+            .expect("base workbook package");
+        let package_rels = String::from_utf8(
+            package
+                .part("_rels/.rels")
+                .expect("package rels part")
+                .bytes
+                .clone(),
+        )
+        .expect("package rels utf8")
+        .replace(
+            r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">"#,
+            r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships" data-root="original">"#,
+        );
+        package
+            .replace_part_bytes("_rels/.rels", package_rels.into_bytes())
+            .expect("replace package rels");
+        let bytes = package.to_bytes().expect("package bytes");
+        let loaded = codec
+            .load(bytes.as_slice(), CommonLoadOptions::default())
+            .expect("load workbook");
+        let mut package = loaded.package.clone();
+        let package_rels = String::from_utf8(
+            package
+                .part("_rels/.rels")
+                .expect("package rels part")
+                .bytes
+                .clone(),
+        )
+        .expect("package rels utf8")
+        .replace(r#"data-root="original""#, r#"data-root="changed""#);
+        package
+            .replace_part_bytes("_rels/.rels", package_rels.into_bytes())
+            .expect("replace package rels");
+
+        let error = super::ensure_support_parts_present(&package, &loaded.support_parts)
+            .expect_err("ensure should fail when package rels root attr drifts");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(
+            error
+                .message
+                .contains("explicit package relationships summary changed")
+        );
+        assert!(error.message.contains("_rels/.rels"));
+    }
+
+    #[test]
     fn ensure_support_parts_present_rejects_package_relationships_order_drift() {
         let codec = XlsxCodec;
         let mut package = OpcPackage::from_bytes(&workbook_with_styles_and_theme_bytes())
@@ -41091,6 +41191,56 @@ mod tests {
 
         let error = super::ensure_support_parts_present(&package, &loaded.support_parts)
             .expect_err("ensure should fail when workbook rels summary drifts");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(
+            error
+                .message
+                .contains("explicit workbook relationships summary changed")
+        );
+        assert!(error.message.contains("xl/_rels/workbook.xml.rels"));
+    }
+
+    #[test]
+    fn ensure_support_parts_present_rejects_workbook_relationships_root_attr_drift() {
+        let codec = XlsxCodec;
+        let mut package = OpcPackage::from_bytes(&workbook_with_styles_and_theme_bytes())
+            .expect("base workbook package");
+        let workbook_rels = String::from_utf8(
+            package
+                .part(WORKBOOK_RELS_PART_NAME)
+                .expect("workbook rels part")
+                .bytes
+                .clone(),
+        )
+        .expect("workbook rels utf8")
+        .replace(
+            r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">"#,
+            r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships" data-root="original">"#,
+        );
+        package
+            .replace_part_bytes(WORKBOOK_RELS_PART_NAME, workbook_rels.into_bytes())
+            .expect("replace workbook rels");
+        let bytes = package.to_bytes().expect("package bytes");
+        let loaded = codec
+            .load(bytes.as_slice(), CommonLoadOptions::default())
+            .expect("load workbook");
+        let mut package = loaded.package.clone();
+        let workbook_rels = String::from_utf8(
+            package
+                .part(WORKBOOK_RELS_PART_NAME)
+                .expect("workbook rels part")
+                .bytes
+                .clone(),
+        )
+        .expect("workbook rels utf8")
+        .replace(r#"data-root="original""#, r#"data-root="changed""#);
+        package
+            .replace_part_bytes(WORKBOOK_RELS_PART_NAME, workbook_rels.into_bytes())
+            .expect("replace workbook rels");
+
+        let error = super::ensure_support_parts_present(&package, &loaded.support_parts)
+            .expect_err("ensure should fail when workbook rels root attr drifts");
 
         assert_eq!(error.code, OmErrorCode::InvalidState);
         assert!(
