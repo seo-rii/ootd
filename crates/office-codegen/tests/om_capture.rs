@@ -7,14 +7,16 @@ use std::{
 
 use office_codegen::{
     CanonicalOmGenerationError, CodegenSummary, DifferentialCaseResult, DifferentialCaseStatus,
-    OmCaptureBundleError, OmSourcesManifest, PiaCaptureClass, PiaCaptureInterface,
-    PiaPublicSurfaceCapture, SourceRegistryManifest, TypelibIdentityCapture, build_coverage_report,
-    build_coverage_report_from_json, build_coverage_report_from_path, build_differential_report,
-    build_focus_surface_registry, build_focus_surface_registry_from_json,
-    build_focus_surface_registry_from_path, generate_canonical_office_idl_from_dir,
-    load_capture_bundle, normalize_capture_bundle, normalize_capture_bundle_from_dir,
-    normalize_pia_capture_json, summarize_capture_bundle, summarize_om_sources,
-    summarize_om_sources_toml, summarize_source_registry, summarize_source_registry_toml,
+    DifferentialReportLoadError, OmCaptureBundleError, OmSourcesManifest, PiaCaptureClass,
+    PiaCaptureInterface, PiaPublicSurfaceCapture, SourceRegistryManifest, TypelibIdentityCapture,
+    build_coverage_report, build_coverage_report_from_json, build_coverage_report_from_path,
+    build_differential_report, build_focus_surface_registry,
+    build_focus_surface_registry_from_json, build_focus_surface_registry_from_path,
+    generate_canonical_office_idl_from_dir, load_capture_bundle,
+    load_differential_report_from_json, load_differential_report_from_path,
+    normalize_capture_bundle, normalize_capture_bundle_from_dir, normalize_pia_capture_json,
+    summarize_capture_bundle, summarize_om_sources, summarize_om_sources_toml,
+    summarize_source_registry, summarize_source_registry_toml,
 };
 use office_idl::{AccessMode, CaptureOriginKind, InterfaceKind, OfficeIdlDocument};
 use sha2::{Digest, Sha256};
@@ -286,6 +288,86 @@ fn builds_differential_report_with_stable_status_counts() {
     assert!(json.contains(r#""missingOracle":1"#));
     assert!(json.contains(r#""missingRuntime":1"#));
     assert!(json.contains(r#""runtimeTrace":"reports/range_value2_runtime.json""#));
+}
+
+#[test]
+fn loads_differential_report_from_json_and_rejects_stale_counts() {
+    let report = build_differential_report(
+        "Excel",
+        "16.0",
+        "excel_365",
+        vec![DifferentialCaseResult {
+            name: "Application.Name".to_string(),
+            surface: Some("Application".to_string()),
+            member: Some("Name".to_string()),
+            status: DifferentialCaseStatus::Passed,
+            expected: Some("Microsoft Excel".to_string()),
+            actual: Some("Microsoft Excel".to_string()),
+            message: None,
+            artifacts: BTreeMap::new(),
+        }],
+    );
+    let json = serde_json::to_string(&report).expect("report json");
+
+    let loaded = load_differential_report_from_json(&json).expect("load report");
+
+    assert_eq!(loaded, report);
+
+    let stale_case_count = json.replace(r#""caseCount":1"#, r#""caseCount":2"#);
+    let error = load_differential_report_from_json(&stale_case_count)
+        .expect_err("stale case count should fail");
+    match error {
+        DifferentialReportLoadError::Contract { message } => {
+            assert!(message.contains("caseCount 2 did not match cases length 1"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    let stale_status_count = json.replace(r#""passed":1"#, r#""passed":0"#);
+    let error = load_differential_report_from_json(&stale_status_count)
+        .expect_err("stale status counts should fail");
+    match error {
+        DifferentialReportLoadError::Contract { message } => {
+            assert!(message.contains("statusCounts"));
+            assert!(message.contains("passed: 0"));
+            assert!(message.contains("passed: 1"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn loads_differential_report_from_path_wrapper() {
+    let report = build_differential_report(
+        "Excel",
+        "16.0",
+        "excel_365",
+        vec![DifferentialCaseResult {
+            name: "Workbook.Worksheets.Count".to_string(),
+            surface: Some("Workbook".to_string()),
+            member: Some("Worksheets".to_string()),
+            status: DifferentialCaseStatus::Failed,
+            expected: Some("3".to_string()),
+            actual: Some("2".to_string()),
+            message: Some("chart sheets must not be counted as worksheets".to_string()),
+            artifacts: BTreeMap::from([(
+                "oracle".to_string(),
+                "reports/workbook_worksheets_count_oracle.json".to_string(),
+            )]),
+        }],
+    );
+    let unique_suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time")
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!("ootd-differential-report-{unique_suffix}.json"));
+    fs::write(&path, serde_json::to_string(&report).expect("report json")).expect("write report");
+
+    let loaded = load_differential_report_from_path(&path).expect("load report path");
+
+    assert_eq!(loaded, report);
+
+    fs::remove_file(&path).expect("remove temp report");
 }
 
 #[test]

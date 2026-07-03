@@ -4719,6 +4719,8 @@
   - 범위: `specs/sources.toml` registry를 valid TOML schema로 정리하고, `office-codegen`이 enabled official/open-source/synthetic/real-world corpus와 validation mode를 typed summary로 읽어 후속 oracle/corpus runner가 같은 source contract를 재사용할 수 있도록 고정
   - `Step 7.37 DONE` codegen differential report model
   - 범위: `office-codegen`에 Excel oracle 결과와 runtime 결과를 비교한 case-level outcome, status counts, artifact links를 담는 serde 가능한 `DifferentialReport` 모델과 builder를 추가해 후속 oracle/corpus runner가 동일한 regression report contract를 출력할 수 있도록 고정
+  - `Step 7.38 DONE` codegen differential report import validation
+  - 범위: `office-codegen`이 differential report JSON/path를 다시 로드하면서 `caseCount`와 `statusCounts`가 실제 case list와 일치하는지 검증하도록 추가해 후속 runner가 생성한 stale/malformed regression report가 downstream gate를 통과하지 못하도록 고정
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.

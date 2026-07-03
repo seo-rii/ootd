@@ -37,6 +37,13 @@ pub enum PiaCaptureLoadError {
 }
 
 #[derive(Debug)]
+pub enum DifferentialReportLoadError {
+    Io(std::io::Error),
+    Json(serde_json::Error),
+    Contract { message: String },
+}
+
+#[derive(Debug)]
 pub enum OmCaptureBundleError {
     LibraryMismatch { typelib: String, pia: String },
     VersionMismatch { typelib: String, pia: String },
@@ -322,6 +329,18 @@ impl From<std::io::Error> for PiaCaptureLoadError {
 }
 
 impl From<serde_json::Error> for PiaCaptureLoadError {
+    fn from(value: serde_json::Error) -> Self {
+        Self::Json(value)
+    }
+}
+
+impl From<std::io::Error> for DifferentialReportLoadError {
+    fn from(value: std::io::Error) -> Self {
+        Self::Io(value)
+    }
+}
+
+impl From<serde_json::Error> for DifferentialReportLoadError {
     fn from(value: serde_json::Error) -> Self {
         Self::Json(value)
     }
@@ -1232,6 +1251,42 @@ impl DifferentialReport {
             cases,
         }
     }
+
+    pub fn validate(&self) -> Result<(), DifferentialReportLoadError> {
+        if self.case_count != self.cases.len() {
+            return Err(DifferentialReportLoadError::Contract {
+                message: format!(
+                    "differential report caseCount {} did not match cases length {}",
+                    self.case_count,
+                    self.cases.len()
+                ),
+            });
+        }
+        let mut expected_counts = DifferentialStatusCounts::default();
+        for case in &self.cases {
+            expected_counts.record(case.status);
+        }
+        if self.status_counts != expected_counts {
+            return Err(DifferentialReportLoadError::Contract {
+                message: format!(
+                    "differential report statusCounts {:?} did not match cases {:?}",
+                    self.status_counts, expected_counts
+                ),
+            });
+        }
+        Ok(())
+    }
+
+    pub fn from_json_str(input: &str) -> Result<Self, DifferentialReportLoadError> {
+        let report = serde_json::from_str::<Self>(input)?;
+        report.validate()?;
+        Ok(report)
+    }
+
+    pub fn from_json_path(path: impl AsRef<Path>) -> Result<Self, DifferentialReportLoadError> {
+        let input = fs::read_to_string(path)?;
+        Self::from_json_str(&input)
+    }
 }
 
 pub fn summarize(document: &OfficeIdlDocument) -> CodegenSummary {
@@ -1452,6 +1507,18 @@ pub fn build_differential_report(
     cases: Vec<DifferentialCaseResult>,
 ) -> DifferentialReport {
     DifferentialReport::from_cases(library, version, profile, cases)
+}
+
+pub fn load_differential_report_from_json(
+    input: &str,
+) -> Result<DifferentialReport, DifferentialReportLoadError> {
+    DifferentialReport::from_json_str(input)
+}
+
+pub fn load_differential_report_from_path(
+    path: impl AsRef<Path>,
+) -> Result<DifferentialReport, DifferentialReportLoadError> {
+    DifferentialReport::from_json_path(path)
 }
 
 pub fn normalize_pia_capture_json(input: &str) -> Result<OfficeIdlDocument, PiaCaptureLoadError> {
