@@ -27386,16 +27386,17 @@ mod tests {
                     .to_vec(),
             })
             .expect("add chartsheet part");
+        let chartsheet_rels_xml = br#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rIdChartSheetDrawing" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing2.xml"/>
+</Relationships>"#
+            .to_vec();
         package
             .add_part(OpcPart {
                 name: "xl/chartsheets/_rels/sheet1.xml.rels".to_string(),
                 content_type: None,
                 compression: CompressionMethod::Stored,
-                bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rIdChartSheetDrawing" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing2.xml"/>
-</Relationships>"#
-                    .to_vec(),
+                bytes: chartsheet_rels_xml.clone(),
             })
             .expect("add chartsheet rels");
         package
@@ -27415,16 +27416,17 @@ mod tests {
                     .to_vec(),
             })
             .expect("add drawing");
+        let drawing_rels_xml = br#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rIdChart2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart2.xml"/>
+</Relationships>"#
+            .to_vec();
         package
             .add_part(OpcPart {
                 name: "xl/drawings/_rels/drawing2.xml.rels".to_string(),
                 content_type: None,
                 compression: CompressionMethod::Stored,
-                bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rIdChart2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart2.xml"/>
-</Relationships>"#
-                    .to_vec(),
+                bytes: drawing_rels_xml.clone(),
             })
             .expect("add drawing rels");
         let chart_xml = br##"<?xml version="1.0" encoding="UTF-8"?>
@@ -27688,9 +27690,21 @@ mod tests {
                 .bytes,
             chart_xml
         );
-        assert!(saved_package.contains("xl/chartsheets/_rels/sheet1.xml.rels"));
+        assert_eq!(
+            saved_package
+                .part("xl/chartsheets/_rels/sheet1.xml.rels")
+                .expect("saved chartsheet rels")
+                .bytes,
+            chartsheet_rels_xml
+        );
         assert!(saved_package.contains("xl/drawings/drawing2.xml"));
-        assert!(saved_package.contains("xl/drawings/_rels/drawing2.xml.rels"));
+        assert_eq!(
+            saved_package
+                .part("xl/drawings/_rels/drawing2.xml.rels")
+                .expect("saved chartsheet drawing rels")
+                .bytes,
+            drawing_rels_xml
+        );
         assert_eq!(
             saved_package
                 .part("xl/charts/_rels/chart2.xml.rels")
@@ -27733,16 +27747,17 @@ mod tests {
         package
             .replace_part_bytes("xl/worksheets/sheet1.xml", sheet_xml.into_bytes())
             .expect("replace sheet xml");
+        let worksheet_rels_xml = br#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rIdChartDrawing" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/>
+</Relationships>"#
+            .to_vec();
         package
             .add_part(OpcPart {
                 name: "xl/worksheets/_rels/sheet1.xml.rels".to_string(),
                 content_type: None,
                 compression: CompressionMethod::Stored,
-                bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rIdChartDrawing" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/>
-</Relationships>"#
-                    .to_vec(),
+                bytes: worksheet_rels_xml.clone(),
             })
             .expect("add worksheet rels");
         package
@@ -27763,16 +27778,17 @@ mod tests {
                     .to_vec(),
             })
             .expect("add drawing");
+        let drawing_rels_xml = br#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rIdChart1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart1.xml"/>
+</Relationships>"#
+            .to_vec();
         package
             .add_part(OpcPart {
                 name: "xl/drawings/_rels/drawing1.xml.rels".to_string(),
                 content_type: None,
                 compression: CompressionMethod::Stored,
-                bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rIdChart1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart1.xml"/>
-</Relationships>"#
-                    .to_vec(),
+                bytes: drawing_rels_xml.clone(),
             })
             .expect("add drawing rels");
         let chart_xml = br##"<?xml version="1.0" encoding="UTF-8"?>
@@ -28555,7 +28571,20 @@ mod tests {
             chart_xml
         );
         assert!(saved_package.contains("xl/drawings/drawing1.xml"));
-        assert!(saved_package.contains("xl/drawings/_rels/drawing1.xml.rels"));
+        assert_eq!(
+            saved_package
+                .part("xl/worksheets/_rels/sheet1.xml.rels")
+                .expect("saved worksheet rels")
+                .bytes,
+            worksheet_rels_xml
+        );
+        assert_eq!(
+            saved_package
+                .part("xl/drawings/_rels/drawing1.xml.rels")
+                .expect("saved drawing rels")
+                .bytes,
+            drawing_rels_xml
+        );
         assert_eq!(
             saved_package
                 .part("xl/charts/style1.xml")
