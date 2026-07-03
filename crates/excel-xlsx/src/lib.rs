@@ -28182,6 +28182,44 @@ mod tests {
             chart_inventory_opaque_xml
         );
 
+        let mut host_sheet_missing_loaded = loaded.clone();
+        assert!(
+            host_sheet_missing_loaded
+                .package
+                .remove_part("xl/chartsheets/sheet1.xml")
+        );
+        let error = codec
+            .save(
+                &host_sheet_missing_loaded,
+                office_common::SaveOptions::default(),
+            )
+            .expect_err("save should reject missing drawing host sheet part");
+        assert!(
+            error
+                .to_string()
+                .contains("explicit drawing host sheet part is missing: xl/chartsheets/sheet1.xml"),
+            "{error}"
+        );
+
+        let mut host_rels_missing_loaded = loaded.clone();
+        assert!(
+            host_rels_missing_loaded
+                .package
+                .remove_part("xl/chartsheets/_rels/sheet1.xml.rels")
+        );
+        let error = codec
+            .save(
+                &host_rels_missing_loaded,
+                office_common::SaveOptions::default(),
+            )
+            .expect_err("save should reject missing drawing host rels part");
+        assert!(
+            error.to_string().contains(
+                "explicit drawing host relationships part is missing: xl/chartsheets/_rels/sheet1.xml.rels"
+            ),
+            "{error}"
+        );
+
         let mut chart_rels_changed_loaded = loaded.clone();
         chart_rels_changed_loaded
             .package
