@@ -3021,38 +3021,50 @@ mod tests {
 
     #[test]
     fn completion_rejects_receipt_expected_output_mismatch() {
-        let plan = CapturePlan::from_toml_str(resolved_template()).expect("plan");
-        let tempdir = TempDir::new().expect("tempdir");
-        plan.materialize_execution_bundle(tempdir.path())
-            .expect("materialize execution bundle");
+        for actual_outputs in [
+            vec!["wrong.json".to_string()],
+            vec![
+                "raw_typelib_identity.json".to_string(),
+                "raw_typelib_identity.json".to_string(),
+                "excel_typelib_snapshot.idl".to_string(),
+                "excel_typelib_snapshot.odl".to_string(),
+                "excel_pia_identity.json".to_string(),
+                "excel_pia_public_surface.json".to_string(),
+            ],
+        ] {
+            let plan = CapturePlan::from_toml_str(resolved_template()).expect("plan");
+            let tempdir = TempDir::new().expect("tempdir");
+            plan.materialize_execution_bundle(tempdir.path())
+                .expect("materialize execution bundle");
 
-        let mut receipt = sample_execution_receipt();
-        receipt.expected_capture_outputs = vec!["wrong.json".to_string()];
-        let receipt_path = tempdir.path().join("manifest/execution_receipt.json");
-        fs::write(
-            &receipt_path,
-            serde_json::to_vec_pretty(&receipt).expect("receipt payload"),
-        )
-        .expect("execution receipt");
+            let mut receipt = sample_execution_receipt();
+            receipt.expected_capture_outputs = actual_outputs.clone();
+            let receipt_path = tempdir.path().join("manifest/execution_receipt.json");
+            fs::write(
+                &receipt_path,
+                serde_json::to_vec_pretty(&receipt).expect("receipt payload"),
+            )
+            .expect("execution receipt");
 
-        let error = plan
-            .complete_execution_bundle(tempdir.path())
-            .expect_err("expected output mismatch should fail");
-        match error {
-            CaptureBundleCompletionError::ExpectedOutputsMismatch { expected, actual } => {
-                assert_eq!(actual, vec!["wrong.json".to_string()]);
-                assert_eq!(
-                    expected,
-                    vec![
-                        "raw_typelib_identity.json".to_string(),
-                        "excel_typelib_snapshot.idl".to_string(),
-                        "excel_typelib_snapshot.odl".to_string(),
-                        "excel_pia_identity.json".to_string(),
-                        "excel_pia_public_surface.json".to_string(),
-                    ]
-                );
+            let error = plan
+                .complete_execution_bundle(tempdir.path())
+                .expect_err("expected output mismatch should fail");
+            match error {
+                CaptureBundleCompletionError::ExpectedOutputsMismatch { expected, actual } => {
+                    assert_eq!(actual, actual_outputs);
+                    assert_eq!(
+                        expected,
+                        vec![
+                            "raw_typelib_identity.json".to_string(),
+                            "excel_typelib_snapshot.idl".to_string(),
+                            "excel_typelib_snapshot.odl".to_string(),
+                            "excel_pia_identity.json".to_string(),
+                            "excel_pia_public_surface.json".to_string(),
+                        ]
+                    );
+                }
+                other => panic!("unexpected error: {other:?}"),
             }
-            other => panic!("unexpected error: {other:?}"),
         }
     }
 
