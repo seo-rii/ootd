@@ -3127,6 +3127,11 @@ mod tests {
                 true,
             ),
             ("manualStepResults", Vec::<&str>::new(), false),
+            (
+                "manualStepResults",
+                vec!["oleview_snapshot_export", "oleview_snapshot_export"],
+                false,
+            ),
         ];
 
         for (expected_section, result_names, command_case) in cases {
