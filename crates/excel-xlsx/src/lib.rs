@@ -41032,6 +41032,54 @@ mod tests {
     }
 
     #[test]
+    fn dirty_save_preserves_package_part_compression_methods() {
+        let codec = XlsxCodec;
+        let base_package =
+            OpcPackage::from_bytes(&workbook_with_styles_and_theme_bytes()).expect("base package");
+        let mut parts = base_package.parts().to_vec();
+        for part in &mut parts {
+            part.compression = match part.name.as_str() {
+                "[Content_Types].xml"
+                | "xl/workbook.xml"
+                | "xl/worksheets/sheet1.xml"
+                | "xl/theme/theme1.xml" => CompressionMethod::Deflated,
+                _ => CompressionMethod::Stored,
+            };
+        }
+        let input_package = OpcPackage::new(parts);
+        let input = input_package.to_bytes().expect("input package bytes");
+        let original_package = OpcPackage::from_bytes(&input).expect("original package");
+
+        let mut loaded = codec
+            .load(input.as_slice(), CommonLoadOptions::default())
+            .expect("load workbook");
+        let sheet_id = loaded.state.worksheets[0].id;
+        loaded
+            .state
+            .set_range_values(
+                &office_common::RangeRef::single_cell(WorkbookId(0), sheet_id, 1, 1),
+                &office_common::OmArray::scalar(office_common::OmValue::Number(11.0)),
+            )
+            .expect("set A1");
+        let saved = codec
+            .save(&loaded, office_common::SaveOptions::default())
+            .expect("dirty save workbook");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+
+        for original_part in original_package.parts() {
+            assert_eq!(
+                saved_package
+                    .part(original_part.name.as_str())
+                    .expect("saved part")
+                    .compression,
+                original_part.compression,
+                "{} should preserve its ZIP compression method",
+                original_part.name
+            );
+        }
+    }
+
+    #[test]
     fn ensure_support_parts_present_rejects_missing_content_types_part() {
         let codec = XlsxCodec;
         let loaded = codec
