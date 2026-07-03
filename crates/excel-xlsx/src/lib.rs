@@ -4824,10 +4824,10 @@ fn ensure_support_parts_present_for_save(
 fn ensure_support_parts_present_with_options(
     package: &OpcPackage,
     support_parts: &WorkbookSupportParts,
-    validate_workbook_relationships_source_bytes: bool,
+    validate_package_source_bytes: bool,
 ) -> OmResult<()> {
     if let Some(source_bytes) = support_parts.content_types_source_bytes.as_deref()
-        && validate_workbook_relationships_source_bytes
+        && validate_package_source_bytes
     {
         let actual_part = package.part("[Content_Types].xml").ok_or_else(|| {
             OmError::new(
@@ -4995,7 +4995,7 @@ fn ensure_support_parts_present_with_options(
     if let (Some(workbook_rels), Some(expected_summary)) = (
         support_parts.workbook_relationships_part_uri.as_deref(),
         support_parts.workbook_relationships_summary.as_ref(),
-    ) && validate_workbook_relationships_source_bytes
+    ) && validate_package_source_bytes
     {
         let actual_summary = parse_worksheet_relationships_part_summary(
             package
@@ -5026,7 +5026,7 @@ fn ensure_support_parts_present_with_options(
         support_parts
             .workbook_relationships_part_source_bytes
             .as_deref(),
-    ) && validate_workbook_relationships_source_bytes
+    ) && validate_package_source_bytes
     {
         let actual_part = package.part(workbook_rels).ok_or_else(|| {
             OmError::new(
@@ -39928,6 +39928,31 @@ mod tests {
             error
                 .message
                 .contains("explicit content types part bytes changed")
+        );
+        assert!(error.message.contains("[Content_Types].xml"));
+    }
+
+    #[test]
+    fn ensure_support_parts_present_rejects_missing_content_types_part() {
+        let codec = XlsxCodec;
+        let loaded = codec
+            .load(
+                &workbook_with_styles_and_theme_bytes(),
+                CommonLoadOptions::default(),
+            )
+            .expect("load workbook");
+        assert!(loaded.support_parts.content_types_source_bytes.is_some());
+        let mut package = loaded.package.clone();
+        package.remove_part("[Content_Types].xml");
+
+        let error = super::ensure_support_parts_present(&package, &loaded.support_parts)
+            .expect_err("ensure should fail when content types part is missing");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(
+            error
+                .message
+                .contains("explicit content types part is missing")
         );
         assert!(error.message.contains("[Content_Types].xml"));
     }
