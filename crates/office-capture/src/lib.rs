@@ -371,6 +371,7 @@ struct CaptureManifestRecord {
     normalized_paths: NormalizedCapturePaths,
     validation: CaptureValidation,
     writable_outputs: BTreeMap<String, String>,
+    expected_capture_outputs: Vec<String>,
     downstream_output: String,
     unresolved_fields: Vec<String>,
     ready_to_run: bool,
@@ -639,6 +640,7 @@ impl CapturePlan {
                 normalized_paths: self.normalized_paths.clone(),
                 validation: self.template.validation.clone(),
                 writable_outputs,
+                expected_capture_outputs: self.summary().pending_capture_outputs,
                 downstream_output: self.artifact_path(&self.output_layout.office_idl_excel_om),
                 unresolved_fields: self.unresolved_fields.clone(),
                 ready_to_run: self.unresolved_fields.is_empty(),
@@ -2442,6 +2444,16 @@ mod tests {
             manifest["downstreamOutput"],
             "C:\\capture\\excel-om\\excel_om_windows_capture\\office_idl_excel_om.json"
         );
+        assert_eq!(
+            manifest["expectedCaptureOutputs"],
+            serde_json::json!([
+                "raw_typelib_identity.json",
+                "excel_typelib_snapshot.idl",
+                "excel_typelib_snapshot.odl",
+                "excel_pia_identity.json",
+                "excel_pia_public_surface.json"
+            ])
+        );
         assert_eq!(result.written_paths.len(), 8);
         assert!(result.manifest_path.is_some());
         assert!(result.output_checksums_path.is_some());
@@ -2680,6 +2692,10 @@ mod tests {
         assert_eq!(
             manifest["executionReceipt"]["host"]["computerName"],
             "WIN-EXCEL"
+        );
+        assert_eq!(
+            manifest["expectedCaptureOutputs"],
+            manifest["executionReceipt"]["expectedCaptureOutputs"]
         );
         assert!(
             result
