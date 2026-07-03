@@ -15,7 +15,8 @@ use office_codegen::{
     build_focus_surface_registry_from_path, generate_canonical_office_idl_from_dir,
     load_capture_bundle, load_differential_report_from_json, load_differential_report_from_path,
     normalize_capture_bundle, normalize_capture_bundle_from_dir, normalize_pia_capture_json,
-    summarize_capture_bundle, summarize_differential_gate, summarize_om_sources,
+    summarize_capture_bundle, summarize_differential_gate,
+    summarize_differential_gate_with_source_context, summarize_om_sources,
     summarize_om_sources_toml, summarize_source_registry, summarize_source_registry_toml,
     validate_differential_report_source_context, write_differential_report_to_path,
 };
@@ -301,6 +302,60 @@ fn validates_differential_report_source_registry_context() {
         DifferentialReportLoadError::Contract { message } => {
             assert!(message.contains("source context"));
             assert!(message.contains("excel_2021"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn summarizes_differential_gate_with_source_registry_context() {
+    let registry_toml =
+        fs::read_to_string(repo_root().join("specs/sources.toml")).expect("source registry");
+    let source_summary = summarize_source_registry_toml(&registry_toml).expect("source summary");
+    let report = build_differential_report_with_source_context(
+        "Excel",
+        "16.0",
+        &source_summary,
+        vec![
+            DifferentialCaseResult {
+                name: "Application.Name".to_string(),
+                surface: Some("Application".to_string()),
+                member: Some("Name".to_string()),
+                status: DifferentialCaseStatus::Passed,
+                expected: Some("Microsoft Excel".to_string()),
+                actual: Some("Microsoft Excel".to_string()),
+                message: None,
+                artifacts: BTreeMap::new(),
+            },
+            DifferentialCaseResult {
+                name: "Chart.SetSourceData".to_string(),
+                surface: Some("Chart".to_string()),
+                member: Some("SetSourceData".to_string()),
+                status: DifferentialCaseStatus::MissingRuntime,
+                expected: Some("series attached".to_string()),
+                actual: None,
+                message: Some("runtime chart setter is not implemented".to_string()),
+                artifacts: BTreeMap::new(),
+            },
+        ],
+    );
+
+    let gate = summarize_differential_gate_with_source_context(&report, &source_summary)
+        .expect("matching source context should gate");
+
+    assert!(!gate.passed);
+    assert_eq!(gate.blocking_case_count, 1);
+    assert_eq!(gate.blocking_cases, vec!["Chart.SetSourceData".to_string()]);
+    assert_eq!(gate.missing_runtime_count, 1);
+
+    let report_without_context =
+        build_differential_report("Excel", "16.0", "excel_365", report.cases.clone());
+    let error =
+        summarize_differential_gate_with_source_context(&report_without_context, &source_summary)
+            .expect_err("missing context should fail before gate");
+    match error {
+        DifferentialReportLoadError::Contract { message } => {
+            assert!(message.contains("missing source registry context"));
         }
         other => panic!("unexpected error: {other:?}"),
     }

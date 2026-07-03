@@ -1657,6 +1657,14 @@ pub fn summarize_differential_gate(report: &DifferentialReport) -> DifferentialG
     report.gate_summary()
 }
 
+pub fn summarize_differential_gate_with_source_context(
+    report: &DifferentialReport,
+    source_summary: &SourceRegistrySummary,
+) -> Result<DifferentialGateSummary, DifferentialReportLoadError> {
+    report.validate_source_context(source_summary)?;
+    Ok(report.gate_summary())
+}
+
 pub fn write_differential_report_to_path(
     report: &DifferentialReport,
     path: impl AsRef<Path>,
