@@ -307,6 +307,9 @@ pub struct DxfSummary {
     pub grandchild_names: Vec<Vec<Vec<String>>>,
     pub grandchild_attr_maps: Vec<Vec<Vec<BTreeMap<String, String>>>>,
     pub grandchild_texts: Vec<Vec<Vec<Option<String>>>>,
+    pub great_grandchild_names: Vec<Vec<Vec<Vec<String>>>>,
+    pub great_grandchild_attr_maps: Vec<Vec<Vec<Vec<BTreeMap<String, String>>>>>,
+    pub great_grandchild_texts: Vec<Vec<Vec<Vec<Option<String>>>>>,
 }
 
 impl PartialEq for DxfSummary {
@@ -323,6 +326,18 @@ impl PartialEq for DxfSummary {
                 &other.grandchild_attr_maps,
             )
             && dxf_grandchild_texts_equal(&self.grandchild_texts, &other.grandchild_texts)
+            && dxf_great_grandchild_names_equal(
+                &self.great_grandchild_names,
+                &other.great_grandchild_names,
+            )
+            && dxf_great_grandchild_attr_maps_equal(
+                &self.great_grandchild_attr_maps,
+                &other.great_grandchild_attr_maps,
+            )
+            && dxf_great_grandchild_texts_equal(
+                &self.great_grandchild_texts,
+                &other.great_grandchild_texts,
+            )
     }
 }
 
@@ -366,6 +381,59 @@ fn dxf_grandchild_texts_all_empty(value: &[Vec<Vec<Option<String>>>]) -> bool {
     value
         .iter()
         .all(|children| children.iter().all(Vec::is_empty))
+}
+
+fn dxf_great_grandchild_names_equal(
+    left: &[Vec<Vec<Vec<String>>>],
+    right: &[Vec<Vec<Vec<String>>>],
+) -> bool {
+    left == right
+        || (left.is_empty() && dxf_great_grandchild_names_all_empty(right))
+        || (right.is_empty() && dxf_great_grandchild_names_all_empty(left))
+}
+
+fn dxf_great_grandchild_attr_maps_equal(
+    left: &[Vec<Vec<Vec<BTreeMap<String, String>>>>],
+    right: &[Vec<Vec<Vec<BTreeMap<String, String>>>>],
+) -> bool {
+    left == right
+        || (left.is_empty() && dxf_great_grandchild_attr_maps_all_empty(right))
+        || (right.is_empty() && dxf_great_grandchild_attr_maps_all_empty(left))
+}
+
+fn dxf_great_grandchild_texts_equal(
+    left: &[Vec<Vec<Vec<Option<String>>>>],
+    right: &[Vec<Vec<Vec<Option<String>>>>],
+) -> bool {
+    left == right
+        || (left.is_empty() && dxf_great_grandchild_texts_all_empty(right))
+        || (right.is_empty() && dxf_great_grandchild_texts_all_empty(left))
+}
+
+fn dxf_great_grandchild_names_all_empty(value: &[Vec<Vec<Vec<String>>>]) -> bool {
+    value.iter().all(|children| {
+        children
+            .iter()
+            .all(|nested| nested.iter().all(Vec::is_empty))
+    })
+}
+
+fn dxf_great_grandchild_attr_maps_all_empty(
+    value: &[Vec<Vec<Vec<BTreeMap<String, String>>>>],
+) -> bool {
+    value.iter().all(|children| {
+        children
+            .iter()
+            .all(|nested| nested.iter().all(Vec::is_empty))
+    })
+}
+
+fn dxf_great_grandchild_texts_all_empty(value: &[Vec<Vec<Vec<Option<String>>>>]) -> bool {
+    value.iter().all(|children| {
+        children
+            .iter()
+            .all(|nested| nested.iter().all(Vec::is_empty))
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -5475,6 +5543,9 @@ fn parse_stylesheet_summary(styles_xml: &[u8]) -> OmResult<StylesheetSummary> {
                             grandchild_names: Vec::new(),
                             grandchild_attr_maps: Vec::new(),
                             grandchild_texts: Vec::new(),
+                            great_grandchild_names: Vec::new(),
+                            great_grandchild_attr_maps: Vec::new(),
+                            great_grandchild_texts: Vec::new(),
                         });
                         section_depth += 1;
                     }
@@ -6639,6 +6710,9 @@ fn parse_stylesheet_summary(styles_xml: &[u8]) -> OmResult<StylesheetSummary> {
                         current_dxf.grandchild_names.push(Vec::new());
                         current_dxf.grandchild_attr_maps.push(Vec::new());
                         current_dxf.grandchild_texts.push(Vec::new());
+                        current_dxf.great_grandchild_names.push(Vec::new());
+                        current_dxf.great_grandchild_attr_maps.push(Vec::new());
+                        current_dxf.great_grandchild_texts.push(Vec::new());
                         section_depth += 1;
                     }
                     _ if current_section == Some(StylesheetSection::Dxfs) && section_depth == 3 => {
@@ -6708,6 +6782,36 @@ fn parse_stylesheet_summary(styles_xml: &[u8]) -> OmResult<StylesheetSummary> {
                                 )
                             })?
                             .push(Vec::new());
+                        current_dxf
+                            .great_grandchild_names
+                            .last_mut()
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered nested dxf child before direct dxf child",
+                                )
+                            })?
+                            .push(Vec::new());
+                        current_dxf
+                            .great_grandchild_attr_maps
+                            .last_mut()
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered nested dxf child before direct dxf child",
+                                )
+                            })?
+                            .push(Vec::new());
+                        current_dxf
+                            .great_grandchild_texts
+                            .last_mut()
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered nested dxf child before direct dxf child",
+                                )
+                            })?
+                            .push(Vec::new());
                         section_depth += 1;
                     }
                     _ if current_section == Some(StylesheetSection::Dxfs) && section_depth == 4 => {
@@ -6747,6 +6851,84 @@ fn parse_stylesheet_summary(styles_xml: &[u8]) -> OmResult<StylesheetSummary> {
                                 OmError::new(
                                     OmErrorCode::InvalidState,
                                     "styles.xml encountered dxf grandchild before nested dxf child",
+                                )
+                            })?
+                            .push(None);
+                        current_dxf
+                            .great_grandchild_names
+                            .last_mut()
+                            .and_then(|nested| nested.last_mut())
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered dxf grandchild before nested dxf child",
+                                )
+                            })?
+                            .push(Vec::new());
+                        current_dxf
+                            .great_grandchild_attr_maps
+                            .last_mut()
+                            .and_then(|nested| nested.last_mut())
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered dxf grandchild before nested dxf child",
+                                )
+                            })?
+                            .push(Vec::new());
+                        current_dxf
+                            .great_grandchild_texts
+                            .last_mut()
+                            .and_then(|nested| nested.last_mut())
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered dxf grandchild before nested dxf child",
+                                )
+                            })?
+                            .push(Vec::new());
+                        section_depth += 1;
+                    }
+                    _ if current_section == Some(StylesheetSection::Dxfs) && section_depth == 5 => {
+                        let current_dxf = dxfs.last_mut().ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "styles.xml encountered dxf great-grandchild outside tracked dxf child",
+                            )
+                        })?;
+                        current_dxf
+                            .great_grandchild_names
+                            .last_mut()
+                            .and_then(|nested| nested.last_mut())
+                            .and_then(|grandchildren| grandchildren.last_mut())
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered dxf great-grandchild before dxf grandchild",
+                                )
+                            })?
+                            .push(local_name.clone());
+                        current_dxf
+                            .great_grandchild_attr_maps
+                            .last_mut()
+                            .and_then(|nested| nested.last_mut())
+                            .and_then(|grandchildren| grandchildren.last_mut())
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered dxf great-grandchild before dxf grandchild",
+                                )
+                            })?
+                            .push(parse_child_attrs(&element, reader.decoder())?);
+                        current_dxf
+                            .great_grandchild_texts
+                            .last_mut()
+                            .and_then(|nested| nested.last_mut())
+                            .and_then(|grandchildren| grandchildren.last_mut())
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered dxf great-grandchild before dxf grandchild",
                                 )
                             })?
                             .push(None);
@@ -7286,6 +7468,9 @@ fn parse_stylesheet_summary(styles_xml: &[u8]) -> OmResult<StylesheetSummary> {
                             grandchild_names: Vec::new(),
                             grandchild_attr_maps: Vec::new(),
                             grandchild_texts: Vec::new(),
+                            great_grandchild_names: Vec::new(),
+                            great_grandchild_attr_maps: Vec::new(),
+                            great_grandchild_texts: Vec::new(),
                         });
                     }
                     b"xf"
@@ -8564,6 +8749,9 @@ fn parse_stylesheet_summary(styles_xml: &[u8]) -> OmResult<StylesheetSummary> {
                         current_dxf.grandchild_names.push(Vec::new());
                         current_dxf.grandchild_attr_maps.push(Vec::new());
                         current_dxf.grandchild_texts.push(Vec::new());
+                        current_dxf.great_grandchild_names.push(Vec::new());
+                        current_dxf.great_grandchild_attr_maps.push(Vec::new());
+                        current_dxf.great_grandchild_texts.push(Vec::new());
                     }
                     _ if current_section == Some(StylesheetSection::Dxfs) && section_depth == 3 => {
                         let current_dxf = dxfs.last_mut().ok_or_else(|| {
@@ -8638,6 +8826,36 @@ fn parse_stylesheet_summary(styles_xml: &[u8]) -> OmResult<StylesheetSummary> {
                                 )
                             })?
                             .push(Vec::new());
+                        current_dxf
+                            .great_grandchild_names
+                            .last_mut()
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered nested dxf child before direct dxf child",
+                                )
+                            })?
+                            .push(Vec::new());
+                        current_dxf
+                            .great_grandchild_attr_maps
+                            .last_mut()
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered nested dxf child before direct dxf child",
+                                )
+                            })?
+                            .push(Vec::new());
+                        current_dxf
+                            .great_grandchild_texts
+                            .last_mut()
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered nested dxf child before direct dxf child",
+                                )
+                            })?
+                            .push(Vec::new());
                     }
                     _ if current_section == Some(StylesheetSection::Dxfs) && section_depth == 4 => {
                         let current_dxf = dxfs.last_mut().ok_or_else(|| {
@@ -8682,6 +8900,89 @@ fn parse_stylesheet_summary(styles_xml: &[u8]) -> OmResult<StylesheetSummary> {
                                 OmError::new(
                                     OmErrorCode::InvalidState,
                                     "styles.xml encountered dxf grandchild before nested dxf child",
+                                )
+                            })?
+                            .push(None);
+                        current_dxf
+                            .great_grandchild_names
+                            .last_mut()
+                            .and_then(|nested| nested.last_mut())
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered dxf grandchild before nested dxf child",
+                                )
+                            })?
+                            .push(Vec::new());
+                        current_dxf
+                            .great_grandchild_attr_maps
+                            .last_mut()
+                            .and_then(|nested| nested.last_mut())
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered dxf grandchild before nested dxf child",
+                                )
+                            })?
+                            .push(Vec::new());
+                        current_dxf
+                            .great_grandchild_texts
+                            .last_mut()
+                            .and_then(|nested| nested.last_mut())
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered dxf grandchild before nested dxf child",
+                                )
+                            })?
+                            .push(Vec::new());
+                    }
+                    _ if current_section == Some(StylesheetSection::Dxfs) && section_depth == 5 => {
+                        let current_dxf = dxfs.last_mut().ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "styles.xml encountered dxf great-grandchild outside tracked dxf child",
+                            )
+                        })?;
+                        current_dxf
+                            .great_grandchild_names
+                            .last_mut()
+                            .and_then(|nested| nested.last_mut())
+                            .and_then(|grandchildren| grandchildren.last_mut())
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered dxf great-grandchild before dxf grandchild",
+                                )
+                            })?
+                            .push(
+                                String::from_utf8_lossy(element.name().as_ref())
+                                    .rsplit(':')
+                                    .next()
+                                    .unwrap_or_default()
+                                    .to_string(),
+                            );
+                        current_dxf
+                            .great_grandchild_attr_maps
+                            .last_mut()
+                            .and_then(|nested| nested.last_mut())
+                            .and_then(|grandchildren| grandchildren.last_mut())
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered dxf great-grandchild before dxf grandchild",
+                                )
+                            })?
+                            .push(parse_child_attrs(&element, reader.decoder())?);
+                        current_dxf
+                            .great_grandchild_texts
+                            .last_mut()
+                            .and_then(|nested| nested.last_mut())
+                            .and_then(|grandchildren| grandchildren.last_mut())
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered dxf great-grandchild before dxf grandchild",
                                 )
                             })?
                             .push(None);
@@ -8918,6 +9219,25 @@ fn parse_stylesheet_summary(styles_xml: &[u8]) -> OmResult<StylesheetSummary> {
                                 OmError::new(
                                     OmErrorCode::InvalidState,
                                     "styles.xml encountered dxf grandchild text before dxf grandchild",
+                                )
+                            })?,
+                        &content,
+                    );
+                } else if element_stack.len() == 7
+                    && element_stack.first().map(String::as_str) == Some("styleSheet")
+                    && element_stack.get(1).map(String::as_str) == Some("dxfs")
+                    && element_stack.get(2).map(String::as_str) == Some("dxf")
+                {
+                    append_summary_text(
+                        dxfs.last_mut()
+                            .and_then(|dxf| dxf.great_grandchild_texts.last_mut())
+                            .and_then(|nested| nested.last_mut())
+                            .and_then(|grandchildren| grandchildren.last_mut())
+                            .and_then(|great_grandchildren| great_grandchildren.last_mut())
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered dxf great-grandchild text before dxf great-grandchild",
                                 )
                             })?,
                         &content,
@@ -9500,6 +9820,25 @@ fn parse_stylesheet_summary(styles_xml: &[u8]) -> OmResult<StylesheetSummary> {
                                 OmError::new(
                                     OmErrorCode::InvalidState,
                                     "styles.xml encountered dxf grandchild text before dxf grandchild",
+                                )
+                            })?,
+                        &content,
+                    );
+                } else if element_stack.len() == 7
+                    && element_stack.first().map(String::as_str) == Some("styleSheet")
+                    && element_stack.get(1).map(String::as_str) == Some("dxfs")
+                    && element_stack.get(2).map(String::as_str) == Some("dxf")
+                {
+                    append_summary_text(
+                        dxfs.last_mut()
+                            .and_then(|dxf| dxf.great_grandchild_texts.last_mut())
+                            .and_then(|nested| nested.last_mut())
+                            .and_then(|grandchildren| grandchildren.last_mut())
+                            .and_then(|great_grandchildren| great_grandchildren.last_mut())
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered dxf great-grandchild text before dxf great-grandchild",
                                 )
                             })?,
                         &content,
@@ -52329,6 +52668,9 @@ mod tests {
                 grandchild_names: Vec::new(),
                 grandchild_attr_maps: Vec::new(),
                 grandchild_texts: Vec::new(),
+                great_grandchild_names: Vec::new(),
+                great_grandchild_attr_maps: Vec::new(),
+                great_grandchild_texts: Vec::new(),
             }]
         );
     }
@@ -52363,6 +52705,9 @@ mod tests {
                 grandchild_names: Vec::new(),
                 grandchild_attr_maps: Vec::new(),
                 grandchild_texts: Vec::new(),
+                great_grandchild_names: Vec::new(),
+                great_grandchild_attr_maps: Vec::new(),
+                great_grandchild_texts: Vec::new(),
             }]
         );
     }
@@ -52417,6 +52762,9 @@ mod tests {
                 grandchild_names: Vec::new(),
                 grandchild_attr_maps: Vec::new(),
                 grandchild_texts: Vec::new(),
+                great_grandchild_names: Vec::new(),
+                great_grandchild_attr_maps: Vec::new(),
+                great_grandchild_texts: Vec::new(),
             }]
         );
     }
@@ -52474,6 +52822,9 @@ mod tests {
                 grandchild_names: Vec::new(),
                 grandchild_attr_maps: Vec::new(),
                 grandchild_texts: Vec::new(),
+                great_grandchild_names: Vec::new(),
+                great_grandchild_attr_maps: Vec::new(),
+                great_grandchild_texts: Vec::new(),
             }]
         );
     }
@@ -52508,6 +52859,9 @@ mod tests {
                 grandchild_names: Vec::new(),
                 grandchild_attr_maps: Vec::new(),
                 grandchild_texts: Vec::new(),
+                great_grandchild_names: Vec::new(),
+                great_grandchild_attr_maps: Vec::new(),
+                great_grandchild_texts: Vec::new(),
             }]
         );
     }
@@ -52553,6 +52907,9 @@ mod tests {
                 grandchild_names: Vec::new(),
                 grandchild_attr_maps: Vec::new(),
                 grandchild_texts: Vec::new(),
+                great_grandchild_names: Vec::new(),
+                great_grandchild_attr_maps: Vec::new(),
+                great_grandchild_texts: Vec::new(),
             }]
         );
     }
@@ -52587,6 +52944,9 @@ mod tests {
                 grandchild_names: Vec::new(),
                 grandchild_attr_maps: Vec::new(),
                 grandchild_texts: Vec::new(),
+                great_grandchild_names: Vec::new(),
+                great_grandchild_attr_maps: Vec::new(),
+                great_grandchild_texts: Vec::new(),
             }]
         );
     }
@@ -52620,6 +52980,38 @@ mod tests {
         assert_eq!(
             styles_summary.dxfs[0].grandchild_texts,
             vec![vec![vec![Some("alphabeta".to_string())]]]
+        );
+    }
+
+    #[test]
+    fn load_collects_dxf_great_grandchild_summary_in_styles_summary() {
+        let codec = XlsxCodec;
+        let loaded = codec
+            .load(
+                &workbook_with_dxf_font_color_tint_alpha_bytes(),
+                CommonLoadOptions::default(),
+            )
+            .expect("load workbook");
+        let styles_summary = loaded
+            .support_parts
+            .styles_summary
+            .as_ref()
+            .expect("typed styles summary");
+
+        assert_eq!(
+            styles_summary.dxfs[0].great_grandchild_names,
+            vec![vec![vec![vec!["alpha".to_string()]]]]
+        );
+        assert_eq!(
+            styles_summary.dxfs[0].great_grandchild_attr_maps,
+            vec![vec![vec![vec![BTreeMap::from([(
+                "val".to_string(),
+                "50000".to_string()
+            )])]]]]
+        );
+        assert_eq!(
+            styles_summary.dxfs[0].great_grandchild_texts,
+            vec![vec![vec![vec![Some("alphabeta".to_string())]]]]
         );
     }
 
@@ -52670,6 +53062,9 @@ mod tests {
                 grandchild_names: Vec::new(),
                 grandchild_attr_maps: Vec::new(),
                 grandchild_texts: Vec::new(),
+                great_grandchild_names: Vec::new(),
+                great_grandchild_attr_maps: Vec::new(),
+                great_grandchild_texts: Vec::new(),
             }]
         );
     }
@@ -52721,6 +53116,9 @@ mod tests {
                 grandchild_names: Vec::new(),
                 grandchild_attr_maps: Vec::new(),
                 grandchild_texts: Vec::new(),
+                great_grandchild_names: Vec::new(),
+                great_grandchild_attr_maps: Vec::new(),
+                great_grandchild_texts: Vec::new(),
             }]
         );
     }
@@ -52764,6 +53162,9 @@ mod tests {
                 grandchild_names: Vec::new(),
                 grandchild_attr_maps: Vec::new(),
                 grandchild_texts: Vec::new(),
+                great_grandchild_names: Vec::new(),
+                great_grandchild_attr_maps: Vec::new(),
+                great_grandchild_texts: Vec::new(),
             }]
         );
     }
@@ -52824,6 +53225,9 @@ mod tests {
                 grandchild_names: Vec::new(),
                 grandchild_attr_maps: Vec::new(),
                 grandchild_texts: Vec::new(),
+                great_grandchild_names: Vec::new(),
+                great_grandchild_attr_maps: Vec::new(),
+                great_grandchild_texts: Vec::new(),
             }]
         );
     }
@@ -52858,6 +53262,9 @@ mod tests {
                 grandchild_names: Vec::new(),
                 grandchild_attr_maps: Vec::new(),
                 grandchild_texts: Vec::new(),
+                great_grandchild_names: Vec::new(),
+                great_grandchild_attr_maps: Vec::new(),
+                great_grandchild_texts: Vec::new(),
             }]
         );
     }
@@ -52909,6 +53316,9 @@ mod tests {
                 grandchild_names: Vec::new(),
                 grandchild_attr_maps: Vec::new(),
                 grandchild_texts: Vec::new(),
+                great_grandchild_names: Vec::new(),
+                great_grandchild_attr_maps: Vec::new(),
+                great_grandchild_texts: Vec::new(),
             }]
         );
     }
@@ -52964,6 +53374,9 @@ mod tests {
                     grandchild_names: Vec::new(),
                     grandchild_attr_maps: Vec::new(),
                     grandchild_texts: Vec::new(),
+                    great_grandchild_names: Vec::new(),
+                    great_grandchild_attr_maps: Vec::new(),
+                    great_grandchild_texts: Vec::new(),
                 },
                 DxfSummary {
                     child_names: vec!["font".to_string()],
@@ -52978,6 +53391,9 @@ mod tests {
                     grandchild_names: Vec::new(),
                     grandchild_attr_maps: Vec::new(),
                     grandchild_texts: Vec::new(),
+                    great_grandchild_names: Vec::new(),
+                    great_grandchild_attr_maps: Vec::new(),
+                    great_grandchild_texts: Vec::new(),
                 },
             ]
         );
@@ -53034,6 +53450,9 @@ mod tests {
                     grandchild_names: Vec::new(),
                     grandchild_attr_maps: Vec::new(),
                     grandchild_texts: Vec::new(),
+                    great_grandchild_names: Vec::new(),
+                    great_grandchild_attr_maps: Vec::new(),
+                    great_grandchild_texts: Vec::new(),
                 },
                 DxfSummary {
                     child_names: vec!["font".to_string()],
@@ -53048,6 +53467,9 @@ mod tests {
                     grandchild_names: Vec::new(),
                     grandchild_attr_maps: Vec::new(),
                     grandchild_texts: Vec::new(),
+                    great_grandchild_names: Vec::new(),
+                    great_grandchild_attr_maps: Vec::new(),
+                    great_grandchild_texts: Vec::new(),
                 },
             ]
         );
@@ -53101,6 +53523,9 @@ mod tests {
                     grandchild_names: Vec::new(),
                     grandchild_attr_maps: Vec::new(),
                     grandchild_texts: Vec::new(),
+                    great_grandchild_names: Vec::new(),
+                    great_grandchild_attr_maps: Vec::new(),
+                    great_grandchild_texts: Vec::new(),
                 },
                 DxfSummary {
                     child_names: vec!["font".to_string()],
@@ -53115,6 +53540,9 @@ mod tests {
                     grandchild_names: Vec::new(),
                     grandchild_attr_maps: Vec::new(),
                     grandchild_texts: Vec::new(),
+                    great_grandchild_names: Vec::new(),
+                    great_grandchild_attr_maps: Vec::new(),
+                    great_grandchild_texts: Vec::new(),
                 },
             ]
         );
@@ -53171,6 +53599,9 @@ mod tests {
                     grandchild_names: Vec::new(),
                     grandchild_attr_maps: Vec::new(),
                     grandchild_texts: Vec::new(),
+                    great_grandchild_names: Vec::new(),
+                    great_grandchild_attr_maps: Vec::new(),
+                    great_grandchild_texts: Vec::new(),
                 },
                 DxfSummary {
                     child_names: Vec::new(),
@@ -53182,6 +53613,9 @@ mod tests {
                     grandchild_names: Vec::new(),
                     grandchild_attr_maps: Vec::new(),
                     grandchild_texts: Vec::new(),
+                    great_grandchild_names: Vec::new(),
+                    great_grandchild_attr_maps: Vec::new(),
+                    great_grandchild_texts: Vec::new(),
                 },
             ]
         );
@@ -53235,6 +53669,9 @@ mod tests {
                     grandchild_names: Vec::new(),
                     grandchild_attr_maps: Vec::new(),
                     grandchild_texts: Vec::new(),
+                    great_grandchild_names: Vec::new(),
+                    great_grandchild_attr_maps: Vec::new(),
+                    great_grandchild_texts: Vec::new(),
                 },
                 DxfSummary {
                     child_names: vec!["font".to_string()],
@@ -53249,6 +53686,9 @@ mod tests {
                     grandchild_names: Vec::new(),
                     grandchild_attr_maps: Vec::new(),
                     grandchild_texts: Vec::new(),
+                    great_grandchild_names: Vec::new(),
+                    great_grandchild_attr_maps: Vec::new(),
+                    great_grandchild_texts: Vec::new(),
                 },
             ]
         );
@@ -53305,6 +53745,9 @@ mod tests {
                     grandchild_names: Vec::new(),
                     grandchild_attr_maps: Vec::new(),
                     grandchild_texts: Vec::new(),
+                    great_grandchild_names: Vec::new(),
+                    great_grandchild_attr_maps: Vec::new(),
+                    great_grandchild_texts: Vec::new(),
                 },
                 DxfSummary {
                     child_names: Vec::new(),
@@ -53316,6 +53759,9 @@ mod tests {
                     grandchild_names: Vec::new(),
                     grandchild_attr_maps: Vec::new(),
                     grandchild_texts: Vec::new(),
+                    great_grandchild_names: Vec::new(),
+                    great_grandchild_attr_maps: Vec::new(),
+                    great_grandchild_texts: Vec::new(),
                 },
             ]
         );
@@ -53369,6 +53815,9 @@ mod tests {
                     grandchild_names: Vec::new(),
                     grandchild_attr_maps: Vec::new(),
                     grandchild_texts: Vec::new(),
+                    great_grandchild_names: Vec::new(),
+                    great_grandchild_attr_maps: Vec::new(),
+                    great_grandchild_texts: Vec::new(),
                 },
                 DxfSummary {
                     child_names: vec!["font".to_string()],
@@ -53383,6 +53832,9 @@ mod tests {
                     grandchild_names: Vec::new(),
                     grandchild_attr_maps: Vec::new(),
                     grandchild_texts: Vec::new(),
+                    great_grandchild_names: Vec::new(),
+                    great_grandchild_attr_maps: Vec::new(),
+                    great_grandchild_texts: Vec::new(),
                 },
                 DxfSummary {
                     child_names: Vec::new(),
@@ -53394,6 +53846,9 @@ mod tests {
                     grandchild_names: Vec::new(),
                     grandchild_attr_maps: Vec::new(),
                     grandchild_texts: Vec::new(),
+                    great_grandchild_names: Vec::new(),
+                    great_grandchild_attr_maps: Vec::new(),
+                    great_grandchild_texts: Vec::new(),
                 },
             ]
         );
@@ -53447,6 +53902,9 @@ mod tests {
                     grandchild_names: Vec::new(),
                     grandchild_attr_maps: Vec::new(),
                     grandchild_texts: Vec::new(),
+                    great_grandchild_names: Vec::new(),
+                    great_grandchild_attr_maps: Vec::new(),
+                    great_grandchild_texts: Vec::new(),
                 },
                 DxfSummary {
                     child_names: vec!["font".to_string()],
@@ -53461,6 +53919,9 @@ mod tests {
                     grandchild_names: Vec::new(),
                     grandchild_attr_maps: Vec::new(),
                     grandchild_texts: Vec::new(),
+                    great_grandchild_names: Vec::new(),
+                    great_grandchild_attr_maps: Vec::new(),
+                    great_grandchild_texts: Vec::new(),
                 },
                 DxfSummary {
                     child_names: Vec::new(),
@@ -53472,6 +53933,9 @@ mod tests {
                     grandchild_names: Vec::new(),
                     grandchild_attr_maps: Vec::new(),
                     grandchild_texts: Vec::new(),
+                    great_grandchild_names: Vec::new(),
+                    great_grandchild_attr_maps: Vec::new(),
+                    great_grandchild_texts: Vec::new(),
                 },
             ]
         );
@@ -53528,6 +53992,9 @@ mod tests {
                     grandchild_names: Vec::new(),
                     grandchild_attr_maps: Vec::new(),
                     grandchild_texts: Vec::new(),
+                    great_grandchild_names: Vec::new(),
+                    great_grandchild_attr_maps: Vec::new(),
+                    great_grandchild_texts: Vec::new(),
                 },
                 DxfSummary {
                     child_names: Vec::new(),
@@ -53539,6 +54006,9 @@ mod tests {
                     grandchild_names: Vec::new(),
                     grandchild_attr_maps: Vec::new(),
                     grandchild_texts: Vec::new(),
+                    great_grandchild_names: Vec::new(),
+                    great_grandchild_attr_maps: Vec::new(),
+                    great_grandchild_texts: Vec::new(),
                 },
                 DxfSummary {
                     child_names: vec!["font".to_string()],
@@ -53553,6 +54023,9 @@ mod tests {
                     grandchild_names: Vec::new(),
                     grandchild_attr_maps: Vec::new(),
                     grandchild_texts: Vec::new(),
+                    great_grandchild_names: Vec::new(),
+                    great_grandchild_attr_maps: Vec::new(),
+                    great_grandchild_texts: Vec::new(),
                 },
             ]
         );
@@ -53610,6 +54083,9 @@ mod tests {
                     grandchild_names: Vec::new(),
                     grandchild_attr_maps: Vec::new(),
                     grandchild_texts: Vec::new(),
+                    great_grandchild_names: Vec::new(),
+                    great_grandchild_attr_maps: Vec::new(),
+                    great_grandchild_texts: Vec::new(),
                 },
                 DxfSummary {
                     child_names: Vec::new(),
@@ -53621,6 +54097,9 @@ mod tests {
                     grandchild_names: Vec::new(),
                     grandchild_attr_maps: Vec::new(),
                     grandchild_texts: Vec::new(),
+                    great_grandchild_names: Vec::new(),
+                    great_grandchild_attr_maps: Vec::new(),
+                    great_grandchild_texts: Vec::new(),
                 },
                 DxfSummary {
                     child_names: vec!["font".to_string()],
@@ -53635,6 +54114,9 @@ mod tests {
                     grandchild_names: Vec::new(),
                     grandchild_attr_maps: Vec::new(),
                     grandchild_texts: Vec::new(),
+                    great_grandchild_names: Vec::new(),
+                    great_grandchild_attr_maps: Vec::new(),
+                    great_grandchild_texts: Vec::new(),
                 },
             ]
         );
@@ -69007,6 +69489,13 @@ mod tests {
     fn dirty_save_preserves_dxf_grandchild_summary_in_styles_xml() {
         assert_dirty_save_preserves_styles_xml_for_mutated_input(
             workbook_with_dxf_font_color_tint_bytes(),
+        );
+    }
+
+    #[test]
+    fn dirty_save_preserves_dxf_great_grandchild_summary_in_styles_xml() {
+        assert_dirty_save_preserves_styles_xml_for_mutated_input(
+            workbook_with_dxf_font_color_tint_alpha_bytes(),
         );
     }
 
@@ -93644,6 +94133,82 @@ mod tests {
         let error = codec
             .save(&loaded, office_common::SaveOptions::default())
             .expect_err("save should fail when dxf grandchild text drifts");
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("typed styles summary drifted"));
+        assert!(error.message.contains("xl/styles.xml"));
+    }
+
+    #[test]
+    fn save_rejects_stylesheet_when_dxf_great_grandchild_attr_drifts() {
+        let codec = XlsxCodec;
+        let input = workbook_with_dxf_font_color_tint_alpha_bytes();
+        let mut loaded = codec
+            .load(&input, CommonLoadOptions::default())
+            .expect("load workbook");
+        let sheet_id = loaded.state.worksheets[0].id;
+        let styles_xml = String::from_utf8(
+            loaded
+                .package
+                .part("xl/styles.xml")
+                .expect("styles part")
+                .bytes
+                .clone(),
+        )
+        .expect("styles xml utf8")
+        .replace(r#"alpha val="50000""#, r#"alpha val="25000""#);
+        loaded
+            .package
+            .replace_part_bytes("xl/styles.xml", styles_xml.into_bytes())
+            .expect("replace styles part");
+        loaded
+            .state
+            .set_range_values(
+                &office_common::RangeRef::single_cell(WorkbookId(0), sheet_id, 1, 1),
+                &office_common::OmArray::scalar(office_common::OmValue::Number(9.0)),
+            )
+            .expect("set value");
+
+        let error = codec
+            .save(&loaded, office_common::SaveOptions::default())
+            .expect_err("save should fail when dxf great-grandchild attrs drift");
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("typed styles summary drifted"));
+        assert!(error.message.contains("xl/styles.xml"));
+    }
+
+    #[test]
+    fn save_rejects_stylesheet_when_dxf_great_grandchild_text_drifts() {
+        let codec = XlsxCodec;
+        let input = workbook_with_dxf_font_color_tint_alpha_bytes();
+        let mut loaded = codec
+            .load(&input, CommonLoadOptions::default())
+            .expect("load workbook");
+        let sheet_id = loaded.state.worksheets[0].id;
+        let styles_xml = String::from_utf8(
+            loaded
+                .package
+                .part("xl/styles.xml")
+                .expect("styles part")
+                .bytes
+                .clone(),
+        )
+        .expect("styles xml utf8")
+        .replace("alpha<![CDATA[beta]]>", "changed<![CDATA[beta]]>");
+        loaded
+            .package
+            .replace_part_bytes("xl/styles.xml", styles_xml.into_bytes())
+            .expect("replace styles part");
+        loaded
+            .state
+            .set_range_values(
+                &office_common::RangeRef::single_cell(WorkbookId(0), sheet_id, 1, 1),
+                &office_common::OmArray::scalar(office_common::OmValue::Number(9.0)),
+            )
+            .expect("set value");
+
+        let error = codec
+            .save(&loaded, office_common::SaveOptions::default())
+            .expect_err("save should fail when dxf great-grandchild text drifts");
         assert_eq!(error.code, OmErrorCode::InvalidState);
         assert!(error.message.contains("typed styles summary drifted"));
         assert!(error.message.contains("xl/styles.xml"));
@@ -120380,6 +120945,27 @@ mod tests {
         .replace(
             r#"<color rgb="FFFF0000"/>"#,
             r#"<color rgb="FFFF0000"><tint val="-0.25">alpha<![CDATA[beta]]></tint></color>"#,
+        );
+        package
+            .replace_part_bytes("xl/styles.xml", styles_xml.into_bytes())
+            .expect("replace styles part");
+        package.to_bytes().expect("package bytes")
+    }
+
+    fn workbook_with_dxf_font_color_tint_alpha_bytes() -> Vec<u8> {
+        let mut package = OpcPackage::from_bytes(&workbook_with_dxf_font_color_tint_bytes())
+            .expect("base workbook package");
+        let styles_xml = String::from_utf8(
+            package
+                .part("xl/styles.xml")
+                .expect("styles part")
+                .bytes
+                .clone(),
+        )
+        .expect("styles xml utf8")
+        .replace(
+            r#"<tint val="-0.25">alpha<![CDATA[beta]]></tint>"#,
+            r#"<tint val="-0.25"><alpha val="50000">alpha<![CDATA[beta]]></alpha></tint>"#,
         );
         package
             .replace_part_bytes("xl/styles.xml", styles_xml.into_bytes())
