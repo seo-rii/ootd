@@ -1345,23 +1345,14 @@ fn validate_capture_bundle_contract(
             source,
         }
     })?;
-    let expected_output_names = manifest
-        .get("expectedCaptureOutputs")
-        .and_then(|value| value.as_array())
-        .ok_or_else(|| CanonicalOmGenerationError::CaptureBundleContract {
-            message: "capture_manifest.json missing expectedCaptureOutputs array".to_string(),
-        })?
-        .iter()
-        .map(|value| {
-            value.as_str().map(str::to_string).ok_or_else(|| {
-                CanonicalOmGenerationError::CaptureBundleContract {
-                    message:
-                        "capture_manifest.json expectedCaptureOutputs contains non-string entry"
-                            .to_string(),
-                }
-            })
-        })
-        .collect::<Result<BTreeSet<_>, _>>()?;
+    let expected_output_names = collect_string_set_without_duplicates(
+        manifest.get("expectedCaptureOutputs").ok_or_else(|| {
+            CanonicalOmGenerationError::CaptureBundleContract {
+                message: "capture_manifest.json missing expectedCaptureOutputs array".to_string(),
+            }
+        })?,
+        "capture_manifest.json expectedCaptureOutputs",
+    )?;
     let required_output_names = [
         "raw_typelib_identity.json",
         "excel_typelib_snapshot.idl",
@@ -1552,22 +1543,10 @@ fn validate_capture_bundle_contract(
             .get("expectedCaptureOutputs")
             .filter(|value| !value.is_null())
         {
-            let receipt_expected_output_names = receipt_expected_outputs
-                .as_array()
-                .ok_or_else(|| CanonicalOmGenerationError::CaptureBundleContract {
-                    message:
-                        "capture_manifest.json executionReceipt.expectedCaptureOutputs was not an array"
-                            .to_string(),
-                })?
-                .iter()
-                .map(|value| {
-                    value.as_str().map(str::to_string).ok_or_else(|| {
-                        CanonicalOmGenerationError::CaptureBundleContract {
-                            message: "capture_manifest.json executionReceipt.expectedCaptureOutputs contains non-string entry".to_string(),
-                        }
-                    })
-                })
-                .collect::<Result<BTreeSet<_>, _>>()?;
+            let receipt_expected_output_names = collect_string_set_without_duplicates(
+                receipt_expected_outputs,
+                "capture_manifest.json executionReceipt.expectedCaptureOutputs",
+            )?;
             if receipt_expected_output_names != expected_output_names {
                 return Err(CanonicalOmGenerationError::CaptureBundleContract {
                     message: format!(
@@ -1625,6 +1604,33 @@ fn validate_capture_bundle_contract(
     }
 
     Ok(())
+}
+
+fn collect_string_set_without_duplicates(
+    value: &serde_json::Value,
+    label: &'static str,
+) -> Result<BTreeSet<String>, CanonicalOmGenerationError> {
+    let values =
+        value
+            .as_array()
+            .ok_or_else(|| CanonicalOmGenerationError::CaptureBundleContract {
+                message: format!("{label} was not an array"),
+            })?;
+    let mut names = BTreeSet::new();
+    for value in values {
+        let name =
+            value
+                .as_str()
+                .ok_or_else(|| CanonicalOmGenerationError::CaptureBundleContract {
+                    message: format!("{label} contains non-string entry"),
+                })?;
+        if !names.insert(name.to_string()) {
+            return Err(CanonicalOmGenerationError::CaptureBundleContract {
+                message: format!("{label} contained duplicate entry {name}"),
+            });
+        }
+    }
+    Ok(names)
 }
 
 fn validate_receipt_results(

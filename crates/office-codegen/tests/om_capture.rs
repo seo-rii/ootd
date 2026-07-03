@@ -1617,6 +1617,50 @@ fn normalize_capture_bundle_from_dir_validates_manifest_checksum_contract() {
 }
 
 #[test]
+fn normalize_capture_bundle_from_dir_rejects_duplicate_manifest_expected_outputs() {
+    let unique_suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time")
+        .as_nanos();
+    let bundle_root =
+        std::env::temp_dir().join(format!("ootd-step3-duplicate-expected-{unique_suffix}"));
+    let manifest_dir = bundle_root.join("manifest");
+
+    fs::create_dir_all(&manifest_dir).expect("manifest dir");
+    fs::write(
+        manifest_dir.join("capture_manifest.json"),
+        r#"{
+  "expectedCaptureOutputs": [
+    "raw_typelib_identity.json",
+    "raw_typelib_identity.json",
+    "excel_typelib_snapshot.idl",
+    "excel_typelib_snapshot.odl",
+    "excel_pia_identity.json",
+    "excel_pia_public_surface.json"
+  ],
+  "writableOutputs": {
+    "raw_typelib_identity": "C:\\capture\\raw\\raw_typelib_identity.json",
+    "excel_typelib_snapshot_idl": "C:\\capture\\snapshots\\excel_typelib_snapshot.idl",
+    "excel_typelib_snapshot_odl": "C:\\capture\\snapshots\\excel_typelib_snapshot.odl",
+    "excel_pia_identity": "C:\\capture\\raw\\excel_pia_identity.json",
+    "excel_pia_public_surface": "C:\\capture\\snapshots\\excel_pia_public_surface.json"
+  }
+}"#,
+    )
+    .expect("write manifest");
+
+    let error = normalize_capture_bundle_from_dir(&bundle_root)
+        .expect_err("duplicate manifest expected output should fail");
+    match error {
+        CanonicalOmGenerationError::CaptureBundleContract { message } => {
+            assert!(message.contains("expectedCaptureOutputs"));
+            assert!(message.contains("duplicate entry raw_typelib_identity.json"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
 fn normalize_capture_bundle_from_dir_rejects_unexpected_writable_output_keys() {
     let unique_suffix = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -2043,6 +2087,123 @@ fn normalize_capture_bundle_from_dir_rejects_duplicate_embedded_receipt_results(
         CanonicalOmGenerationError::CaptureBundleContract { message } => {
             assert!(message.contains("manualStepResults"));
             assert!(message.contains("duplicate result oleview_snapshot_export"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn normalize_capture_bundle_from_dir_rejects_duplicate_embedded_receipt_expected_outputs() {
+    let unique_suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time")
+        .as_nanos();
+    let bundle_root = std::env::temp_dir().join(format!(
+        "ootd-step3-duplicate-receipt-expected-{unique_suffix}"
+    ));
+    let raw_dir = bundle_root.join("raw");
+    let snapshots_dir = bundle_root.join("snapshots");
+    let manifest_dir = bundle_root.join("manifest");
+
+    fs::create_dir_all(&raw_dir).expect("raw dir");
+    fs::create_dir_all(&snapshots_dir).expect("snapshots dir");
+    fs::create_dir_all(&manifest_dir).expect("manifest dir");
+    fs::write(
+        raw_dir.join("raw_typelib_identity.json"),
+        fs::read_to_string(repo_root().join("specs/pinned/raw_typelib_identity.template.json"))
+            .expect("typelib template"),
+    )
+    .expect("write typelib");
+    fs::write(
+        raw_dir.join("excel_pia_identity.json"),
+        r#"{"assembly":"Excel"}"#,
+    )
+    .expect("write pia identity");
+    fs::write(
+        snapshots_dir.join("excel_typelib_snapshot.idl"),
+        "library Excel {}",
+    )
+    .expect("write idl");
+    fs::write(
+        snapshots_dir.join("excel_typelib_snapshot.odl"),
+        "odl Excel {}",
+    )
+    .expect("write odl");
+    fs::write(
+        snapshots_dir.join("excel_pia_public_surface.json"),
+        fs::read_to_string(repo_root().join("specs/pinned/excel_pia_public_surface.template.json"))
+            .expect("pia template"),
+    )
+    .expect("write pia surface");
+    fs::write(
+        manifest_dir.join("capture_manifest.json"),
+        r#"{
+  "expectedCaptureOutputs": [
+    "raw_typelib_identity.json",
+    "excel_typelib_snapshot.idl",
+    "excel_typelib_snapshot.odl",
+    "excel_pia_identity.json",
+    "excel_pia_public_surface.json"
+  ],
+  "writableOutputs": {
+    "raw_typelib_identity": "C:\\capture\\raw\\raw_typelib_identity.json",
+    "excel_typelib_snapshot_idl": "C:\\capture\\snapshots\\excel_typelib_snapshot.idl",
+    "excel_typelib_snapshot_odl": "C:\\capture\\snapshots\\excel_typelib_snapshot.odl",
+    "excel_pia_identity": "C:\\capture\\raw\\excel_pia_identity.json",
+    "excel_pia_public_surface": "C:\\capture\\snapshots\\excel_pia_public_surface.json"
+  },
+  "executionReceipt": {
+    "expectedCaptureOutputs": [
+      "raw_typelib_identity.json",
+      "raw_typelib_identity.json",
+      "excel_typelib_snapshot.idl",
+      "excel_typelib_snapshot.odl",
+      "excel_pia_identity.json",
+      "excel_pia_public_surface.json"
+    ],
+    "commandResults": [
+      { "name": "powershell_capture_reflection", "status": "completed" }
+    ],
+    "manualStepResults": [
+      { "name": "oleview_snapshot_export", "status": "completed" }
+    ]
+  }
+}"#,
+    )
+    .expect("write manifest");
+    fs::write(
+        manifest_dir.join("output_checksums.json"),
+        format!(
+            r#"{{
+  "raw/raw_typelib_identity.json": "{}",
+  "snapshots/excel_typelib_snapshot.idl": "{}",
+  "snapshots/excel_typelib_snapshot.odl": "{}",
+  "raw/excel_pia_identity.json": "{}",
+  "snapshots/excel_pia_public_surface.json": "{}"
+}}"#,
+            sha256_hex(
+                fs::read(raw_dir.join("raw_typelib_identity.json"))
+                    .expect("typelib")
+                    .as_slice()
+            ),
+            sha256_hex(b"library Excel {}"),
+            sha256_hex(b"odl Excel {}"),
+            sha256_hex(br#"{"assembly":"Excel"}"#),
+            sha256_hex(
+                fs::read(snapshots_dir.join("excel_pia_public_surface.json"))
+                    .expect("pia")
+                    .as_slice()
+            )
+        ),
+    )
+    .expect("write checksums");
+
+    let error = normalize_capture_bundle_from_dir(&bundle_root)
+        .expect_err("duplicate embedded receipt expected output should fail");
+    match error {
+        CanonicalOmGenerationError::CaptureBundleContract { message } => {
+            assert!(message.contains("executionReceipt.expectedCaptureOutputs"));
+            assert!(message.contains("duplicate entry raw_typelib_identity.json"));
         }
         other => panic!("unexpected error: {other:?}"),
     }
