@@ -4685,6 +4685,8 @@
   - 범위: `office-codegen` capture bundle loader가 `output_checksums.json`에 listed된 expected payload relative path를 bundle root 아래 실제 파일로 재검증해 checksum manifest만 완성된 incomplete bundle이 canonical `office-idl` 생성 입력으로 통과하지 않도록 고정
   - `Step 7.20 DONE` codegen checksum digest validation
   - 범위: `office-codegen` capture bundle loader가 checksum-listed expected payload 파일의 실제 SHA-256 digest를 `output_checksums.json` 값과 비교해 stale/tampered oracle capture artifact가 canonical `office-idl` 생성 입력으로 통과하지 않도록 고정
+  - `Step 7.21 DONE` codegen checksum validator contract documentation
+  - 범위: Windows capture runner 문서가 `office-codegen`의 completed bundle 재검증 범위(expected payload, writable output basename, checksum coverage, file existence, SHA-256 digest, embedded receipt contract)를 현재 구현과 맞게 설명하도록 갱신
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.

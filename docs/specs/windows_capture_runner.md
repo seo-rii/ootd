@@ -92,10 +92,11 @@ completion 단계에서는 receipt가 `expectedCaptureOutputs`를 명시한 경�
 modern receipt는 `commandResults`와 `manualStepResults`의 각 status가 `completed`여야 한다.
 또한 `expectedCaptureOutputs`가 있는 receipt에서는 조건 없는 command result와 manual step result 이름이 `execution_plan.json`의 plan과 일치해야 하며, 조건부 fallback command는 실행되지 않을 수 있어 optional로 취급한다.
 알 수 없는 command result, 누락된 필수 command/manual step, pending/failed status는 completion error이며, 이 경우 completed manifest/checksum을 쓰지 않는다.
-`output_checksums.json`은 manifest-level `expectedCaptureOutputs`의 5개 payload 파일명을 모두 덮는 relative output path checksum set을 제공해야 한다.
+`output_checksums.json`은 manifest-level `expectedCaptureOutputs`의 5개 payload 파일명을 모두 덮는 bundle-relative output path checksum set을 제공해야 한다.
 추가로 `run_execution_bundle` library path와 `--run-execution-bundle DIR` CLI mode를 통해 실제 Windows host에서 launcher를 spawn하고 `manifest/direct_exec_status.json`을 읽은 뒤 final manifest/checksum completion까지 이어지는 direct-exec orchestration을 제공한다.
 non-Windows host에서는 이 path를 명시적으로 거부하고, materialized launcher/script 누락도 preflight error로 바로 반환한다.
 `office-codegen`는 capture bundle directory를 입력으로 받아 canonical `office-idl` JSON output을 쓰는 generator path를 제공하고, synthetic bundle regression과 capture bundle validator로 Step 3 contract를 고정한다.
+completed manifest가 있는 bundle에서는 `office-codegen`도 expected payload 목록, writable output basename, checksum coverage, checksum-listed file existence, SHA-256 digest match, embedded receipt status/result contract를 재검증한다.
 
 Step 1의 확정 범위는 member-level `dispid`, getter/setter origin, type alias info, interface/class inheritance metadata까지다.
 Step 2는 Windows machine에서 실제 artifact를 쓰는 contract와 layout을 고정하고, canonical `office-idl` 생성은 범위 밖으로 유지한다.
