@@ -28356,6 +28356,79 @@ mod tests {
             "{error}"
         );
 
+        let mut drawing_summary_changed_loaded = loaded.clone();
+        drawing_summary_changed_loaded
+            .sheet_drawing_support_parts
+            .get_mut(&sheet_id)
+            .expect("drawing support")
+            .drawing_summaries
+            .get_mut("xl/drawings/drawing2.xml")
+            .expect("drawing summary")
+            .anchors
+            .clear();
+        let error = codec
+            .save(
+                &drawing_summary_changed_loaded,
+                office_common::SaveOptions::default(),
+            )
+            .expect_err("save should reject changed chartsheet drawing summary");
+        assert!(
+            error
+                .to_string()
+                .contains("explicit drawing summary changed for xl/drawings/drawing2.xml"),
+            "{error}"
+        );
+
+        let mut drawing_changed_loaded = loaded.clone();
+        drawing_changed_loaded
+            .package
+            .replace_part_bytes(
+                "xl/drawings/drawing2.xml",
+                br#"<?xml version="1.0" encoding="UTF-8"?>
+<xdr:wsDr
+  xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <xdr:absoluteAnchor>
+    <xdr:pos x="0" y="0"/>
+    <xdr:ext cx="5486400" cy="3200400"/>
+    <xdr:graphicFrame><xdr:nvGraphicFramePr><xdr:cNvPr id="2" name="Chart Sheet Chart"/></xdr:nvGraphicFramePr><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart r:id="rIdChart2"/></a:graphicData></a:graphic></xdr:graphicFrame>
+    <xdr:clientData/>
+  </xdr:absoluteAnchor>
+</xdr:wsDr>"#
+                    .to_vec(),
+            )
+            .expect("replace chartsheet drawing part");
+        let error = codec
+            .save(
+                &drawing_changed_loaded,
+                office_common::SaveOptions::default(),
+            )
+            .expect_err("save should reject changed chartsheet drawing part");
+        assert!(
+            error
+                .to_string()
+                .contains("explicit drawing part bytes changed: xl/drawings/drawing2.xml"),
+            "{error}"
+        );
+
+        let mut drawing_missing_loaded = loaded.clone();
+        assert!(
+            drawing_missing_loaded
+                .package
+                .remove_part("xl/drawings/drawing2.xml")
+        );
+        let error = codec
+            .save(
+                &drawing_missing_loaded,
+                office_common::SaveOptions::default(),
+            )
+            .expect_err("save should reject missing chartsheet drawing part");
+        assert!(
+            error
+                .to_string()
+                .contains("explicit drawing part is missing: xl/drawings/drawing2.xml"),
+            "{error}"
+        );
+
         let mut chart_rels_changed_loaded = loaded.clone();
         chart_rels_changed_loaded
             .package
