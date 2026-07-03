@@ -953,6 +953,7 @@ pub struct ChartPartSummary {
     pub has_extension_list: bool,
     pub relationships_part_uri: Option<String>,
     pub support_relationships: Vec<ChartSupportRelationshipBinding>,
+    pub opaque_relationships: Vec<ChartOpaqueRelationshipSummary>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -1071,6 +1072,14 @@ pub struct ChartSupportRelationshipBinding {
     pub relationship_id: String,
     pub relationship_type: String,
     pub target: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChartOpaqueRelationshipSummary {
+    pub relationship_id: String,
+    pub relationship_type: String,
+    pub target: String,
+    pub target_mode: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3496,13 +3505,24 @@ fn collect_sheet_drawing_support_parts(
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default();
-            let chart_relationship_entries =
-                parse_relationship_entries(chart_rels_part.bytes.as_slice(), &chart_base_segments)?;
+            let chart_relationship_entries = parse_relationship_entries_with_options(
+                chart_rels_part.bytes.as_slice(),
+                &chart_base_segments,
+                true,
+            )?;
             chart_summary.relationships_part_uri = Some(chart_rels_part_uri);
             for relationship in &chart_relationship_entries {
                 if relationship.relationship_type != CHART_STYLE_RELATIONSHIP_TYPE
                     && relationship.relationship_type != CHART_COLOR_STYLE_RELATIONSHIP_TYPE
                 {
+                    chart_summary
+                        .opaque_relationships
+                        .push(ChartOpaqueRelationshipSummary {
+                            relationship_id: relationship.id.clone(),
+                            relationship_type: relationship.relationship_type.clone(),
+                            target: relationship.target.clone(),
+                            target_mode: relationship.target_mode.clone(),
+                        });
                     continue;
                 }
                 let support_part = package.part(&relationship.target).ok_or_else(|| {
@@ -23007,6 +23027,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
         has_extension_list,
         relationships_part_uri: None,
         support_relationships: Vec::new(),
+        opaque_relationships: Vec::new(),
     })
 }
 
@@ -26532,15 +26553,16 @@ mod tests {
         BorderSummary, COMMENTS_RELATIONSHIP_TYPE, CellData, ChartAxisCrosses, ChartAxisGroup,
         ChartAxisKind, ChartAxisScaleType, ChartAxisSummary, ChartCacheKindSummary,
         ChartCacheSummary, ChartDataLabelPosition, ChartDataLabelsSummary, ChartLegendPosition,
-        ChartSeriesSummary, ChartSourceLiteralPointSummary, ChartSourceLiteralSummary,
-        ChartSupportRelationshipBinding, ChartTickLabelPosition, ChartTickMark, ChartView3DModel,
-        CommentPartSummary, DrawingAnchorKind, DrawingAnchorSummary, DrawingCellMarkerSummary,
-        DrawingOpaqueRelationshipSummary, DrawingPointSummary, DrawingSizeSummary, DxfSummary,
-        FileFormat, FillSummary, FontSummary, HYPERLINK_RELATIONSHIP_TYPE, OpcPackage,
-        STYLES_RELATIONSHIP_TYPE, THEME_RELATIONSHIP_TYPE, VML_DRAWING_RELATIONSHIP_TYPE,
-        WORKBOOK_RELS_PART_NAME, WorksheetCommentSummary, WorksheetData, WorksheetHyperlinkBinding,
-        WorksheetHyperlinkSummary, WorksheetRelationshipBinding, WorksheetSupportParts, XlsxCodec,
-        chart_object_anchor_xml, collect_support_part_dimension_coords, compute_dimension_ref,
+        ChartOpaqueRelationshipSummary, ChartSeriesSummary, ChartSourceLiteralPointSummary,
+        ChartSourceLiteralSummary, ChartSupportRelationshipBinding, ChartTickLabelPosition,
+        ChartTickMark, ChartView3DModel, CommentPartSummary, DrawingAnchorKind,
+        DrawingAnchorSummary, DrawingCellMarkerSummary, DrawingOpaqueRelationshipSummary,
+        DrawingPointSummary, DrawingSizeSummary, DxfSummary, FileFormat, FillSummary, FontSummary,
+        HYPERLINK_RELATIONSHIP_TYPE, OpcPackage, STYLES_RELATIONSHIP_TYPE, THEME_RELATIONSHIP_TYPE,
+        VML_DRAWING_RELATIONSHIP_TYPE, WORKBOOK_RELS_PART_NAME, WorksheetCommentSummary,
+        WorksheetData, WorksheetHyperlinkBinding, WorksheetHyperlinkSummary,
+        WorksheetRelationshipBinding, WorksheetSupportParts, XlsxCodec, chart_object_anchor_xml,
+        collect_support_part_dimension_coords, compute_dimension_ref,
         compute_dimension_ref_with_preserved, parse_shared_strings, parse_workbook,
         parse_workbook_relationships, parse_worksheet_cells, rewrite_worksheet_xml,
     };
@@ -32078,6 +32100,21 @@ mod tests {
                 .expect("chart rels source"),
             &chart_rels_xml
         );
+        assert_eq!(
+            drawing_support
+                .chart_summaries
+                .get("xl/charts/chart1.xml")
+                .expect("chart summary")
+                .opaque_relationships,
+            vec![ChartOpaqueRelationshipSummary {
+                relationship_id: "rIdChartHyperlink1".to_string(),
+                relationship_type:
+                    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink"
+                        .to_string(),
+                target: "https://example.com/chart".to_string(),
+                target_mode: Some("External".to_string()),
+            }]
+        );
         assert!(drawing_support.chart_support_part_uris.is_empty());
         assert_eq!(loaded.state.charts.len(), 1);
 
@@ -32276,6 +32313,21 @@ mod tests {
                 .get("xl/charts/_rels/chart1.xml.rels")
                 .expect("chart rels source"),
             &chart_rels_xml
+        );
+        assert_eq!(
+            drawing_support
+                .chart_summaries
+                .get("xl/charts/chart1.xml")
+                .expect("chart summary")
+                .opaque_relationships,
+            vec![ChartOpaqueRelationshipSummary {
+                relationship_id: "rIdChartPackage1".to_string(),
+                relationship_type:
+                    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/package"
+                        .to_string(),
+                target: "xl/embeddings/oleObject1.bin".to_string(),
+                target_mode: None,
+            }]
         );
         assert!(drawing_support.chart_support_part_uris.is_empty());
         assert_eq!(loaded.state.charts.len(), 1);

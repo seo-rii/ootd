@@ -4393,6 +4393,8 @@
   - 범위: embedded chart의 chart rels가 chart XML에서 직접 typed 참조하지 않는 알 수 없는 relationship type으로 internal opaque part를 가리키는 경우 style/color support part로 오인하지 않고 chart rels source bytes, opaque target part bytes, content type, host worksheet/rels, drawing/chart bytes를 clean save에서 그대로 보존하는지 회귀로 고정
   - `Step 6.6b2b2b2b2b2f2b2bo DONE` chartsheet chart unknown relationship type preservation
   - 범위: chartsheet chart의 chart rels가 chart XML에서 직접 typed 참조하지 않는 알 수 없는 relationship type으로 internal opaque part를 가리키는 경우 style/color support part로 오인하지 않고 chart rels source bytes, opaque target part bytes, chart sheet host, workbook rels, content type, drawing/chart bytes를 clean save에서 그대로 보존하는지 회귀로 고정
+  - `Step 6.6b2b2b2b2b2f2b2bp DONE` chart opaque relationship summary overlay
+  - 범위: chart rels의 style/color support relationship을 제외한 internal/external relationship을 `ChartPartSummary::opaque_relationships`에 입력 순서대로 typed summary로 올리고, internal target은 package URI로 정규화하며 external target과 `TargetMode`는 그대로 보존해서 향후 dirty-save drift 감지 기반을 회귀로 고정
 - 목표
   - 현재 core worksheet rewrite 이후 남아 있는 fidelity gap을 좁힌다.
   - style/theme/merge/comment/hyperlink/formula cached-value 계열 보존을 순차적으로 올린다.
