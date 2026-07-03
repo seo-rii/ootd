@@ -2454,6 +2454,23 @@ mod tests {
                 "excel_pia_public_surface.json"
             ])
         );
+        let checksum_output_names = checksums
+            .keys()
+            .map(|relative_path| {
+                Path::new(relative_path)
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .expect("checksum output file name")
+                    .to_string()
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        let expected_output_names = manifest["expectedCaptureOutputs"]
+            .as_array()
+            .expect("expected output list")
+            .iter()
+            .map(|value| value.as_str().expect("expected output name").to_string())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert!(checksum_output_names.is_superset(&expected_output_names));
         assert_eq!(result.written_paths.len(), 8);
         assert!(result.manifest_path.is_some());
         assert!(result.output_checksums_path.is_some());
