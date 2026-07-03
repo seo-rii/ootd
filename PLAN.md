@@ -4295,6 +4295,8 @@
   - 범위: absolute-ref external hyperlink fallback path에서 tracked `rId1` hyperlink relationship의 extra attr drift를 주입한 뒤, dirty save가 worksheet rels typed/source binding을 기준으로 `data-extra="1"`을 복구하고 blank anchor `C3`는 reopen 후에도 비물질화 상태를 유지하는지 회귀로 고정
   - `Step 6.6b2b2b2b2b2f2b2x DONE` worksheet hyperlink relationship inner-XML recovery
   - 범위: absolute-ref external hyperlink fallback path에서 tracked `rId1` hyperlink relationship의 inner XML drift를 주입한 뒤, dirty save가 worksheet rels source bytes와 hyperlink binding rewrite를 거쳐 `<ext preserve="1"/>`을 복구하고 blank anchor `C3`는 reopen 후에도 비물질화 상태를 유지하는지 회귀로 고정
+  - `Step 6.6b2b2b2b2b2f2b2y DONE` worksheet hyperlink relationship root-attr recovery
+  - 범위: absolute-ref external hyperlink fallback path에서 sheet rels root attr drift를 주입한 뒤, dirty save가 worksheet rels source bytes와 hyperlink binding rewrite를 거쳐 `data-root="alpha"`/`data-layout="preserve"`를 복구하고 blank anchor `C3`는 reopen 후에도 비물질화 상태를 유지하는지 회귀로 고정
 - 목표
   - 현재 core worksheet rewrite 이후 남아 있는 fidelity gap을 좁힌다.
   - style/theme/merge/comment/hyperlink/formula cached-value 계열 보존을 순차적으로 올린다.
