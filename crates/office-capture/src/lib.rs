@@ -654,7 +654,7 @@ impl CapturePlan {
                 normalized_paths: self.normalized_paths.clone(),
                 validation: self.template.validation.clone(),
                 writable_outputs,
-                expected_capture_outputs: self.summary().pending_capture_outputs,
+                expected_capture_outputs: self.pending_capture_output_names(),
                 downstream_output: self.artifact_path(&self.output_layout.office_idl_excel_om),
                 unresolved_fields: self.unresolved_fields.clone(),
                 ready_to_run: self.unresolved_fields.is_empty(),
@@ -836,7 +836,7 @@ impl CapturePlan {
                     host_root.join(relative_path_for_host(execution_receipt_relative_path()))
                 });
         let execution_receipt = CaptureExecutionReceipt::from_json_path(&execution_receipt_path)?;
-        let expected_capture_outputs = self.summary().pending_capture_outputs;
+        let expected_capture_outputs = self.pending_capture_output_names();
         if !execution_receipt.expected_capture_outputs.is_empty()
             && execution_receipt.expected_capture_outputs != expected_capture_outputs
         {
@@ -1033,7 +1033,7 @@ impl CapturePlan {
             direct_exec_launcher_path: self.direct_exec_launcher_path(),
             direct_exec_status_path: self.artifact_path(direct_exec_status_relative_path()),
             generated_interop_assembly: generated_interop_assembly.clone(),
-            pending_capture_outputs: self.summary().pending_capture_outputs,
+            pending_capture_outputs: self.pending_capture_output_names(),
             manual_steps: vec![CaptureManualStep {
                 name: "oleview_snapshot_export".to_string(),
                 instructions: format!(
@@ -1539,22 +1539,7 @@ Set-Content -LiteralPath $ExecutionReceiptPath -Value ($ExecutionReceipt | Conve
             .into_iter()
             .map(|(_, relative_path)| self.artifact_path(&relative_path))
             .collect();
-        let pending_capture_outputs = [
-            &self.output_layout.raw_typelib_identity,
-            &self.output_layout.excel_typelib_snapshot_idl,
-            &self.output_layout.excel_typelib_snapshot_odl,
-            &self.output_layout.excel_pia_identity,
-            &self.output_layout.excel_pia_public_surface,
-        ]
-        .into_iter()
-        .map(|relative_path| {
-            Path::new(relative_path)
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or(relative_path)
-                .to_string()
-        })
-        .collect();
+        let pending_capture_outputs = self.pending_capture_output_names();
 
         CapturePlanSummary {
             capture_name: self.template.capture.name.clone(),
@@ -1574,6 +1559,25 @@ Set-Content -LiteralPath $ExecutionReceiptPath -Value ($ExecutionReceipt | Conve
             unresolved_fields: self.unresolved_fields.clone(),
             ready_to_run: self.unresolved_fields.is_empty(),
         }
+    }
+
+    fn pending_capture_output_names(&self) -> Vec<String> {
+        [
+            &self.output_layout.raw_typelib_identity,
+            &self.output_layout.excel_typelib_snapshot_idl,
+            &self.output_layout.excel_typelib_snapshot_odl,
+            &self.output_layout.excel_pia_identity,
+            &self.output_layout.excel_pia_public_surface,
+        ]
+        .into_iter()
+        .map(|relative_path| {
+            Path::new(relative_path)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or(relative_path)
+                .to_string()
+        })
+        .collect()
     }
 
     fn writable_output_map(&self) -> [(&'static str, String); 8] {
