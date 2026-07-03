@@ -1080,6 +1080,7 @@ pub struct ChartSupportRelationshipBinding {
     pub relationship_id: String,
     pub relationship_type: String,
     pub target: String,
+    pub target_mode: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1821,6 +1822,7 @@ impl XlsxCodec {
                                     relationship_id: relationship.id.clone(),
                                     relationship_type: relationship.relationship_type.clone(),
                                     target: relationship.target.clone(),
+                                    target_mode: relationship.target_mode.clone(),
                                 },
                             );
                         } else {
@@ -3862,6 +3864,17 @@ fn collect_sheet_drawing_support_parts(
                         });
                     continue;
                 }
+                chart_summary
+                    .support_relationships
+                    .push(ChartSupportRelationshipBinding {
+                        relationship_id: relationship.id.clone(),
+                        relationship_type: relationship.relationship_type.clone(),
+                        target: relationship.target.clone(),
+                        target_mode: relationship.target_mode.clone(),
+                    });
+                if matches!(relationship.target_mode.as_deref(), Some("External")) {
+                    continue;
+                }
                 let support_part = package.part(&relationship.target).ok_or_else(|| {
                     OmError::new(
                         OmErrorCode::InvalidState,
@@ -3871,13 +3884,6 @@ fn collect_sheet_drawing_support_parts(
                         ),
                     )
                 })?;
-                chart_summary
-                    .support_relationships
-                    .push(ChartSupportRelationshipBinding {
-                        relationship_id: relationship.id.clone(),
-                        relationship_type: relationship.relationship_type.clone(),
-                        target: relationship.target.clone(),
-                    });
                 if chart_support_part_uris
                     .iter()
                     .all(|existing| existing != &relationship.target)
@@ -28049,6 +28055,7 @@ mod tests {
                         "http://schemas.microsoft.com/office/2011/relationships/chartStyle"
                             .to_string(),
                     target: "xl/charts/style2.xml".to_string(),
+                    target_mode: None,
                 },
                 ChartSupportRelationshipBinding {
                     relationship_id: "rIdColors2".to_string(),
@@ -28056,6 +28063,7 @@ mod tests {
                         "http://schemas.microsoft.com/office/2011/relationships/chartColorStyle"
                             .to_string(),
                     target: "xl/charts/colors2.xml".to_string(),
+                    target_mode: None,
                 },
             ]
         );
@@ -29399,6 +29407,8 @@ mod tests {
         let chart_rels_xml = br#"<?xml version="1.0" encoding="UTF-8"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships" data-root="chartsheet-chart">
   <Relationship Id="rIdExternalWorkbook2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/externalLink" Target="https://example.com/External.xlsx" TargetMode="External" data-opaque="1"/>
+  <Relationship Id="rIdExternalStyle2" Type="http://schemas.microsoft.com/office/2011/relationships/chartStyle" Target="https://example.com/chart-style2.xml" TargetMode="External" data-style="1"/>
+  <Relationship Id="rIdExternalColors2" Type="http://schemas.microsoft.com/office/2011/relationships/chartColorStyle" Target="https://example.com/chart-colors2.xml" TargetMode="External" data-colors="1"/>
 </Relationships>"#
             .to_vec();
         package
@@ -29427,12 +29437,12 @@ mod tests {
                 .expect("chart rels source"),
             &chart_rels_xml
         );
+        let chart_summary = drawing_support
+            .chart_summaries
+            .get("xl/charts/chart2.xml")
+            .expect("chart summary");
         assert_eq!(
-            drawing_support
-                .chart_summaries
-                .get("xl/charts/chart2.xml")
-                .expect("chart summary")
-                .opaque_relationships,
+            chart_summary.opaque_relationships,
             vec![ChartOpaqueRelationshipSummary {
                 relationship_id: "rIdExternalWorkbook2".to_string(),
                 relationship_type:
@@ -29441,6 +29451,27 @@ mod tests {
                 target: "https://example.com/External.xlsx".to_string(),
                 target_mode: Some("External".to_string()),
             }]
+        );
+        assert_eq!(
+            chart_summary.support_relationships,
+            vec![
+                ChartSupportRelationshipBinding {
+                    relationship_id: "rIdExternalStyle2".to_string(),
+                    relationship_type:
+                        "http://schemas.microsoft.com/office/2011/relationships/chartStyle"
+                            .to_string(),
+                    target: "https://example.com/chart-style2.xml".to_string(),
+                    target_mode: Some("External".to_string()),
+                },
+                ChartSupportRelationshipBinding {
+                    relationship_id: "rIdExternalColors2".to_string(),
+                    relationship_type:
+                        "http://schemas.microsoft.com/office/2011/relationships/chartColorStyle"
+                            .to_string(),
+                    target: "https://example.com/chart-colors2.xml".to_string(),
+                    target_mode: Some("External".to_string()),
+                },
+            ]
         );
         assert!(drawing_support.chart_support_part_uris.is_empty());
         assert!(
@@ -30062,6 +30093,7 @@ mod tests {
                         "http://schemas.microsoft.com/office/2011/relationships/chartStyle"
                             .to_string(),
                     target: "xl/charts/style1.xml".to_string(),
+                    target_mode: None,
                 },
                 ChartSupportRelationshipBinding {
                     relationship_id: "rIdColors1".to_string(),
@@ -30069,6 +30101,7 @@ mod tests {
                         "http://schemas.microsoft.com/office/2011/relationships/chartColorStyle"
                             .to_string(),
                     target: "xl/charts/colors1.xml".to_string(),
+                    target_mode: None,
                 },
             ]
         );
@@ -32961,6 +32994,8 @@ mod tests {
         let chart_rels_xml = br#"<?xml version="1.0" encoding="UTF-8"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships" data-root="chart">
   <Relationship Id="rIdExternalWorkbook1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/externalLink" Target="https://example.com/External.xlsx" TargetMode="External" data-opaque="1"/>
+  <Relationship Id="rIdExternalStyle1" Type="http://schemas.microsoft.com/office/2011/relationships/chartStyle" Target="https://example.com/chart-style1.xml" TargetMode="External" data-style="1"/>
+  <Relationship Id="rIdExternalColors1" Type="http://schemas.microsoft.com/office/2011/relationships/chartColorStyle" Target="https://example.com/chart-colors1.xml" TargetMode="External" data-colors="1"/>
 </Relationships>"#
             .to_vec();
         package
@@ -32988,12 +33023,12 @@ mod tests {
                 .expect("chart rels source"),
             &chart_rels_xml
         );
+        let chart_summary = drawing_support
+            .chart_summaries
+            .get("xl/charts/chart1.xml")
+            .expect("chart summary");
         assert_eq!(
-            drawing_support
-                .chart_summaries
-                .get("xl/charts/chart1.xml")
-                .expect("chart summary")
-                .opaque_relationships,
+            chart_summary.opaque_relationships,
             vec![ChartOpaqueRelationshipSummary {
                 relationship_id: "rIdExternalWorkbook1".to_string(),
                 relationship_type:
@@ -33002,6 +33037,27 @@ mod tests {
                 target: "https://example.com/External.xlsx".to_string(),
                 target_mode: Some("External".to_string()),
             }]
+        );
+        assert_eq!(
+            chart_summary.support_relationships,
+            vec![
+                ChartSupportRelationshipBinding {
+                    relationship_id: "rIdExternalStyle1".to_string(),
+                    relationship_type:
+                        "http://schemas.microsoft.com/office/2011/relationships/chartStyle"
+                            .to_string(),
+                    target: "https://example.com/chart-style1.xml".to_string(),
+                    target_mode: Some("External".to_string()),
+                },
+                ChartSupportRelationshipBinding {
+                    relationship_id: "rIdExternalColors1".to_string(),
+                    relationship_type:
+                        "http://schemas.microsoft.com/office/2011/relationships/chartColorStyle"
+                            .to_string(),
+                    target: "https://example.com/chart-colors1.xml".to_string(),
+                    target_mode: Some("External".to_string()),
+                },
+            ]
         );
         assert!(drawing_support.chart_support_part_uris.is_empty());
         assert!(
