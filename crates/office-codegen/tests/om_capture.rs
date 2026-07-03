@@ -14,13 +14,14 @@ use office_codegen::{
     build_focus_surface_registry, build_focus_surface_registry_from_json,
     build_focus_surface_registry_from_path, differential_artifact_contract,
     differential_artifact_paths, generate_canonical_office_idl_from_dir, load_capture_bundle,
-    load_differential_gate_from_json, load_differential_gate_from_path,
-    load_differential_gate_from_path_with_source_context, load_differential_report_from_json,
-    load_differential_report_from_path, normalize_capture_bundle,
-    normalize_capture_bundle_from_dir, normalize_pia_capture_json, summarize_capture_bundle,
-    summarize_differential_gate, summarize_differential_gate_with_source_context,
-    summarize_om_sources, summarize_om_sources_toml, summarize_source_registry,
-    summarize_source_registry_toml, validate_differential_report_source_context,
+    load_differential_artifacts_from_output_root, load_differential_gate_from_json,
+    load_differential_gate_from_path, load_differential_gate_from_path_with_source_context,
+    load_differential_report_from_json, load_differential_report_from_path,
+    normalize_capture_bundle, normalize_capture_bundle_from_dir, normalize_pia_capture_json,
+    summarize_capture_bundle, summarize_differential_gate,
+    summarize_differential_gate_with_source_context, summarize_om_sources,
+    summarize_om_sources_toml, summarize_source_registry, summarize_source_registry_toml,
+    validate_differential_report_source_context,
     write_differential_gate_from_report_path_with_source_context, write_differential_gate_to_path,
     write_differential_report_and_gate_to_output_root, write_differential_report_to_path,
 };
@@ -606,6 +607,62 @@ fn writes_differential_report_and_gate_to_canonical_output_root() {
     assert_eq!(loaded_gate, gate);
 
     fs::remove_dir_all(paths.output_root_path).expect("remove output root");
+}
+
+#[test]
+fn loads_differential_artifacts_from_canonical_output_root() {
+    let registry_toml =
+        fs::read_to_string(repo_root().join("specs/sources.toml")).expect("source registry");
+    let source_summary = summarize_source_registry_toml(&registry_toml).expect("source summary");
+    let report = build_differential_report_with_source_context(
+        "Excel",
+        "16.0",
+        &source_summary,
+        vec![DifferentialCaseResult {
+            name: "Application.Version".to_string(),
+            surface: Some("Application".to_string()),
+            member: Some("Version".to_string()),
+            status: DifferentialCaseStatus::Passed,
+            expected: Some("16.0".to_string()),
+            actual: Some("16.0".to_string()),
+            message: None,
+            artifacts: BTreeMap::new(),
+        }],
+    );
+    let unique_suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time")
+        .as_nanos();
+    let output_root =
+        std::env::temp_dir().join(format!("ootd-differential-output-load-{unique_suffix}"));
+    let (paths, gate) =
+        write_differential_report_and_gate_to_output_root(&report, &source_summary, &output_root)
+            .expect("write report and gate");
+
+    let loaded = load_differential_artifacts_from_output_root(&output_root, &source_summary)
+        .expect("load output root artifacts");
+
+    assert_eq!(loaded.paths, paths);
+    assert_eq!(loaded.report, report);
+    assert_eq!(loaded.gate_summary, gate);
+
+    let mut drifted_gate = gate.clone();
+    drifted_gate.skipped_case_count += 1;
+    fs::write(
+        &paths.gate_summary_path,
+        serde_json::to_vec_pretty(&drifted_gate).expect("drifted gate json"),
+    )
+    .expect("rewrite gate");
+    let error = load_differential_artifacts_from_output_root(&output_root, &source_summary)
+        .expect_err("drifted gate should fail");
+    match error {
+        DifferentialReportLoadError::Contract { message } => {
+            assert!(message.contains("did not match report-derived"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    fs::remove_dir_all(output_root).expect("remove output root");
 }
 
 #[test]

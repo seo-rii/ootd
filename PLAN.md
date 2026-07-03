@@ -4747,6 +4747,8 @@
   - 범위: `office-codegen`이 output root 하나로 `differential_report.json`과 `differential_gate_summary.json`을 canonical path에 쓰고 source registry context 검증을 거친 gate summary와 실제 path set을 반환하는 writer API를 제공해 후속 CI/oracle runner의 artifact materialization 경로를 단일 계약으로 고정
   - `Step 7.51 DONE` codegen differential output-root preflight validation
   - 범위: output-root writer가 report count와 source registry context를 파일/디렉터리 생성 전에 검증하도록 강화하고 context 누락 시 report-only partial artifact가 남지 않는지 회귀로 고정해 CI/oracle runner artifact materialization이 stale context를 안전하게 거부하도록 보강
+  - `Step 7.52 DONE` codegen differential output-root import validation
+  - 범위: output root에서 canonical report/gate artifact를 함께 로드하고 source registry context와 gate invariant뿐 아니라 저장된 gate summary가 report-derived gate와 일치하는지 검증하는 API를 추가해 downstream CI job이 drift된 gate artifact를 독립 pass/fail 입력으로 쓰지 못하도록 고정
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.

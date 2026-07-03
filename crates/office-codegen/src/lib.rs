@@ -606,6 +606,13 @@ pub struct DifferentialArtifactPaths {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DifferentialArtifactBundle {
+    pub paths: DifferentialArtifactPaths,
+    pub report: DifferentialReport,
+    pub gate_summary: DifferentialGateSummary,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OmCaptureSummary {
     pub primary_artifact: String,
     pub secondary_artifact: String,
@@ -1815,6 +1822,31 @@ pub fn write_differential_report_and_gate_to_output_root(
         &paths.gate_summary_path,
     )?;
     Ok((paths, gate))
+}
+
+pub fn load_differential_artifacts_from_output_root(
+    output_root: impl AsRef<Path>,
+    source_summary: &SourceRegistrySummary,
+) -> Result<DifferentialArtifactBundle, DifferentialReportLoadError> {
+    let paths = differential_artifact_paths(output_root);
+    let report = load_differential_report_from_path(&paths.report_path)?;
+    report.validate_source_context(source_summary)?;
+    let gate_summary = load_differential_gate_from_path(&paths.gate_summary_path)?;
+    let expected_gate_summary =
+        summarize_differential_gate_with_source_context(&report, source_summary)?;
+    if gate_summary != expected_gate_summary {
+        return Err(DifferentialReportLoadError::Contract {
+            message: format!(
+                "differential gate summary {:?} did not match report-derived {:?}",
+                gate_summary, expected_gate_summary
+            ),
+        });
+    }
+    Ok(DifferentialArtifactBundle {
+        paths,
+        report,
+        gate_summary,
+    })
 }
 
 pub fn write_differential_report_to_path(

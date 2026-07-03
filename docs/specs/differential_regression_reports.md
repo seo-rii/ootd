@@ -139,6 +139,11 @@ canonical artifacts under the output root and returns the exact paths used. It
 preflights report counts and source registry context before creating the output
 directory, so context mismatch cannot leave a report-only partial artifact.
 
+Downstream CI can validate a completed output directory with
+`load_differential_artifacts_from_output_root`. That path loads both canonical
+artifacts, validates report context, validates the gate summary, and rejects a
+stored gate summary that differs from the report-derived gate.
+
 ## Artifact Flow
 
 Canonical artifact filenames are exposed by
