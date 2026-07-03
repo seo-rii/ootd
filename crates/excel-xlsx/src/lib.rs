@@ -40799,6 +40799,47 @@ mod tests {
     }
 
     #[test]
+    fn dirty_save_preserves_package_level_raw_graph_part_bytes() {
+        let codec = XlsxCodec;
+        let input = workbook_with_styles_and_theme_bytes();
+        let original_package = OpcPackage::from_bytes(&input).expect("original package");
+
+        let mut loaded = codec
+            .load(input.as_slice(), CommonLoadOptions::default())
+            .expect("load workbook");
+        let sheet_id = loaded.state.worksheets[0].id;
+        loaded
+            .state
+            .set_range_values(
+                &office_common::RangeRef::single_cell(WorkbookId(0), sheet_id, 1, 1),
+                &office_common::OmArray::scalar(office_common::OmValue::Number(9.0)),
+            )
+            .expect("set A1");
+        let saved = codec
+            .save(&loaded, office_common::SaveOptions::default())
+            .expect("dirty save workbook");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+
+        for part_name in [
+            "[Content_Types].xml",
+            "_rels/.rels",
+            WORKBOOK_RELS_PART_NAME,
+        ] {
+            assert_eq!(
+                saved_package
+                    .part(part_name)
+                    .expect("saved package-level raw graph part")
+                    .bytes,
+                original_package
+                    .part(part_name)
+                    .expect("original package-level raw graph part")
+                    .bytes,
+                "{part_name} should be byte-preserved on dirty worksheet save"
+            );
+        }
+    }
+
+    #[test]
     fn clean_save_preserves_style_and_theme_part_bytes() {
         let codec = XlsxCodec;
         let input = workbook_with_styles_and_theme_bytes();

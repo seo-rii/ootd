@@ -4612,6 +4612,8 @@
   - 범위: dirty worksheet save 경로에서도 `xl/styles.xml` 및 `xl/theme/theme1.xml` support part bytes가 원본 그대로 보존되는지 상위 회귀로 고정
   - `Step 6.6b2b2b2b2b2f2b2em DONE` workbook part byte preservation
   - 범위: clean load/save 및 dirty worksheet save 경로에서 `xl/workbook.xml` part bytes가 원본 그대로 보존되는지 상위 회귀로 고정
+  - `Step 6.6b2b2b2b2b2f2b2en DONE` dirty package raw graph byte preservation
+  - 범위: 일반 dirty worksheet save 경로에서 `[Content_Types].xml`, root package relationships `_rels/.rels`, workbook relationships part bytes가 원본 그대로 보존되는지 상위 회귀로 고정
 - 목표
   - 현재 core worksheet rewrite 이후 남아 있는 fidelity gap을 좁힌다.
   - style/theme/merge/comment/hyperlink/formula cached-value 계열 보존을 순차적으로 올린다.
