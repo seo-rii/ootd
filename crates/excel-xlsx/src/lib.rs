@@ -77603,6 +77603,30 @@ mod tests {
         package
             .replace_part_bytes("[Content_Types].xml", content_types.into_bytes())
             .expect("replace content types");
+        let package_rels = String::from_utf8(
+            package
+                .part("_rels/.rels")
+                .expect("package rels part")
+                .bytes
+                .clone(),
+        )
+        .expect("package rels utf8")
+        .replace(
+            r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">"#,
+            r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships" data-root="keep"><ext preserve="package-rels"/>"#,
+        )
+        .replace(
+            r#"<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>"#,
+            r#"<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml" data-package="keep"><ext preserve="workbook"/></Relationship>"#,
+        );
+        package
+            .replace_part_bytes("_rels/.rels", package_rels.into_bytes())
+            .expect("replace package rels");
+        let expected_package_rels = package
+            .part("_rels/.rels")
+            .expect("expected package rels")
+            .bytes
+            .clone();
         let workbook_rels = String::from_utf8(
             package
                 .part("xl/_rels/workbook.xml.rels")
@@ -77653,6 +77677,13 @@ mod tests {
         assert!(saved_content_types.contains(r#"data-default="keep""#));
         assert!(saved_content_types.contains(r#"data-workbook="keep""#));
         assert!(!saved_content_types.contains("calcChain.xml"));
+        assert_eq!(
+            saved_package
+                .part("_rels/.rels")
+                .expect("saved package rels")
+                .bytes,
+            expected_package_rels
+        );
         let saved_workbook_rels = String::from_utf8(
             saved_package
                 .part("xl/_rels/workbook.xml.rels")

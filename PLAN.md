@@ -4600,6 +4600,8 @@
   - 범위: load/clean-save 경로에서 root package relationships `_rels/.rels` 및 workbook relationships part의 relationship inner XML이 structural summary와 원문 보존 양쪽에 남는지 회귀로 고정
   - `Step 6.6b2b2b2b2b2f2b2eg DONE` package raw graph byte preservation
   - 범위: clean load/save 경로에서 `[Content_Types].xml`, root package relationships `_rels/.rels`, workbook relationships part bytes가 원본 그대로 보존되는지 상위 회귀로 고정
+  - `Step 6.6b2b2b2b2b2f2b2eh DONE` dirty calcChain package relationships preservation
+  - 범위: 실제 dirty calcChain invalidation save 경로에서 root package relationships `_rels/.rels`의 root attrs, root extra child, relationship attrs/inner XML이 byte-level로 그대로 보존되는지 회귀로 고정
 - 목표
   - 현재 core worksheet rewrite 이후 남아 있는 fidelity gap을 좁힌다.
   - style/theme/merge/comment/hyperlink/formula cached-value 계열 보존을 순차적으로 올린다.
