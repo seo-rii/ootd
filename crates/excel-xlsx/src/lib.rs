@@ -113,6 +113,9 @@ pub struct StylesheetSummary {
     pub colors_great_grandchild_names: Vec<Vec<Vec<Vec<String>>>>,
     pub colors_great_grandchild_attr_maps: Vec<Vec<Vec<Vec<BTreeMap<String, String>>>>>,
     pub colors_great_grandchild_texts: Vec<Vec<Vec<Vec<Option<String>>>>>,
+    pub colors_great_great_grandchild_names: Vec<Vec<Vec<Vec<Vec<String>>>>>,
+    pub colors_great_great_grandchild_attr_maps: Vec<Vec<Vec<Vec<Vec<BTreeMap<String, String>>>>>>,
+    pub colors_great_great_grandchild_texts: Vec<Vec<Vec<Vec<Vec<Option<String>>>>>>,
     pub has_indexed_colors: bool,
     pub has_mru_colors: bool,
     pub has_dxfs: bool,
@@ -4634,6 +4637,10 @@ fn parse_stylesheet_summary(styles_xml: &[u8]) -> OmResult<StylesheetSummary> {
     let mut colors_great_grandchild_attr_maps =
         Vec::<Vec<Vec<Vec<BTreeMap<String, String>>>>>::new();
     let mut colors_great_grandchild_texts = Vec::<Vec<Vec<Vec<Option<String>>>>>::new();
+    let mut colors_great_great_grandchild_names = Vec::<Vec<Vec<Vec<Vec<String>>>>>::new();
+    let mut colors_great_great_grandchild_attr_maps =
+        Vec::<Vec<Vec<Vec<Vec<BTreeMap<String, String>>>>>>::new();
+    let mut colors_great_great_grandchild_texts = Vec::<Vec<Vec<Vec<Vec<Option<String>>>>>>::new();
     let mut num_fmts_declared_count = None::<usize>;
     let mut fonts_declared_count = None::<usize>;
     let mut fills_declared_count = None::<usize>;
@@ -5498,6 +5505,9 @@ fn parse_stylesheet_summary(styles_xml: &[u8]) -> OmResult<StylesheetSummary> {
                         colors_great_grandchild_names.push(Vec::new());
                         colors_great_grandchild_attr_maps.push(Vec::new());
                         colors_great_grandchild_texts.push(Vec::new());
+                        colors_great_great_grandchild_names.push(Vec::new());
+                        colors_great_great_grandchild_attr_maps.push(Vec::new());
+                        colors_great_great_grandchild_texts.push(Vec::new());
                         indexed_colors_count += 1;
                         if indexed_colors_count > 1 {
                             return Err(OmError::new(
@@ -5523,6 +5533,9 @@ fn parse_stylesheet_summary(styles_xml: &[u8]) -> OmResult<StylesheetSummary> {
                         colors_great_grandchild_names.push(Vec::new());
                         colors_great_grandchild_attr_maps.push(Vec::new());
                         colors_great_grandchild_texts.push(Vec::new());
+                        colors_great_great_grandchild_names.push(Vec::new());
+                        colors_great_great_grandchild_attr_maps.push(Vec::new());
+                        colors_great_great_grandchild_texts.push(Vec::new());
                         mru_colors_count += 1;
                         if mru_colors_count > 1 {
                             return Err(OmError::new(
@@ -5616,6 +5629,33 @@ fn parse_stylesheet_summary(styles_xml: &[u8]) -> OmResult<StylesheetSummary> {
                                 )
                             })?
                             .push(Vec::new());
+                        colors_great_great_grandchild_names
+                            .last_mut()
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered colors entry before direct colors child",
+                                )
+                            })?
+                            .push(Vec::new());
+                        colors_great_great_grandchild_attr_maps
+                            .last_mut()
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered colors entry before direct colors child",
+                                )
+                            })?
+                            .push(Vec::new());
+                        colors_great_great_grandchild_texts
+                            .last_mut()
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered colors entry before direct colors child",
+                                )
+                            })?
+                            .push(Vec::new());
                         section_depth += 1;
                     }
                     _ if current_section == Some(StylesheetSection::Colors)
@@ -5681,6 +5721,36 @@ fn parse_stylesheet_summary(styles_xml: &[u8]) -> OmResult<StylesheetSummary> {
                                 )
                             })?
                             .push(Vec::new());
+                        colors_great_great_grandchild_names
+                            .last_mut()
+                            .and_then(|children| children.last_mut())
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered colors grandchild before colors entry",
+                                )
+                            })?
+                            .push(Vec::new());
+                        colors_great_great_grandchild_attr_maps
+                            .last_mut()
+                            .and_then(|children| children.last_mut())
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered colors grandchild before colors entry",
+                                )
+                            })?
+                            .push(Vec::new());
+                        colors_great_great_grandchild_texts
+                            .last_mut()
+                            .and_then(|children| children.last_mut())
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered colors grandchild before colors entry",
+                                )
+                            })?
+                            .push(Vec::new());
                         section_depth += 1;
                     }
                     _ if current_section == Some(StylesheetSection::Colors)
@@ -5716,6 +5786,80 @@ fn parse_stylesheet_summary(styles_xml: &[u8]) -> OmResult<StylesheetSummary> {
                                 OmError::new(
                                     OmErrorCode::InvalidState,
                                     "styles.xml encountered colors great-grandchild before colors grandchild",
+                                )
+                            })?
+                            .push(None);
+                        colors_great_great_grandchild_names
+                            .last_mut()
+                            .and_then(|children| children.last_mut())
+                            .and_then(|grandchildren| grandchildren.last_mut())
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered colors great-grandchild before colors grandchild",
+                                )
+                            })?
+                            .push(Vec::new());
+                        colors_great_great_grandchild_attr_maps
+                            .last_mut()
+                            .and_then(|children| children.last_mut())
+                            .and_then(|grandchildren| grandchildren.last_mut())
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered colors great-grandchild before colors grandchild",
+                                )
+                            })?
+                            .push(Vec::new());
+                        colors_great_great_grandchild_texts
+                            .last_mut()
+                            .and_then(|children| children.last_mut())
+                            .and_then(|grandchildren| grandchildren.last_mut())
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered colors great-grandchild before colors grandchild",
+                                )
+                            })?
+                            .push(Vec::new());
+                        section_depth += 1;
+                    }
+                    _ if current_section == Some(StylesheetSection::Colors)
+                        && section_depth == 5 =>
+                    {
+                        colors_great_great_grandchild_names
+                            .last_mut()
+                            .and_then(|children| children.last_mut())
+                            .and_then(|grandchildren| grandchildren.last_mut())
+                            .and_then(|great_grandchildren| great_grandchildren.last_mut())
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered colors great-great-grandchild before colors great-grandchild",
+                                )
+                            })?
+                            .push(local_name.clone());
+                        colors_great_great_grandchild_attr_maps
+                            .last_mut()
+                            .and_then(|children| children.last_mut())
+                            .and_then(|grandchildren| grandchildren.last_mut())
+                            .and_then(|great_grandchildren| great_grandchildren.last_mut())
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered colors great-great-grandchild before colors great-grandchild",
+                                )
+                            })?
+                            .push(parse_child_attrs(&element, reader.decoder())?);
+                        colors_great_great_grandchild_texts
+                            .last_mut()
+                            .and_then(|children| children.last_mut())
+                            .and_then(|grandchildren| grandchildren.last_mut())
+                            .and_then(|great_grandchildren| great_grandchildren.last_mut())
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered colors great-great-grandchild before colors great-grandchild",
                                 )
                             })?
                             .push(None);
@@ -7723,6 +7867,84 @@ fn parse_stylesheet_summary(styles_xml: &[u8]) -> OmResult<StylesheetSummary> {
                                 OmError::new(
                                     OmErrorCode::InvalidState,
                                     "styles.xml encountered colors great-grandchild before colors grandchild",
+                                )
+                            })?
+                            .push(None);
+                        colors_great_great_grandchild_names
+                            .last_mut()
+                            .and_then(|children| children.last_mut())
+                            .and_then(|grandchildren| grandchildren.last_mut())
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered colors great-grandchild before colors grandchild",
+                                )
+                            })?
+                            .push(Vec::new());
+                        colors_great_great_grandchild_attr_maps
+                            .last_mut()
+                            .and_then(|children| children.last_mut())
+                            .and_then(|grandchildren| grandchildren.last_mut())
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered colors great-grandchild before colors grandchild",
+                                )
+                            })?
+                            .push(Vec::new());
+                        colors_great_great_grandchild_texts
+                            .last_mut()
+                            .and_then(|children| children.last_mut())
+                            .and_then(|grandchildren| grandchildren.last_mut())
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered colors great-grandchild before colors grandchild",
+                                )
+                            })?
+                            .push(Vec::new());
+                    }
+                    _ if current_section == Some(StylesheetSection::Colors)
+                        && section_depth == 5 =>
+                    {
+                        let local_name = String::from_utf8_lossy(element.name().as_ref())
+                            .rsplit(':')
+                            .next()
+                            .unwrap_or_default()
+                            .to_string();
+                        colors_great_great_grandchild_names
+                            .last_mut()
+                            .and_then(|children| children.last_mut())
+                            .and_then(|grandchildren| grandchildren.last_mut())
+                            .and_then(|great_grandchildren| great_grandchildren.last_mut())
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered colors great-great-grandchild before colors great-grandchild",
+                                )
+                            })?
+                            .push(local_name);
+                        colors_great_great_grandchild_attr_maps
+                            .last_mut()
+                            .and_then(|children| children.last_mut())
+                            .and_then(|grandchildren| grandchildren.last_mut())
+                            .and_then(|great_grandchildren| great_grandchildren.last_mut())
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered colors great-great-grandchild before colors great-grandchild",
+                                )
+                            })?
+                            .push(parse_child_attrs(&element, reader.decoder())?);
+                        colors_great_great_grandchild_texts
+                            .last_mut()
+                            .and_then(|children| children.last_mut())
+                            .and_then(|grandchildren| grandchildren.last_mut())
+                            .and_then(|great_grandchildren| great_grandchildren.last_mut())
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered colors great-great-grandchild before colors great-grandchild",
                                 )
                             })?
                             .push(None);
@@ -9767,6 +9989,27 @@ fn parse_stylesheet_summary(styles_xml: &[u8]) -> OmResult<StylesheetSummary> {
                             })?,
                         &content,
                     );
+                } else if element_stack.len() == 7
+                    && element_stack.first().map(String::as_str) == Some("styleSheet")
+                    && element_stack.get(1).map(String::as_str) == Some("colors")
+                {
+                    append_summary_text(
+                        colors_great_great_grandchild_texts
+                            .last_mut()
+                            .and_then(|children| children.last_mut())
+                            .and_then(|grandchildren| grandchildren.last_mut())
+                            .and_then(|great_grandchildren| great_grandchildren.last_mut())
+                            .and_then(|great_great_grandchildren| {
+                                great_great_grandchildren.last_mut()
+                            })
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered colors great-great-grandchild text before colors great-great-grandchild",
+                                )
+                            })?,
+                        &content,
+                    );
                 } else if element_stack.len() == 2
                     && element_stack.first().map(String::as_str) == Some("styleSheet")
                     && element_stack.last().map(String::as_str) == Some("extLst")
@@ -10403,6 +10646,27 @@ fn parse_stylesheet_summary(styles_xml: &[u8]) -> OmResult<StylesheetSummary> {
                             })?,
                         &content,
                     );
+                } else if element_stack.len() == 7
+                    && element_stack.first().map(String::as_str) == Some("styleSheet")
+                    && element_stack.get(1).map(String::as_str) == Some("colors")
+                {
+                    append_summary_text(
+                        colors_great_great_grandchild_texts
+                            .last_mut()
+                            .and_then(|children| children.last_mut())
+                            .and_then(|grandchildren| grandchildren.last_mut())
+                            .and_then(|great_grandchildren| great_grandchildren.last_mut())
+                            .and_then(|great_great_grandchildren| {
+                                great_great_grandchildren.last_mut()
+                            })
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered colors great-great-grandchild text before colors great-great-grandchild",
+                                )
+                            })?,
+                        &content,
+                    );
                 } else if element_stack.len() == 2
                     && element_stack.first().map(String::as_str) == Some("styleSheet")
                     && element_stack.last().map(String::as_str) == Some("extLst")
@@ -10936,6 +11200,9 @@ fn parse_stylesheet_summary(styles_xml: &[u8]) -> OmResult<StylesheetSummary> {
         colors_great_grandchild_names,
         colors_great_grandchild_attr_maps,
         colors_great_grandchild_texts,
+        colors_great_great_grandchild_names,
+        colors_great_great_grandchild_attr_maps,
+        colors_great_great_grandchild_texts,
         has_indexed_colors: indexed_colors_count == 1,
         has_mru_colors: mru_colors_count == 1,
         has_dxfs: dxfs_count == 1,
@@ -41455,6 +41722,47 @@ mod tests {
     }
 
     #[test]
+    fn load_collects_colors_great_great_grandchild_attr_maps_in_styles_summary() {
+        let codec = XlsxCodec;
+        let loaded = codec
+            .load(
+                &workbook_with_stylesheet_color_entry_great_great_grandchildren_bytes(),
+                CommonLoadOptions::default(),
+            )
+            .expect("load workbook");
+        let styles_summary = loaded
+            .support_parts
+            .styles_summary
+            .as_ref()
+            .expect("typed styles summary");
+
+        assert_eq!(
+            styles_summary.colors_great_great_grandchild_names,
+            vec![
+                vec![vec![vec![vec!["lumMod".to_string()]]]],
+                vec![vec![vec![vec!["lumMod".to_string()]]]],
+            ]
+        );
+        assert_eq!(
+            styles_summary.colors_great_great_grandchild_attr_maps,
+            vec![
+                vec![vec![vec![vec![BTreeMap::from([(
+                    "val".to_string(),
+                    "40000".to_string()
+                )])]]]],
+                vec![vec![vec![vec![BTreeMap::from([(
+                    "val".to_string(),
+                    "60000".to_string()
+                )])]]]],
+            ]
+        );
+        assert_eq!(
+            styles_summary.colors_great_great_grandchild_texts,
+            vec![vec![vec![vec![vec![None]]]], vec![vec![vec![vec![None]]]]]
+        );
+    }
+
+    #[test]
     fn load_collects_colors_container_attr_map_in_styles_summary() {
         let codec = XlsxCodec;
         let mut package = OpcPackage::from_bytes(&workbook_with_stylesheet_colors_children_bytes())
@@ -41579,6 +41887,30 @@ mod tests {
             vec![
                 vec![vec![vec![Some("alphabeta".to_string())]]],
                 vec![vec![vec![Some("gammadelta".to_string())]]],
+            ]
+        );
+    }
+
+    #[test]
+    fn load_collects_colors_great_great_grandchild_texts_in_styles_summary() {
+        let codec = XlsxCodec;
+        let loaded = codec
+            .load(
+                &workbook_with_stylesheet_color_entry_great_great_grandchild_text_bytes(),
+                CommonLoadOptions::default(),
+            )
+            .expect("load workbook");
+        let styles_summary = loaded
+            .support_parts
+            .styles_summary
+            .as_ref()
+            .expect("typed styles summary");
+
+        assert_eq!(
+            styles_summary.colors_great_great_grandchild_texts,
+            vec![
+                vec![vec![vec![vec![Some("alphabeta".to_string())]]]],
+                vec![vec![vec![vec![Some("gammadelta".to_string())]]]],
             ]
         );
     }
@@ -70977,6 +71309,13 @@ mod tests {
     }
 
     #[test]
+    fn dirty_save_preserves_colors_great_great_grandchild_attr_maps_in_styles_xml() {
+        assert_dirty_save_preserves_styles_xml_for_mutated_input(
+            workbook_with_stylesheet_color_entry_great_great_grandchildren_bytes(),
+        );
+    }
+
+    #[test]
     fn dirty_save_preserves_stylesheet_extension_list_container_text() {
         assert_dirty_save_preserves_styles_xml_for_mutated_input(
             workbook_with_stylesheet_extension_list_container_text_bytes(),
@@ -71015,6 +71354,13 @@ mod tests {
     fn dirty_save_preserves_colors_great_grandchild_texts() {
         assert_dirty_save_preserves_styles_xml_for_mutated_input(
             workbook_with_stylesheet_color_entry_great_grandchild_text_bytes(),
+        );
+    }
+
+    #[test]
+    fn dirty_save_preserves_colors_great_great_grandchild_texts() {
+        assert_dirty_save_preserves_styles_xml_for_mutated_input(
+            workbook_with_stylesheet_color_entry_great_great_grandchild_text_bytes(),
         );
     }
 
@@ -117705,6 +118051,99 @@ mod tests {
     }
 
     #[test]
+    fn save_rejects_stylesheet_when_colors_great_great_grandchild_attrs_drift() {
+        let codec = XlsxCodec;
+        let input = workbook_with_stylesheet_color_entry_great_great_grandchildren_bytes();
+        let mut loaded = codec
+            .load(&input, CommonLoadOptions::default())
+            .expect("load workbook");
+        let styles_xml = String::from_utf8(
+            loaded
+                .package
+                .part("xl/styles.xml")
+                .expect("styles part")
+                .bytes
+                .clone(),
+        )
+        .expect("styles xml utf8")
+        .replace(r#"lumMod val="40000""#, r#"lumMod val="30000""#);
+        loaded
+            .package
+            .replace_part_bytes("xl/styles.xml", styles_xml.into_bytes())
+            .expect("replace styles part");
+
+        let error = codec
+            .save(&loaded, office_common::SaveOptions::default())
+            .expect_err("save should fail when colors great-great-grandchild attrs drift");
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("typed styles summary drifted"));
+        assert!(error.message.contains("xl/styles.xml"));
+    }
+
+    #[test]
+    fn save_rejects_stylesheet_when_colors_great_great_grandchild_text_drifts() {
+        let codec = XlsxCodec;
+        let input = workbook_with_stylesheet_color_entry_great_great_grandchild_text_bytes();
+        let mut loaded = codec
+            .load(&input, CommonLoadOptions::default())
+            .expect("load workbook");
+        let styles_xml = String::from_utf8(
+            loaded
+                .package
+                .part("xl/styles.xml")
+                .expect("styles part")
+                .bytes
+                .clone(),
+        )
+        .expect("styles xml utf8")
+        .replace(
+            ">alpha<![CDATA[beta]]></lumMod>",
+            ">changed<![CDATA[beta]]></lumMod>",
+        );
+        loaded
+            .package
+            .replace_part_bytes("xl/styles.xml", styles_xml.into_bytes())
+            .expect("replace styles part");
+
+        let error = codec
+            .save(&loaded, office_common::SaveOptions::default())
+            .expect_err("save should fail when colors great-great-grandchild text drifts");
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("typed styles summary drifted"));
+        assert!(error.message.contains("xl/styles.xml"));
+    }
+
+    #[test]
+    fn save_rejects_stylesheet_when_colors_great_great_grandchild_cdata_text_drifts() {
+        let codec = XlsxCodec;
+        let input = workbook_with_stylesheet_color_entry_great_great_grandchild_text_bytes();
+        let mut loaded = codec
+            .load(&input, CommonLoadOptions::default())
+            .expect("load workbook");
+        let styles_xml = String::from_utf8(
+            loaded
+                .package
+                .part("xl/styles.xml")
+                .expect("styles part")
+                .bytes
+                .clone(),
+        )
+        .expect("styles xml utf8")
+        .replace("<![CDATA[delta]]>", "<![CDATA[changed]]>");
+        loaded
+            .package
+            .replace_part_bytes("xl/styles.xml", styles_xml.into_bytes())
+            .expect("replace styles part");
+
+        let error = codec
+            .save(&loaded, office_common::SaveOptions::default())
+            .expect_err("save should fail when colors great-great-grandchild cdata text drifts");
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("typed styles summary drifted"));
+        assert!(error.message.contains("xl/styles.xml"));
+    }
+
+    #[test]
     fn save_rejects_stylesheet_when_indexed_color_child_attrs_drift() {
         let codec = XlsxCodec;
         let input = workbook_with_stylesheet_color_entries_bytes();
@@ -123354,6 +123793,60 @@ mod tests {
         .replace(
             r#"<alpha val="75000"/>"#,
             r#"<alpha val="75000">gamma<![CDATA[delta]]></alpha>"#,
+        );
+        package
+            .replace_part_bytes("xl/styles.xml", styles_xml.into_bytes())
+            .expect("replace styles part");
+        package.to_bytes().expect("package bytes")
+    }
+
+    fn workbook_with_stylesheet_color_entry_great_great_grandchildren_bytes() -> Vec<u8> {
+        let mut package = OpcPackage::from_bytes(
+            &workbook_with_stylesheet_color_entry_great_grandchildren_bytes(),
+        )
+        .expect("base workbook package");
+        let styles_xml = String::from_utf8(
+            package
+                .part("xl/styles.xml")
+                .expect("styles part")
+                .bytes
+                .clone(),
+        )
+        .expect("styles xml utf8")
+        .replace(
+            r#"<alpha val="50000"/>"#,
+            r#"<alpha val="50000"><lumMod val="40000"/></alpha>"#,
+        )
+        .replace(
+            r#"<alpha val="75000"/>"#,
+            r#"<alpha val="75000"><lumMod val="60000"/></alpha>"#,
+        );
+        package
+            .replace_part_bytes("xl/styles.xml", styles_xml.into_bytes())
+            .expect("replace styles part");
+        package.to_bytes().expect("package bytes")
+    }
+
+    fn workbook_with_stylesheet_color_entry_great_great_grandchild_text_bytes() -> Vec<u8> {
+        let mut package = OpcPackage::from_bytes(
+            &workbook_with_stylesheet_color_entry_great_great_grandchildren_bytes(),
+        )
+        .expect("base workbook package");
+        let styles_xml = String::from_utf8(
+            package
+                .part("xl/styles.xml")
+                .expect("styles part")
+                .bytes
+                .clone(),
+        )
+        .expect("styles xml utf8")
+        .replace(
+            r#"<lumMod val="40000"/>"#,
+            r#"<lumMod val="40000">alpha<![CDATA[beta]]></lumMod>"#,
+        )
+        .replace(
+            r#"<lumMod val="60000"/>"#,
+            r#"<lumMod val="60000">gamma<![CDATA[delta]]></lumMod>"#,
         );
         package
             .replace_part_bytes("xl/styles.xml", styles_xml.into_bytes())
