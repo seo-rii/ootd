@@ -40810,6 +40810,46 @@ mod tests {
     }
 
     #[test]
+    fn ensure_support_parts_present_rejects_workbook_relationships_order_drift() {
+        let codec = XlsxCodec;
+        let loaded = codec
+            .load(
+                &workbook_with_styles_and_theme_bytes(),
+                CommonLoadOptions::default(),
+            )
+            .expect("load workbook");
+        let mut package = loaded.package.clone();
+        let workbook_rels = String::from_utf8(
+            package
+                .part(WORKBOOK_RELS_PART_NAME)
+                .expect("workbook rels part")
+                .bytes
+                .clone(),
+        )
+        .expect("workbook rels utf8");
+        let styles_relationship = r#"  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>"#;
+        let theme_relationship = r#"  <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="theme/theme1.xml"/>"#;
+        let workbook_rels = workbook_rels.replace(
+            format!("{styles_relationship}\n{theme_relationship}").as_str(),
+            format!("{theme_relationship}\n{styles_relationship}").as_str(),
+        );
+        package
+            .replace_part_bytes(WORKBOOK_RELS_PART_NAME, workbook_rels.into_bytes())
+            .expect("replace workbook rels");
+
+        let error = super::ensure_support_parts_present(&package, &loaded.support_parts)
+            .expect_err("ensure should fail when workbook rels order drifts");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(
+            error
+                .message
+                .contains("explicit workbook relationships summary changed")
+        );
+        assert!(error.message.contains("xl/_rels/workbook.xml.rels"));
+    }
+
+    #[test]
     fn load_collects_workbook_relationships_structural_summary() {
         let codec = XlsxCodec;
         let mut package = OpcPackage::from_bytes(&workbook_with_styles_and_theme_bytes())
