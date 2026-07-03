@@ -15,8 +15,8 @@ use office_codegen::{
     generate_canonical_office_idl_from_dir, load_capture_bundle,
     load_differential_report_from_json, load_differential_report_from_path,
     normalize_capture_bundle, normalize_capture_bundle_from_dir, normalize_pia_capture_json,
-    summarize_capture_bundle, summarize_om_sources, summarize_om_sources_toml,
-    summarize_source_registry, summarize_source_registry_toml,
+    summarize_capture_bundle, summarize_differential_gate, summarize_om_sources,
+    summarize_om_sources_toml, summarize_source_registry, summarize_source_registry_toml,
 };
 use office_idl::{AccessMode, CaptureOriginKind, InterfaceKind, OfficeIdlDocument};
 use sha2::{Digest, Sha256};
@@ -288,6 +288,148 @@ fn builds_differential_report_with_stable_status_counts() {
     assert!(json.contains(r#""missingOracle":1"#));
     assert!(json.contains(r#""missingRuntime":1"#));
     assert!(json.contains(r#""runtimeTrace":"reports/range_value2_runtime.json""#));
+}
+
+#[test]
+fn summarizes_differential_report_gate_failures() {
+    let report = build_differential_report(
+        "Excel",
+        "16.0",
+        "excel_365",
+        vec![
+            DifferentialCaseResult {
+                name: "Application.Version".to_string(),
+                surface: Some("Application".to_string()),
+                member: Some("Version".to_string()),
+                status: DifferentialCaseStatus::Passed,
+                expected: Some("16.0".to_string()),
+                actual: Some("16.0".to_string()),
+                message: None,
+                artifacts: BTreeMap::new(),
+            },
+            DifferentialCaseResult {
+                name: "Range.Value2 multi-area".to_string(),
+                surface: Some("Range".to_string()),
+                member: Some("Value2".to_string()),
+                status: DifferentialCaseStatus::Failed,
+                expected: Some("[[1],[2]]".to_string()),
+                actual: Some("1".to_string()),
+                message: Some("runtime collapsed the reference to the first scalar".to_string()),
+                artifacts: BTreeMap::new(),
+            },
+            DifferentialCaseResult {
+                name: "Chart.SetSourceData".to_string(),
+                surface: Some("Chart".to_string()),
+                member: Some("SetSourceData".to_string()),
+                status: DifferentialCaseStatus::MissingOracle,
+                expected: None,
+                actual: Some("completed".to_string()),
+                message: Some("Excel oracle result was not captured".to_string()),
+                artifacts: BTreeMap::new(),
+            },
+            DifferentialCaseResult {
+                name: "WorksheetFunction.XLookup".to_string(),
+                surface: Some("WorksheetFunction".to_string()),
+                member: Some("XLookup".to_string()),
+                status: DifferentialCaseStatus::MissingRuntime,
+                expected: Some("matched".to_string()),
+                actual: None,
+                message: Some("runtime function is not implemented".to_string()),
+                artifacts: BTreeMap::new(),
+            },
+            DifferentialCaseResult {
+                name: "PivotChart refresh".to_string(),
+                surface: Some("Chart".to_string()),
+                member: Some("Refresh".to_string()),
+                status: DifferentialCaseStatus::Unsupported,
+                expected: None,
+                actual: None,
+                message: Some("pivot charts are preserve-only".to_string()),
+                artifacts: BTreeMap::new(),
+            },
+            DifferentialCaseResult {
+                name: "External link update".to_string(),
+                surface: Some("Workbook".to_string()),
+                member: Some("UpdateLink".to_string()),
+                status: DifferentialCaseStatus::Skipped,
+                expected: None,
+                actual: None,
+                message: Some("external workbook fixture is unavailable".to_string()),
+                artifacts: BTreeMap::new(),
+            },
+        ],
+    );
+
+    let gate = summarize_differential_gate(&report);
+
+    assert!(!gate.passed);
+    assert_eq!(gate.blocking_case_count, 3);
+    assert_eq!(
+        gate.blocking_cases,
+        vec![
+            "Range.Value2 multi-area".to_string(),
+            "Chart.SetSourceData".to_string(),
+            "WorksheetFunction.XLookup".to_string(),
+        ]
+    );
+    assert_eq!(gate.failed_case_count, 1);
+    assert_eq!(gate.incomplete_oracle_count, 1);
+    assert_eq!(gate.missing_runtime_count, 1);
+    assert_eq!(gate.unsupported_case_count, 1);
+    assert_eq!(gate.skipped_case_count, 1);
+
+    let json = serde_json::to_string(&gate).expect("gate json");
+    assert!(json.contains(r#""passed":false"#));
+    assert!(json.contains(r#""blockingCaseCount":3"#));
+}
+
+#[test]
+fn differential_report_gate_passes_with_only_passed_skipped_and_unsupported_cases() {
+    let report = build_differential_report(
+        "Excel",
+        "16.0",
+        "excel_365",
+        vec![
+            DifferentialCaseResult {
+                name: "Application.Name".to_string(),
+                surface: Some("Application".to_string()),
+                member: Some("Name".to_string()),
+                status: DifferentialCaseStatus::Passed,
+                expected: Some("Microsoft Excel".to_string()),
+                actual: Some("Microsoft Excel".to_string()),
+                message: None,
+                artifacts: BTreeMap::new(),
+            },
+            DifferentialCaseResult {
+                name: "PivotChart refresh".to_string(),
+                surface: Some("Chart".to_string()),
+                member: Some("Refresh".to_string()),
+                status: DifferentialCaseStatus::Unsupported,
+                expected: None,
+                actual: None,
+                message: Some("pivot charts are preserve-only".to_string()),
+                artifacts: BTreeMap::new(),
+            },
+            DifferentialCaseResult {
+                name: "External link update".to_string(),
+                surface: Some("Workbook".to_string()),
+                member: Some("UpdateLink".to_string()),
+                status: DifferentialCaseStatus::Skipped,
+                expected: None,
+                actual: None,
+                message: Some("external workbook fixture is unavailable".to_string()),
+                artifacts: BTreeMap::new(),
+            },
+        ],
+    );
+
+    let gate = summarize_differential_gate(&report);
+
+    assert!(gate.passed);
+    assert_eq!(gate.blocking_case_count, 0);
+    assert!(gate.blocking_cases.is_empty());
+    assert_eq!(gate.unsupported_case_count, 1);
+    assert_eq!(gate.skipped_case_count, 1);
 }
 
 #[test]

@@ -310,6 +310,20 @@ pub struct DifferentialReport {
     pub cases: Vec<DifferentialCaseResult>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DifferentialGateSummary {
+    pub passed: bool,
+    pub blocking_case_count: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blocking_cases: Vec<String>,
+    pub incomplete_oracle_count: usize,
+    pub missing_runtime_count: usize,
+    pub failed_case_count: usize,
+    pub unsupported_case_count: usize,
+    pub skipped_case_count: usize,
+}
+
 impl From<std::io::Error> for OmSourcesLoadError {
     fn from(value: std::io::Error) -> Self {
         Self::Io(value)
@@ -1287,6 +1301,32 @@ impl DifferentialReport {
         let input = fs::read_to_string(path)?;
         Self::from_json_str(&input)
     }
+
+    pub fn gate_summary(&self) -> DifferentialGateSummary {
+        let blocking_cases = self
+            .cases
+            .iter()
+            .filter(|case| {
+                matches!(
+                    case.status,
+                    DifferentialCaseStatus::Failed
+                        | DifferentialCaseStatus::MissingOracle
+                        | DifferentialCaseStatus::MissingRuntime
+                )
+            })
+            .map(|case| case.name.clone())
+            .collect::<Vec<_>>();
+        DifferentialGateSummary {
+            passed: blocking_cases.is_empty(),
+            blocking_case_count: blocking_cases.len(),
+            blocking_cases,
+            incomplete_oracle_count: self.status_counts.missing_oracle,
+            missing_runtime_count: self.status_counts.missing_runtime,
+            failed_case_count: self.status_counts.failed,
+            unsupported_case_count: self.status_counts.unsupported,
+            skipped_case_count: self.status_counts.skipped,
+        }
+    }
 }
 
 pub fn summarize(document: &OfficeIdlDocument) -> CodegenSummary {
@@ -1519,6 +1559,10 @@ pub fn load_differential_report_from_path(
     path: impl AsRef<Path>,
 ) -> Result<DifferentialReport, DifferentialReportLoadError> {
     DifferentialReport::from_json_path(path)
+}
+
+pub fn summarize_differential_gate(report: &DifferentialReport) -> DifferentialGateSummary {
+    report.gate_summary()
 }
 
 pub fn normalize_pia_capture_json(input: &str) -> Result<OfficeIdlDocument, PiaCaptureLoadError> {
