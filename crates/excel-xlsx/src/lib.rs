@@ -41282,6 +41282,57 @@ mod tests {
     }
 
     #[test]
+    fn load_collects_package_relationships_inner_xml_summary() {
+        let codec = XlsxCodec;
+        let mut package = OpcPackage::from_bytes(&workbook_with_styles_and_theme_bytes())
+            .expect("base workbook package");
+        let package_rels = String::from_utf8(
+            package
+                .part("_rels/.rels")
+                .expect("package rels part")
+                .bytes
+                .clone(),
+        )
+        .expect("package rels utf8")
+        .replace(
+            r#"<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>"#,
+            r#"<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"><ext preserve="1"/></Relationship>"#,
+        );
+        package
+            .replace_part_bytes("_rels/.rels", package_rels.into_bytes())
+            .expect("replace package rels");
+        let bytes = package.to_bytes().expect("package bytes");
+
+        let loaded = codec
+            .load(bytes.as_slice(), CommonLoadOptions::default())
+            .expect("load workbook");
+        let summary = loaded
+            .support_parts
+            .package_relationships_summary
+            .as_ref()
+            .expect("package relationships summary");
+
+        assert_eq!(
+            summary.relationship_inner_xmls,
+            vec![r#"<ext preserve="1"/>"#.to_string()]
+        );
+
+        let saved = codec
+            .save(&loaded, office_common::SaveOptions::default())
+            .expect("clean save workbook");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_package_rels = String::from_utf8(
+            saved_package
+                .part("_rels/.rels")
+                .expect("saved package rels")
+                .bytes
+                .clone(),
+        )
+        .expect("saved package rels utf8");
+        assert!(saved_package_rels.contains(r#"<ext preserve="1"/>"#));
+    }
+
+    #[test]
     fn load_collects_package_external_relationships_structural_summary() {
         let codec = XlsxCodec;
         let mut package = OpcPackage::from_bytes(&workbook_with_styles_and_theme_bytes())
@@ -41748,6 +41799,61 @@ mod tests {
         assert!(saved_workbook_rels.contains(r#"data-root="keep""#));
         assert!(saved_workbook_rels.contains(r#"<ext preserve="1"/>"#));
         assert!(saved_workbook_rels.contains(r#"data-style="keep""#));
+    }
+
+    #[test]
+    fn load_collects_workbook_relationships_inner_xml_summary() {
+        let codec = XlsxCodec;
+        let mut package = OpcPackage::from_bytes(&workbook_with_styles_and_theme_bytes())
+            .expect("base workbook package");
+        let workbook_rels = String::from_utf8(
+            package
+                .part(WORKBOOK_RELS_PART_NAME)
+                .expect("workbook rels part")
+                .bytes
+                .clone(),
+        )
+        .expect("workbook rels utf8")
+        .replace(
+            r#"<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>"#,
+            r#"<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"><ext preserve="1"/></Relationship>"#,
+        );
+        package
+            .replace_part_bytes(WORKBOOK_RELS_PART_NAME, workbook_rels.into_bytes())
+            .expect("replace workbook rels");
+        let bytes = package.to_bytes().expect("package bytes");
+
+        let loaded = codec
+            .load(bytes.as_slice(), CommonLoadOptions::default())
+            .expect("load workbook");
+        let summary = loaded
+            .support_parts
+            .workbook_relationships_summary
+            .as_ref()
+            .expect("workbook relationships summary");
+
+        assert_eq!(
+            summary.relationship_inner_xmls,
+            vec![
+                String::new(),
+                r#"<ext preserve="1"/>"#.to_string(),
+                String::new()
+            ]
+        );
+
+        let saved = codec
+            .save(&loaded, office_common::SaveOptions::default())
+            .expect("clean save workbook");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_workbook_rels = String::from_utf8(
+            saved_package
+                .part(WORKBOOK_RELS_PART_NAME)
+                .expect("saved workbook rels")
+                .bytes
+                .clone(),
+        )
+        .expect("saved workbook rels utf8");
+        assert!(saved_workbook_rels.contains(r#"<ext preserve="1"/>"#));
     }
 
     #[test]
