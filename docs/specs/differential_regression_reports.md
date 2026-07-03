@@ -27,6 +27,7 @@ The report context is derived from `SourceRegistrySummary` and includes:
 `office-codegen` provides these entry points:
 
 - `summarize_source_registry_toml`
+- `differential_artifact_contract`
 - `build_differential_report_with_source_context`
 - `validate_differential_report_source_context`
 
@@ -134,15 +135,21 @@ the caller.
 
 ## Artifact Flow
 
+Canonical artifact filenames are exposed by
+`differential_artifact_contract()`:
+
+- `differential_report.json`
+- `differential_gate_summary.json`
+
 The intended flow is:
 
 1. Load [sources.toml](/home/seorii/dev/hancomac/ootd/specs/sources.toml).
 2. Build `SourceRegistrySummary`.
 3. Compare Excel Oracle results and runtime results into case records.
 4. Build a differential report with source context.
-5. Write the report JSON artifact.
+5. Write `differential_report.json`.
 6. Load the report artifact through the context-aware gate path.
-7. Write the gate summary JSON artifact.
+7. Write `differential_gate_summary.json`.
 8. Downstream CI loads the gate summary and validates the gate invariant before
    making a pass/fail decision.
 

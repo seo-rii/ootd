@@ -12,14 +12,15 @@ use office_codegen::{
     build_coverage_report, build_coverage_report_from_json, build_coverage_report_from_path,
     build_differential_report, build_differential_report_with_source_context,
     build_focus_surface_registry, build_focus_surface_registry_from_json,
-    build_focus_surface_registry_from_path, generate_canonical_office_idl_from_dir,
-    load_capture_bundle, load_differential_gate_from_json, load_differential_gate_from_path,
-    load_differential_gate_from_path_with_source_context, load_differential_report_from_json,
-    load_differential_report_from_path, normalize_capture_bundle,
-    normalize_capture_bundle_from_dir, normalize_pia_capture_json, summarize_capture_bundle,
-    summarize_differential_gate, summarize_differential_gate_with_source_context,
-    summarize_om_sources, summarize_om_sources_toml, summarize_source_registry,
-    summarize_source_registry_toml, validate_differential_report_source_context,
+    build_focus_surface_registry_from_path, differential_artifact_contract,
+    generate_canonical_office_idl_from_dir, load_capture_bundle, load_differential_gate_from_json,
+    load_differential_gate_from_path, load_differential_gate_from_path_with_source_context,
+    load_differential_report_from_json, load_differential_report_from_path,
+    normalize_capture_bundle, normalize_capture_bundle_from_dir, normalize_pia_capture_json,
+    summarize_capture_bundle, summarize_differential_gate,
+    summarize_differential_gate_with_source_context, summarize_om_sources,
+    summarize_om_sources_toml, summarize_source_registry, summarize_source_registry_toml,
+    validate_differential_report_source_context,
     write_differential_gate_from_report_path_with_source_context, write_differential_gate_to_path,
     write_differential_report_to_path,
 };
@@ -204,6 +205,24 @@ fn loads_source_registry_and_reports_enabled_test_corpus() {
         ]
     );
     assert_eq!(summary.profile_count, 3);
+}
+
+#[test]
+fn reports_canonical_differential_artifact_names() {
+    let contract = differential_artifact_contract();
+
+    assert_eq!(contract.report_artifact, "differential_report.json");
+    assert_eq!(
+        contract.gate_summary_artifact,
+        "differential_gate_summary.json"
+    );
+    assert_eq!(
+        contract.artifact_names,
+        vec![
+            "differential_report.json".to_string(),
+            "differential_gate_summary.json".to_string(),
+        ]
+    );
 }
 
 #[test]

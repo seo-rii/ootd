@@ -83,6 +83,9 @@ pub struct CanonicalOmGenerationResult {
     pub summary: OmCaptureBundleSummary,
 }
 
+pub const DIFFERENTIAL_REPORT_ARTIFACT_NAME: &str = "differential_report.json";
+pub const DIFFERENTIAL_GATE_SUMMARY_ARTIFACT_NAME: &str = "differential_gate_summary.json";
+
 pub const PRIORITY_OM_SURFACES: [&str; 58] = [
     "Application",
     "WorksheetFunction",
@@ -586,6 +589,13 @@ pub struct SourceRegistrySummary {
     pub enabled_corpus_source_count: usize,
     pub validation_modes: Vec<String>,
     pub profile_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DifferentialArtifactContract {
+    pub report_artifact: String,
+    pub gate_summary_artifact: String,
+    pub artifact_names: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1247,6 +1257,19 @@ impl SourceRegistrySummary {
     }
 }
 
+impl DifferentialArtifactContract {
+    pub fn canonical() -> Self {
+        Self {
+            report_artifact: DIFFERENTIAL_REPORT_ARTIFACT_NAME.to_string(),
+            gate_summary_artifact: DIFFERENTIAL_GATE_SUMMARY_ARTIFACT_NAME.to_string(),
+            artifact_names: vec![
+                DIFFERENTIAL_REPORT_ARTIFACT_NAME.to_string(),
+                DIFFERENTIAL_GATE_SUMMARY_ARTIFACT_NAME.to_string(),
+            ],
+        }
+    }
+}
+
 impl DifferentialStatusCounts {
     pub fn record(&mut self, status: DifferentialCaseStatus) {
         match status {
@@ -1657,6 +1680,10 @@ pub fn summarize_source_registry_toml(
 ) -> Result<SourceRegistrySummary, OmSourcesLoadError> {
     let manifest = SourceRegistryManifest::from_toml_str(input)?;
     Ok(SourceRegistrySummary::from_manifest(&manifest))
+}
+
+pub fn differential_artifact_contract() -> DifferentialArtifactContract {
+    DifferentialArtifactContract::canonical()
 }
 
 pub fn build_differential_report(
