@@ -31824,6 +31824,11 @@ mod tests {
                 target_mode: Some("External".to_string()),
             }]
         );
+        assert!(
+            drawing_support
+                .drawing_opaque_relationship_part_uris
+                .is_empty()
+        );
         assert_eq!(loaded.state.charts.len(), 1);
 
         let saved = codec
@@ -32016,6 +32021,11 @@ mod tests {
                 target: "https://example.com/drawing-meta/2".to_string(),
                 target_mode: Some("External".to_string()),
             }]
+        );
+        assert!(
+            drawing_support
+                .drawing_opaque_relationship_part_uris
+                .is_empty()
         );
         assert_eq!(loaded.state.charts.len(), 1);
 
