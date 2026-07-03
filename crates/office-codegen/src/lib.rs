@@ -61,6 +61,7 @@ pub enum CanonicalOmGenerationError {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CaptureBundlePaths {
+    pub bundle_root_path: PathBuf,
     pub raw_typelib_identity_path: PathBuf,
     pub excel_pia_public_surface_path: PathBuf,
     pub capture_manifest_path: PathBuf,
@@ -858,6 +859,7 @@ impl CaptureBundlePaths {
     pub fn from_bundle_root(bundle_root: impl AsRef<Path>) -> Self {
         let bundle_root = bundle_root.as_ref();
         Self {
+            bundle_root_path: bundle_root.to_path_buf(),
             raw_typelib_identity_path: bundle_root.join("raw/raw_typelib_identity.json"),
             excel_pia_public_surface_path: bundle_root
                 .join("snapshots/excel_pia_public_surface.json"),
@@ -1444,6 +1446,31 @@ fn validate_capture_bundle_contract(
             ),
         });
     }
+    for expected_output_name in &expected_output_names {
+        let relative_path = checksums
+            .keys()
+            .find(|relative_path| {
+                relative_path
+                    .rsplit(['\\', '/'])
+                    .next()
+                    .is_some_and(|file_name| file_name == expected_output_name)
+            })
+            .expect("checksum coverage already proved expected output path");
+        let artifact_path = bundle_relative_path(&bundle_paths.bundle_root_path, relative_path)
+            .ok_or_else(|| CanonicalOmGenerationError::CaptureBundleContract {
+                message: format!(
+                    "output_checksums.json path {relative_path} was not bundle-relative"
+                ),
+            })?;
+        if !artifact_path.exists() {
+            return Err(CanonicalOmGenerationError::CaptureBundleContract {
+                message: format!(
+                    "output_checksums.json path {relative_path} for {expected_output_name} did not exist at {}",
+                    artifact_path.display()
+                ),
+            });
+        }
+    }
 
     if let Some(receipt) = manifest
         .get("executionReceipt")
@@ -1576,6 +1603,20 @@ fn validate_receipt_results(
         result_names.insert(name.to_string());
     }
     Ok(result_names)
+}
+
+fn bundle_relative_path(bundle_root: &Path, relative_path: &str) -> Option<PathBuf> {
+    let mut path = bundle_root.to_path_buf();
+    for component in relative_path.split(['\\', '/']) {
+        if component.is_empty() || component == "." {
+            continue;
+        }
+        if component == ".." {
+            return None;
+        }
+        path.push(component);
+    }
+    Some(path)
 }
 
 fn load_pia_public_surface_capture(
