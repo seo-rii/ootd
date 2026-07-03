@@ -4693,6 +4693,8 @@
   - 범위: `office-codegen` capture bundle loader가 expected payload filename별 checksum path를 정확히 하나로 제한해 duplicate basename checksum entries가 임의 path 선택이나 stale artifact 검증 우회를 만들지 못하도록 고정
   - `Step 7.24 DONE` codegen checksum exact payload path validation
   - 범위: `office-codegen` capture bundle loader가 expected payload filename별 checksum key를 canonical relative path와 정확히 대조해 같은 basename의 wrong-directory checksum entry가 실제 loader input과 다른 artifact를 검증하지 못하도록 고정
+  - `Step 7.25 DONE` codegen checksum exact payload name-set validation
+  - 범위: `office-codegen` capture bundle loader가 `output_checksums.json` payload filename set을 manifest-level `expectedCaptureOutputs`와 정확히 대조해 예상 외 checksum payload가 completed oracle bundle contract에 섞이지 못하도록 고정
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.

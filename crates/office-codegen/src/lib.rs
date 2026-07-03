@@ -1439,10 +1439,10 @@ fn validate_capture_bundle_contract(
         .filter_map(|relative_path| relative_path.rsplit(['\\', '/']).next())
         .map(str::to_string)
         .collect::<BTreeSet<_>>();
-    if !checksum_output_names.is_superset(&expected_output_names) {
+    if checksum_output_names != expected_output_names {
         return Err(CanonicalOmGenerationError::CaptureBundleContract {
             message: format!(
-                "output_checksums.json payload names {:?} did not cover expectedCaptureOutputs {:?}",
+                "output_checksums.json payload names {:?} did not match expectedCaptureOutputs {:?}",
                 checksum_output_names, expected_output_names
             ),
         });
