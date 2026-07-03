@@ -28182,6 +28182,59 @@ mod tests {
             chart_inventory_opaque_xml
         );
 
+        let mut chart_rels_changed_loaded = loaded.clone();
+        chart_rels_changed_loaded
+            .package
+            .replace_part_bytes(
+                "xl/charts/_rels/chart2.xml.rels",
+                br#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships
+  xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rIdStyle2" Type="http://schemas.microsoft.com/office/2011/relationships/chartStyle" Target="style2.xml" />
+  <Relationship Id="rIdChartInventoryOpaque2" Type="https://example.com/relationships/chartInventoryOpaque" Target="../../customXml/chartInventoryOpaque2.xml" data-opaque="1" />
+  <Relationship Id="rIdColors2" Type="http://schemas.microsoft.com/office/2011/relationships/chartColorStyle" Target="colors2.xml" />
+</Relationships>"#
+                    .to_vec(),
+            )
+            .expect("replace chart rels part");
+        let error = codec
+            .save(
+                &chart_rels_changed_loaded,
+                office_common::SaveOptions::default(),
+            )
+            .expect_err("save should reject changed chart rels part");
+        assert!(
+            error.to_string().contains(
+                "explicit chart relationships part bytes changed: xl/charts/_rels/chart2.xml.rels"
+            ),
+            "{error}"
+        );
+
+        let mut chart_rels_missing_loaded = loaded.clone();
+        chart_rels_missing_loaded
+            .sheet_drawing_support_parts
+            .get_mut(&sheet_id)
+            .expect("drawing support")
+            .chart_summaries
+            .remove("xl/charts/chart2.xml");
+        assert!(
+            chart_rels_missing_loaded
+                .package
+                .remove_part("xl/charts/_rels/chart2.xml.rels")
+        );
+        let error = codec
+            .save(
+                &chart_rels_missing_loaded,
+                office_common::SaveOptions::default(),
+            )
+            .expect_err("save should reject missing chart rels part");
+        assert!(
+            error.to_string().contains(
+                "explicit chart relationships part is missing: xl/charts/_rels/chart2.xml.rels"
+            ),
+            "{error}"
+        );
+
         let mut support_changed_loaded = loaded.clone();
         support_changed_loaded
             .package
