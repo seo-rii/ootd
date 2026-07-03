@@ -4657,6 +4657,8 @@
   - 범위: `capture_manifest.json`이 Windows capture payload 파일명 5개를 `expectedCaptureOutputs`로 담고, completion manifest에서는 receipt의 expected output contract와 일치하는지 검증하도록 고정
   - `Step 7.6 DONE` capture checksum expected output coverage
   - 범위: `output_checksums.json`의 relative output path set이 manifest의 `expectedCaptureOutputs` payload 파일명 전체를 덮는지 회귀로 고정
+  - `Step 7.7 DONE` completion receipt expected output validation
+  - 범위: execution receipt가 `expectedCaptureOutputs`를 명시한 경우 completion 단계에서 plan의 Windows capture payload contract와 정확히 일치하지 않으면 명시적으로 실패하도록 고정
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.

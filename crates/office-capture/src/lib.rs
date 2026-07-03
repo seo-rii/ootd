@@ -331,6 +331,10 @@ pub enum CaptureBundleCompletionError {
         logical_name: &'static str,
         path: PathBuf,
     },
+    ExpectedOutputsMismatch {
+        expected: Vec<String>,
+        actual: Vec<String>,
+    },
     Write(CaptureWriteError),
 }
 
@@ -822,6 +826,15 @@ impl CapturePlan {
                     host_root.join(relative_path_for_host(execution_receipt_relative_path()))
                 });
         let execution_receipt = CaptureExecutionReceipt::from_json_path(&execution_receipt_path)?;
+        let expected_capture_outputs = self.summary().pending_capture_outputs;
+        if !execution_receipt.expected_capture_outputs.is_empty()
+            && execution_receipt.expected_capture_outputs != expected_capture_outputs
+        {
+            return Err(CaptureBundleCompletionError::ExpectedOutputsMismatch {
+                expected: expected_capture_outputs,
+                actual: execution_receipt.expected_capture_outputs,
+            });
+        }
         let artifacts = self.read_materialized_artifacts(host_root)?;
         let write_result = self
             .write_artifacts_with_receipt(host_root, &artifacts, Some(&execution_receipt))
@@ -1628,6 +1641,11 @@ impl fmt::Display for CaptureBundleCompletionError {
                     path.display()
                 )
             }
+            CaptureBundleCompletionError::ExpectedOutputsMismatch { expected, actual } => write!(
+                f,
+                "execution receipt expected capture outputs {:?} did not match plan {:?}",
+                actual, expected
+            ),
             CaptureBundleCompletionError::Write(source) => write!(f, "{source}"),
         }
     }
@@ -1639,6 +1657,7 @@ impl std::error::Error for CaptureBundleCompletionError {
             CaptureBundleCompletionError::Io { source, .. } => Some(source),
             CaptureBundleCompletionError::Json { source, .. } => Some(source),
             CaptureBundleCompletionError::MissingArtifact { .. } => None,
+            CaptureBundleCompletionError::ExpectedOutputsMismatch { .. } => None,
             CaptureBundleCompletionError::Write(source) => Some(source),
         }
     }
@@ -2795,6 +2814,43 @@ mod tests {
         match error {
             CaptureBundleCompletionError::MissingArtifact { logical_name, .. } => {
                 assert_eq!(logical_name, "execution_receipt");
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn completion_rejects_receipt_expected_output_mismatch() {
+        let plan = CapturePlan::from_toml_str(resolved_template()).expect("plan");
+        let tempdir = TempDir::new().expect("tempdir");
+        plan.materialize_execution_bundle(tempdir.path())
+            .expect("materialize execution bundle");
+
+        let mut receipt = sample_execution_receipt();
+        receipt.expected_capture_outputs = vec!["wrong.json".to_string()];
+        let receipt_path = tempdir.path().join("manifest/execution_receipt.json");
+        fs::write(
+            &receipt_path,
+            serde_json::to_vec_pretty(&receipt).expect("receipt payload"),
+        )
+        .expect("execution receipt");
+
+        let error = plan
+            .complete_execution_bundle(tempdir.path())
+            .expect_err("expected output mismatch should fail");
+        match error {
+            CaptureBundleCompletionError::ExpectedOutputsMismatch { expected, actual } => {
+                assert_eq!(actual, vec!["wrong.json".to_string()]);
+                assert_eq!(
+                    expected,
+                    vec![
+                        "raw_typelib_identity.json".to_string(),
+                        "excel_typelib_snapshot.idl".to_string(),
+                        "excel_typelib_snapshot.odl".to_string(),
+                        "excel_pia_identity.json".to_string(),
+                        "excel_pia_public_surface.json".to_string(),
+                    ]
+                );
             }
             other => panic!("unexpected error: {other:?}"),
         }
