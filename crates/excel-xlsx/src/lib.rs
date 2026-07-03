@@ -3631,6 +3631,10 @@ fn collect_worksheet_support_parts(
     Ok(support_parts)
 }
 
+fn relationship_target_mode_is_external(target_mode: Option<&str>) -> bool {
+    target_mode.is_some_and(|target_mode| target_mode.eq_ignore_ascii_case("External"))
+}
+
 fn collect_sheet_drawing_support_parts(
     sheet_part_uri: &str,
     package: &OpcPackage,
@@ -3785,7 +3789,7 @@ fn collect_sheet_drawing_support_parts(
             }
         }
         for opaque_relationship in &drawing_summary.opaque_relationships {
-            if !matches!(opaque_relationship.target_mode.as_deref(), Some("External"))
+            if !relationship_target_mode_is_external(opaque_relationship.target_mode.as_deref())
                 && let Some(opaque_part) = package.part(&opaque_relationship.target)
             {
                 if drawing_opaque_relationship_part_uris
@@ -3842,7 +3846,7 @@ fn collect_sheet_drawing_support_parts(
                 if relationship.relationship_type != CHART_STYLE_RELATIONSHIP_TYPE
                     && relationship.relationship_type != CHART_COLOR_STYLE_RELATIONSHIP_TYPE
                 {
-                    if !matches!(relationship.target_mode.as_deref(), Some("External"))
+                    if !relationship_target_mode_is_external(relationship.target_mode.as_deref())
                         && let Some(opaque_part) = package.part(&relationship.target)
                     {
                         if chart_opaque_relationship_part_uris
@@ -3872,7 +3876,7 @@ fn collect_sheet_drawing_support_parts(
                         target: relationship.target.clone(),
                         target_mode: relationship.target_mode.clone(),
                     });
-                if matches!(relationship.target_mode.as_deref(), Some("External")) {
+                if relationship_target_mode_is_external(relationship.target_mode.as_deref()) {
                     continue;
                 }
                 let support_part = package.part(&relationship.target).ok_or_else(|| {
@@ -29407,8 +29411,8 @@ mod tests {
         let chart_rels_xml = br#"<?xml version="1.0" encoding="UTF-8"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships" data-root="chartsheet-chart">
   <Relationship Id="rIdExternalWorkbook2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/externalLink" Target="https://example.com/External.xlsx" TargetMode="External" data-opaque="1"/>
-  <Relationship Id="rIdExternalStyle2" Type="http://schemas.microsoft.com/office/2011/relationships/chartStyle" Target="https://example.com/chart-style2.xml" TargetMode="External" data-style="1"/>
-  <Relationship Id="rIdExternalColors2" Type="http://schemas.microsoft.com/office/2011/relationships/chartColorStyle" Target="https://example.com/chart-colors2.xml" TargetMode="External" data-colors="1"/>
+  <Relationship Id="rIdExternalStyle2" Type="http://schemas.microsoft.com/office/2011/relationships/chartStyle" Target="https://example.com/chart-style2.xml" TargetMode="ExTeRnAl" data-style="1"/>
+  <Relationship Id="rIdExternalColors2" Type="http://schemas.microsoft.com/office/2011/relationships/chartColorStyle" Target="https://example.com/chart-colors2.xml" TargetMode="external" data-colors="1"/>
 </Relationships>"#
             .to_vec();
         package
@@ -29461,7 +29465,7 @@ mod tests {
                         "http://schemas.microsoft.com/office/2011/relationships/chartStyle"
                             .to_string(),
                     target: "https://example.com/chart-style2.xml".to_string(),
-                    target_mode: Some("External".to_string()),
+                    target_mode: Some("ExTeRnAl".to_string()),
                 },
                 ChartSupportRelationshipBinding {
                     relationship_id: "rIdExternalColors2".to_string(),
@@ -29469,7 +29473,7 @@ mod tests {
                         "http://schemas.microsoft.com/office/2011/relationships/chartColorStyle"
                             .to_string(),
                     target: "https://example.com/chart-colors2.xml".to_string(),
-                    target_mode: Some("External".to_string()),
+                    target_mode: Some("external".to_string()),
                 },
             ]
         );
@@ -32994,8 +32998,8 @@ mod tests {
         let chart_rels_xml = br#"<?xml version="1.0" encoding="UTF-8"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships" data-root="chart">
   <Relationship Id="rIdExternalWorkbook1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/externalLink" Target="https://example.com/External.xlsx" TargetMode="External" data-opaque="1"/>
-  <Relationship Id="rIdExternalStyle1" Type="http://schemas.microsoft.com/office/2011/relationships/chartStyle" Target="https://example.com/chart-style1.xml" TargetMode="External" data-style="1"/>
-  <Relationship Id="rIdExternalColors1" Type="http://schemas.microsoft.com/office/2011/relationships/chartColorStyle" Target="https://example.com/chart-colors1.xml" TargetMode="External" data-colors="1"/>
+  <Relationship Id="rIdExternalStyle1" Type="http://schemas.microsoft.com/office/2011/relationships/chartStyle" Target="https://example.com/chart-style1.xml" TargetMode="ExTeRnAl" data-style="1"/>
+  <Relationship Id="rIdExternalColors1" Type="http://schemas.microsoft.com/office/2011/relationships/chartColorStyle" Target="https://example.com/chart-colors1.xml" TargetMode="external" data-colors="1"/>
 </Relationships>"#
             .to_vec();
         package
@@ -33047,7 +33051,7 @@ mod tests {
                         "http://schemas.microsoft.com/office/2011/relationships/chartStyle"
                             .to_string(),
                     target: "https://example.com/chart-style1.xml".to_string(),
-                    target_mode: Some("External".to_string()),
+                    target_mode: Some("ExTeRnAl".to_string()),
                 },
                 ChartSupportRelationshipBinding {
                     relationship_id: "rIdExternalColors1".to_string(),
@@ -33055,7 +33059,7 @@ mod tests {
                         "http://schemas.microsoft.com/office/2011/relationships/chartColorStyle"
                             .to_string(),
                     target: "https://example.com/chart-colors1.xml".to_string(),
-                    target_mode: Some("External".to_string()),
+                    target_mode: Some("external".to_string()),
                 },
             ]
         );
