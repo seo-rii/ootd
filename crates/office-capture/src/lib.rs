@@ -340,6 +340,11 @@ pub enum CaptureBundleCompletionError {
         name: String,
         status: String,
     },
+    ReceiptResultsMismatch {
+        section: &'static str,
+        expected: Vec<String>,
+        actual: Vec<String>,
+    },
     Write(CaptureWriteError),
 }
 
@@ -839,6 +844,56 @@ impl CapturePlan {
                 expected: expected_capture_outputs,
                 actual: execution_receipt.expected_capture_outputs,
             });
+        }
+        if !execution_receipt.expected_capture_outputs.is_empty() {
+            let execution_plan = self.execution_plan();
+            let known_command_names = execution_plan
+                .commands
+                .iter()
+                .map(|command| command.name.clone())
+                .collect::<Vec<_>>();
+            let required_command_names = execution_plan
+                .commands
+                .iter()
+                .filter(|command| command.condition.is_none())
+                .map(|command| command.name.clone())
+                .collect::<Vec<_>>();
+            let actual_command_names = execution_receipt
+                .command_results
+                .iter()
+                .map(|command| command.name.clone())
+                .collect::<Vec<_>>();
+            let has_unknown_command = actual_command_names
+                .iter()
+                .any(|name| !known_command_names.contains(name));
+            let has_all_required_commands = required_command_names
+                .iter()
+                .all(|name| actual_command_names.contains(name));
+            if has_unknown_command || !has_all_required_commands {
+                return Err(CaptureBundleCompletionError::ReceiptResultsMismatch {
+                    section: "commandResults",
+                    expected: required_command_names,
+                    actual: actual_command_names,
+                });
+            }
+
+            let expected_manual_step_names = execution_plan
+                .manual_steps
+                .iter()
+                .map(|step| step.name.clone())
+                .collect::<Vec<_>>();
+            let actual_manual_step_names = execution_receipt
+                .manual_step_results
+                .iter()
+                .map(|step| step.name.clone())
+                .collect::<Vec<_>>();
+            if actual_manual_step_names != expected_manual_step_names {
+                return Err(CaptureBundleCompletionError::ReceiptResultsMismatch {
+                    section: "manualStepResults",
+                    expected: expected_manual_step_names,
+                    actual: actual_manual_step_names,
+                });
+            }
         }
         for command_result in &execution_receipt.command_results {
             if command_result.status != "completed" {
@@ -1678,6 +1733,15 @@ impl fmt::Display for CaptureBundleCompletionError {
                 "execution receipt {} entry {} was {}, not completed",
                 section, name, status
             ),
+            CaptureBundleCompletionError::ReceiptResultsMismatch {
+                section,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "execution receipt {} entries {:?} did not match expected {:?}",
+                section, actual, expected
+            ),
             CaptureBundleCompletionError::Write(source) => write!(f, "{source}"),
         }
     }
@@ -1691,6 +1755,7 @@ impl std::error::Error for CaptureBundleCompletionError {
             CaptureBundleCompletionError::MissingArtifact { .. } => None,
             CaptureBundleCompletionError::ExpectedOutputsMismatch { .. } => None,
             CaptureBundleCompletionError::ReceiptStatusNotCompleted { .. } => None,
+            CaptureBundleCompletionError::ReceiptResultsMismatch { .. } => None,
             CaptureBundleCompletionError::Write(source) => Some(source),
         }
     }
@@ -2977,6 +3042,79 @@ mod tests {
                     assert_eq!(section, expected_section);
                     assert_eq!(name, expected_name);
                     assert_eq!(actual_status, status);
+                }
+                other => panic!("unexpected error for {expected_section}: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn completion_rejects_modern_receipt_result_name_mismatches() {
+        let cases = [
+            ("commandResults", Vec::<&str>::new(), true),
+            (
+                "commandResults",
+                vec!["powershell_capture_reflection", "unknown_capture_step"],
+                true,
+            ),
+            ("manualStepResults", Vec::<&str>::new(), false),
+        ];
+
+        for (expected_section, result_names, command_case) in cases {
+            let plan = CapturePlan::from_toml_str(resolved_template()).expect("plan");
+            let tempdir = TempDir::new().expect("tempdir");
+            plan.write_artifacts(tempdir.path(), &sample_artifacts())
+                .expect("materialized artifacts");
+
+            let mut receipt = sample_execution_receipt();
+            if command_case {
+                receipt.command_results = result_names
+                    .iter()
+                    .map(|name| CaptureCommandResult {
+                        name: name.to_string(),
+                        status: "completed".to_string(),
+                        exit_code: Some(0),
+                        detail: None,
+                    })
+                    .collect();
+            } else {
+                receipt.manual_step_results = result_names
+                    .iter()
+                    .map(|name| CaptureManualStepResult {
+                        name: name.to_string(),
+                        status: "completed".to_string(),
+                        detail: None,
+                    })
+                    .collect();
+            }
+            fs::write(
+                tempdir.path().join("manifest/execution_receipt.json"),
+                serde_json::to_vec_pretty(&receipt).expect("receipt payload"),
+            )
+            .expect("execution receipt");
+
+            let error = plan
+                .complete_execution_bundle(tempdir.path())
+                .expect_err("receipt result mismatch should fail");
+            match error {
+                CaptureBundleCompletionError::ReceiptResultsMismatch {
+                    section,
+                    expected,
+                    actual,
+                } => {
+                    assert_eq!(section, expected_section);
+                    if command_case {
+                        assert_eq!(expected, vec!["powershell_capture_reflection".to_string()]);
+                    } else {
+                        assert_eq!(expected, vec!["oleview_snapshot_export".to_string()]);
+                    }
+                    assert_eq!(
+                        actual,
+                        result_names
+                            .into_iter()
+                            .map(str::to_string)
+                            .collect::<Vec<_>>()
+                    );
                 }
                 other => panic!("unexpected error for {expected_section}: {other:?}"),
             }

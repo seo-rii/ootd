@@ -4673,6 +4673,8 @@
   - 범위: completion 단계가 5개 Windows capture payload 파일 각각의 누락을 `MissingArtifact`와 정확한 logical name으로 실패시키는지 회귀로 고정해 incomplete oracle capture bundle이 manifest/checksum으로 닫히지 않도록 검증
   - `Step 7.14 DONE` completion receipt status validation
   - 범위: execution receipt의 command/manual step result가 `completed`가 아닌 경우 completion 단계가 manifest/checksum을 닫지 않고 명시적으로 실패하도록 검증해 pending/failed oracle capture 결과가 성공 bundle로 승격되지 않도록 고정
+  - `Step 7.15 DONE` modern receipt result coverage validation
+  - 범위: `expectedCaptureOutputs`가 있는 execution receipt는 조건 없는 command result와 manual step result 이름이 execution plan과 맞아야 completion이 진행되도록 검증해 누락되거나 알 수 없는 capture step 결과가 성공 bundle에 포함되지 않도록 고정
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.
