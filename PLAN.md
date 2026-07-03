@@ -4397,6 +4397,8 @@
   - 범위: chart rels의 style/color support relationship을 제외한 internal/external relationship을 `ChartPartSummary::opaque_relationships`에 입력 순서대로 typed summary로 올리고, internal target은 package URI로 정규화하며 external target과 `TargetMode`는 그대로 보존해서 향후 dirty-save drift 감지 기반을 회귀로 고정
   - `Step 6.6b2b2b2b2b2f2b2bq DONE` chartsheet chart opaque relationship summary regression
   - 범위: chartsheet chart rels의 external hyperlink와 internal package relationship도 `ChartPartSummary::opaque_relationships`에 typed summary로 노출되는지 회귀로 고정해서 embedded/chartsheet chart inventory summary 표면을 맞춤
+  - `Step 6.6b2b2b2b2b2f2b2br DONE` chart userShapes/externalData opaque summary regression
+  - 범위: embedded/chartsheet chart XML에서 직접 참조되는 `chartUserShapes`와 `externalLink` 관계도 `ChartPartSummary::opaque_relationships`에 typed summary로 노출되는지 회귀로 고정해서 source-byte 보존과 typed overlay 사이의 gap을 줄임
 - 목표
   - 현재 core worksheet rewrite 이후 남아 있는 fidelity gap을 좁힌다.
   - style/theme/merge/comment/hyperlink/formula cached-value 계열 보존을 순차적으로 올린다.

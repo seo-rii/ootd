@@ -28216,6 +28216,21 @@ mod tests {
                 .expect("chart rels source"),
             &chart_rels_xml
         );
+        assert_eq!(
+            drawing_support
+                .chart_summaries
+                .get("xl/charts/chart2.xml")
+                .expect("chart summary")
+                .opaque_relationships,
+            vec![ChartOpaqueRelationshipSummary {
+                relationship_id: "rIdUserShapes2".to_string(),
+                relationship_type:
+                    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chartUserShapes"
+                        .to_string(),
+                target: "xl/drawings/userShapes2.xml".to_string(),
+                target_mode: None,
+            }]
+        );
         assert!(drawing_support.chart_support_part_uris.is_empty());
         assert_eq!(loaded.state.charts.len(), 1);
 
@@ -28442,6 +28457,21 @@ mod tests {
                 .get("xl/charts/_rels/chart2.xml.rels")
                 .expect("chart rels source"),
             &chart_rels_xml
+        );
+        assert_eq!(
+            drawing_support
+                .chart_summaries
+                .get("xl/charts/chart2.xml")
+                .expect("chart summary")
+                .opaque_relationships,
+            vec![ChartOpaqueRelationshipSummary {
+                relationship_id: "rIdExternalData2".to_string(),
+                relationship_type:
+                    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/externalLink"
+                        .to_string(),
+                target: "xl/externalLinks/externalLink2.xml".to_string(),
+                target_mode: None,
+            }]
         );
         assert!(drawing_support.chart_support_part_uris.is_empty());
         assert_eq!(loaded.state.charts.len(), 1);
@@ -31161,6 +31191,21 @@ mod tests {
                 .expect("chart rels source"),
             &chart_rels_xml
         );
+        assert_eq!(
+            drawing_support
+                .chart_summaries
+                .get("xl/charts/chart1.xml")
+                .expect("chart summary")
+                .opaque_relationships,
+            vec![ChartOpaqueRelationshipSummary {
+                relationship_id: "rIdUserShapes1".to_string(),
+                relationship_type:
+                    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chartUserShapes"
+                        .to_string(),
+                target: "xl/drawings/userShapes1.xml".to_string(),
+                target_mode: None,
+            }]
+        );
         assert!(drawing_support.chart_support_part_uris.is_empty());
         assert_eq!(loaded.state.charts.len(), 1);
 
@@ -31365,6 +31410,21 @@ mod tests {
                 .get("xl/charts/_rels/chart1.xml.rels")
                 .expect("chart rels source"),
             &chart_rels_xml
+        );
+        assert_eq!(
+            drawing_support
+                .chart_summaries
+                .get("xl/charts/chart1.xml")
+                .expect("chart summary")
+                .opaque_relationships,
+            vec![ChartOpaqueRelationshipSummary {
+                relationship_id: "rIdExternalData1".to_string(),
+                relationship_type:
+                    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/externalLink"
+                        .to_string(),
+                target: "xl/externalLinks/externalLink1.xml".to_string(),
+                target_mode: None,
+            }]
         );
         assert!(drawing_support.chart_support_part_uris.is_empty());
         assert_eq!(loaded.state.charts.len(), 1);
