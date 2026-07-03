@@ -28181,6 +28181,41 @@ mod tests {
                 .bytes,
             chart_inventory_opaque_xml
         );
+
+        let mut changed_loaded = loaded.clone();
+        changed_loaded
+            .package
+            .replace_part_bytes(
+                "customXml/chartInventoryOpaque2.xml",
+                br#"<?xml version="1.0" encoding="UTF-8"?><chartInventoryOpaque preserve="changed"/>"#
+                    .to_vec(),
+            )
+            .expect("replace chart inventory opaque part");
+        let error = codec
+            .save(&changed_loaded, office_common::SaveOptions::default())
+            .expect_err("save should reject changed chart opaque target");
+        assert!(
+            error.to_string().contains(
+                "explicit chart opaque relationship target part bytes changed: customXml/chartInventoryOpaque2.xml"
+            ),
+            "{error}"
+        );
+
+        let mut missing_loaded = loaded.clone();
+        assert!(
+            missing_loaded
+                .package
+                .remove_part("customXml/chartInventoryOpaque2.xml")
+        );
+        let error = codec
+            .save(&missing_loaded, office_common::SaveOptions::default())
+            .expect_err("save should reject missing chart opaque target");
+        assert!(
+            error.to_string().contains(
+                "explicit chart opaque relationship target part is missing: customXml/chartInventoryOpaque2.xml"
+            ),
+            "{error}"
+        );
     }
 
     #[test]

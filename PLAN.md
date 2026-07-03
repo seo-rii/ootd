@@ -4413,6 +4413,8 @@
   - 범위: clean save 직전에 drawing/chart part를 다시 파싱해 `SheetDrawingSupportParts`의 typed drawing/chart summary와 비교하고 summary overlay가 package bytes와 달라진 경우 명시적으로 실패하게 해서 raw graph overlay의 semantic drift를 회귀로 고정
   - `Step 6.6b2b2b2b2b2f2b2by DONE` chart summary save validation regression
   - 범위: clean save 직전에 `SheetDrawingSupportParts::chart_summaries`가 package의 chart part/relationships에서 재구성한 summary와 달라진 경우 `explicit chart summary changed` 오류로 실패하는지 직접 회귀로 고정해서 drawing summary drift와 chart summary drift 양쪽 save gate를 테스트로 덮음
+  - `Step 6.6b2b2b2b2b2f2b2bz DONE` chart opaque target save validation regression
+  - 범위: chart rels의 internal opaque target part가 package 안에서 bytes drift되거나 삭제된 경우 clean save가 `explicit chart opaque relationship target part ...` 오류로 실패하는지 직접 회귀로 고정해서 drawing opaque target과 chart opaque target 양쪽 save gate를 테스트로 덮음
 - 목표
   - 현재 core worksheet rewrite 이후 남아 있는 fidelity gap을 좁힌다.
   - style/theme/merge/comment/hyperlink/formula cached-value 계열 보존을 순차적으로 올린다.
