@@ -4337,6 +4337,8 @@
   - 범위: embedded chart drawing에 chart anchor와 picture anchor가 같이 있고 drawing rels에 image relationship/media part가 공존하는 경우 chart inventory는 chart part만 typed로 수집하면서도 opaque image relationship, media bytes, content type, host worksheet/rels, drawing/chart bytes를 clean save에서 그대로 보존하는지 회귀로 고정
   - `Step 6.6b2b2b2b2b2f2b2as DONE` chartsheet drawing image relationship preservation
   - 범위: chartsheet drawing에 chart anchor와 picture anchor가 같이 있고 drawing rels에 image relationship/media part가 공존하는 경우 chart sheet host, workbook rels, drawing rels의 opaque image relationship, media bytes, content type, drawing/chart bytes를 clean save에서 그대로 보존하는지 회귀로 고정
+  - `Step 6.6b2b2b2b2b2f2b2at DONE` embedded chart user-shapes relationship preservation
+  - 범위: embedded chart XML의 `c:userShapes r:id`와 chart rels의 opaque `chartUserShapes` relationship/userShapes part가 style/color support part로 typed 수집되지 않아도 chart rels source bytes, userShapes part, content type, host worksheet/rels, drawing/chart bytes를 clean save에서 그대로 보존하는지 회귀로 고정
 - 목표
   - 현재 core worksheet rewrite 이후 남아 있는 fidelity gap을 좁힌다.
   - style/theme/merge/comment/hyperlink/formula cached-value 계열 보존을 순차적으로 올린다.
