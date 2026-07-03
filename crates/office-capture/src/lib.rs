@@ -3199,6 +3199,30 @@ mod tests {
                 "C:\\capture\\excel-om\\excel_om_windows_capture\\snapshots\\excel_pia_public_surface.json".to_string(),
             ]
         );
+        let pending_output_names = execution_plan
+            .pending_capture_outputs
+            .iter()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>();
+        let declared_output_names = execution_plan
+            .manual_steps
+            .iter()
+            .flat_map(|step| step.outputs.iter())
+            .chain(
+                execution_plan
+                    .commands
+                    .iter()
+                    .flat_map(|command| command.outputs.iter()),
+            )
+            .filter_map(|output| {
+                output
+                    .rsplit(|ch| ch == '\\' || ch == '/')
+                    .next()
+                    .filter(|file_name| pending_output_names.contains(*file_name))
+                    .map(str::to_string)
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(declared_output_names, pending_output_names);
     }
 
     #[test]
