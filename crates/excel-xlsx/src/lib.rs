@@ -192,7 +192,7 @@ pub struct TableStylesSummary {
     pub style_child_texts: Vec<Vec<Option<String>>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Eq)]
 pub struct FontSummary {
     pub child_names: Vec<String>,
     pub child_attr_maps: Vec<BTreeMap<String, String>>,
@@ -200,6 +200,68 @@ pub struct FontSummary {
     pub nested_child_names: Vec<Vec<String>>,
     pub nested_child_attr_maps: Vec<Vec<BTreeMap<String, String>>>,
     pub nested_child_texts: Vec<Vec<Option<String>>>,
+    pub grandchild_names: Vec<Vec<Vec<String>>>,
+    pub grandchild_attr_maps: Vec<Vec<Vec<BTreeMap<String, String>>>>,
+    pub grandchild_texts: Vec<Vec<Vec<Option<String>>>>,
+}
+
+impl PartialEq for FontSummary {
+    fn eq(&self, other: &Self) -> bool {
+        self.child_names == other.child_names
+            && self.child_attr_maps == other.child_attr_maps
+            && self.child_texts == other.child_texts
+            && self.nested_child_names == other.nested_child_names
+            && self.nested_child_attr_maps == other.nested_child_attr_maps
+            && self.nested_child_texts == other.nested_child_texts
+            && font_grandchild_names_equal(&self.grandchild_names, &other.grandchild_names)
+            && font_grandchild_attr_maps_equal(
+                &self.grandchild_attr_maps,
+                &other.grandchild_attr_maps,
+            )
+            && font_grandchild_texts_equal(&self.grandchild_texts, &other.grandchild_texts)
+    }
+}
+
+fn font_grandchild_names_equal(left: &[Vec<Vec<String>>], right: &[Vec<Vec<String>>]) -> bool {
+    left == right
+        || (left.is_empty() && font_grandchild_names_all_empty(right))
+        || (right.is_empty() && font_grandchild_names_all_empty(left))
+}
+
+fn font_grandchild_attr_maps_equal(
+    left: &[Vec<Vec<BTreeMap<String, String>>>],
+    right: &[Vec<Vec<BTreeMap<String, String>>>],
+) -> bool {
+    left == right
+        || (left.is_empty() && font_grandchild_attr_maps_all_empty(right))
+        || (right.is_empty() && font_grandchild_attr_maps_all_empty(left))
+}
+
+fn font_grandchild_texts_equal(
+    left: &[Vec<Vec<Option<String>>>],
+    right: &[Vec<Vec<Option<String>>>],
+) -> bool {
+    left == right
+        || (left.is_empty() && font_grandchild_texts_all_empty(right))
+        || (right.is_empty() && font_grandchild_texts_all_empty(left))
+}
+
+fn font_grandchild_names_all_empty(value: &[Vec<Vec<String>>]) -> bool {
+    value
+        .iter()
+        .all(|children| children.iter().all(Vec::is_empty))
+}
+
+fn font_grandchild_attr_maps_all_empty(value: &[Vec<Vec<BTreeMap<String, String>>>]) -> bool {
+    value
+        .iter()
+        .all(|children| children.iter().all(Vec::is_empty))
+}
+
+fn font_grandchild_texts_all_empty(value: &[Vec<Vec<Option<String>>>]) -> bool {
+    value
+        .iter()
+        .all(|children| children.iter().all(Vec::is_empty))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -5271,6 +5333,9 @@ fn parse_stylesheet_summary(styles_xml: &[u8]) -> OmResult<StylesheetSummary> {
                             nested_child_names: Vec::new(),
                             nested_child_attr_maps: Vec::new(),
                             nested_child_texts: Vec::new(),
+                            grandchild_names: Vec::new(),
+                            grandchild_attr_maps: Vec::new(),
+                            grandchild_texts: Vec::new(),
                         });
                         section_depth += 1;
                     }
@@ -5921,6 +5986,9 @@ fn parse_stylesheet_summary(styles_xml: &[u8]) -> OmResult<StylesheetSummary> {
                         current_font.nested_child_names.push(Vec::new());
                         current_font.nested_child_attr_maps.push(Vec::new());
                         current_font.nested_child_texts.push(Vec::new());
+                        current_font.grandchild_names.push(Vec::new());
+                        current_font.grandchild_attr_maps.push(Vec::new());
+                        current_font.grandchild_texts.push(Vec::new());
                         section_depth += 1;
                     }
                     _ if current_section == Some(StylesheetSection::Fonts)
@@ -5959,6 +6027,80 @@ fn parse_stylesheet_summary(styles_xml: &[u8]) -> OmResult<StylesheetSummary> {
                                 OmError::new(
                                     OmErrorCode::InvalidState,
                                     "styles.xml encountered nested font child before direct font child",
+                                )
+                            })?
+                            .push(None);
+                        current_font
+                            .grandchild_names
+                            .last_mut()
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered nested font child before direct font child",
+                                )
+                            })?
+                            .push(Vec::new());
+                        current_font
+                            .grandchild_attr_maps
+                            .last_mut()
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered nested font child before direct font child",
+                                )
+                            })?
+                            .push(Vec::new());
+                        current_font
+                            .grandchild_texts
+                            .last_mut()
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered nested font child before direct font child",
+                                )
+                            })?
+                            .push(Vec::new());
+                        section_depth += 1;
+                    }
+                    _ if current_section == Some(StylesheetSection::Fonts)
+                        && section_depth == 4 =>
+                    {
+                        let current_font = fonts.last_mut().ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "styles.xml encountered font grandchild outside tracked font child",
+                            )
+                        })?;
+                        current_font
+                            .grandchild_names
+                            .last_mut()
+                            .and_then(|grandchildren| grandchildren.last_mut())
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered font grandchild before nested font child",
+                                )
+                            })?
+                            .push(local_name.clone());
+                        current_font
+                            .grandchild_attr_maps
+                            .last_mut()
+                            .and_then(|grandchildren| grandchildren.last_mut())
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered font grandchild before nested font child",
+                                )
+                            })?
+                            .push(parse_child_attrs(&element, reader.decoder())?);
+                        current_font
+                            .grandchild_texts
+                            .last_mut()
+                            .and_then(|grandchildren| grandchildren.last_mut())
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered font grandchild before nested font child",
                                 )
                             })?
                             .push(None);
@@ -6843,6 +6985,9 @@ fn parse_stylesheet_summary(styles_xml: &[u8]) -> OmResult<StylesheetSummary> {
                             nested_child_names: Vec::new(),
                             nested_child_attr_maps: Vec::new(),
                             nested_child_texts: Vec::new(),
+                            grandchild_names: Vec::new(),
+                            grandchild_attr_maps: Vec::new(),
+                            grandchild_texts: Vec::new(),
                         });
                     }
                     b"fill"
@@ -7480,6 +7625,9 @@ fn parse_stylesheet_summary(styles_xml: &[u8]) -> OmResult<StylesheetSummary> {
                         current_font.nested_child_names.push(Vec::new());
                         current_font.nested_child_attr_maps.push(Vec::new());
                         current_font.nested_child_texts.push(Vec::new());
+                        current_font.grandchild_names.push(Vec::new());
+                        current_font.grandchild_attr_maps.push(Vec::new());
+                        current_font.grandchild_texts.push(Vec::new());
                     }
                     _ if current_section == Some(StylesheetSection::Fonts)
                         && section_depth == 3 =>
@@ -7523,6 +7671,85 @@ fn parse_stylesheet_summary(styles_xml: &[u8]) -> OmResult<StylesheetSummary> {
                                 OmError::new(
                                     OmErrorCode::InvalidState,
                                     "styles.xml encountered nested font child before direct font child",
+                                )
+                            })?
+                            .push(None);
+                        current_font
+                            .grandchild_names
+                            .last_mut()
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered nested font child before direct font child",
+                                )
+                            })?
+                            .push(Vec::new());
+                        current_font
+                            .grandchild_attr_maps
+                            .last_mut()
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered nested font child before direct font child",
+                                )
+                            })?
+                            .push(Vec::new());
+                        current_font
+                            .grandchild_texts
+                            .last_mut()
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered nested font child before direct font child",
+                                )
+                            })?
+                            .push(Vec::new());
+                    }
+                    _ if current_section == Some(StylesheetSection::Fonts)
+                        && section_depth == 4 =>
+                    {
+                        let current_font = fonts.last_mut().ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "styles.xml encountered font grandchild outside tracked font child",
+                            )
+                        })?;
+                        current_font
+                            .grandchild_names
+                            .last_mut()
+                            .and_then(|grandchildren| grandchildren.last_mut())
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered font grandchild before nested font child",
+                                )
+                            })?
+                            .push(
+                                String::from_utf8_lossy(element.name().as_ref())
+                                    .rsplit(':')
+                                    .next()
+                                    .unwrap_or_default()
+                                    .to_string(),
+                            );
+                        current_font
+                            .grandchild_attr_maps
+                            .last_mut()
+                            .and_then(|grandchildren| grandchildren.last_mut())
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered font grandchild before nested font child",
+                                )
+                            })?
+                            .push(parse_child_attrs(&element, reader.decoder())?);
+                        current_font
+                            .grandchild_texts
+                            .last_mut()
+                            .and_then(|grandchildren| grandchildren.last_mut())
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered font grandchild before nested font child",
                                 )
                             })?
                             .push(None);
@@ -8046,6 +8273,25 @@ fn parse_stylesheet_summary(styles_xml: &[u8]) -> OmResult<StylesheetSummary> {
                             })?,
                         &content,
                     );
+                } else if element_stack.len() == 6
+                    && element_stack.first().map(String::as_str) == Some("styleSheet")
+                    && element_stack.get(1).map(String::as_str) == Some("fonts")
+                    && element_stack.get(2).map(String::as_str) == Some("font")
+                {
+                    append_summary_text(
+                        fonts
+                            .last_mut()
+                            .and_then(|font| font.grandchild_texts.last_mut())
+                            .and_then(|nested| nested.last_mut())
+                            .and_then(|grandchildren| grandchildren.last_mut())
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered font grandchild text before font grandchild",
+                                )
+                            })?,
+                        &content,
+                    );
                 } else if element_stack.len() == 2
                     && element_stack.first().map(String::as_str) == Some("styleSheet")
                     && element_stack.last().map(String::as_str) == Some("colors")
@@ -8565,6 +8811,25 @@ fn parse_stylesheet_summary(styles_xml: &[u8]) -> OmResult<StylesheetSummary> {
                                 OmError::new(
                                     OmErrorCode::InvalidState,
                                     "styles.xml encountered nested font child text before nested font child",
+                                )
+                            })?,
+                        &content,
+                    );
+                } else if element_stack.len() == 6
+                    && element_stack.first().map(String::as_str) == Some("styleSheet")
+                    && element_stack.get(1).map(String::as_str) == Some("fonts")
+                    && element_stack.get(2).map(String::as_str) == Some("font")
+                {
+                    append_summary_text(
+                        fonts
+                            .last_mut()
+                            .and_then(|font| font.grandchild_texts.last_mut())
+                            .and_then(|nested| nested.last_mut())
+                            .and_then(|grandchildren| grandchildren.last_mut())
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "styles.xml encountered font grandchild text before font grandchild",
                                 )
                             })?,
                         &content,
@@ -50321,6 +50586,9 @@ mod tests {
                 nested_child_names: vec![Vec::new(), Vec::new()],
                 nested_child_attr_maps: vec![Vec::new(), Vec::new()],
                 nested_child_texts: vec![Vec::new(), Vec::new()],
+                grandchild_names: vec![Vec::new(), Vec::new()],
+                grandchild_attr_maps: vec![Vec::new(), Vec::new()],
+                grandchild_texts: vec![Vec::new(), Vec::new()],
             }]
         );
     }
@@ -50352,6 +50620,9 @@ mod tests {
                 nested_child_names: vec![Vec::new(), Vec::new()],
                 nested_child_attr_maps: vec![Vec::new(), Vec::new()],
                 nested_child_texts: vec![Vec::new(), Vec::new()],
+                grandchild_names: vec![Vec::new(), Vec::new()],
+                grandchild_attr_maps: vec![Vec::new(), Vec::new()],
+                grandchild_texts: vec![Vec::new(), Vec::new()],
             }]
         );
     }
@@ -50397,6 +50668,9 @@ mod tests {
                 nested_child_names: vec![Vec::new(), Vec::new()],
                 nested_child_attr_maps: vec![Vec::new(), Vec::new()],
                 nested_child_texts: vec![Vec::new(), Vec::new()],
+                grandchild_names: vec![Vec::new(), Vec::new()],
+                grandchild_attr_maps: vec![Vec::new(), Vec::new()],
+                grandchild_texts: vec![Vec::new(), Vec::new()],
             }]
         );
     }
@@ -50488,6 +50762,9 @@ mod tests {
                 nested_child_names: vec![Vec::new(), Vec::new(), Vec::new()],
                 nested_child_attr_maps: vec![Vec::new(), Vec::new(), Vec::new()],
                 nested_child_texts: vec![Vec::new(), Vec::new(), Vec::new()],
+                grandchild_names: vec![Vec::new(), Vec::new(), Vec::new()],
+                grandchild_attr_maps: vec![Vec::new(), Vec::new(), Vec::new()],
+                grandchild_texts: vec![Vec::new(), Vec::new(), Vec::new()],
             }]
         );
     }
@@ -50537,6 +50814,9 @@ mod tests {
                 nested_child_names: vec![Vec::new(), Vec::new(), Vec::new()],
                 nested_child_attr_maps: vec![Vec::new(), Vec::new(), Vec::new()],
                 nested_child_texts: vec![Vec::new(), Vec::new(), Vec::new()],
+                grandchild_names: vec![Vec::new(), Vec::new(), Vec::new()],
+                grandchild_attr_maps: vec![Vec::new(), Vec::new(), Vec::new()],
+                grandchild_texts: vec![Vec::new(), Vec::new(), Vec::new()],
             }]
         );
     }
@@ -50577,7 +50857,50 @@ mod tests {
                     vec![Some("alphabeta".to_string())],
                     Vec::new(),
                 ],
+                grandchild_names: vec![Vec::new(), vec![Vec::new()], Vec::new()],
+                grandchild_attr_maps: vec![Vec::new(), vec![Vec::new()], Vec::new()],
+                grandchild_texts: vec![Vec::new(), vec![Vec::new()], Vec::new()],
             }]
+        );
+    }
+
+    #[test]
+    fn load_collects_font_grandchild_summary_in_styles_summary() {
+        let codec = XlsxCodec;
+        let loaded = codec
+            .load(
+                &workbook_with_font_color_tint_alpha_bytes(),
+                CommonLoadOptions::default(),
+            )
+            .expect("load workbook");
+        let styles_summary = loaded
+            .support_parts
+            .styles_summary
+            .as_ref()
+            .expect("typed styles summary");
+
+        assert_eq!(
+            styles_summary.fonts[0].grandchild_names,
+            vec![Vec::new(), vec![vec!["alpha".to_string()]], Vec::new()]
+        );
+        assert_eq!(
+            styles_summary.fonts[0].grandchild_attr_maps,
+            vec![
+                Vec::new(),
+                vec![vec![BTreeMap::from([(
+                    "val".to_string(),
+                    "50000".to_string()
+                )])]],
+                Vec::new()
+            ]
+        );
+        assert_eq!(
+            styles_summary.fonts[0].grandchild_texts,
+            vec![
+                Vec::new(),
+                vec![vec![Some("alphabeta".to_string())]],
+                Vec::new()
+            ]
         );
     }
 
@@ -67674,6 +67997,13 @@ mod tests {
     fn dirty_save_preserves_font_nested_child_summary_in_styles_xml() {
         assert_dirty_save_preserves_styles_xml_for_mutated_input(
             workbook_with_font_nested_color_bytes(),
+        );
+    }
+
+    #[test]
+    fn dirty_save_preserves_font_grandchild_summary_in_styles_xml() {
+        assert_dirty_save_preserves_styles_xml_for_mutated_input(
+            workbook_with_font_color_tint_alpha_bytes(),
         );
     }
 
@@ -85432,6 +85762,82 @@ mod tests {
         let error = codec
             .save(&loaded, office_common::SaveOptions::default())
             .expect_err("save should fail when font nested child text drifts");
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("typed styles summary drifted"));
+        assert!(error.message.contains("xl/styles.xml"));
+    }
+
+    #[test]
+    fn save_rejects_stylesheet_when_font_grandchild_attr_drifts() {
+        let codec = XlsxCodec;
+        let input = workbook_with_font_color_tint_alpha_bytes();
+        let mut loaded = codec
+            .load(&input, CommonLoadOptions::default())
+            .expect("load workbook");
+        let sheet_id = loaded.state.worksheets[0].id;
+        let styles_xml = String::from_utf8(
+            loaded
+                .package
+                .part("xl/styles.xml")
+                .expect("styles part")
+                .bytes
+                .clone(),
+        )
+        .expect("styles xml utf8")
+        .replace(r#"alpha val="50000""#, r#"alpha val="25000""#);
+        loaded
+            .package
+            .replace_part_bytes("xl/styles.xml", styles_xml.into_bytes())
+            .expect("replace styles part");
+        loaded
+            .state
+            .set_range_values(
+                &office_common::RangeRef::single_cell(WorkbookId(0), sheet_id, 1, 1),
+                &office_common::OmArray::scalar(office_common::OmValue::Number(9.0)),
+            )
+            .expect("set value");
+
+        let error = codec
+            .save(&loaded, office_common::SaveOptions::default())
+            .expect_err("save should fail when font grandchild attrs drift");
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("typed styles summary drifted"));
+        assert!(error.message.contains("xl/styles.xml"));
+    }
+
+    #[test]
+    fn save_rejects_stylesheet_when_font_grandchild_text_drifts() {
+        let codec = XlsxCodec;
+        let input = workbook_with_font_color_tint_alpha_bytes();
+        let mut loaded = codec
+            .load(&input, CommonLoadOptions::default())
+            .expect("load workbook");
+        let sheet_id = loaded.state.worksheets[0].id;
+        let styles_xml = String::from_utf8(
+            loaded
+                .package
+                .part("xl/styles.xml")
+                .expect("styles part")
+                .bytes
+                .clone(),
+        )
+        .expect("styles xml utf8")
+        .replace("alpha<![CDATA[beta]]>", "changed<![CDATA[beta]]>");
+        loaded
+            .package
+            .replace_part_bytes("xl/styles.xml", styles_xml.into_bytes())
+            .expect("replace styles part");
+        loaded
+            .state
+            .set_range_values(
+                &office_common::RangeRef::single_cell(WorkbookId(0), sheet_id, 1, 1),
+                &office_common::OmArray::scalar(office_common::OmValue::Number(9.0)),
+            )
+            .expect("set value");
+
+        let error = codec
+            .save(&loaded, office_common::SaveOptions::default())
+            .expect_err("save should fail when font grandchild text drifts");
         assert_eq!(error.code, OmErrorCode::InvalidState);
         assert!(error.message.contains("typed styles summary drifted"));
         assert!(error.message.contains("xl/styles.xml"));
@@ -119192,6 +119598,27 @@ mod tests {
         .replace(
             r#"<font><sz val="11"/><name val="Calibri"/></font>"#,
             r#"<font><sz val="11"/><color rgb="FFFF0000"><tint val="-0.25">alpha<![CDATA[beta]]></tint></color><name val="Calibri"/></font>"#,
+        );
+        package
+            .replace_part_bytes("xl/styles.xml", styles_xml.into_bytes())
+            .expect("replace styles part");
+        package.to_bytes().expect("package bytes")
+    }
+
+    fn workbook_with_font_color_tint_alpha_bytes() -> Vec<u8> {
+        let mut package = OpcPackage::from_bytes(&workbook_with_font_nested_color_bytes())
+            .expect("base workbook package");
+        let styles_xml = String::from_utf8(
+            package
+                .part("xl/styles.xml")
+                .expect("styles part")
+                .bytes
+                .clone(),
+        )
+        .expect("styles xml utf8")
+        .replace(
+            r#"<tint val="-0.25">alpha<![CDATA[beta]]></tint>"#,
+            r#"<tint val="-0.25"><alpha val="50000">alpha<![CDATA[beta]]></alpha></tint>"#,
         );
         package
             .replace_part_bytes("xl/styles.xml", styles_xml.into_bytes())
