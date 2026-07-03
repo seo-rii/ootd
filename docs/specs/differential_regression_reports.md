@@ -133,6 +133,10 @@ That path loads the report, validates stale report counts, validates source
 registry context, writes the gate summary JSON, and returns the same summary to
 the caller.
 
+If the runner owns the output directory, it should prefer
+`write_differential_report_and_gate_to_output_root`. That path writes both
+canonical artifacts under the output root and returns the exact paths used.
+
 ## Artifact Flow
 
 Canonical artifact filenames are exposed by

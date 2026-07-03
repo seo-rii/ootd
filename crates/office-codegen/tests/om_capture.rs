@@ -22,7 +22,7 @@ use office_codegen::{
     summarize_om_sources, summarize_om_sources_toml, summarize_source_registry,
     summarize_source_registry_toml, validate_differential_report_source_context,
     write_differential_gate_from_report_path_with_source_context, write_differential_gate_to_path,
-    write_differential_report_to_path,
+    write_differential_report_and_gate_to_output_root, write_differential_report_to_path,
 };
 use office_idl::{AccessMode, CaptureOriginKind, InterfaceKind, OfficeIdlDocument};
 use sha2::{Digest, Sha256};
@@ -549,6 +549,63 @@ fn writes_differential_gate_from_report_path_with_source_registry_context() {
     fs::remove_file(&report_path).expect("remove report");
     fs::remove_file(&gate_path).expect("remove gate");
     fs::remove_file(&copied_gate_path).expect("remove copied gate");
+}
+
+#[test]
+fn writes_differential_report_and_gate_to_canonical_output_root() {
+    let registry_toml =
+        fs::read_to_string(repo_root().join("specs/sources.toml")).expect("source registry");
+    let source_summary = summarize_source_registry_toml(&registry_toml).expect("source summary");
+    let report = build_differential_report_with_source_context(
+        "Excel",
+        "16.0",
+        &source_summary,
+        vec![DifferentialCaseResult {
+            name: "Application.Version".to_string(),
+            surface: Some("Application".to_string()),
+            member: Some("Version".to_string()),
+            status: DifferentialCaseStatus::Passed,
+            expected: Some("16.0".to_string()),
+            actual: Some("16.0".to_string()),
+            message: None,
+            artifacts: BTreeMap::new(),
+        }],
+    );
+    let unique_suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time")
+        .as_nanos();
+    let output_root =
+        std::env::temp_dir().join(format!("ootd-differential-output-root-{unique_suffix}"));
+
+    let (paths, gate) =
+        write_differential_report_and_gate_to_output_root(&report, &source_summary, &output_root)
+            .expect("write report and gate");
+
+    assert_eq!(paths.output_root_path, output_root);
+    assert_eq!(
+        paths.report_path.file_name().and_then(|name| name.to_str()),
+        Some("differential_report.json")
+    );
+    assert_eq!(
+        paths
+            .gate_summary_path
+            .file_name()
+            .and_then(|name| name.to_str()),
+        Some("differential_gate_summary.json")
+    );
+    assert!(paths.report_path.exists());
+    assert!(paths.gate_summary_path.exists());
+    assert!(gate.passed);
+
+    let loaded_report =
+        load_differential_report_from_path(&paths.report_path).expect("reload report");
+    let loaded_gate =
+        load_differential_gate_from_path(&paths.gate_summary_path).expect("reload gate");
+    assert_eq!(loaded_report, report);
+    assert_eq!(loaded_gate, gate);
+
+    fs::remove_dir_all(paths.output_root_path).expect("remove output root");
 }
 
 #[test]

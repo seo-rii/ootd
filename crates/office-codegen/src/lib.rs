@@ -1799,6 +1799,22 @@ pub fn write_differential_gate_from_report_path_with_source_context(
     Ok(gate)
 }
 
+pub fn write_differential_report_and_gate_to_output_root(
+    report: &DifferentialReport,
+    source_summary: &SourceRegistrySummary,
+    output_root: impl AsRef<Path>,
+) -> Result<(DifferentialArtifactPaths, DifferentialGateSummary), DifferentialReportLoadError> {
+    let paths = differential_artifact_paths(output_root);
+    fs::create_dir_all(&paths.output_root_path)?;
+    report.write_json_path(&paths.report_path)?;
+    let gate = write_differential_gate_from_report_path_with_source_context(
+        &paths.report_path,
+        source_summary,
+        &paths.gate_summary_path,
+    )?;
+    Ok((paths, gate))
+}
+
 pub fn write_differential_report_to_path(
     report: &DifferentialReport,
     path: impl AsRef<Path>,
