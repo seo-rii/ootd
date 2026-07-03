@@ -275,6 +275,7 @@ fn main() {
                     "output_dir": summary.output_dir,
                     "capture_root": summary.capture_root,
                     "output_paths": summary.output_paths,
+                    "pending_capture_outputs": summary.pending_capture_outputs,
                     "downstream_path": summary.downstream_path,
                     "unresolved_fields": summary.unresolved_fields,
                     "ready_to_run": summary.ready_to_run,

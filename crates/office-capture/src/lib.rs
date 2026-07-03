@@ -136,6 +136,7 @@ pub struct CapturePlanSummary {
     pub output_dir: String,
     pub capture_root: String,
     pub output_paths: Vec<String>,
+    pub pending_capture_outputs: Vec<String>,
     pub downstream_path: String,
     pub unresolved_fields: Vec<String>,
     pub ready_to_run: bool,
@@ -1435,6 +1436,22 @@ Set-Content -LiteralPath $ExecutionReceiptPath -Value ($ExecutionReceipt | Conve
             .into_iter()
             .map(|(_, relative_path)| self.artifact_path(&relative_path))
             .collect();
+        let pending_capture_outputs = [
+            &self.output_layout.raw_typelib_identity,
+            &self.output_layout.excel_typelib_snapshot_idl,
+            &self.output_layout.excel_typelib_snapshot_odl,
+            &self.output_layout.excel_pia_identity,
+            &self.output_layout.excel_pia_public_surface,
+        ]
+        .into_iter()
+        .map(|relative_path| {
+            Path::new(relative_path)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or(relative_path)
+                .to_string()
+        })
+        .collect();
 
         CapturePlanSummary {
             capture_name: self.template.capture.name.clone(),
@@ -1449,6 +1466,7 @@ Set-Content -LiteralPath $ExecutionReceiptPath -Value ($ExecutionReceipt | Conve
             output_dir: self.normalized_paths.output_dir.clone(),
             capture_root: self.normalized_paths.capture_root.clone(),
             output_paths,
+            pending_capture_outputs,
             downstream_path: self.artifact_path(&self.output_layout.office_idl_excel_om),
             unresolved_fields: self.unresolved_fields.clone(),
             ready_to_run: self.unresolved_fields.is_empty(),
@@ -1520,6 +1538,10 @@ impl fmt::Display for CapturePlanSummary {
         writeln!(f, "output_paths:")?;
         for output_path in &self.output_paths {
             writeln!(f, "  - {}", output_path)?;
+        }
+        writeln!(f, "pending_capture_outputs:")?;
+        for output_name in &self.pending_capture_outputs {
+            writeln!(f, "  - {}", output_name)?;
         }
         writeln!(f, "downstream_path: {}", self.downstream_path)?;
         Ok(())

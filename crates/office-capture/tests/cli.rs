@@ -47,6 +47,16 @@ fn prints_json_summary_when_requested() {
         summary["output_paths"][0],
         "C:\\ootd-capture\\excel-om\\excel_om_windows_capture\\manifest\\capture_manifest.json"
     );
+    assert_eq!(
+        summary["pending_capture_outputs"],
+        serde_json::json!([
+            "raw_typelib_identity.json",
+            "excel_typelib_snapshot.idl",
+            "excel_typelib_snapshot.odl",
+            "excel_pia_identity.json",
+            "excel_pia_public_surface.json"
+        ])
+    );
 }
 
 #[test]
