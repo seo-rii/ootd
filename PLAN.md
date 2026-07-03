@@ -4365,6 +4365,8 @@
   - 범위: embedded chart의 chart rels가 chart XML에서 직접 typed 참조하지 않는 internal `package` relationship으로 `xl/embeddings/oleObjectN.bin` 같은 opaque binary part를 가리키는 경우 style/color support part로 오인하지 않고 chart rels source bytes, embedding part bytes, content type, host worksheet/rels, drawing/chart bytes를 clean save에서 그대로 보존하는지 회귀로 고정
   - `Step 6.6b2b2b2b2b2f2b2bg DONE` chartsheet chart opaque package relationship preservation
   - 범위: chartsheet chart의 chart rels가 chart XML에서 직접 typed 참조하지 않는 internal `package` relationship으로 `xl/embeddings/oleObjectN.bin` 같은 opaque binary part를 가리키는 경우 style/color support part로 오인하지 않고 chart rels source bytes, embedding part bytes, chart sheet host, workbook rels, content type, drawing/chart bytes를 clean save에서 그대로 보존하는지 회귀로 고정
+  - `Step 6.6b2b2b2b2b2f2b2bh DONE` embedded chart opaque image relationship preservation
+  - 범위: embedded chart의 chart rels가 chart XML에서 직접 typed 참조하지 않는 internal image relationship으로 `xl/media/...` image part를 가리키는 경우 style/color support part로 오인하지 않고 chart rels source bytes, media part bytes, content type, host worksheet/rels, drawing/chart bytes를 clean save에서 그대로 보존하는지 회귀로 고정
 - 목표
   - 현재 core worksheet rewrite 이후 남아 있는 fidelity gap을 좁힌다.
   - style/theme/merge/comment/hyperlink/formula cached-value 계열 보존을 순차적으로 올린다.
