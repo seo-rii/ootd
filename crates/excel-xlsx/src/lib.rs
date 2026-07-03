@@ -41233,6 +41233,37 @@ mod tests {
     }
 
     #[test]
+    fn clean_save_preserves_package_part_set() {
+        let codec = XlsxCodec;
+        let input = workbook_with_styles_and_theme_bytes();
+        let original_package = OpcPackage::from_bytes(&input).expect("original package");
+
+        let loaded = codec
+            .load(input.as_slice(), CommonLoadOptions::default())
+            .expect("load workbook");
+        let saved = codec
+            .save(&loaded, office_common::SaveOptions::default())
+            .expect("clean save workbook");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+
+        let original_part_names = original_package
+            .parts()
+            .iter()
+            .map(|part| part.name.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        let saved_part_names = saved_package
+            .parts()
+            .iter()
+            .map(|part| part.name.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+
+        assert_eq!(
+            saved_part_names, original_part_names,
+            "clean save should not add or remove package parts"
+        );
+    }
+
+    #[test]
     fn ensure_support_parts_present_rejects_missing_content_types_part() {
         let codec = XlsxCodec;
         let loaded = codec
