@@ -608,6 +608,11 @@ pub struct ThemePartSummary {
     pub extra_color_scheme_list_great_grandchild_attr_maps:
         Vec<Vec<Vec<Vec<BTreeMap<String, String>>>>>,
     pub extra_color_scheme_list_great_grandchild_texts: Vec<Vec<Vec<Vec<Option<String>>>>>,
+    pub extra_color_scheme_list_great_great_grandchild_names: Vec<Vec<Vec<Vec<Vec<String>>>>>,
+    pub extra_color_scheme_list_great_great_grandchild_attr_maps:
+        Vec<Vec<Vec<Vec<Vec<BTreeMap<String, String>>>>>>,
+    pub extra_color_scheme_list_great_great_grandchild_texts:
+        Vec<Vec<Vec<Vec<Vec<Option<String>>>>>>,
     pub extra_color_scheme_list_text: Option<String>,
     pub custom_color_list_text: Option<String>,
     pub custom_color_list_child_names: Vec<String>,
@@ -10638,6 +10643,12 @@ fn parse_theme_part_summary(theme_xml: &[u8]) -> OmResult<ThemePartSummary> {
         Vec::<Vec<Vec<Vec<BTreeMap<String, String>>>>>::new();
     let mut extra_color_scheme_list_great_grandchild_texts =
         Vec::<Vec<Vec<Vec<Option<String>>>>>::new();
+    let mut extra_color_scheme_list_great_great_grandchild_names =
+        Vec::<Vec<Vec<Vec<Vec<String>>>>>::new();
+    let mut extra_color_scheme_list_great_great_grandchild_attr_maps =
+        Vec::<Vec<Vec<Vec<Vec<BTreeMap<String, String>>>>>>::new();
+    let mut extra_color_scheme_list_great_great_grandchild_texts =
+        Vec::<Vec<Vec<Vec<Vec<Option<String>>>>>>::new();
     let mut extra_color_scheme_list_text = None;
     let mut custom_color_list_text = None;
     let mut custom_color_list_child_names = Vec::<String>::new();
@@ -11152,6 +11163,9 @@ fn parse_theme_part_summary(theme_xml: &[u8]) -> OmResult<ThemePartSummary> {
                     extra_color_scheme_list_great_grandchild_names.push(Vec::new());
                     extra_color_scheme_list_great_grandchild_attr_maps.push(Vec::new());
                     extra_color_scheme_list_great_grandchild_texts.push(Vec::new());
+                    extra_color_scheme_list_great_great_grandchild_names.push(Vec::new());
+                    extra_color_scheme_list_great_great_grandchild_attr_maps.push(Vec::new());
+                    extra_color_scheme_list_great_great_grandchild_texts.push(Vec::new());
                 } else if element_stack.len() == 3
                     && element_stack.first().map(String::as_str) == Some("theme")
                     && element_stack.get(1).map(String::as_str) == Some("extraClrSchemeLst")
@@ -11229,6 +11243,33 @@ fn parse_theme_part_summary(theme_xml: &[u8]) -> OmResult<ThemePartSummary> {
                         })?
                         .push(Vec::new());
                     extra_color_scheme_list_great_grandchild_texts
+                        .last_mut()
+                        .ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "theme part encountered extraClrSchemeLst nested child before extraClrSchemeLst child",
+                            )
+                        })?
+                        .push(Vec::new());
+                    extra_color_scheme_list_great_great_grandchild_names
+                        .last_mut()
+                        .ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "theme part encountered extraClrSchemeLst nested child before extraClrSchemeLst child",
+                            )
+                        })?
+                        .push(Vec::new());
+                    extra_color_scheme_list_great_great_grandchild_attr_maps
+                        .last_mut()
+                        .ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "theme part encountered extraClrSchemeLst nested child before extraClrSchemeLst child",
+                            )
+                        })?
+                        .push(Vec::new());
+                    extra_color_scheme_list_great_great_grandchild_texts
                         .last_mut()
                         .ok_or_else(|| {
                             OmError::new(
@@ -11319,6 +11360,36 @@ fn parse_theme_part_summary(theme_xml: &[u8]) -> OmResult<ThemePartSummary> {
                             )
                         })?
                         .push(Vec::new());
+                    extra_color_scheme_list_great_great_grandchild_names
+                        .last_mut()
+                        .and_then(|nested| nested.last_mut())
+                        .ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "theme part encountered extraClrSchemeLst grandchild before extraClrSchemeLst nested child",
+                            )
+                        })?
+                        .push(Vec::new());
+                    extra_color_scheme_list_great_great_grandchild_attr_maps
+                        .last_mut()
+                        .and_then(|nested| nested.last_mut())
+                        .ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "theme part encountered extraClrSchemeLst grandchild before extraClrSchemeLst nested child",
+                            )
+                        })?
+                        .push(Vec::new());
+                    extra_color_scheme_list_great_great_grandchild_texts
+                        .last_mut()
+                        .and_then(|nested| nested.last_mut())
+                        .ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "theme part encountered extraClrSchemeLst grandchild before extraClrSchemeLst nested child",
+                            )
+                        })?
+                        .push(Vec::new());
                 } else if element_stack.len() == 5
                     && element_stack.first().map(String::as_str) == Some("theme")
                     && element_stack.get(1).map(String::as_str) == Some("extraClrSchemeLst")
@@ -11353,6 +11424,79 @@ fn parse_theme_part_summary(theme_xml: &[u8]) -> OmResult<ThemePartSummary> {
                             OmError::new(
                                 OmErrorCode::InvalidState,
                                 "theme part encountered extraClrSchemeLst great-grandchild before extraClrSchemeLst grandchild",
+                            )
+                        })?
+                        .push(None);
+                    extra_color_scheme_list_great_great_grandchild_names
+                        .last_mut()
+                        .and_then(|nested| nested.last_mut())
+                        .and_then(|grandchildren| grandchildren.last_mut())
+                        .ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "theme part encountered extraClrSchemeLst great-grandchild before extraClrSchemeLst grandchild",
+                            )
+                        })?
+                        .push(Vec::new());
+                    extra_color_scheme_list_great_great_grandchild_attr_maps
+                        .last_mut()
+                        .and_then(|nested| nested.last_mut())
+                        .and_then(|grandchildren| grandchildren.last_mut())
+                        .ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "theme part encountered extraClrSchemeLst great-grandchild before extraClrSchemeLst grandchild",
+                            )
+                        })?
+                        .push(Vec::new());
+                    extra_color_scheme_list_great_great_grandchild_texts
+                        .last_mut()
+                        .and_then(|nested| nested.last_mut())
+                        .and_then(|grandchildren| grandchildren.last_mut())
+                        .ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "theme part encountered extraClrSchemeLst great-grandchild before extraClrSchemeLst grandchild",
+                            )
+                        })?
+                        .push(Vec::new());
+                } else if element_stack.len() == 6
+                    && element_stack.first().map(String::as_str) == Some("theme")
+                    && element_stack.get(1).map(String::as_str) == Some("extraClrSchemeLst")
+                {
+                    extra_color_scheme_list_great_great_grandchild_names
+                        .last_mut()
+                        .and_then(|nested| nested.last_mut())
+                        .and_then(|grandchildren| grandchildren.last_mut())
+                        .and_then(|great_grandchildren| great_grandchildren.last_mut())
+                        .ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "theme part encountered extraClrSchemeLst great-great-grandchild before extraClrSchemeLst great-grandchild",
+                            )
+                        })?
+                        .push(local_name.clone());
+                    extra_color_scheme_list_great_great_grandchild_attr_maps
+                        .last_mut()
+                        .and_then(|nested| nested.last_mut())
+                        .and_then(|grandchildren| grandchildren.last_mut())
+                        .and_then(|great_grandchildren| great_grandchildren.last_mut())
+                        .ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "theme part encountered extraClrSchemeLst great-great-grandchild before extraClrSchemeLst great-grandchild",
+                            )
+                        })?
+                        .push(read_attr_map(&element, reader.decoder())?);
+                    extra_color_scheme_list_great_great_grandchild_texts
+                        .last_mut()
+                        .and_then(|nested| nested.last_mut())
+                        .and_then(|grandchildren| grandchildren.last_mut())
+                        .and_then(|great_grandchildren| great_grandchildren.last_mut())
+                        .ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "theme part encountered extraClrSchemeLst great-great-grandchild before extraClrSchemeLst great-grandchild",
                             )
                         })?
                         .push(None);
@@ -13655,6 +13799,9 @@ fn parse_theme_part_summary(theme_xml: &[u8]) -> OmResult<ThemePartSummary> {
                     extra_color_scheme_list_great_grandchild_names.push(Vec::new());
                     extra_color_scheme_list_great_grandchild_attr_maps.push(Vec::new());
                     extra_color_scheme_list_great_grandchild_texts.push(Vec::new());
+                    extra_color_scheme_list_great_great_grandchild_names.push(Vec::new());
+                    extra_color_scheme_list_great_great_grandchild_attr_maps.push(Vec::new());
+                    extra_color_scheme_list_great_great_grandchild_texts.push(Vec::new());
                 } else if element_stack.len() == 3
                     && element_stack.first().map(String::as_str) == Some("theme")
                     && element_stack.get(1).map(String::as_str) == Some("extraClrSchemeLst")
@@ -13732,6 +13879,33 @@ fn parse_theme_part_summary(theme_xml: &[u8]) -> OmResult<ThemePartSummary> {
                         })?
                         .push(Vec::new());
                     extra_color_scheme_list_great_grandchild_texts
+                        .last_mut()
+                        .ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "theme part encountered extraClrSchemeLst nested child before extraClrSchemeLst child",
+                            )
+                        })?
+                        .push(Vec::new());
+                    extra_color_scheme_list_great_great_grandchild_names
+                        .last_mut()
+                        .ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "theme part encountered extraClrSchemeLst nested child before extraClrSchemeLst child",
+                            )
+                        })?
+                        .push(Vec::new());
+                    extra_color_scheme_list_great_great_grandchild_attr_maps
+                        .last_mut()
+                        .ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "theme part encountered extraClrSchemeLst nested child before extraClrSchemeLst child",
+                            )
+                        })?
+                        .push(Vec::new());
+                    extra_color_scheme_list_great_great_grandchild_texts
                         .last_mut()
                         .ok_or_else(|| {
                             OmError::new(
@@ -13822,6 +13996,36 @@ fn parse_theme_part_summary(theme_xml: &[u8]) -> OmResult<ThemePartSummary> {
                             )
                         })?
                         .push(Vec::new());
+                    extra_color_scheme_list_great_great_grandchild_names
+                        .last_mut()
+                        .and_then(|nested| nested.last_mut())
+                        .ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "theme part encountered extraClrSchemeLst grandchild before extraClrSchemeLst nested child",
+                            )
+                        })?
+                        .push(Vec::new());
+                    extra_color_scheme_list_great_great_grandchild_attr_maps
+                        .last_mut()
+                        .and_then(|nested| nested.last_mut())
+                        .ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "theme part encountered extraClrSchemeLst grandchild before extraClrSchemeLst nested child",
+                            )
+                        })?
+                        .push(Vec::new());
+                    extra_color_scheme_list_great_great_grandchild_texts
+                        .last_mut()
+                        .and_then(|nested| nested.last_mut())
+                        .ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "theme part encountered extraClrSchemeLst grandchild before extraClrSchemeLst nested child",
+                            )
+                        })?
+                        .push(Vec::new());
                 } else if element_stack.len() == 5
                     && element_stack.first().map(String::as_str) == Some("theme")
                     && element_stack.get(1).map(String::as_str) == Some("extraClrSchemeLst")
@@ -13856,6 +14060,85 @@ fn parse_theme_part_summary(theme_xml: &[u8]) -> OmResult<ThemePartSummary> {
                             OmError::new(
                                 OmErrorCode::InvalidState,
                                 "theme part encountered extraClrSchemeLst great-grandchild before extraClrSchemeLst grandchild",
+                            )
+                        })?
+                        .push(None);
+                    extra_color_scheme_list_great_great_grandchild_names
+                        .last_mut()
+                        .and_then(|nested| nested.last_mut())
+                        .and_then(|grandchildren| grandchildren.last_mut())
+                        .ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "theme part encountered extraClrSchemeLst great-grandchild before extraClrSchemeLst grandchild",
+                            )
+                        })?
+                        .push(Vec::new());
+                    extra_color_scheme_list_great_great_grandchild_attr_maps
+                        .last_mut()
+                        .and_then(|nested| nested.last_mut())
+                        .and_then(|grandchildren| grandchildren.last_mut())
+                        .ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "theme part encountered extraClrSchemeLst great-grandchild before extraClrSchemeLst grandchild",
+                            )
+                        })?
+                        .push(Vec::new());
+                    extra_color_scheme_list_great_great_grandchild_texts
+                        .last_mut()
+                        .and_then(|nested| nested.last_mut())
+                        .and_then(|grandchildren| grandchildren.last_mut())
+                        .ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "theme part encountered extraClrSchemeLst great-grandchild before extraClrSchemeLst grandchild",
+                            )
+                        })?
+                        .push(Vec::new());
+                } else if element_stack.len() == 6
+                    && element_stack.first().map(String::as_str) == Some("theme")
+                    && element_stack.get(1).map(String::as_str) == Some("extraClrSchemeLst")
+                {
+                    extra_color_scheme_list_great_great_grandchild_names
+                        .last_mut()
+                        .and_then(|nested| nested.last_mut())
+                        .and_then(|grandchildren| grandchildren.last_mut())
+                        .and_then(|great_grandchildren| great_grandchildren.last_mut())
+                        .ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "theme part encountered extraClrSchemeLst great-great-grandchild before extraClrSchemeLst great-grandchild",
+                            )
+                        })?
+                        .push(
+                            String::from_utf8_lossy(element.name().as_ref())
+                                .rsplit(':')
+                                .next()
+                                .unwrap_or_default()
+                                .to_string(),
+                        );
+                    extra_color_scheme_list_great_great_grandchild_attr_maps
+                        .last_mut()
+                        .and_then(|nested| nested.last_mut())
+                        .and_then(|grandchildren| grandchildren.last_mut())
+                        .and_then(|great_grandchildren| great_grandchildren.last_mut())
+                        .ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "theme part encountered extraClrSchemeLst great-great-grandchild before extraClrSchemeLst great-grandchild",
+                            )
+                        })?
+                        .push(read_attr_map(&element, reader.decoder())?);
+                    extra_color_scheme_list_great_great_grandchild_texts
+                        .last_mut()
+                        .and_then(|nested| nested.last_mut())
+                        .and_then(|grandchildren| grandchildren.last_mut())
+                        .and_then(|great_grandchildren| great_grandchildren.last_mut())
+                        .ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "theme part encountered extraClrSchemeLst great-great-grandchild before extraClrSchemeLst great-grandchild",
                             )
                         })?
                         .push(None);
@@ -15840,6 +16123,27 @@ fn parse_theme_part_summary(theme_xml: &[u8]) -> OmResult<ThemePartSummary> {
                             })?,
                         &content,
                     );
+                } else if element_stack.len() == 7
+                    && element_stack.first().map(String::as_str) == Some("theme")
+                    && element_stack.get(1).map(String::as_str) == Some("extraClrSchemeLst")
+                {
+                    append_extension_list_child_text(
+                        extra_color_scheme_list_great_great_grandchild_texts
+                            .last_mut()
+                            .and_then(|nested| nested.last_mut())
+                            .and_then(|grandchildren| grandchildren.last_mut())
+                            .and_then(|great_grandchildren| great_grandchildren.last_mut())
+                            .and_then(|great_great_grandchildren| {
+                                great_great_grandchildren.last_mut()
+                            })
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "theme part encountered extraClrSchemeLst great-great-grandchild text before extraClrSchemeLst great-great-grandchild",
+                                )
+                            })?,
+                        &content,
+                    );
                 } else if element_stack.len() == 2
                     && element_stack.first().map(String::as_str) == Some("theme")
                     && element_stack.last().map(String::as_str) == Some("extraClrSchemeLst")
@@ -16595,6 +16899,27 @@ fn parse_theme_part_summary(theme_xml: &[u8]) -> OmResult<ThemePartSummary> {
                             })?,
                         &content,
                     );
+                } else if element_stack.len() == 7
+                    && element_stack.first().map(String::as_str) == Some("theme")
+                    && element_stack.get(1).map(String::as_str) == Some("extraClrSchemeLst")
+                {
+                    append_extension_list_child_text(
+                        extra_color_scheme_list_great_great_grandchild_texts
+                            .last_mut()
+                            .and_then(|nested| nested.last_mut())
+                            .and_then(|grandchildren| grandchildren.last_mut())
+                            .and_then(|great_grandchildren| great_grandchildren.last_mut())
+                            .and_then(|great_great_grandchildren| {
+                                great_great_grandchildren.last_mut()
+                            })
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "theme part encountered extraClrSchemeLst great-great-grandchild text before extraClrSchemeLst great-great-grandchild",
+                                )
+                            })?,
+                        &content,
+                    );
                 } else if element_stack.len() == 2
                     && element_stack.first().map(String::as_str) == Some("theme")
                     && element_stack.last().map(String::as_str) == Some("extraClrSchemeLst")
@@ -17089,6 +17414,9 @@ fn parse_theme_part_summary(theme_xml: &[u8]) -> OmResult<ThemePartSummary> {
                     extra_color_scheme_list_great_grandchild_names,
                     extra_color_scheme_list_great_grandchild_attr_maps,
                     extra_color_scheme_list_great_grandchild_texts,
+                    extra_color_scheme_list_great_great_grandchild_names,
+                    extra_color_scheme_list_great_great_grandchild_attr_maps,
+                    extra_color_scheme_list_great_great_grandchild_texts,
                     extra_color_scheme_list_text,
                     custom_color_list_text,
                     custom_color_list_child_names,
@@ -30980,6 +31308,55 @@ mod tests {
         assert_eq!(
             theme_summary.extra_color_scheme_list_great_grandchild_texts,
             vec![vec![vec![vec![None], vec![None]]], vec![vec![vec![None]]]]
+        );
+    }
+
+    #[test]
+    fn load_collects_theme_extra_color_scheme_list_great_great_grandchild_details_in_theme_summary()
+    {
+        let codec = XlsxCodec;
+        let loaded = codec
+            .load(
+                &workbook_with_theme_extra_color_scheme_list_great_great_grandchildren_bytes(),
+                CommonLoadOptions::default(),
+            )
+            .expect("load workbook");
+        let theme_summary = loaded
+            .support_parts
+            .theme_summaries
+            .get("xl/theme/theme1.xml")
+            .expect("typed theme summary");
+
+        assert!(theme_summary.has_extra_color_scheme_list);
+        assert_eq!(
+            theme_summary.extra_color_scheme_list_great_great_grandchild_names,
+            vec![
+                vec![vec![vec![vec!["lumMod".to_string()]], vec![Vec::new()]]],
+                vec![vec![vec![Vec::new()]]],
+            ]
+        );
+        assert_eq!(
+            theme_summary.extra_color_scheme_list_great_great_grandchild_attr_maps,
+            vec![
+                vec![vec![
+                    vec![vec![BTreeMap::from([(
+                        "val".to_string(),
+                        "75000".to_string(),
+                    )])]],
+                    vec![Vec::new()],
+                ]],
+                vec![vec![vec![Vec::new()]]],
+            ]
+        );
+        assert_eq!(
+            theme_summary.extra_color_scheme_list_great_great_grandchild_texts,
+            vec![
+                vec![vec![
+                    vec![vec![Some("alphabeta".to_string())]],
+                    vec![Vec::new()],
+                ]],
+                vec![vec![vec![Vec::new()]]],
+            ]
         );
     }
 
@@ -78414,6 +78791,13 @@ mod tests {
     }
 
     #[test]
+    fn dirty_save_preserves_theme_extra_color_scheme_list_great_great_grandchildren() {
+        assert_dirty_save_preserves_theme_xml_for_mutated_input(
+            workbook_with_theme_extra_color_scheme_list_great_great_grandchildren_bytes(),
+        );
+    }
+
+    #[test]
     fn dirty_save_preserves_theme_extra_color_scheme_list_great_grandchildren_in_theme_xml() {
         assert_dirty_save_preserves_theme_xml_for_mutated_input(
             workbook_with_theme_extra_color_scheme_list_value_children_bytes(),
@@ -107276,6 +107660,48 @@ mod tests {
     }
 
     #[test]
+    fn save_rejects_theme_part_when_extra_color_scheme_list_great_great_grandchild_attrs_drift() {
+        let codec = XlsxCodec;
+        let input = workbook_with_theme_extra_color_scheme_list_great_great_grandchildren_bytes();
+        let mut loaded = codec
+            .load(&input, CommonLoadOptions::default())
+            .expect("load workbook");
+        let sheet_id = loaded.state.worksheets[0].id;
+        let original_theme_xml = String::from_utf8(
+            loaded
+                .package
+                .part("xl/theme/theme1.xml")
+                .expect("theme part")
+                .bytes
+                .clone(),
+        )
+        .expect("theme xml utf8");
+        let theme_xml =
+            original_theme_xml.replace(r#"lumMod val="75000""#, r#"lumMod val="65000""#);
+        assert_ne!(theme_xml, original_theme_xml);
+        loaded
+            .package
+            .replace_part_bytes("xl/theme/theme1.xml", theme_xml.into_bytes())
+            .expect("replace theme part");
+        loaded
+            .state
+            .set_range_values(
+                &office_common::RangeRef::single_cell(WorkbookId(0), sheet_id, 1, 1),
+                &office_common::OmArray::scalar(office_common::OmValue::Number(9.0)),
+            )
+            .expect("set value");
+
+        let error = codec
+            .save(&loaded, office_common::SaveOptions::default())
+            .expect_err(
+                "save should fail when extraClrSchemeLst great-great-grandchild attrs drift",
+            );
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("typed theme summary drifted"));
+        assert!(error.message.contains("xl/theme/theme1.xml"));
+    }
+
+    #[test]
     fn save_rejects_theme_part_when_extra_color_scheme_list_grandchild_text_drifts() {
         let codec = XlsxCodec;
         let input = workbook_with_theme_extra_color_scheme_list_grandchild_text_bytes();
@@ -107393,6 +107819,50 @@ mod tests {
         let error = codec
             .save(&loaded, office_common::SaveOptions::default())
             .expect_err("save should fail when extraClrSchemeLst great-grandchild text drifts");
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("typed theme summary drifted"));
+        assert!(error.message.contains("xl/theme/theme1.xml"));
+    }
+
+    #[test]
+    fn save_rejects_theme_part_when_extra_color_scheme_list_great_great_grandchild_text_drifts() {
+        let codec = XlsxCodec;
+        let input = workbook_with_theme_extra_color_scheme_list_great_great_grandchildren_bytes();
+        let mut loaded = codec
+            .load(&input, CommonLoadOptions::default())
+            .expect("load workbook");
+        let sheet_id = loaded.state.worksheets[0].id;
+        let original_theme_xml = String::from_utf8(
+            loaded
+                .package
+                .part("xl/theme/theme1.xml")
+                .expect("theme part")
+                .bytes
+                .clone(),
+        )
+        .expect("theme xml utf8");
+        let theme_xml = original_theme_xml.replace(
+            ">alpha<![CDATA[beta]]></a:lumMod>",
+            ">changed<![CDATA[beta]]></a:lumMod>",
+        );
+        assert_ne!(theme_xml, original_theme_xml);
+        loaded
+            .package
+            .replace_part_bytes("xl/theme/theme1.xml", theme_xml.into_bytes())
+            .expect("replace theme part");
+        loaded
+            .state
+            .set_range_values(
+                &office_common::RangeRef::single_cell(WorkbookId(0), sheet_id, 1, 1),
+                &office_common::OmArray::scalar(office_common::OmValue::Number(9.0)),
+            )
+            .expect("set value");
+
+        let error = codec
+            .save(&loaded, office_common::SaveOptions::default())
+            .expect_err(
+                "save should fail when extraClrSchemeLst great-great-grandchild text drifts",
+            );
         assert_eq!(error.code, OmErrorCode::InvalidState);
         assert!(error.message.contains("typed theme summary drifted"));
         assert!(error.message.contains("xl/theme/theme1.xml"));
@@ -118672,6 +119142,29 @@ mod tests {
 </a:theme>"#
                     .to_vec(),
             )
+            .expect("replace theme part");
+        package.to_bytes().expect("package bytes")
+    }
+
+    fn workbook_with_theme_extra_color_scheme_list_great_great_grandchildren_bytes() -> Vec<u8> {
+        let mut package = OpcPackage::from_bytes(
+            &workbook_with_theme_extra_color_scheme_list_value_children_bytes(),
+        )
+        .expect("base workbook package");
+        let theme_xml = String::from_utf8(
+            package
+                .part("xl/theme/theme1.xml")
+                .expect("theme part")
+                .bytes
+                .clone(),
+        )
+        .expect("theme xml utf8")
+        .replace(
+            r#"<a:sysClr val="windowText" lastClr="000000"/>"#,
+            r#"<a:sysClr val="windowText" lastClr="000000"><a:lumMod val="75000">alpha<![CDATA[beta]]></a:lumMod></a:sysClr>"#,
+        );
+        package
+            .replace_part_bytes("xl/theme/theme1.xml", theme_xml.into_bytes())
             .expect("replace theme part");
         package.to_bytes().expect("package bytes")
     }
