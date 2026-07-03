@@ -350,8 +350,9 @@
 
 - 현재 위치
   - `Step 6.1`부터 `Step 6.4`까지는 완료됐다.
-  - `Step 6.1`부터 `Step 6.5b2b2c2b2b2b2b2b2b2b2b1`까지와 `Step 6.6a`는 완료됐고, `Step 6.5b2b2c2b2b2b2b2b2b2b2b2`와 `Step 6.6b`가 남아 있다.
-  - 현재 남은 범위는 deeper `style/theme` typed preservation과 hyperlink/comment mutation-aware rewrite다.
+  - `Step 6.5`는 `Step 6.5b2b2c2b2b2b2b2b2b2b2b2b1900`까지 완료됐고, broader style/theme typed preservation만 명시 PENDING으로 남아 있다.
+  - `Step 6.6`은 hyperlink/comment mutation-aware rewrite와 chart/drawing raw graph preservation 회귀를 `Step 6.6b2b2b2b2b2f2b2cj`까지 확장했다.
+  - 현재 남은 범위는 deeper `style/theme` typed preservation과 추가 XLSX fidelity/corpus 확장이다.
 - 세부 단계
   - `Step 6.1 DONE` worksheet rewrite baseline과 raw XML preservation
   - 범위: dirty worksheet save, `mergeCells`, raw row/cell fragment, row/cell opaque payload 보존
