@@ -4307,6 +4307,8 @@
   - 범위: absolute-ref external hyperlink fallback path에서 opaque relationship `rId9`의 `TargetMode` drift를 주입한 뒤, dirty save가 worksheet rels source bytes를 기준으로 `TargetMode="External"`과 opaque type/target/attr를 복구하고 blank anchor `C3`는 reopen 후에도 비물질화 상태를 유지하는지 회귀로 고정
   - `Step 6.6b2b2b2b2b2f2b2ad DONE` worksheet hyperlink fallback opaque relationship extra-attr recovery
   - 범위: absolute-ref external hyperlink fallback path에서 opaque relationship `rId9`의 extra attr drift를 주입한 뒤, dirty save가 worksheet rels source bytes를 기준으로 `data-extra="1"`과 opaque type/target/TargetMode를 복구하고 blank anchor `C3`는 reopen 후에도 비물질화 상태를 유지하는지 회귀로 고정
+  - `Step 6.6b2b2b2b2b2f2b2ae DONE` worksheet hyperlink fallback opaque relationship inner-XML recovery
+  - 범위: absolute-ref external hyperlink fallback path에서 opaque relationship `rId9`의 inner XML drift를 주입한 뒤, dirty save가 worksheet rels source bytes를 기준으로 `<ext preserve="1"/>`과 opaque type/target/TargetMode/attr를 복구하고 blank anchor `C3`는 reopen 후에도 비물질화 상태를 유지하는지 회귀로 고정
 - 목표
   - 현재 core worksheet rewrite 이후 남아 있는 fidelity gap을 좁힌다.
   - style/theme/merge/comment/hyperlink/formula cached-value 계열 보존을 순차적으로 올린다.
