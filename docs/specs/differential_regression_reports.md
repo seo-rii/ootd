@@ -70,6 +70,8 @@ Supported statuses are:
 
 - `caseCount` equals `cases.length`
 - `case.name` is unique within the report
+- case artifact keys and paths are non-empty, and artifact paths are relative
+  paths that stay within the report output root
 - `statusCounts` equals the status histogram reconstructed from `cases`
 - `context` equals the current `SourceRegistrySummary`
 - `profile` equals the registry default profile when using the context-aware

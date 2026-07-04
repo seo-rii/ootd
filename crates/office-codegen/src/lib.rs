@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use office_idl::{
     AccessMode, CaptureMetadata, CaptureOrigin, CaptureOriginKind, ClassDef, EnumDef, EnumValue,
@@ -1369,6 +1369,40 @@ impl DifferentialReport {
                 return Err(DifferentialReportLoadError::Contract {
                     message: format!("differential report duplicate case name {}", case.name),
                 });
+            }
+            for (artifact_key, artifact_path) in &case.artifacts {
+                if artifact_key.is_empty() {
+                    return Err(DifferentialReportLoadError::Contract {
+                        message: format!(
+                            "differential report case {} has empty artifact key",
+                            case.name
+                        ),
+                    });
+                }
+                if artifact_path.is_empty() {
+                    return Err(DifferentialReportLoadError::Contract {
+                        message: format!(
+                            "differential report case {} artifact {} has empty path",
+                            case.name, artifact_key
+                        ),
+                    });
+                }
+                let path = Path::new(artifact_path);
+                if path.is_absolute()
+                    || path.components().any(|component| {
+                        matches!(
+                            component,
+                            Component::ParentDir | Component::RootDir | Component::Prefix(_)
+                        )
+                    })
+                {
+                    return Err(DifferentialReportLoadError::Contract {
+                        message: format!(
+                            "differential report case {} artifact {} path {} must be relative and stay within the output root",
+                            case.name, artifact_key, artifact_path
+                        ),
+                    });
+                }
             }
         }
         let mut expected_counts = DifferentialStatusCounts::default();
