@@ -1516,6 +1516,23 @@ impl DifferentialGateSummary {
                 ),
             });
         }
+        let mut seen_blocking_cases = BTreeSet::new();
+        for blocking_case in &self.blocking_cases {
+            if blocking_case.is_empty() {
+                return Err(DifferentialReportLoadError::Contract {
+                    message: "differential gate blockingCases contained empty case name"
+                        .to_string(),
+                });
+            }
+            if !seen_blocking_cases.insert(blocking_case.clone()) {
+                return Err(DifferentialReportLoadError::Contract {
+                    message: format!(
+                        "differential gate duplicate blocking case {}",
+                        blocking_case
+                    ),
+                });
+            }
+        }
         Ok(())
     }
 

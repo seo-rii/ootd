@@ -120,6 +120,7 @@ Non-blocking statuses are:
 
 - `blockingCaseCount` equals `blockingCases.length`
 - `passed` is true exactly when `blockingCaseCount == 0`
+- `blockingCases` contains non-empty, unique case names
 
 Relevant APIs:
 

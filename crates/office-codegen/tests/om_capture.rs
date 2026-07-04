@@ -812,6 +812,34 @@ fn loads_differential_gate_summary_and_rejects_stale_contract() {
         other => panic!("unexpected error: {other:?}"),
     }
 
+    let mut duplicate_gate = gate.clone();
+    duplicate_gate.blocking_case_count = 2;
+    duplicate_gate
+        .blocking_cases
+        .push("Range.Value2 multi-area".to_string());
+    let duplicate_blocking_case =
+        serde_json::to_string(&duplicate_gate).expect("duplicate gate json");
+    let error = load_differential_gate_from_json(&duplicate_blocking_case)
+        .expect_err("duplicate blocking case should fail");
+    match error {
+        DifferentialReportLoadError::Contract { message } => {
+            assert!(message.contains("duplicate blocking case Range.Value2 multi-area"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    let mut empty_gate = gate.clone();
+    empty_gate.blocking_cases = vec![String::new()];
+    let empty_blocking_case = serde_json::to_string(&empty_gate).expect("empty gate json");
+    let error = load_differential_gate_from_json(&empty_blocking_case)
+        .expect_err("empty blocking case should fail");
+    match error {
+        DifferentialReportLoadError::Contract { message } => {
+            assert!(message.contains("blockingCases contained empty case name"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+
     let mut stale_gate = gate;
     stale_gate.blocking_case_count += 1;
     let write_error = write_differential_gate_to_path(&stale_gate, &path)
@@ -819,6 +847,15 @@ fn loads_differential_gate_summary_and_rejects_stale_contract() {
     match write_error {
         DifferentialReportLoadError::Contract { message } => {
             assert!(message.contains("blockingCaseCount 2"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    let write_error = write_differential_gate_to_path(&duplicate_gate, &path)
+        .expect_err("duplicate blocking case should not write");
+    match write_error {
+        DifferentialReportLoadError::Contract { message } => {
+            assert!(message.contains("duplicate blocking case Range.Value2 multi-area"));
         }
         other => panic!("unexpected error: {other:?}"),
     }

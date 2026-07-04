@@ -4755,6 +4755,8 @@
   - 범위: differential report import/write validation이 `case.name` 중복을 contract error로 거부하도록 추가해 duplicate case가 blocking list, artifact links, status summary에서 하나의 regression identity로 접히거나 모호해지지 않도록 고정
   - `Step 7.55 DONE` codegen differential case artifact reference validation
   - 범위: differential report import/write validation이 case artifact key/path의 empty value와 절대경로 또는 `..` parent traversal path를 contract error로 거부하도록 추가해 downstream CI artifact links가 output root 밖을 가리키거나 빈 logical artifact로 접히지 않도록 고정
+  - `Step 7.56 DONE` codegen differential gate blocking case validation
+  - 범위: differential gate summary import/write validation이 `blockingCases`의 빈 case name과 중복 case name을 contract error로 거부하도록 추가해 standalone gate artifact도 report의 regression identity contract와 동일하게 유지되도록 고정
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.
