@@ -1363,6 +1363,14 @@ impl DifferentialReport {
                 ),
             });
         }
+        let mut seen_case_names = BTreeSet::new();
+        for case in &self.cases {
+            if !seen_case_names.insert(case.name.clone()) {
+                return Err(DifferentialReportLoadError::Contract {
+                    message: format!("differential report duplicate case name {}", case.name),
+                });
+            }
+        }
         let mut expected_counts = DifferentialStatusCounts::default();
         for case in &self.cases {
             expected_counts.record(case.status);

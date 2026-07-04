@@ -4751,6 +4751,8 @@
   - 범위: output root에서 canonical report/gate artifact를 함께 로드하고 source registry context와 gate invariant뿐 아니라 저장된 gate summary가 report-derived gate와 일치하는지 검증하는 API를 추가해 downstream CI job이 drift된 gate artifact를 독립 pass/fail 입력으로 쓰지 못하도록 고정
   - `Step 7.53 DONE` codegen validated differential bundle outcome accessors
   - 범위: 검증된 `DifferentialArtifactBundle`에서 `passed`, `blocking_case_count`, `blocking_cases`를 직접 조회하는 accessor를 추가해 downstream CI job이 raw gate JSON 필드 재해석 없이 output-root import 결과만으로 pass/fail 판단을 수행하도록 고정
+  - `Step 7.54 DONE` codegen differential duplicate case validation
+  - 범위: differential report import/write validation이 `case.name` 중복을 contract error로 거부하도록 추가해 duplicate case가 blocking list, artifact links, status summary에서 하나의 regression identity로 접히거나 모호해지지 않도록 고정
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.
