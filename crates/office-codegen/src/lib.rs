@@ -1551,6 +1551,7 @@ impl DifferentialReport {
         }
         let mut seen_case_names = BTreeSet::new();
         let mut seen_artifact_paths = BTreeSet::new();
+        let mut seen_casefold_artifact_paths = BTreeSet::new();
         for case in &self.cases {
             if is_blank_contract_string(&case.name) {
                 return Err(DifferentialReportLoadError::Contract {
@@ -1750,6 +1751,14 @@ impl DifferentialReport {
                     return Err(DifferentialReportLoadError::Contract {
                         message: format!(
                             "differential report duplicate artifact path {}",
+                            artifact_path
+                        ),
+                    });
+                }
+                if !seen_casefold_artifact_paths.insert(artifact_path.to_ascii_uppercase()) {
+                    return Err(DifferentialReportLoadError::Contract {
+                        message: format!(
+                            "differential report duplicate artifact path {} under ASCII case-insensitive matching",
                             artifact_path
                         ),
                     });

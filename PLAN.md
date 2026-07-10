@@ -4817,6 +4817,8 @@
   - 범위: differential case artifact path validation이 `CON`, `NUL`, `COM1`, `LPT1` 등 Windows reserved device name segment를 extension/case-insensitive contract error로 거부하도록 추가해 platform-dependent artifact path가 CI artifact boundary를 통과하지 못하도록 고정
   - `Step 7.86 DONE` codegen differential artifact trailing-dot segment validation
   - 범위: differential case artifact path validation이 trailing-dot path segment를 contract error로 거부하도록 추가해 Windows/CI artifact 환경에서 `reports/runtime.`이나 `reports./...`가 다른 파일/디렉터리명으로 정규화되어 충돌하는 일을 차단
+  - `Step 7.87 DONE` codegen differential artifact case-insensitive duplicate validation
+  - 범위: differential report validation이 report 전체 artifact path를 exact match뿐 아니라 ASCII case-insensitive match로도 중복 거부하도록 추가해 `reports/Shared.json`과 `reports/shared.json`이 platform-dependent artifact storage에서 같은 파일로 접히지 않도록 고정
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.

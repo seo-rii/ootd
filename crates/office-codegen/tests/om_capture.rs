@@ -2304,6 +2304,66 @@ fn differential_report_rejects_duplicate_case_artifact_paths() {
         other => panic!("unexpected error: {other:?}"),
     }
     assert!(!path.exists());
+
+    let casefold_report = build_differential_report(
+        "Excel",
+        "16.0",
+        "excel_365",
+        vec![
+            DifferentialCaseResult {
+                name: "Application.Name".to_string(),
+                surface: Some("Application".to_string()),
+                member: Some("Name".to_string()),
+                status: DifferentialCaseStatus::Passed,
+                expected: Some("Microsoft Excel".to_string()),
+                actual: Some("Microsoft Excel".to_string()),
+                message: None,
+                artifacts: BTreeMap::from([(
+                    "runtimeTrace".to_string(),
+                    "reports/Shared.json".to_string(),
+                )]),
+            },
+            DifferentialCaseResult {
+                name: "Application.Version".to_string(),
+                surface: Some("Application".to_string()),
+                member: Some("Version".to_string()),
+                status: DifferentialCaseStatus::Passed,
+                expected: Some("16.0".to_string()),
+                actual: Some("16.0".to_string()),
+                message: None,
+                artifacts: BTreeMap::from([(
+                    "oracleTrace".to_string(),
+                    "reports/shared.json".to_string(),
+                )]),
+            },
+        ],
+    );
+    let casefold_json = serde_json::to_string(&casefold_report).expect("casefold report json");
+    let casefold_load_error = load_differential_report_from_json(&casefold_json)
+        .expect_err("case-insensitive duplicate artifact path should fail load");
+    match casefold_load_error {
+        DifferentialReportLoadError::Contract { message } => {
+            assert!(message.contains(
+                "duplicate artifact path reports/shared.json under ASCII case-insensitive matching"
+            ));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    let casefold_path = std::env::temp_dir().join(format!(
+        "ootd-differential-report-casefold-artifact-path-{unique_suffix}.json"
+    ));
+    let casefold_write_error = write_differential_report_to_path(&casefold_report, &casefold_path)
+        .expect_err("case-insensitive duplicate artifact path should fail write");
+    match casefold_write_error {
+        DifferentialReportLoadError::Contract { message } => {
+            assert!(message.contains(
+                "duplicate artifact path reports/shared.json under ASCII case-insensitive matching"
+            ));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+    assert!(!casefold_path.exists());
 }
 
 #[test]
