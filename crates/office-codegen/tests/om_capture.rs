@@ -440,6 +440,14 @@ fn differential_report_rejects_malformed_source_context_shape() {
                 .clear();
             (report, "validationModes was empty")
         },
+        {
+            let mut report = base_report.clone();
+            report.profile = "excel_2021".to_string();
+            (
+                report,
+                "profile excel_2021 did not match context defaultProfile excel_365",
+            )
+        },
     ] {
         let json = serde_json::to_string(&report).expect("report json");
 

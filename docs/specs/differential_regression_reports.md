@@ -81,6 +81,7 @@ Supported statuses are:
   lists do not contain duplicates
 - present `context.enabledCorpusGroups` and `context.validationModes` are
   non-empty, and `enabledCorpusSourceCount` covers the enabled corpus groups
+- when `context` is present, `profile` equals `context.defaultProfile`
 - `context` equals the current `SourceRegistrySummary`
 - `profile` equals the registry default profile when using the context-aware
   gate path

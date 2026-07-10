@@ -1403,6 +1403,14 @@ impl DifferentialReport {
                     message: "differential report context validationModes was empty".to_string(),
                 });
             }
+            if self.profile != context.default_profile {
+                return Err(DifferentialReportLoadError::Contract {
+                    message: format!(
+                        "differential report profile {} did not match context defaultProfile {}",
+                        self.profile, context.default_profile
+                    ),
+                });
+            }
             let mut seen_corpus_groups = BTreeSet::new();
             for group in &context.enabled_corpus_groups {
                 if group.is_empty() {
