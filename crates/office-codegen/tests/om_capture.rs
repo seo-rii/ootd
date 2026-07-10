@@ -1358,6 +1358,64 @@ fn differential_report_rejects_empty_case_surface_or_member() {
 }
 
 #[test]
+fn differential_report_rejects_empty_report_metadata() {
+    for (library, version, profile, expected_message) in [
+        ("", "16.0", "excel_365", "library was empty"),
+        ("Excel", "", "excel_365", "version was empty"),
+        ("Excel", "16.0", "", "profile was empty"),
+    ] {
+        let report = build_differential_report(
+            library,
+            version,
+            profile,
+            vec![DifferentialCaseResult {
+                name: "Application.Version".to_string(),
+                surface: Some("Application".to_string()),
+                member: Some("Version".to_string()),
+                status: DifferentialCaseStatus::Passed,
+                expected: Some("16.0".to_string()),
+                actual: Some("16.0".to_string()),
+                message: None,
+                artifacts: BTreeMap::new(),
+            }],
+        );
+        let json = serde_json::to_string(&report).expect("report json");
+
+        let error = load_differential_report_from_json(&json)
+            .expect_err("empty report metadata should fail load");
+        match error {
+            DifferentialReportLoadError::Contract { message } => {
+                assert!(
+                    message.contains(expected_message),
+                    "{message:?} did not contain {expected_message:?}"
+                );
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "ootd-differential-report-empty-metadata-{unique_suffix}.json"
+        ));
+        let write_error = write_differential_report_to_path(&report, &path)
+            .expect_err("empty report metadata should fail write");
+        match write_error {
+            DifferentialReportLoadError::Contract { message } => {
+                assert!(
+                    message.contains(expected_message),
+                    "{message:?} did not contain {expected_message:?}"
+                );
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+        assert!(!path.exists());
+    }
+}
+
+#[test]
 fn differential_report_rejects_invalid_case_artifact_references() {
     for (artifact_key, artifact_path, expected_message) in [
         ("", "reports/runtime.json", "empty artifact key"),

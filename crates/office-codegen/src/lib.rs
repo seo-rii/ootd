@@ -1354,6 +1354,21 @@ impl DifferentialReport {
     }
 
     pub fn validate(&self) -> Result<(), DifferentialReportLoadError> {
+        if self.library.is_empty() {
+            return Err(DifferentialReportLoadError::Contract {
+                message: "differential report library was empty".to_string(),
+            });
+        }
+        if self.version.is_empty() {
+            return Err(DifferentialReportLoadError::Contract {
+                message: "differential report version was empty".to_string(),
+            });
+        }
+        if self.profile.is_empty() {
+            return Err(DifferentialReportLoadError::Contract {
+                message: "differential report profile was empty".to_string(),
+            });
+        }
         if self.case_count != self.cases.len() {
             return Err(DifferentialReportLoadError::Contract {
                 message: format!(

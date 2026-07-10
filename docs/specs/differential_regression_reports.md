@@ -68,6 +68,7 @@ Supported statuses are:
 
 `office-codegen` validates that:
 
+- `library`, `version`, and `profile` are non-empty
 - `caseCount` equals `cases.length`
 - `case.name` is non-empty and unique within the report
 - present `case.surface` and `case.member` values are non-empty
