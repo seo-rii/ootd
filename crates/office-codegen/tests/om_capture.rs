@@ -921,6 +921,59 @@ fn output_root_writer_rejects_context_mismatch_before_materializing_artifacts() 
     assert!(!expected_paths.gate_summary_path.exists());
 }
 
+#[cfg(unix)]
+#[test]
+fn output_root_writer_rejects_output_root_symlink_before_partial_write() {
+    let registry_toml =
+        fs::read_to_string(repo_root().join("specs/sources.toml")).expect("source registry");
+    let source_summary = summarize_source_registry_toml(&registry_toml).expect("source summary");
+    let report = build_differential_report_with_source_context(
+        "Excel",
+        "16.0",
+        &source_summary,
+        vec![DifferentialCaseResult {
+            name: "Application.Version".to_string(),
+            surface: Some("Application".to_string()),
+            member: Some("Version".to_string()),
+            status: DifferentialCaseStatus::Passed,
+            expected: Some("16.0".to_string()),
+            actual: Some("16.0".to_string()),
+            message: None,
+            artifacts: BTreeMap::new(),
+        }],
+    );
+    let unique_suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time")
+        .as_nanos();
+    let output_root = std::env::temp_dir().join(format!(
+        "ootd-differential-output-root-symlink-root-{unique_suffix}"
+    ));
+    let symlink_target = std::env::temp_dir().join(format!(
+        "ootd-differential-output-root-symlink-root-target-{unique_suffix}"
+    ));
+    fs::create_dir_all(&symlink_target).expect("symlink target");
+    std::os::unix::fs::symlink(&symlink_target, &output_root).expect("output root symlink");
+    let expected_paths = differential_artifact_paths(&symlink_target);
+
+    let error =
+        write_differential_report_and_gate_to_output_root(&report, &source_summary, &output_root)
+            .expect_err("output root symlink should fail before write");
+
+    match error {
+        DifferentialReportLoadError::Contract { message } => {
+            assert!(message.contains("differential output root"));
+            assert!(message.contains("was a symlink"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+    assert!(!expected_paths.report_path.exists());
+    assert!(!expected_paths.gate_summary_path.exists());
+
+    fs::remove_file(output_root).expect("remove output root symlink");
+    fs::remove_dir_all(symlink_target).expect("remove symlink target");
+}
+
 #[test]
 fn output_root_writer_rejects_artifact_directory_before_partial_write() {
     let registry_toml =
@@ -1021,6 +1074,56 @@ fn output_root_writer_rejects_artifact_symlink_before_partial_write() {
     );
 
     fs::remove_dir_all(output_root).expect("remove output root");
+}
+
+#[cfg(unix)]
+#[test]
+fn output_root_loader_rejects_output_root_symlink_as_contract_error() {
+    let registry_toml =
+        fs::read_to_string(repo_root().join("specs/sources.toml")).expect("source registry");
+    let source_summary = summarize_source_registry_toml(&registry_toml).expect("source summary");
+    let report = build_differential_report_with_source_context(
+        "Excel",
+        "16.0",
+        &source_summary,
+        vec![DifferentialCaseResult {
+            name: "Application.Version".to_string(),
+            surface: Some("Application".to_string()),
+            member: Some("Version".to_string()),
+            status: DifferentialCaseStatus::Passed,
+            expected: Some("16.0".to_string()),
+            actual: Some("16.0".to_string()),
+            message: None,
+            artifacts: BTreeMap::new(),
+        }],
+    );
+    let unique_suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time")
+        .as_nanos();
+    let output_root = std::env::temp_dir().join(format!(
+        "ootd-differential-output-root-load-symlink-root-{unique_suffix}"
+    ));
+    let symlink_target = std::env::temp_dir().join(format!(
+        "ootd-differential-output-root-load-symlink-root-target-{unique_suffix}"
+    ));
+    write_differential_report_and_gate_to_output_root(&report, &source_summary, &symlink_target)
+        .expect("write target artifacts");
+    std::os::unix::fs::symlink(&symlink_target, &output_root).expect("output root symlink");
+
+    let error = load_differential_artifacts_from_output_root(&output_root, &source_summary)
+        .expect_err("output root symlink should fail before import");
+
+    match error {
+        DifferentialReportLoadError::Contract { message } => {
+            assert!(message.contains("differential output root"));
+            assert!(message.contains("was a symlink"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    fs::remove_file(output_root).expect("remove output root symlink");
+    fs::remove_dir_all(symlink_target).expect("remove symlink target");
 }
 
 #[test]

@@ -2091,6 +2091,18 @@ pub fn differential_artifact_paths(output_root: impl AsRef<Path>) -> Differentia
 fn preflight_differential_artifact_output_paths(
     paths: &DifferentialArtifactPaths,
 ) -> Result<(), DifferentialReportLoadError> {
+    if paths
+        .output_root_path
+        .symlink_metadata()
+        .is_ok_and(|metadata| metadata.file_type().is_symlink())
+    {
+        return Err(DifferentialReportLoadError::Contract {
+            message: format!(
+                "differential output root {} was a symlink",
+                paths.output_root_path.display()
+            ),
+        });
+    }
     if paths.output_root_path.exists() && !paths.output_root_path.is_dir() {
         return Err(DifferentialReportLoadError::Contract {
             message: format!(
