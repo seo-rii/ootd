@@ -4811,6 +4811,8 @@
   - 범위: output-root report/gate writer와 loader가 output root path가 기존 파일인 경우를 contract error로 거부하는 회귀 테스트를 추가해 artifact root shape 오류가 platform I/O error로 누수되거나 partial artifact write로 이어지지 않도록 고정
   - `Step 7.83 DONE` codegen differential artifact path segment whitespace validation
   - 범위: differential case artifact path validation이 각 path segment의 leading/trailing whitespace를 contract error로 거부하도록 추가해 `reports /...`나 `reports/ trace.json`처럼 눈에 잘 띄지 않는 artifact path drift가 CI artifact boundary를 통과하지 못하도록 고정
+  - `Step 7.84 DONE` codegen differential artifact portable path character validation
+  - 범위: differential case artifact path validation이 Windows-reserved portable path characters와 control character를 contract error로 거부하도록 추가해 `C:/...`, `reports/runtime:trace.json`, `reports/runtime?.json` 같은 platform-dependent artifact path가 CI artifact boundary를 통과하지 못하도록 고정
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.

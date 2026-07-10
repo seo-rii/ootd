@@ -1343,6 +1343,10 @@ fn is_contract_identifier(value: &str) -> bool {
         && chars.all(|character| character.is_ascii_alphanumeric() || character == '_')
 }
 
+fn is_reserved_artifact_path_character(character: char) -> bool {
+    matches!(character, '<' | '>' | ':' | '"' | '|' | '?' | '*') || character.is_control()
+}
+
 impl DifferentialReport {
     pub fn from_cases(
         library: impl Into<String>,
@@ -1638,6 +1642,17 @@ impl DifferentialReport {
                     return Err(DifferentialReportLoadError::Contract {
                         message: format!(
                             "differential report case {} artifact {} path {} contained path segment with leading or trailing whitespace",
+                            case.name, artifact_key, artifact_path
+                        ),
+                    });
+                }
+                if artifact_path
+                    .chars()
+                    .any(is_reserved_artifact_path_character)
+                {
+                    return Err(DifferentialReportLoadError::Contract {
+                        message: format!(
+                            "differential report case {} artifact {} path {} contained reserved portable path character",
                             case.name, artifact_key, artifact_path
                         ),
                     });
