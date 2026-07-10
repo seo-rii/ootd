@@ -160,8 +160,9 @@ context mismatch or path conflicts cannot leave a report-only partial artifact.
 
 Downstream CI can validate a completed output directory with
 `load_differential_artifacts_from_output_root`. That path loads both canonical
-artifacts, validates report context, validates the gate summary, and rejects a
-stored gate summary that differs from the report-derived gate.
+artifacts, preflights canonical artifact paths, validates report context,
+validates the gate summary, and rejects a stored gate summary that differs from
+the report-derived gate.
 The returned bundle exposes `passed()`, `blocking_case_count()`, and
 `blocking_cases()` so CI code can make a pass/fail decision without re-reading
 raw JSON fields.

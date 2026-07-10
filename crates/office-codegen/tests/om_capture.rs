@@ -959,6 +959,52 @@ fn output_root_writer_rejects_artifact_directory_before_partial_write() {
 }
 
 #[test]
+fn output_root_loader_rejects_artifact_directory_as_contract_error() {
+    let registry_toml =
+        fs::read_to_string(repo_root().join("specs/sources.toml")).expect("source registry");
+    let source_summary = summarize_source_registry_toml(&registry_toml).expect("source summary");
+    let report = build_differential_report_with_source_context(
+        "Excel",
+        "16.0",
+        &source_summary,
+        vec![DifferentialCaseResult {
+            name: "Application.Version".to_string(),
+            surface: Some("Application".to_string()),
+            member: Some("Version".to_string()),
+            status: DifferentialCaseStatus::Passed,
+            expected: Some("16.0".to_string()),
+            actual: Some("16.0".to_string()),
+            message: None,
+            artifacts: BTreeMap::new(),
+        }],
+    );
+    let unique_suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time")
+        .as_nanos();
+    let output_root = std::env::temp_dir().join(format!(
+        "ootd-differential-output-root-load-path-preflight-{unique_suffix}"
+    ));
+    let expected_paths = differential_artifact_paths(&output_root);
+    fs::create_dir_all(&output_root).expect("output root");
+    write_differential_report_to_path(&report, &expected_paths.report_path).expect("write report");
+    fs::create_dir_all(&expected_paths.gate_summary_path).expect("gate path directory");
+
+    let error = load_differential_artifacts_from_output_root(&output_root, &source_summary)
+        .expect_err("artifact directory should fail before import");
+
+    match error {
+        DifferentialReportLoadError::Contract { message } => {
+            assert!(message.contains("differential artifact path"));
+            assert!(message.contains("was a directory"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    fs::remove_dir_all(output_root).expect("remove output root");
+}
+
+#[test]
 fn loads_differential_gate_summary_and_rejects_stale_contract() {
     let report = build_differential_report(
         "Excel",

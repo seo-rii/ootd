@@ -1909,6 +1909,30 @@ pub fn differential_artifact_paths(output_root: impl AsRef<Path>) -> Differentia
     DifferentialArtifactPaths::canonical(output_root)
 }
 
+fn preflight_differential_artifact_output_paths(
+    paths: &DifferentialArtifactPaths,
+) -> Result<(), DifferentialReportLoadError> {
+    if paths.output_root_path.exists() && !paths.output_root_path.is_dir() {
+        return Err(DifferentialReportLoadError::Contract {
+            message: format!(
+                "differential output root {} was not a directory",
+                paths.output_root_path.display()
+            ),
+        });
+    }
+    for artifact_path in [&paths.report_path, &paths.gate_summary_path] {
+        if artifact_path.is_dir() {
+            return Err(DifferentialReportLoadError::Contract {
+                message: format!(
+                    "differential artifact path {} was a directory",
+                    artifact_path.display()
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
 pub fn build_differential_report(
     library: impl Into<String>,
     version: impl Into<String>,
@@ -2012,24 +2036,7 @@ pub fn write_differential_report_and_gate_to_output_root(
     let paths = differential_artifact_paths(output_root);
     report.validate()?;
     report.validate_source_context(source_summary)?;
-    if paths.output_root_path.exists() && !paths.output_root_path.is_dir() {
-        return Err(DifferentialReportLoadError::Contract {
-            message: format!(
-                "differential output root {} was not a directory",
-                paths.output_root_path.display()
-            ),
-        });
-    }
-    for artifact_path in [&paths.report_path, &paths.gate_summary_path] {
-        if artifact_path.is_dir() {
-            return Err(DifferentialReportLoadError::Contract {
-                message: format!(
-                    "differential artifact path {} was a directory",
-                    artifact_path.display()
-                ),
-            });
-        }
-    }
+    preflight_differential_artifact_output_paths(&paths)?;
     fs::create_dir_all(&paths.output_root_path)?;
     report.write_json_path(&paths.report_path)?;
     let gate = write_differential_gate_from_report_path_with_source_context(
@@ -2045,6 +2052,7 @@ pub fn load_differential_artifacts_from_output_root(
     source_summary: &SourceRegistrySummary,
 ) -> Result<DifferentialArtifactBundle, DifferentialReportLoadError> {
     let paths = differential_artifact_paths(output_root);
+    preflight_differential_artifact_output_paths(&paths)?;
     let report = load_differential_report_from_path(&paths.report_path)?;
     report.validate_source_context(source_summary)?;
     let gate_summary = load_differential_gate_from_path(&paths.gate_summary_path)?;

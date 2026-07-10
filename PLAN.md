@@ -4777,6 +4777,8 @@
   - 범위: differential report import/write validation이 present `context.defaultProfile`과 report-level `profile` 불일치를 contract error로 거부하도록 추가해 context-aware 경로가 아니어도 artifact 내부 profile provenance가 서로 모순되지 않도록 고정
   - `Step 7.66 DONE` codegen differential output-root path preflight
   - 범위: output-root report/gate writer가 canonical artifact path가 이미 디렉터리인 경우를 파일 쓰기 전에 contract error로 거부하도록 추가해 gate path 충돌이 report-only partial artifact를 남기지 못하도록 고정
+  - `Step 7.67 DONE` codegen differential output-root import path preflight
+  - 범위: output-root import path도 canonical artifact path가 이미 디렉터리인 경우를 report/gate read 전에 contract error로 거부하도록 writer와 동일한 preflight를 공유해 CI artifact path 충돌이 platform I/O error로 누수되지 않도록 고정
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.
