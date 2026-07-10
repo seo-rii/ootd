@@ -1605,6 +1605,14 @@ impl DifferentialReport {
                         ),
                     });
                 }
+                if artifact_path.ends_with('/') || artifact_path.contains("//") {
+                    return Err(DifferentialReportLoadError::Contract {
+                        message: format!(
+                            "differential report case {} artifact {} path {} contained empty path segment",
+                            case.name, artifact_key, artifact_path
+                        ),
+                    });
+                }
                 let path = Path::new(artifact_path);
                 if path.is_absolute()
                     || path.components().any(|component| {

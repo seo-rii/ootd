@@ -1794,6 +1794,16 @@ fn differential_report_rejects_invalid_case_artifact_references() {
         ),
         (
             "runtimeTrace",
+            "reports/",
+            "artifact runtimeTrace path reports/ contained empty path segment",
+        ),
+        (
+            "runtimeTrace",
+            "reports//runtime.json",
+            "artifact runtimeTrace path reports//runtime.json contained empty path segment",
+        ),
+        (
+            "runtimeTrace",
             "/tmp/runtime.json",
             "artifact runtimeTrace path /tmp/runtime.json must be relative",
         ),
