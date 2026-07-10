@@ -2117,6 +2117,16 @@ fn differential_report_rejects_invalid_case_artifact_references() {
         ),
         (
             "runtimeTrace",
+            "reports/runtime.",
+            "artifact runtimeTrace path reports/runtime. contained path segment with trailing dot",
+        ),
+        (
+            "runtimeTrace",
+            "reports./runtime.json",
+            "artifact runtimeTrace path reports./runtime.json contained path segment with trailing dot",
+        ),
+        (
+            "runtimeTrace",
             "C:/runtime.json",
             "artifact runtimeTrace path C:/runtime.json contained reserved portable path character",
         ),

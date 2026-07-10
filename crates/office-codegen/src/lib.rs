@@ -1676,6 +1676,17 @@ impl DifferentialReport {
                     });
                 }
                 if artifact_path
+                    .split('/')
+                    .any(|segment| segment != "." && segment != ".." && segment.ends_with('.'))
+                {
+                    return Err(DifferentialReportLoadError::Contract {
+                        message: format!(
+                            "differential report case {} artifact {} path {} contained path segment with trailing dot",
+                            case.name, artifact_key, artifact_path
+                        ),
+                    });
+                }
+                if artifact_path
                     .chars()
                     .any(is_reserved_artifact_path_character)
                 {
