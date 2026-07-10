@@ -1365,6 +1365,11 @@ impl DifferentialReport {
         }
         let mut seen_case_names = BTreeSet::new();
         for case in &self.cases {
+            if case.name.is_empty() {
+                return Err(DifferentialReportLoadError::Contract {
+                    message: "differential report contained empty case name".to_string(),
+                });
+            }
             if !seen_case_names.insert(case.name.clone()) {
                 return Err(DifferentialReportLoadError::Contract {
                     message: format!("differential report duplicate case name {}", case.name),

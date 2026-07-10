@@ -69,7 +69,7 @@ Supported statuses are:
 `office-codegen` validates that:
 
 - `caseCount` equals `cases.length`
-- `case.name` is unique within the report
+- `case.name` is non-empty and unique within the report
 - case artifact keys and paths are non-empty, and artifact paths are relative
   paths that stay within the report output root
 - `statusCounts` equals the status histogram reconstructed from `cases`
