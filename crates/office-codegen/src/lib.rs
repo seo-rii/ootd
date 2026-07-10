@@ -2050,6 +2050,7 @@ pub fn validate_differential_report_source_context(
     report: &DifferentialReport,
     source_summary: &SourceRegistrySummary,
 ) -> Result<(), DifferentialReportLoadError> {
+    report.validate()?;
     report.validate_source_context(source_summary)
 }
 

@@ -328,6 +328,17 @@ fn validates_differential_report_source_registry_context() {
     validate_differential_report_source_context(&report, &source_summary)
         .expect("matching source context");
 
+    let mut stale_report = report.clone();
+    stale_report.case_count += 1;
+    let error = validate_differential_report_source_context(&stale_report, &source_summary)
+        .expect_err("stale report should fail before context validation");
+    match error {
+        DifferentialReportLoadError::Contract { message } => {
+            assert!(message.contains("caseCount 2 did not match cases length 1"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+
     let report_without_context =
         build_differential_report("Excel", "16.0", "excel_365", report.cases.clone());
     let error =

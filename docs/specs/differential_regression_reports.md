@@ -33,6 +33,8 @@ The report context is derived from `SourceRegistrySummary` and includes:
 
 CI runners should not compute a gate summary from a report that lacks this
 context. Context mismatch is a contract error, not a test failure.
+`validate_differential_report_source_context` validates the report contract
+before comparing the source registry context.
 
 ## Differential Report JSON
 
