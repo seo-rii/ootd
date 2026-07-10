@@ -1729,8 +1729,13 @@ impl DifferentialGateSummary {
                 ),
             });
         }
-        let expected_blocking_count =
-            self.failed_case_count + self.incomplete_oracle_count + self.missing_runtime_count;
+        let expected_blocking_count = self
+            .failed_case_count
+            .checked_add(self.incomplete_oracle_count)
+            .and_then(|count| count.checked_add(self.missing_runtime_count))
+            .ok_or_else(|| DifferentialReportLoadError::Contract {
+                message: "differential gate blocking status counts overflowed".to_string(),
+            })?;
         if self.blocking_case_count != expected_blocking_count {
             return Err(DifferentialReportLoadError::Contract {
                 message: format!(

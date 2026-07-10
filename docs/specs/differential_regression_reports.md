@@ -135,7 +135,7 @@ Non-blocking statuses are:
 - `blockingCaseCount` equals `blockingCases.length`
 - `passed` is true exactly when `blockingCaseCount == 0`
 - `blockingCaseCount` equals `failedCaseCount + incompleteOracleCount +
-  missingRuntimeCount`
+  missingRuntimeCount`, with overflow rejected as a contract error
 - `blockingCases` contains non-blank, trimmed, unique case names
 
 Relevant APIs:
