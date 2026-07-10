@@ -392,6 +392,25 @@ fn differential_report_rejects_malformed_source_context_shape() {
         },
         {
             let mut report = base_report.clone();
+            let context = report.context.as_mut().expect("context");
+            context.enabled_corpus_groups.clear();
+            context.enabled_corpus_source_count = 0;
+            (report, "enabledCorpusGroups was empty")
+        },
+        {
+            let mut report = base_report.clone();
+            report
+                .context
+                .as_mut()
+                .expect("context")
+                .enabled_corpus_source_count = 1;
+            (
+                report,
+                "enabledCorpusSourceCount 1 did not cover enabledCorpusGroups length 4",
+            )
+        },
+        {
+            let mut report = base_report.clone();
             report
                 .context
                 .as_mut()
@@ -399,6 +418,16 @@ fn differential_report_rejects_malformed_source_context_shape() {
                 .validation_modes
                 .push(String::new());
             (report, "validationModes contained empty value")
+        },
+        {
+            let mut report = base_report.clone();
+            report
+                .context
+                .as_mut()
+                .expect("context")
+                .validation_modes
+                .clear();
+            (report, "validationModes was empty")
         },
     ] {
         let json = serde_json::to_string(&report).expect("report json");

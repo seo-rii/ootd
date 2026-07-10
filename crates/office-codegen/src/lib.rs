@@ -1383,6 +1383,26 @@ impl DifferentialReport {
                     });
                 }
             }
+            if context.enabled_corpus_groups.is_empty() {
+                return Err(DifferentialReportLoadError::Contract {
+                    message: "differential report context enabledCorpusGroups was empty"
+                        .to_string(),
+                });
+            }
+            if context.enabled_corpus_source_count < context.enabled_corpus_groups.len() {
+                return Err(DifferentialReportLoadError::Contract {
+                    message: format!(
+                        "differential report context enabledCorpusSourceCount {} did not cover enabledCorpusGroups length {}",
+                        context.enabled_corpus_source_count,
+                        context.enabled_corpus_groups.len()
+                    ),
+                });
+            }
+            if context.validation_modes.is_empty() {
+                return Err(DifferentialReportLoadError::Contract {
+                    message: "differential report context validationModes was empty".to_string(),
+                });
+            }
             let mut seen_corpus_groups = BTreeSet::new();
             for group in &context.enabled_corpus_groups {
                 if group.is_empty() {

@@ -4769,6 +4769,8 @@
   - 범위: differential report import/write validation이 빈 `library`, `version`, `profile` 값을 contract error로 거부하도록 추가해 report provenance와 profile routing metadata가 빈 문자열로 artifact boundary를 통과하지 못하도록 고정
   - `Step 7.62 DONE` codegen differential source context shape validation
   - 범위: differential report import/write validation이 present `context`의 빈 string field, 빈 list entry, 중복 corpus group/validation mode를 contract error로 거부하도록 추가해 source registry 비교 전에도 malformed provenance shape가 artifact boundary를 통과하지 못하도록 고정
+  - `Step 7.63 DONE` codegen differential source context count validation
+  - 범위: differential report import/write validation이 present `context.enabledCorpusGroups`/`context.validationModes` 빈 list와 `enabledCorpusSourceCount < enabledCorpusGroups.len()` count mismatch를 contract error로 거부하도록 추가해 provenance list/count가 서로 모순된 artifact를 source registry 비교 전 단계에서 차단
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.

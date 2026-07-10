@@ -77,6 +77,8 @@ Supported statuses are:
 - `statusCounts` equals the status histogram reconstructed from `cases`
 - present `context` string fields and list entries are non-empty, and context
   lists do not contain duplicates
+- present `context.enabledCorpusGroups` and `context.validationModes` are
+  non-empty, and `enabledCorpusSourceCount` covers the enabled corpus groups
 - `context` equals the current `SourceRegistrySummary`
 - `profile` equals the registry default profile when using the context-aware
   gate path
