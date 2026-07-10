@@ -4775,6 +4775,8 @@
   - 범위: public `validate_differential_report_source_context` API가 source registry context 비교 전에 report `caseCount`/`statusCounts`/shape contract를 검증하도록 강화해 in-memory stale report가 context만 맞다는 이유로 validation path를 통과하지 못하도록 고정
   - `Step 7.65 DONE` codegen differential context profile validation
   - 범위: differential report import/write validation이 present `context.defaultProfile`과 report-level `profile` 불일치를 contract error로 거부하도록 추가해 context-aware 경로가 아니어도 artifact 내부 profile provenance가 서로 모순되지 않도록 고정
+  - `Step 7.66 DONE` codegen differential output-root path preflight
+  - 범위: output-root report/gate writer가 canonical artifact path가 이미 디렉터리인 경우를 파일 쓰기 전에 contract error로 거부하도록 추가해 gate path 충돌이 report-only partial artifact를 남기지 못하도록 고정
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.
