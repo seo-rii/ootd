@@ -82,7 +82,8 @@ Supported statuses are:
   trailing whitespace; artifact paths are non-blank forward-slash relative
   paths without `.`, `..`, empty path segments, or leading/trailing whitespace
   that stay within the report output root under an artifact subdirectory; case
-  artifact paths cannot use canonical differential artifact filenames
+  artifact paths are unique within the report and cannot use canonical
+  differential artifact filenames
 - `statusCounts` equals the status histogram reconstructed from `cases`
 - present `context` string fields and list entries are non-blank, contain no
   leading or trailing whitespace, and context lists do not contain duplicates

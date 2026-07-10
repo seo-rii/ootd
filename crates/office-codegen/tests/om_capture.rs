@@ -1890,6 +1890,70 @@ fn differential_report_rejects_invalid_case_artifact_references() {
 }
 
 #[test]
+fn differential_report_rejects_duplicate_case_artifact_paths() {
+    let report = build_differential_report(
+        "Excel",
+        "16.0",
+        "excel_365",
+        vec![
+            DifferentialCaseResult {
+                name: "Application.Version".to_string(),
+                surface: Some("Application".to_string()),
+                member: Some("Version".to_string()),
+                status: DifferentialCaseStatus::Passed,
+                expected: Some("16.0".to_string()),
+                actual: Some("16.0".to_string()),
+                message: None,
+                artifacts: BTreeMap::from([(
+                    "runtimeTrace".to_string(),
+                    "reports/shared.json".to_string(),
+                )]),
+            },
+            DifferentialCaseResult {
+                name: "Range.Value2".to_string(),
+                surface: Some("Range".to_string()),
+                member: Some("Value2".to_string()),
+                status: DifferentialCaseStatus::Failed,
+                expected: Some("[[1],[2]]".to_string()),
+                actual: Some("1".to_string()),
+                message: Some("runtime collapsed the reference to the first scalar".to_string()),
+                artifacts: BTreeMap::from([(
+                    "oracleTrace".to_string(),
+                    "reports/shared.json".to_string(),
+                )]),
+            },
+        ],
+    );
+    let json = serde_json::to_string(&report).expect("report json");
+
+    let load_error = load_differential_report_from_json(&json)
+        .expect_err("duplicate artifact path should fail load");
+    match load_error {
+        DifferentialReportLoadError::Contract { message } => {
+            assert!(message.contains("duplicate artifact path reports/shared.json"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    let unique_suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time")
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!(
+        "ootd-differential-report-duplicate-artifact-path-{unique_suffix}.json"
+    ));
+    let write_error = write_differential_report_to_path(&report, &path)
+        .expect_err("duplicate artifact path should fail write");
+    match write_error {
+        DifferentialReportLoadError::Contract { message } => {
+            assert!(message.contains("duplicate artifact path reports/shared.json"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+    assert!(!path.exists());
+}
+
+#[test]
 fn differential_report_rejects_untrimmed_contract_strings() {
     let registry_toml =
         fs::read_to_string(repo_root().join("specs/sources.toml")).expect("source registry");

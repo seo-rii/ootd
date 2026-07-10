@@ -4799,6 +4799,8 @@
   - 범위: differential case artifact path validation이 output root 직하 단일 파일명을 contract error로 거부하고 `reports/...`처럼 artifact subdirectory 아래의 portable relative path만 허용하도록 추가해 case 부속 artifact가 canonical artifact namespace와 섞이지 않도록 고정
   - `Step 7.77 DONE` codegen differential artifact key identifier validation
   - 범위: differential case artifact key validation이 ASCII identifier(`[_A-Za-z][_A-Za-z0-9]*`) 형식이 아닌 key를 contract error로 거부하도록 추가해 downstream CI가 artifact map key를 stable machine identifier로 안전하게 사용할 수 있도록 고정
+  - `Step 7.78 DONE` codegen differential duplicate artifact path validation
+  - 범위: differential report validation이 report 전체에서 중복 case artifact path를 contract error로 거부하도록 추가해 여러 case/key가 같은 output-root 파일을 공유하거나 덮어쓰는 artifact ambiguity를 차단
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.

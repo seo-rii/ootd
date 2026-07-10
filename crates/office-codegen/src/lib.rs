@@ -1517,6 +1517,7 @@ impl DifferentialReport {
             });
         }
         let mut seen_case_names = BTreeSet::new();
+        let mut seen_artifact_paths = BTreeSet::new();
         for case in &self.cases {
             if is_blank_contract_string(&case.name) {
                 return Err(DifferentialReportLoadError::Contract {
@@ -1664,6 +1665,14 @@ impl DifferentialReport {
                         message: format!(
                             "differential report case {} artifact {} path {} must be under an artifact subdirectory",
                             case.name, artifact_key, artifact_path
+                        ),
+                    });
+                }
+                if !seen_artifact_paths.insert(artifact_path.clone()) {
+                    return Err(DifferentialReportLoadError::Contract {
+                        message: format!(
+                            "differential report duplicate artifact path {}",
+                            artifact_path
                         ),
                     });
                 }
