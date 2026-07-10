@@ -1121,6 +1121,27 @@ fn loads_differential_gate_summary_and_rejects_stale_contract() {
         }
     }
 
+    let mut untrimmed_gate = gate.clone();
+    untrimmed_gate.blocking_cases = vec![" Range.Value2 multi-area ".to_string()];
+    let untrimmed_blocking_case =
+        serde_json::to_string(&untrimmed_gate).expect("untrimmed gate json");
+    let error = load_differential_gate_from_json(&untrimmed_blocking_case)
+        .expect_err("untrimmed blocking case should fail");
+    match error {
+        DifferentialReportLoadError::Contract { message } => {
+            assert!(message.contains("leading or trailing whitespace"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+    let write_error = write_differential_gate_to_path(&untrimmed_gate, &path)
+        .expect_err("untrimmed blocking case should not write");
+    match write_error {
+        DifferentialReportLoadError::Contract { message } => {
+            assert!(message.contains("leading or trailing whitespace"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+
     let mut stale_gate = gate;
     stale_gate.blocking_case_count += 1;
     let write_error = write_differential_gate_to_path(&stale_gate, &path)
@@ -1746,6 +1767,154 @@ fn differential_report_rejects_invalid_case_artifact_references() {
         ));
         let write_error = write_differential_report_to_path(&report, &path)
             .expect_err("invalid artifact reference should fail write");
+        match write_error {
+            DifferentialReportLoadError::Contract { message } => {
+                assert!(
+                    message.contains(expected_message),
+                    "{message:?} did not contain {expected_message:?}"
+                );
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+        assert!(!path.exists());
+    }
+}
+
+#[test]
+fn differential_report_rejects_untrimmed_contract_strings() {
+    let registry_toml =
+        fs::read_to_string(repo_root().join("specs/sources.toml")).expect("source registry");
+    let source_summary = summarize_source_registry_toml(&registry_toml).expect("source summary");
+    let base_report = build_differential_report_with_source_context(
+        "Excel",
+        "16.0",
+        &source_summary,
+        vec![DifferentialCaseResult {
+            name: "Application.Version".to_string(),
+            surface: Some("Application".to_string()),
+            member: Some("Version".to_string()),
+            status: DifferentialCaseStatus::Passed,
+            expected: Some("16.0".to_string()),
+            actual: Some("16.0".to_string()),
+            message: None,
+            artifacts: BTreeMap::from([(
+                "runtimeTrace".to_string(),
+                "reports/runtime.json".to_string(),
+            )]),
+        }],
+    );
+
+    for (report, expected_message) in [
+        {
+            let mut report = base_report.clone();
+            report.library = " Excel".to_string();
+            (report, "library contained leading or trailing whitespace")
+        },
+        {
+            let mut report = base_report.clone();
+            report.version = "16.0 ".to_string();
+            (report, "version contained leading or trailing whitespace")
+        },
+        {
+            let mut report = base_report.clone();
+            report.profile = " excel_365 ".to_string();
+            (report, "profile contained leading or trailing whitespace")
+        },
+        {
+            let mut report = base_report.clone();
+            report.context.as_mut().expect("context").project_name =
+                " excel-compat-core ".to_string();
+            (
+                report,
+                "context projectName contained leading or trailing whitespace",
+            )
+        },
+        {
+            let mut report = base_report.clone();
+            report
+                .context
+                .as_mut()
+                .expect("context")
+                .enabled_corpus_groups
+                .push(" official_ms".to_string());
+            (
+                report,
+                "enabledCorpusGroups contained value with leading or trailing whitespace",
+            )
+        },
+        {
+            let mut report = base_report.clone();
+            report
+                .context
+                .as_mut()
+                .expect("context")
+                .validation_modes
+                .push("excel_oracle ".to_string());
+            (
+                report,
+                "validationModes contained value with leading or trailing whitespace",
+            )
+        },
+        {
+            let mut report = base_report.clone();
+            report.cases[0].name = " Application.Version".to_string();
+            (report, "case name contained leading or trailing whitespace")
+        },
+        {
+            let mut report = base_report.clone();
+            report.cases[0].surface = Some("Application ".to_string());
+            (report, "surface contained leading or trailing whitespace")
+        },
+        {
+            let mut report = base_report.clone();
+            report.cases[0].member = Some(" Version".to_string());
+            (report, "member contained leading or trailing whitespace")
+        },
+        {
+            let mut report = base_report.clone();
+            report.cases[0].artifacts = BTreeMap::from([(
+                " runtimeTrace".to_string(),
+                "reports/runtime.json".to_string(),
+            )]);
+            (
+                report,
+                "artifact key contained leading or trailing whitespace",
+            )
+        },
+        {
+            let mut report = base_report.clone();
+            report.cases[0].artifacts = BTreeMap::from([(
+                "runtimeTrace".to_string(),
+                "reports/runtime.json ".to_string(),
+            )]);
+            (
+                report,
+                "artifact runtimeTrace path contained leading or trailing whitespace",
+            )
+        },
+    ] {
+        let json = serde_json::to_string(&report).expect("report json");
+        let load_error = load_differential_report_from_json(&json)
+            .expect_err("untrimmed contract string should fail load");
+        match load_error {
+            DifferentialReportLoadError::Contract { message } => {
+                assert!(
+                    message.contains(expected_message),
+                    "{message:?} did not contain {expected_message:?}"
+                );
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "ootd-differential-report-untrimmed-{unique_suffix}.json"
+        ));
+        let write_error = write_differential_report_to_path(&report, &path)
+            .expect_err("untrimmed contract string should fail write");
         match write_error {
             DifferentialReportLoadError::Contract { message } => {
                 assert!(

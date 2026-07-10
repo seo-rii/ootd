@@ -1330,6 +1330,10 @@ fn is_blank_contract_string(value: &str) -> bool {
     value.trim().is_empty()
 }
 
+fn has_surrounding_contract_whitespace(value: &str) -> bool {
+    value.trim() != value
+}
+
 impl DifferentialReport {
     pub fn from_cases(
         library: impl Into<String>,
@@ -1363,14 +1367,32 @@ impl DifferentialReport {
                 message: "differential report library was empty".to_string(),
             });
         }
+        if has_surrounding_contract_whitespace(&self.library) {
+            return Err(DifferentialReportLoadError::Contract {
+                message: "differential report library contained leading or trailing whitespace"
+                    .to_string(),
+            });
+        }
         if is_blank_contract_string(&self.version) {
             return Err(DifferentialReportLoadError::Contract {
                 message: "differential report version was empty".to_string(),
             });
         }
+        if has_surrounding_contract_whitespace(&self.version) {
+            return Err(DifferentialReportLoadError::Contract {
+                message: "differential report version contained leading or trailing whitespace"
+                    .to_string(),
+            });
+        }
         if is_blank_contract_string(&self.profile) {
             return Err(DifferentialReportLoadError::Contract {
                 message: "differential report profile was empty".to_string(),
+            });
+        }
+        if has_surrounding_contract_whitespace(&self.profile) {
+            return Err(DifferentialReportLoadError::Contract {
+                message: "differential report profile contained leading or trailing whitespace"
+                    .to_string(),
             });
         }
         if let Some(context) = self.context.as_ref() {
@@ -1384,6 +1406,13 @@ impl DifferentialReport {
                 if is_blank_contract_string(field_value) {
                     return Err(DifferentialReportLoadError::Contract {
                         message: format!("differential report context {field_name} was empty"),
+                    });
+                }
+                if has_surrounding_contract_whitespace(field_value) {
+                    return Err(DifferentialReportLoadError::Contract {
+                        message: format!(
+                            "differential report context {field_name} contained leading or trailing whitespace"
+                        ),
                     });
                 }
             }
@@ -1424,6 +1453,13 @@ impl DifferentialReport {
                                 .to_string(),
                     });
                 }
+                if has_surrounding_contract_whitespace(group) {
+                    return Err(DifferentialReportLoadError::Contract {
+                        message:
+                            "differential report context enabledCorpusGroups contained value with leading or trailing whitespace"
+                                .to_string(),
+                    });
+                }
                 if !seen_corpus_groups.insert(group.clone()) {
                     return Err(DifferentialReportLoadError::Contract {
                         message: format!(
@@ -1438,6 +1474,13 @@ impl DifferentialReport {
                     return Err(DifferentialReportLoadError::Contract {
                         message:
                             "differential report context validationModes contained empty value"
+                                .to_string(),
+                    });
+                }
+                if has_surrounding_contract_whitespace(mode) {
+                    return Err(DifferentialReportLoadError::Contract {
+                        message:
+                            "differential report context validationModes contained value with leading or trailing whitespace"
                                 .to_string(),
                     });
                 }
@@ -1466,6 +1509,13 @@ impl DifferentialReport {
                     message: "differential report contained empty case name".to_string(),
                 });
             }
+            if has_surrounding_contract_whitespace(&case.name) {
+                return Err(DifferentialReportLoadError::Contract {
+                    message:
+                        "differential report case name contained leading or trailing whitespace"
+                            .to_string(),
+                });
+            }
             if !seen_case_names.insert(case.name.clone()) {
                 return Err(DifferentialReportLoadError::Contract {
                     message: format!("differential report duplicate case name {}", case.name),
@@ -1480,9 +1530,33 @@ impl DifferentialReport {
                     message: format!("differential report case {} has empty surface", case.name),
                 });
             }
+            if case
+                .surface
+                .as_deref()
+                .is_some_and(has_surrounding_contract_whitespace)
+            {
+                return Err(DifferentialReportLoadError::Contract {
+                    message: format!(
+                        "differential report case {} surface contained leading or trailing whitespace",
+                        case.name
+                    ),
+                });
+            }
             if case.member.as_deref().is_some_and(is_blank_contract_string) {
                 return Err(DifferentialReportLoadError::Contract {
                     message: format!("differential report case {} has empty member", case.name),
+                });
+            }
+            if case
+                .member
+                .as_deref()
+                .is_some_and(has_surrounding_contract_whitespace)
+            {
+                return Err(DifferentialReportLoadError::Contract {
+                    message: format!(
+                        "differential report case {} member contained leading or trailing whitespace",
+                        case.name
+                    ),
                 });
             }
             for (artifact_key, artifact_path) in &case.artifacts {
@@ -1494,10 +1568,26 @@ impl DifferentialReport {
                         ),
                     });
                 }
+                if has_surrounding_contract_whitespace(artifact_key) {
+                    return Err(DifferentialReportLoadError::Contract {
+                        message: format!(
+                            "differential report case {} artifact key contained leading or trailing whitespace",
+                            case.name
+                        ),
+                    });
+                }
                 if is_blank_contract_string(artifact_path) {
                     return Err(DifferentialReportLoadError::Contract {
                         message: format!(
                             "differential report case {} artifact {} has empty path",
+                            case.name, artifact_key
+                        ),
+                    });
+                }
+                if has_surrounding_contract_whitespace(artifact_path) {
+                    return Err(DifferentialReportLoadError::Contract {
+                        message: format!(
+                            "differential report case {} artifact {} path contained leading or trailing whitespace",
                             case.name, artifact_key
                         ),
                     });
@@ -1650,6 +1740,13 @@ impl DifferentialGateSummary {
                 return Err(DifferentialReportLoadError::Contract {
                     message: "differential gate blockingCases contained empty case name"
                         .to_string(),
+                });
+            }
+            if has_surrounding_contract_whitespace(blocking_case) {
+                return Err(DifferentialReportLoadError::Contract {
+                    message:
+                        "differential gate blockingCases contained case name with leading or trailing whitespace"
+                            .to_string(),
                 });
             }
             if !seen_blocking_cases.insert(blocking_case.clone()) {
