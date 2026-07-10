@@ -1597,6 +1597,14 @@ impl DifferentialReport {
                         ),
                     });
                 }
+                if artifact_path.contains('\\') {
+                    return Err(DifferentialReportLoadError::Contract {
+                        message: format!(
+                            "differential report case {} artifact {} path {} must use forward slashes",
+                            case.name, artifact_key, artifact_path
+                        ),
+                    });
+                }
                 let path = Path::new(artifact_path);
                 if path.is_absolute()
                     || path.components().any(|component| {

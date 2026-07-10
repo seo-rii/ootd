@@ -4789,6 +4789,8 @@
   - 범위: differential report validation이 빈 `cases` 목록을 contract error로 거부하도록 추가해 oracle/runtime 비교가 한 건도 실행되지 않은 artifact가 자동 pass gate로 해석되지 못하도록 고정
   - `Step 7.72 DONE` codegen differential gate count overflow validation
   - 범위: differential gate validation이 blocking status count 합계(`failedCaseCount + incompleteOracleCount + missingRuntimeCount`)의 `usize` overflow를 contract error로 거부하도록 추가해 malformed JSON artifact가 debug/release별 산술 동작 차이나 panic으로 누수되지 않도록 고정
+  - `Step 7.73 DONE` codegen differential artifact backslash validation
+  - 범위: differential case artifact path validation이 backslash를 contract error로 거부하도록 추가해 Linux CI에서 Windows-style separator/traversal 문자열이 portable relative artifact link로 잘못 통과하지 못하도록 고정
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.

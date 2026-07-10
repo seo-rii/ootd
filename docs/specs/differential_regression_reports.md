@@ -79,8 +79,8 @@ Supported statuses are:
 - present `case.surface` and `case.member` values are non-blank and contain no
   leading or trailing whitespace
 - case artifact keys and paths are non-blank, contain no leading or trailing
-  whitespace, and artifact paths are relative paths without `.` or `..`
-  components that stay within the report output root
+  whitespace, and artifact paths are forward-slash relative paths without `.`
+  or `..` components that stay within the report output root
 - `statusCounts` equals the status histogram reconstructed from `cases`
 - present `context` string fields and list entries are non-blank, contain no
   leading or trailing whitespace, and context lists do not contain duplicates

@@ -1784,6 +1784,16 @@ fn differential_report_rejects_invalid_case_artifact_references() {
         ),
         (
             "runtimeTrace",
+            "reports\\runtime.json",
+            "artifact runtimeTrace path reports\\runtime.json must use forward slashes",
+        ),
+        (
+            "runtimeTrace",
+            "..\\runtime.json",
+            "artifact runtimeTrace path ..\\runtime.json must use forward slashes",
+        ),
+        (
+            "runtimeTrace",
             "/tmp/runtime.json",
             "artifact runtimeTrace path /tmp/runtime.json must be relative",
         ),
