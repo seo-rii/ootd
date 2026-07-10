@@ -812,8 +812,21 @@ fn loads_differential_gate_summary_and_rejects_stale_contract() {
         other => panic!("unexpected error: {other:?}"),
     }
 
+    let stale_blocking_status_count =
+        gate_json.replace(r#""failedCaseCount": 1"#, r#""failedCaseCount": 0"#);
+    let error = load_differential_gate_from_json(&stale_blocking_status_count)
+        .expect_err("stale blocking status count should fail");
+    match error {
+        DifferentialReportLoadError::Contract { message } => {
+            assert!(message.contains("blockingCaseCount 1"));
+            assert!(message.contains("blocking status counts 0"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+
     let mut duplicate_gate = gate.clone();
     duplicate_gate.blocking_case_count = 2;
+    duplicate_gate.failed_case_count = 2;
     duplicate_gate
         .blocking_cases
         .push("Range.Value2 multi-area".to_string());
@@ -847,6 +860,19 @@ fn loads_differential_gate_summary_and_rejects_stale_contract() {
     match write_error {
         DifferentialReportLoadError::Contract { message } => {
             assert!(message.contains("blockingCaseCount 2"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    let mut stale_status_gate = stale_gate.clone();
+    stale_status_gate.blocking_case_count = 1;
+    stale_status_gate.failed_case_count = 0;
+    let write_error = write_differential_gate_to_path(&stale_status_gate, &path)
+        .expect_err("stale blocking status count should not write");
+    match write_error {
+        DifferentialReportLoadError::Contract { message } => {
+            assert!(message.contains("blockingCaseCount 1"));
+            assert!(message.contains("blocking status counts 0"));
         }
         other => panic!("unexpected error: {other:?}"),
     }

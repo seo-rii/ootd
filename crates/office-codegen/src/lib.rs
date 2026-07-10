@@ -1516,6 +1516,16 @@ impl DifferentialGateSummary {
                 ),
             });
         }
+        let expected_blocking_count =
+            self.failed_case_count + self.incomplete_oracle_count + self.missing_runtime_count;
+        if self.blocking_case_count != expected_blocking_count {
+            return Err(DifferentialReportLoadError::Contract {
+                message: format!(
+                    "differential gate blockingCaseCount {} did not match blocking status counts {}",
+                    self.blocking_case_count, expected_blocking_count
+                ),
+            });
+        }
         let mut seen_blocking_cases = BTreeSet::new();
         for blocking_case in &self.blocking_cases {
             if blocking_case.is_empty() {
