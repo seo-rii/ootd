@@ -975,6 +975,54 @@ fn output_root_writer_rejects_output_root_symlink_before_partial_write() {
 }
 
 #[test]
+fn output_root_writer_rejects_output_root_file_before_partial_write() {
+    let registry_toml =
+        fs::read_to_string(repo_root().join("specs/sources.toml")).expect("source registry");
+    let source_summary = summarize_source_registry_toml(&registry_toml).expect("source summary");
+    let report = build_differential_report_with_source_context(
+        "Excel",
+        "16.0",
+        &source_summary,
+        vec![DifferentialCaseResult {
+            name: "Application.Version".to_string(),
+            surface: Some("Application".to_string()),
+            member: Some("Version".to_string()),
+            status: DifferentialCaseStatus::Passed,
+            expected: Some("16.0".to_string()),
+            actual: Some("16.0".to_string()),
+            message: None,
+            artifacts: BTreeMap::new(),
+        }],
+    );
+    let unique_suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time")
+        .as_nanos();
+    let output_root = std::env::temp_dir().join(format!(
+        "ootd-differential-output-root-file-{unique_suffix}"
+    ));
+    fs::write(&output_root, b"not a directory").expect("output root file");
+    let expected_paths = differential_artifact_paths(&output_root);
+
+    let error =
+        write_differential_report_and_gate_to_output_root(&report, &source_summary, &output_root)
+            .expect_err("output root file should fail before write");
+
+    match error {
+        DifferentialReportLoadError::Contract { message } => {
+            assert!(message.contains("differential output root"));
+            assert!(message.contains("was not a directory"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+    assert!(output_root.is_file());
+    assert!(!expected_paths.report_path.exists());
+    assert!(!expected_paths.gate_summary_path.exists());
+
+    fs::remove_file(output_root).expect("remove output root file");
+}
+
+#[test]
 fn output_root_writer_rejects_artifact_directory_before_partial_write() {
     let registry_toml =
         fs::read_to_string(repo_root().join("specs/sources.toml")).expect("source registry");
@@ -1124,6 +1172,34 @@ fn output_root_loader_rejects_output_root_symlink_as_contract_error() {
 
     fs::remove_file(output_root).expect("remove output root symlink");
     fs::remove_dir_all(symlink_target).expect("remove symlink target");
+}
+
+#[test]
+fn output_root_loader_rejects_output_root_file_as_contract_error() {
+    let registry_toml =
+        fs::read_to_string(repo_root().join("specs/sources.toml")).expect("source registry");
+    let source_summary = summarize_source_registry_toml(&registry_toml).expect("source summary");
+    let unique_suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time")
+        .as_nanos();
+    let output_root = std::env::temp_dir().join(format!(
+        "ootd-differential-output-root-load-file-{unique_suffix}"
+    ));
+    fs::write(&output_root, b"not a directory").expect("output root file");
+
+    let error = load_differential_artifacts_from_output_root(&output_root, &source_summary)
+        .expect_err("output root file should fail before import");
+
+    match error {
+        DifferentialReportLoadError::Contract { message } => {
+            assert!(message.contains("differential output root"));
+            assert!(message.contains("was not a directory"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    fs::remove_file(output_root).expect("remove output root file");
 }
 
 #[test]

@@ -4807,6 +4807,8 @@
   - 범위: output-root report/gate writer와 loader가 canonical artifact path symlink를 contract error로 거부하도록 추가해 CI artifact materialization/import가 output root 밖의 파일을 따라가거나 report-only partial artifact를 남기지 못하도록 고정
   - `Step 7.81 DONE` codegen differential output-root symlink preflight
   - 범위: output-root report/gate writer와 loader가 output root 자체가 symlink인 경우를 contract error로 거부하도록 추가해 CI artifact root가 다른 디렉터리로 우회되어 report/gate를 쓰거나 읽지 못하도록 고정
+  - `Step 7.82 DONE` codegen differential output-root file preflight regression
+  - 범위: output-root report/gate writer와 loader가 output root path가 기존 파일인 경우를 contract error로 거부하는 회귀 테스트를 추가해 artifact root shape 오류가 platform I/O error로 누수되거나 partial artifact write로 이어지지 않도록 고정
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.
