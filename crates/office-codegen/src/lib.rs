@@ -1369,6 +1369,55 @@ impl DifferentialReport {
                 message: "differential report profile was empty".to_string(),
             });
         }
+        if let Some(context) = self.context.as_ref() {
+            for (field_name, field_value) in [
+                ("projectName", context.project_name.as_str()),
+                ("defaultProfile", context.default_profile.as_str()),
+                ("defaultMode", context.default_mode.as_str()),
+                ("primaryOmArtifact", context.primary_om_artifact.as_str()),
+                ("primaryOoxmlSource", context.primary_ooxml_source.as_str()),
+            ] {
+                if field_value.is_empty() {
+                    return Err(DifferentialReportLoadError::Contract {
+                        message: format!("differential report context {field_name} was empty"),
+                    });
+                }
+            }
+            let mut seen_corpus_groups = BTreeSet::new();
+            for group in &context.enabled_corpus_groups {
+                if group.is_empty() {
+                    return Err(DifferentialReportLoadError::Contract {
+                        message:
+                            "differential report context enabledCorpusGroups contained empty value"
+                                .to_string(),
+                    });
+                }
+                if !seen_corpus_groups.insert(group.clone()) {
+                    return Err(DifferentialReportLoadError::Contract {
+                        message: format!(
+                            "differential report context duplicate enabled corpus group {group}"
+                        ),
+                    });
+                }
+            }
+            let mut seen_validation_modes = BTreeSet::new();
+            for mode in &context.validation_modes {
+                if mode.is_empty() {
+                    return Err(DifferentialReportLoadError::Contract {
+                        message:
+                            "differential report context validationModes contained empty value"
+                                .to_string(),
+                    });
+                }
+                if !seen_validation_modes.insert(mode.clone()) {
+                    return Err(DifferentialReportLoadError::Contract {
+                        message: format!(
+                            "differential report context duplicate validation mode {mode}"
+                        ),
+                    });
+                }
+            }
+        }
         if self.case_count != self.cases.len() {
             return Err(DifferentialReportLoadError::Contract {
                 message: format!(

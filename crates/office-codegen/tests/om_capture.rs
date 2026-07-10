@@ -354,6 +354,90 @@ fn validates_differential_report_source_registry_context() {
 }
 
 #[test]
+fn differential_report_rejects_malformed_source_context_shape() {
+    let registry_toml =
+        fs::read_to_string(repo_root().join("specs/sources.toml")).expect("source registry");
+    let source_summary = summarize_source_registry_toml(&registry_toml).expect("source summary");
+    let base_report = build_differential_report_with_source_context(
+        "Excel",
+        "16.0",
+        &source_summary,
+        vec![DifferentialCaseResult {
+            name: "Application.Version".to_string(),
+            surface: Some("Application".to_string()),
+            member: Some("Version".to_string()),
+            status: DifferentialCaseStatus::Passed,
+            expected: Some("16.0".to_string()),
+            actual: Some("16.0".to_string()),
+            message: None,
+            artifacts: BTreeMap::new(),
+        }],
+    );
+
+    for (report, expected_message) in [
+        {
+            let mut report = base_report.clone();
+            report.context.as_mut().expect("context").project_name = String::new();
+            (report, "context projectName was empty")
+        },
+        {
+            let mut report = base_report.clone();
+            report
+                .context
+                .as_mut()
+                .expect("context")
+                .enabled_corpus_groups
+                .push("official_ms".to_string());
+            (report, "duplicate enabled corpus group official_ms")
+        },
+        {
+            let mut report = base_report.clone();
+            report
+                .context
+                .as_mut()
+                .expect("context")
+                .validation_modes
+                .push(String::new());
+            (report, "validationModes contained empty value")
+        },
+    ] {
+        let json = serde_json::to_string(&report).expect("report json");
+
+        let error = load_differential_report_from_json(&json)
+            .expect_err("malformed context should fail load");
+        match error {
+            DifferentialReportLoadError::Contract { message } => {
+                assert!(
+                    message.contains(expected_message),
+                    "{message:?} did not contain {expected_message:?}"
+                );
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "ootd-differential-report-malformed-context-{unique_suffix}.json"
+        ));
+        let write_error = write_differential_report_to_path(&report, &path)
+            .expect_err("malformed context should fail write");
+        match write_error {
+            DifferentialReportLoadError::Contract { message } => {
+                assert!(
+                    message.contains(expected_message),
+                    "{message:?} did not contain {expected_message:?}"
+                );
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+        assert!(!path.exists());
+    }
+}
+
+#[test]
 fn summarizes_differential_gate_with_source_registry_context() {
     let registry_toml =
         fs::read_to_string(repo_root().join("specs/sources.toml")).expect("source registry");

@@ -75,6 +75,8 @@ Supported statuses are:
 - case artifact keys and paths are non-empty, and artifact paths are relative
   paths that stay within the report output root
 - `statusCounts` equals the status histogram reconstructed from `cases`
+- present `context` string fields and list entries are non-empty, and context
+  lists do not contain duplicates
 - `context` equals the current `SourceRegistrySummary`
 - `profile` equals the registry default profile when using the context-aware
   gate path
