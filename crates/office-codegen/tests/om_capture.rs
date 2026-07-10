@@ -388,7 +388,7 @@ fn differential_report_rejects_malformed_source_context_shape() {
     for (report, expected_message) in [
         {
             let mut report = base_report.clone();
-            report.context.as_mut().expect("context").project_name = String::new();
+            report.context.as_mut().expect("context").project_name = "   ".to_string();
             (report, "context projectName was empty")
         },
         {
@@ -426,8 +426,18 @@ fn differential_report_rejects_malformed_source_context_shape() {
                 .context
                 .as_mut()
                 .expect("context")
+                .enabled_corpus_groups
+                .push("   ".to_string());
+            (report, "enabledCorpusGroups contained empty value")
+        },
+        {
+            let mut report = base_report.clone();
+            report
+                .context
+                .as_mut()
+                .expect("context")
                 .validation_modes
-                .push(String::new());
+                .push("   ".to_string());
             (report, "validationModes contained empty value")
         },
         {
@@ -1088,16 +1098,27 @@ fn loads_differential_gate_summary_and_rejects_stale_contract() {
         other => panic!("unexpected error: {other:?}"),
     }
 
-    let mut empty_gate = gate.clone();
-    empty_gate.blocking_cases = vec![String::new()];
-    let empty_blocking_case = serde_json::to_string(&empty_gate).expect("empty gate json");
-    let error = load_differential_gate_from_json(&empty_blocking_case)
-        .expect_err("empty blocking case should fail");
-    match error {
-        DifferentialReportLoadError::Contract { message } => {
-            assert!(message.contains("blockingCases contained empty case name"));
+    for blocking_case in ["", "   "] {
+        let mut empty_gate = gate.clone();
+        empty_gate.blocking_cases = vec![blocking_case.to_string()];
+        let empty_blocking_case = serde_json::to_string(&empty_gate).expect("empty gate json");
+        let error = load_differential_gate_from_json(&empty_blocking_case)
+            .expect_err("empty blocking case should fail");
+        match error {
+            DifferentialReportLoadError::Contract { message } => {
+                assert!(message.contains("blockingCases contained empty case name"));
+            }
+            other => panic!("unexpected error: {other:?}"),
         }
-        other => panic!("unexpected error: {other:?}"),
+
+        let write_error = write_differential_gate_to_path(&empty_gate, &path)
+            .expect_err("empty blocking case should not write");
+        match write_error {
+            DifferentialReportLoadError::Contract { message } => {
+                assert!(message.contains("blockingCases contained empty case name"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
     }
 
     let mut stale_gate = gate;
@@ -1473,48 +1494,50 @@ fn differential_report_rejects_duplicate_case_names() {
 
 #[test]
 fn differential_report_rejects_empty_case_names() {
-    let report = build_differential_report(
-        "Excel",
-        "16.0",
-        "excel_365",
-        vec![DifferentialCaseResult {
-            name: String::new(),
-            surface: Some("Application".to_string()),
-            member: Some("Version".to_string()),
-            status: DifferentialCaseStatus::Passed,
-            expected: Some("16.0".to_string()),
-            actual: Some("16.0".to_string()),
-            message: None,
-            artifacts: BTreeMap::new(),
-        }],
-    );
-    let json = serde_json::to_string(&report).expect("report json");
+    for case_name in ["", "   "] {
+        let report = build_differential_report(
+            "Excel",
+            "16.0",
+            "excel_365",
+            vec![DifferentialCaseResult {
+                name: case_name.to_string(),
+                surface: Some("Application".to_string()),
+                member: Some("Version".to_string()),
+                status: DifferentialCaseStatus::Passed,
+                expected: Some("16.0".to_string()),
+                actual: Some("16.0".to_string()),
+                message: None,
+                artifacts: BTreeMap::new(),
+            }],
+        );
+        let json = serde_json::to_string(&report).expect("report json");
 
-    let error =
-        load_differential_report_from_json(&json).expect_err("empty case name should fail load");
-    match error {
-        DifferentialReportLoadError::Contract { message } => {
-            assert!(message.contains("contained empty case name"));
+        let error = load_differential_report_from_json(&json)
+            .expect_err("empty case name should fail load");
+        match error {
+            DifferentialReportLoadError::Contract { message } => {
+                assert!(message.contains("contained empty case name"));
+            }
+            other => panic!("unexpected error: {other:?}"),
         }
-        other => panic!("unexpected error: {other:?}"),
-    }
 
-    let unique_suffix = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system time")
-        .as_nanos();
-    let path = std::env::temp_dir().join(format!(
-        "ootd-differential-report-empty-case-{unique_suffix}.json"
-    ));
-    let write_error = write_differential_report_to_path(&report, &path)
-        .expect_err("empty case name should fail write");
-    match write_error {
-        DifferentialReportLoadError::Contract { message } => {
-            assert!(message.contains("contained empty case name"));
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "ootd-differential-report-empty-case-{unique_suffix}.json"
+        ));
+        let write_error = write_differential_report_to_path(&report, &path)
+            .expect_err("empty case name should fail write");
+        match write_error {
+            DifferentialReportLoadError::Contract { message } => {
+                assert!(message.contains("contained empty case name"));
+            }
+            other => panic!("unexpected error: {other:?}"),
         }
-        other => panic!("unexpected error: {other:?}"),
+        assert!(!path.exists());
     }
-    assert!(!path.exists());
 }
 
 #[test]
@@ -1526,8 +1549,18 @@ fn differential_report_rejects_empty_case_surface_or_member() {
             "empty surface",
         ),
         (
+            Some("   ".to_string()),
+            Some("Version".to_string()),
+            "empty surface",
+        ),
+        (
             Some("Application".to_string()),
             Some(String::new()),
+            "empty member",
+        ),
+        (
+            Some("Application".to_string()),
+            Some("   ".to_string()),
             "empty member",
         ),
     ] {
@@ -1586,8 +1619,11 @@ fn differential_report_rejects_empty_case_surface_or_member() {
 fn differential_report_rejects_empty_report_metadata() {
     for (library, version, profile, expected_message) in [
         ("", "16.0", "excel_365", "library was empty"),
+        ("   ", "16.0", "excel_365", "library was empty"),
         ("Excel", "", "excel_365", "version was empty"),
+        ("Excel", "   ", "excel_365", "version was empty"),
         ("Excel", "16.0", "", "profile was empty"),
+        ("Excel", "16.0", "   ", "profile was empty"),
     ] {
         let report = build_differential_report(
             library,
@@ -1644,7 +1680,13 @@ fn differential_report_rejects_empty_report_metadata() {
 fn differential_report_rejects_invalid_case_artifact_references() {
     for (artifact_key, artifact_path, expected_message) in [
         ("", "reports/runtime.json", "empty artifact key"),
+        ("   ", "reports/runtime.json", "empty artifact key"),
         ("runtimeTrace", "", "artifact runtimeTrace has empty path"),
+        (
+            "runtimeTrace",
+            "   ",
+            "artifact runtimeTrace has empty path",
+        ),
         (
             "runtimeTrace",
             "../runtime.json",

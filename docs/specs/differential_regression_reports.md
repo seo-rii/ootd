@@ -70,14 +70,14 @@ Supported statuses are:
 
 `office-codegen` validates that:
 
-- `library`, `version`, and `profile` are non-empty
+- `library`, `version`, and `profile` are non-blank
 - `caseCount` equals `cases.length`
-- `case.name` is non-empty and unique within the report
-- present `case.surface` and `case.member` values are non-empty
-- case artifact keys and paths are non-empty, and artifact paths are relative
+- `case.name` is non-blank and unique within the report
+- present `case.surface` and `case.member` values are non-blank
+- case artifact keys and paths are non-blank, and artifact paths are relative
   paths without `.` or `..` components that stay within the report output root
 - `statusCounts` equals the status histogram reconstructed from `cases`
-- present `context` string fields and list entries are non-empty, and context
+- present `context` string fields and list entries are non-blank, and context
   lists do not contain duplicates
 - present `context.enabledCorpusGroups` and `context.validationModes` are
   non-empty, and `enabledCorpusSourceCount` covers the enabled corpus groups
@@ -131,7 +131,7 @@ Non-blocking statuses are:
 - `passed` is true exactly when `blockingCaseCount == 0`
 - `blockingCaseCount` equals `failedCaseCount + incompleteOracleCount +
   missingRuntimeCount`
-- `blockingCases` contains non-empty, unique case names
+- `blockingCases` contains non-blank, unique case names
 
 Relevant APIs:
 

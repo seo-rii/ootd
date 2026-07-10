@@ -1326,6 +1326,10 @@ impl DifferentialStatusCounts {
     }
 }
 
+fn is_blank_contract_string(value: &str) -> bool {
+    value.trim().is_empty()
+}
+
 impl DifferentialReport {
     pub fn from_cases(
         library: impl Into<String>,
@@ -1354,17 +1358,17 @@ impl DifferentialReport {
     }
 
     pub fn validate(&self) -> Result<(), DifferentialReportLoadError> {
-        if self.library.is_empty() {
+        if is_blank_contract_string(&self.library) {
             return Err(DifferentialReportLoadError::Contract {
                 message: "differential report library was empty".to_string(),
             });
         }
-        if self.version.is_empty() {
+        if is_blank_contract_string(&self.version) {
             return Err(DifferentialReportLoadError::Contract {
                 message: "differential report version was empty".to_string(),
             });
         }
-        if self.profile.is_empty() {
+        if is_blank_contract_string(&self.profile) {
             return Err(DifferentialReportLoadError::Contract {
                 message: "differential report profile was empty".to_string(),
             });
@@ -1377,7 +1381,7 @@ impl DifferentialReport {
                 ("primaryOmArtifact", context.primary_om_artifact.as_str()),
                 ("primaryOoxmlSource", context.primary_ooxml_source.as_str()),
             ] {
-                if field_value.is_empty() {
+                if is_blank_contract_string(field_value) {
                     return Err(DifferentialReportLoadError::Contract {
                         message: format!("differential report context {field_name} was empty"),
                     });
@@ -1413,7 +1417,7 @@ impl DifferentialReport {
             }
             let mut seen_corpus_groups = BTreeSet::new();
             for group in &context.enabled_corpus_groups {
-                if group.is_empty() {
+                if is_blank_contract_string(group) {
                     return Err(DifferentialReportLoadError::Contract {
                         message:
                             "differential report context enabledCorpusGroups contained empty value"
@@ -1430,7 +1434,7 @@ impl DifferentialReport {
             }
             let mut seen_validation_modes = BTreeSet::new();
             for mode in &context.validation_modes {
-                if mode.is_empty() {
+                if is_blank_contract_string(mode) {
                     return Err(DifferentialReportLoadError::Contract {
                         message:
                             "differential report context validationModes contained empty value"
@@ -1457,7 +1461,7 @@ impl DifferentialReport {
         }
         let mut seen_case_names = BTreeSet::new();
         for case in &self.cases {
-            if case.name.is_empty() {
+            if is_blank_contract_string(&case.name) {
                 return Err(DifferentialReportLoadError::Contract {
                     message: "differential report contained empty case name".to_string(),
                 });
@@ -1467,18 +1471,22 @@ impl DifferentialReport {
                     message: format!("differential report duplicate case name {}", case.name),
                 });
             }
-            if case.surface.as_deref() == Some("") {
+            if case
+                .surface
+                .as_deref()
+                .is_some_and(is_blank_contract_string)
+            {
                 return Err(DifferentialReportLoadError::Contract {
                     message: format!("differential report case {} has empty surface", case.name),
                 });
             }
-            if case.member.as_deref() == Some("") {
+            if case.member.as_deref().is_some_and(is_blank_contract_string) {
                 return Err(DifferentialReportLoadError::Contract {
                     message: format!("differential report case {} has empty member", case.name),
                 });
             }
             for (artifact_key, artifact_path) in &case.artifacts {
-                if artifact_key.is_empty() {
+                if is_blank_contract_string(artifact_key) {
                     return Err(DifferentialReportLoadError::Contract {
                         message: format!(
                             "differential report case {} has empty artifact key",
@@ -1486,7 +1494,7 @@ impl DifferentialReport {
                         ),
                     });
                 }
-                if artifact_path.is_empty() {
+                if is_blank_contract_string(artifact_path) {
                     return Err(DifferentialReportLoadError::Contract {
                         message: format!(
                             "differential report case {} artifact {} has empty path",
@@ -1638,7 +1646,7 @@ impl DifferentialGateSummary {
         }
         let mut seen_blocking_cases = BTreeSet::new();
         for blocking_case in &self.blocking_cases {
-            if blocking_case.is_empty() {
+            if is_blank_contract_string(blocking_case) {
                 return Err(DifferentialReportLoadError::Contract {
                     message: "differential gate blockingCases contained empty case name"
                         .to_string(),
