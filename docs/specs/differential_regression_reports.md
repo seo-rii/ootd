@@ -75,7 +75,7 @@ Supported statuses are:
 - `caseCount` equals `cases.length`
 - `cases` is non-empty
 - `case.name` is non-blank, contains no leading or trailing whitespace, and is
-  unique within the report
+  unique within the report under exact and ASCII case-insensitive matching
 - present `case.surface` and `case.member` values are non-blank and contain no
   leading or trailing whitespace
 - case artifact keys are non-blank ASCII identifiers without leading or
@@ -141,7 +141,8 @@ Non-blocking statuses are:
 - `passed` is true exactly when `blockingCaseCount == 0`
 - `blockingCaseCount` equals `failedCaseCount + incompleteOracleCount +
   missingRuntimeCount`, with overflow rejected as a contract error
-- `blockingCases` contains non-blank, trimmed, unique case names
+- `blockingCases` contains non-blank, trimmed case names that are unique under
+  exact and ASCII case-insensitive matching
 
 Relevant APIs:
 

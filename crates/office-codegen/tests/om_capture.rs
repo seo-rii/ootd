@@ -1399,6 +1399,25 @@ fn loads_differential_gate_summary_and_rejects_stale_contract() {
         other => panic!("unexpected error: {other:?}"),
     }
 
+    let mut casefold_duplicate_gate = gate.clone();
+    casefold_duplicate_gate.blocking_case_count = 2;
+    casefold_duplicate_gate.failed_case_count = 2;
+    casefold_duplicate_gate
+        .blocking_cases
+        .push("range.value2 multi-area".to_string());
+    let casefold_duplicate_blocking_case =
+        serde_json::to_string(&casefold_duplicate_gate).expect("casefold duplicate gate json");
+    let error = load_differential_gate_from_json(&casefold_duplicate_blocking_case)
+        .expect_err("case-insensitive duplicate blocking case should fail");
+    match error {
+        DifferentialReportLoadError::Contract { message } => {
+            assert!(message.contains(
+                "duplicate blocking case range.value2 multi-area under ASCII case-insensitive matching"
+            ));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+
     for blocking_case in ["", "   "] {
         let mut empty_gate = gate.clone();
         empty_gate.blocking_cases = vec![blocking_case.to_string()];
@@ -1472,6 +1491,17 @@ fn loads_differential_gate_summary_and_rejects_stale_contract() {
     match write_error {
         DifferentialReportLoadError::Contract { message } => {
             assert!(message.contains("duplicate blocking case Range.Value2 multi-area"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    let write_error = write_differential_gate_to_path(&casefold_duplicate_gate, &path)
+        .expect_err("case-insensitive duplicate blocking case should not write");
+    match write_error {
+        DifferentialReportLoadError::Contract { message } => {
+            assert!(message.contains(
+                "duplicate blocking case range.value2 multi-area under ASCII case-insensitive matching"
+            ));
         }
         other => panic!("unexpected error: {other:?}"),
     }
@@ -1853,6 +1883,61 @@ fn differential_report_rejects_duplicate_case_names() {
         other => panic!("unexpected error: {other:?}"),
     }
     assert!(!path.exists());
+
+    let casefold_report = build_differential_report(
+        "Excel",
+        "16.0",
+        "excel_365",
+        vec![
+            DifferentialCaseResult {
+                name: "Application.Version".to_string(),
+                surface: Some("Application".to_string()),
+                member: Some("Version".to_string()),
+                status: DifferentialCaseStatus::Passed,
+                expected: Some("16.0".to_string()),
+                actual: Some("16.0".to_string()),
+                message: None,
+                artifacts: BTreeMap::new(),
+            },
+            DifferentialCaseResult {
+                name: "application.version".to_string(),
+                surface: Some("Application".to_string()),
+                member: Some("Version".to_string()),
+                status: DifferentialCaseStatus::Failed,
+                expected: Some("16.0".to_string()),
+                actual: Some("15.0".to_string()),
+                message: Some("wrong version".to_string()),
+                artifacts: BTreeMap::new(),
+            },
+        ],
+    );
+    let casefold_json = serde_json::to_string(&casefold_report).expect("casefold report json");
+
+    let error = load_differential_report_from_json(&casefold_json)
+        .expect_err("case-insensitive duplicate case name should fail load");
+    match error {
+        DifferentialReportLoadError::Contract { message } => {
+            assert!(message.contains(
+                "duplicate case name application.version under ASCII case-insensitive matching"
+            ));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    let casefold_path = std::env::temp_dir().join(format!(
+        "ootd-differential-report-casefold-duplicate-{unique_suffix}.json"
+    ));
+    let write_error = write_differential_report_to_path(&casefold_report, &casefold_path)
+        .expect_err("case-insensitive duplicate case name should fail write");
+    match write_error {
+        DifferentialReportLoadError::Contract { message } => {
+            assert!(message.contains(
+                "duplicate case name application.version under ASCII case-insensitive matching"
+            ));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+    assert!(!casefold_path.exists());
 }
 
 #[test]

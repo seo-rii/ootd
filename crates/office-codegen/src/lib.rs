@@ -1550,6 +1550,7 @@ impl DifferentialReport {
             });
         }
         let mut seen_case_names = BTreeSet::new();
+        let mut seen_casefold_case_names = BTreeSet::new();
         let mut seen_artifact_paths = BTreeSet::new();
         let mut seen_casefold_artifact_paths = BTreeSet::new();
         for case in &self.cases {
@@ -1568,6 +1569,14 @@ impl DifferentialReport {
             if !seen_case_names.insert(case.name.clone()) {
                 return Err(DifferentialReportLoadError::Contract {
                     message: format!("differential report duplicate case name {}", case.name),
+                });
+            }
+            if !seen_casefold_case_names.insert(case.name.to_ascii_uppercase()) {
+                return Err(DifferentialReportLoadError::Contract {
+                    message: format!(
+                        "differential report duplicate case name {} under ASCII case-insensitive matching",
+                        case.name
+                    ),
                 });
             }
             if case
@@ -1892,6 +1901,7 @@ impl DifferentialGateSummary {
             });
         }
         let mut seen_blocking_cases = BTreeSet::new();
+        let mut seen_casefold_blocking_cases = BTreeSet::new();
         for blocking_case in &self.blocking_cases {
             if is_blank_contract_string(blocking_case) {
                 return Err(DifferentialReportLoadError::Contract {
@@ -1910,6 +1920,14 @@ impl DifferentialGateSummary {
                 return Err(DifferentialReportLoadError::Contract {
                     message: format!(
                         "differential gate duplicate blocking case {}",
+                        blocking_case
+                    ),
+                });
+            }
+            if !seen_casefold_blocking_cases.insert(blocking_case.to_ascii_uppercase()) {
+                return Err(DifferentialReportLoadError::Contract {
+                    message: format!(
+                        "differential gate duplicate blocking case {} under ASCII case-insensitive matching",
                         blocking_case
                     ),
                 });
