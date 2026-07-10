@@ -1375,6 +1375,16 @@ impl DifferentialReport {
                     message: format!("differential report duplicate case name {}", case.name),
                 });
             }
+            if case.surface.as_deref() == Some("") {
+                return Err(DifferentialReportLoadError::Contract {
+                    message: format!("differential report case {} has empty surface", case.name),
+                });
+            }
+            if case.member.as_deref() == Some("") {
+                return Err(DifferentialReportLoadError::Contract {
+                    message: format!("differential report case {} has empty member", case.name),
+                });
+            }
             for (artifact_key, artifact_path) in &case.artifacts {
                 if artifact_key.is_empty() {
                     return Err(DifferentialReportLoadError::Contract {

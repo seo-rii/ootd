@@ -4763,6 +4763,8 @@
   - 범위: in-memory differential report에서 gate summary를 만들기 전에 report `caseCount`/`statusCounts` contract를 검증하는 `try_summarize_differential_gate` API를 추가하고 context-aware gate summary 경로도 동일 검증을 거치도록 강화해 stale report object가 file import를 우회해 gate 판정으로 들어가지 못하도록 고정
   - `Step 7.59 DONE` codegen differential case name validation
   - 범위: differential report import/write validation이 빈 `case.name`을 contract error로 거부하도록 추가해 report case identity와 gate `blockingCases` identity contract가 empty string으로 어긋나지 않도록 고정
+  - `Step 7.60 DONE` codegen differential case surface/member validation
+  - 범위: differential report import/write validation이 present-but-empty `case.surface`와 `case.member` 값을 contract error로 거부하도록 추가해 downstream grouping/filtering이 missing field와 empty classification을 서로 다르게 해석하지 않도록 고정
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.
