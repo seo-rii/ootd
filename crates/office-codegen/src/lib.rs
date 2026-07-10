@@ -2100,6 +2100,17 @@ fn preflight_differential_artifact_output_paths(
         });
     }
     for artifact_path in [&paths.report_path, &paths.gate_summary_path] {
+        if artifact_path
+            .symlink_metadata()
+            .is_ok_and(|metadata| metadata.file_type().is_symlink())
+        {
+            return Err(DifferentialReportLoadError::Contract {
+                message: format!(
+                    "differential artifact path {} was a symlink",
+                    artifact_path.display()
+                ),
+            });
+        }
         if artifact_path.is_dir() {
             return Err(DifferentialReportLoadError::Contract {
                 message: format!(

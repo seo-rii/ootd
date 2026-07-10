@@ -4803,6 +4803,8 @@
   - 범위: differential report validation이 report 전체에서 중복 case artifact path를 contract error로 거부하도록 추가해 여러 case/key가 같은 output-root 파일을 공유하거나 덮어쓰는 artifact ambiguity를 차단
   - `Step 7.79 DONE` codegen differential canonical artifact namespace validation
   - 범위: differential case artifact path validation이 `differential_report.json/...`와 `differential_gate_summary.json/...`처럼 canonical artifact filename을 top-level namespace로 쓰는 경로를 contract error로 거부하도록 추가해 case artifact subdirectory가 report/gate 파일 경로와 충돌하지 못하도록 고정
+  - `Step 7.80 DONE` codegen differential canonical artifact symlink preflight
+  - 범위: output-root report/gate writer와 loader가 canonical artifact path symlink를 contract error로 거부하도록 추가해 CI artifact materialization/import가 output root 밖의 파일을 따라가거나 report-only partial artifact를 남기지 못하도록 고정
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.

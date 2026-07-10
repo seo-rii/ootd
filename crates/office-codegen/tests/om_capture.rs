@@ -968,6 +968,61 @@ fn output_root_writer_rejects_artifact_directory_before_partial_write() {
     fs::remove_dir_all(output_root).expect("remove output root");
 }
 
+#[cfg(unix)]
+#[test]
+fn output_root_writer_rejects_artifact_symlink_before_partial_write() {
+    let registry_toml =
+        fs::read_to_string(repo_root().join("specs/sources.toml")).expect("source registry");
+    let source_summary = summarize_source_registry_toml(&registry_toml).expect("source summary");
+    let report = build_differential_report_with_source_context(
+        "Excel",
+        "16.0",
+        &source_summary,
+        vec![DifferentialCaseResult {
+            name: "Application.Version".to_string(),
+            surface: Some("Application".to_string()),
+            member: Some("Version".to_string()),
+            status: DifferentialCaseStatus::Passed,
+            expected: Some("16.0".to_string()),
+            actual: Some("16.0".to_string()),
+            message: None,
+            artifacts: BTreeMap::new(),
+        }],
+    );
+    let unique_suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time")
+        .as_nanos();
+    let output_root = std::env::temp_dir().join(format!(
+        "ootd-differential-output-root-symlink-preflight-{unique_suffix}"
+    ));
+    let expected_paths = differential_artifact_paths(&output_root);
+    fs::create_dir_all(&output_root).expect("output root");
+    let symlink_target = output_root.join("outside-gate-target.json");
+    fs::write(&symlink_target, b"unchanged").expect("write symlink target");
+    std::os::unix::fs::symlink(&symlink_target, &expected_paths.gate_summary_path)
+        .expect("gate path symlink");
+
+    let error =
+        write_differential_report_and_gate_to_output_root(&report, &source_summary, &output_root)
+            .expect_err("artifact symlink should fail before write");
+
+    match error {
+        DifferentialReportLoadError::Contract { message } => {
+            assert!(message.contains("differential artifact path"));
+            assert!(message.contains("was a symlink"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+    assert!(!expected_paths.report_path.exists());
+    assert_eq!(
+        fs::read_to_string(&symlink_target).expect("symlink target"),
+        "unchanged"
+    );
+
+    fs::remove_dir_all(output_root).expect("remove output root");
+}
+
 #[test]
 fn output_root_loader_rejects_artifact_directory_as_contract_error() {
     let registry_toml =
@@ -1007,6 +1062,55 @@ fn output_root_loader_rejects_artifact_directory_as_contract_error() {
         DifferentialReportLoadError::Contract { message } => {
             assert!(message.contains("differential artifact path"));
             assert!(message.contains("was a directory"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    fs::remove_dir_all(output_root).expect("remove output root");
+}
+
+#[cfg(unix)]
+#[test]
+fn output_root_loader_rejects_artifact_symlink_as_contract_error() {
+    let registry_toml =
+        fs::read_to_string(repo_root().join("specs/sources.toml")).expect("source registry");
+    let source_summary = summarize_source_registry_toml(&registry_toml).expect("source summary");
+    let report = build_differential_report_with_source_context(
+        "Excel",
+        "16.0",
+        &source_summary,
+        vec![DifferentialCaseResult {
+            name: "Application.Version".to_string(),
+            surface: Some("Application".to_string()),
+            member: Some("Version".to_string()),
+            status: DifferentialCaseStatus::Passed,
+            expected: Some("16.0".to_string()),
+            actual: Some("16.0".to_string()),
+            message: None,
+            artifacts: BTreeMap::new(),
+        }],
+    );
+    let unique_suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time")
+        .as_nanos();
+    let output_root = std::env::temp_dir().join(format!(
+        "ootd-differential-output-root-load-symlink-preflight-{unique_suffix}"
+    ));
+    let expected_paths = differential_artifact_paths(&output_root);
+    fs::create_dir_all(&output_root).expect("output root");
+    let symlink_target = output_root.join("outside-report-target.json");
+    write_differential_report_to_path(&report, &symlink_target).expect("write symlink target");
+    std::os::unix::fs::symlink(&symlink_target, &expected_paths.report_path)
+        .expect("report path symlink");
+
+    let error = load_differential_artifacts_from_output_root(&output_root, &source_summary)
+        .expect_err("artifact symlink should fail before import");
+
+    match error {
+        DifferentialReportLoadError::Contract { message } => {
+            assert!(message.contains("differential artifact path"));
+            assert!(message.contains("was a symlink"));
         }
         other => panic!("unexpected error: {other:?}"),
     }
