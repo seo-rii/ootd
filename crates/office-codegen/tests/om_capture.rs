@@ -1804,6 +1804,16 @@ fn differential_report_rejects_invalid_case_artifact_references() {
         ),
         (
             "runtimeTrace",
+            "differential_report.json",
+            "artifact runtimeTrace path differential_report.json collided with canonical differential artifact",
+        ),
+        (
+            "runtimeTrace",
+            "differential_gate_summary.json",
+            "artifact runtimeTrace path differential_gate_summary.json collided with canonical differential artifact",
+        ),
+        (
+            "runtimeTrace",
             "/tmp/runtime.json",
             "artifact runtimeTrace path /tmp/runtime.json must be relative",
         ),

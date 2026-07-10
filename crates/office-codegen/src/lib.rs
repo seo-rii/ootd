@@ -1613,6 +1613,16 @@ impl DifferentialReport {
                         ),
                     });
                 }
+                if artifact_path == DIFFERENTIAL_REPORT_ARTIFACT_NAME
+                    || artifact_path == DIFFERENTIAL_GATE_SUMMARY_ARTIFACT_NAME
+                {
+                    return Err(DifferentialReportLoadError::Contract {
+                        message: format!(
+                            "differential report case {} artifact {} path {} collided with canonical differential artifact",
+                            case.name, artifact_key, artifact_path
+                        ),
+                    });
+                }
                 let path = Path::new(artifact_path);
                 if path.is_absolute()
                     || path.components().any(|component| {

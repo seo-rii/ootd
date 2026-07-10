@@ -81,7 +81,8 @@ Supported statuses are:
 - case artifact keys and paths are non-blank, contain no leading or trailing
   whitespace, and artifact paths are forward-slash relative paths without `.`
   or `..` components or empty path segments that stay within the report output
-  root
+  root; case artifact paths cannot use canonical differential artifact
+  filenames
 - `statusCounts` equals the status histogram reconstructed from `cases`
 - present `context` string fields and list entries are non-blank, contain no
   leading or trailing whitespace, and context lists do not contain duplicates
