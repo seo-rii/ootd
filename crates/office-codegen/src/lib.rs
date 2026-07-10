@@ -1502,6 +1502,11 @@ impl DifferentialReport {
                 ),
             });
         }
+        if self.cases.is_empty() {
+            return Err(DifferentialReportLoadError::Contract {
+                message: "differential report cases was empty".to_string(),
+            });
+        }
         let mut seen_case_names = BTreeSet::new();
         for case in &self.cases {
             if is_blank_contract_string(&case.name) {

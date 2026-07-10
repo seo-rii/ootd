@@ -73,6 +73,7 @@ Supported statuses are:
 - `library`, `version`, and `profile` are non-blank and contain no leading or
   trailing whitespace
 - `caseCount` equals `cases.length`
+- `cases` is non-empty
 - `case.name` is non-blank, contains no leading or trailing whitespace, and is
   unique within the report
 - present `case.surface` and `case.member` values are non-blank and contain no

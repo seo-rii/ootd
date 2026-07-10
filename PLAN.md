@@ -4785,6 +4785,8 @@
   - 범위: differential report/gate validation이 metadata, context fields/list entries, case identity/classification, artifact key/path, blocking case name의 whitespace-only 문자열을 contract error로 거부하도록 강화해 JSON artifact boundary에서 실질적으로 빈 provenance와 case identity가 통과하지 못하도록 고정
   - `Step 7.70 DONE` codegen differential trimmed string validation
   - 범위: differential report/gate validation이 metadata, context fields/list entries, case identity/classification, artifact key/path, blocking case name의 leading/trailing whitespace를 contract error로 거부하도록 추가해 눈에 보이지 않는 identity/provenance drift와 duplicate ambiguity가 CI artifact boundary를 통과하지 못하도록 고정
+  - `Step 7.71 DONE` codegen differential empty case set validation
+  - 범위: differential report validation이 빈 `cases` 목록을 contract error로 거부하도록 추가해 oracle/runtime 비교가 한 건도 실행되지 않은 artifact가 자동 pass gate로 해석되지 못하도록 고정
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.
