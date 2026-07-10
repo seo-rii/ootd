@@ -1631,12 +1631,13 @@ impl DifferentialReport {
                         ),
                     });
                 }
-                if artifact_path == DIFFERENTIAL_REPORT_ARTIFACT_NAME
-                    || artifact_path == DIFFERENTIAL_GATE_SUMMARY_ARTIFACT_NAME
+                let first_path_segment = artifact_path.split('/').next().unwrap_or(artifact_path);
+                if first_path_segment == DIFFERENTIAL_REPORT_ARTIFACT_NAME
+                    || first_path_segment == DIFFERENTIAL_GATE_SUMMARY_ARTIFACT_NAME
                 {
                     return Err(DifferentialReportLoadError::Contract {
                         message: format!(
-                            "differential report case {} artifact {} path {} collided with canonical differential artifact",
+                            "differential report case {} artifact {} path {} collided with canonical differential artifact namespace",
                             case.name, artifact_key, artifact_path
                         ),
                     });

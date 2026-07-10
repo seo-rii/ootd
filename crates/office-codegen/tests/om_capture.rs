@@ -1820,12 +1820,22 @@ fn differential_report_rejects_invalid_case_artifact_references() {
         (
             "runtimeTrace",
             "differential_report.json",
-            "artifact runtimeTrace path differential_report.json collided with canonical differential artifact",
+            "artifact runtimeTrace path differential_report.json collided with canonical differential artifact namespace",
         ),
         (
             "runtimeTrace",
             "differential_gate_summary.json",
-            "artifact runtimeTrace path differential_gate_summary.json collided with canonical differential artifact",
+            "artifact runtimeTrace path differential_gate_summary.json collided with canonical differential artifact namespace",
+        ),
+        (
+            "runtimeTrace",
+            "differential_report.json/runtime.json",
+            "artifact runtimeTrace path differential_report.json/runtime.json collided with canonical differential artifact namespace",
+        ),
+        (
+            "runtimeTrace",
+            "differential_gate_summary.json/runtime.json",
+            "artifact runtimeTrace path differential_gate_summary.json/runtime.json collided with canonical differential artifact namespace",
         ),
         (
             "runtimeTrace",
