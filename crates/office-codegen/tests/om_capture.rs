@@ -21,7 +21,7 @@ use office_codegen::{
     summarize_capture_bundle, summarize_differential_gate,
     summarize_differential_gate_with_source_context, summarize_om_sources,
     summarize_om_sources_toml, summarize_source_registry, summarize_source_registry_toml,
-    validate_differential_report_source_context,
+    try_summarize_differential_gate, validate_differential_report_source_context,
     write_differential_gate_from_report_path_with_source_context, write_differential_gate_to_path,
     write_differential_report_and_gate_to_output_root, write_differential_report_to_path,
 };
@@ -388,11 +388,33 @@ fn summarizes_differential_gate_with_source_registry_context() {
 
     let gate = summarize_differential_gate_with_source_context(&report, &source_summary)
         .expect("matching source context should gate");
+    let validated_gate =
+        try_summarize_differential_gate(&report).expect("valid report should summarize gate");
 
     assert!(!gate.passed);
+    assert_eq!(validated_gate, gate);
     assert_eq!(gate.blocking_case_count, 1);
     assert_eq!(gate.blocking_cases, vec!["Chart.SetSourceData".to_string()]);
     assert_eq!(gate.missing_runtime_count, 1);
+
+    let mut stale_report = report.clone();
+    stale_report.case_count += 1;
+    let error = try_summarize_differential_gate(&stale_report)
+        .expect_err("stale report should fail validated gate summary");
+    match error {
+        DifferentialReportLoadError::Contract { message } => {
+            assert!(message.contains("caseCount 3 did not match cases length 2"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+    let error = summarize_differential_gate_with_source_context(&stale_report, &source_summary)
+        .expect_err("stale report should fail context-aware gate summary");
+    match error {
+        DifferentialReportLoadError::Contract { message } => {
+            assert!(message.contains("caseCount 3 did not match cases length 2"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
 
     let report_without_context =
         build_differential_report("Excel", "16.0", "excel_365", report.cases.clone());

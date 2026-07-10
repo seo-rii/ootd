@@ -127,6 +127,7 @@ Non-blocking statuses are:
 Relevant APIs:
 
 - `summarize_differential_gate`
+- `try_summarize_differential_gate`
 - `summarize_differential_gate_with_source_context`
 - `load_differential_gate_from_json`
 - `load_differential_gate_from_path`
@@ -138,6 +139,8 @@ CI should prefer `write_differential_gate_from_report_path_with_source_context`.
 That path loads the report, validates stale report counts, validates source
 registry context, writes the gate summary JSON, and returns the same summary to
 the caller.
+Use `try_summarize_differential_gate` when a runner already has an in-memory
+report and still needs stale count validation before deriving a gate summary.
 
 If the runner owns the output directory, it should prefer
 `write_differential_report_and_gate_to_output_root`. That path writes both
