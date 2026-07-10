@@ -1347,6 +1347,35 @@ fn is_reserved_artifact_path_character(character: char) -> bool {
     matches!(character, '<' | '>' | ':' | '"' | '|' | '?' | '*') || character.is_control()
 }
 
+fn is_reserved_artifact_path_segment(segment: &str) -> bool {
+    let stem = segment.split('.').next().unwrap_or(segment);
+    matches!(
+        stem.to_ascii_uppercase().as_str(),
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
+    )
+}
+
 impl DifferentialReport {
     pub fn from_cases(
         library: impl Into<String>,
@@ -1653,6 +1682,17 @@ impl DifferentialReport {
                     return Err(DifferentialReportLoadError::Contract {
                         message: format!(
                             "differential report case {} artifact {} path {} contained reserved portable path character",
+                            case.name, artifact_key, artifact_path
+                        ),
+                    });
+                }
+                if artifact_path
+                    .split('/')
+                    .any(is_reserved_artifact_path_segment)
+                {
+                    return Err(DifferentialReportLoadError::Contract {
+                        message: format!(
+                            "differential report case {} artifact {} path {} contained reserved portable path segment",
                             case.name, artifact_key, artifact_path
                         ),
                     });

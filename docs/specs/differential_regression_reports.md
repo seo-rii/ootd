@@ -81,10 +81,10 @@ Supported statuses are:
 - case artifact keys are non-blank ASCII identifiers without leading or
   trailing whitespace; artifact paths are non-blank forward-slash relative
   paths without `.`, `..`, empty path segments, Windows-reserved portable path
-  characters, or leading/trailing whitespace on any path segment that stay
-  within the report output root under an artifact subdirectory; case artifact
-  paths are unique within the report and cannot use canonical differential
-  artifact filenames as their top-level namespace
+  characters or device-name segments, or leading/trailing whitespace on any
+  path segment that stay within the report output root under an artifact
+  subdirectory; case artifact paths are unique within the report and cannot use
+  canonical differential artifact filenames as their top-level namespace
 - `statusCounts` equals the status histogram reconstructed from `cases`
 - present `context` string fields and list entries are non-blank, contain no
   leading or trailing whitespace, and context lists do not contain duplicates

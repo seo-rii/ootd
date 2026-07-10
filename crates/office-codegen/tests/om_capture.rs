@@ -2137,6 +2137,21 @@ fn differential_report_rejects_invalid_case_artifact_references() {
         ),
         (
             "runtimeTrace",
+            "reports/CON.json",
+            "artifact runtimeTrace path reports/CON.json contained reserved portable path segment",
+        ),
+        (
+            "runtimeTrace",
+            "reports/nul.json",
+            "artifact runtimeTrace path reports/nul.json contained reserved portable path segment",
+        ),
+        (
+            "runtimeTrace",
+            "reports/COM1/runtime.json",
+            "artifact runtimeTrace path reports/COM1/runtime.json contained reserved portable path segment",
+        ),
+        (
+            "runtimeTrace",
             "differential_report.json",
             "artifact runtimeTrace path differential_report.json collided with canonical differential artifact namespace",
         ),
