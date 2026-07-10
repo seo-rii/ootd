@@ -1334,6 +1334,15 @@ fn has_surrounding_contract_whitespace(value: &str) -> bool {
     value.trim() != value
 }
 
+fn is_contract_identifier(value: &str) -> bool {
+    let mut chars = value.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    (first.is_ascii_alphabetic() || first == '_')
+        && chars.all(|character| character.is_ascii_alphanumeric() || character == '_')
+}
+
 impl DifferentialReport {
     pub fn from_cases(
         library: impl Into<String>,
@@ -1578,6 +1587,14 @@ impl DifferentialReport {
                         message: format!(
                             "differential report case {} artifact key contained leading or trailing whitespace",
                             case.name
+                        ),
+                    });
+                }
+                if !is_contract_identifier(artifact_key) {
+                    return Err(DifferentialReportLoadError::Contract {
+                        message: format!(
+                            "differential report case {} artifact key {} must be an ASCII identifier",
+                            case.name, artifact_key
                         ),
                     });
                 }

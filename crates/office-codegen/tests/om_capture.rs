@@ -1761,6 +1761,21 @@ fn differential_report_rejects_invalid_case_artifact_references() {
     for (artifact_key, artifact_path, expected_message) in [
         ("", "reports/runtime.json", "empty artifact key"),
         ("   ", "reports/runtime.json", "empty artifact key"),
+        (
+            "runtime trace",
+            "reports/runtime.json",
+            "artifact key runtime trace must be an ASCII identifier",
+        ),
+        (
+            "runtime/trace",
+            "reports/runtime.json",
+            "artifact key runtime/trace must be an ASCII identifier",
+        ),
+        (
+            "1runtimeTrace",
+            "reports/runtime.json",
+            "artifact key 1runtimeTrace must be an ASCII identifier",
+        ),
         ("runtimeTrace", "", "artifact runtimeTrace has empty path"),
         (
             "runtimeTrace",
