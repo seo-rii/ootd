@@ -1631,6 +1631,17 @@ impl DifferentialReport {
                         ),
                     });
                 }
+                if artifact_path
+                    .split('/')
+                    .any(has_surrounding_contract_whitespace)
+                {
+                    return Err(DifferentialReportLoadError::Contract {
+                        message: format!(
+                            "differential report case {} artifact {} path {} contained path segment with leading or trailing whitespace",
+                            case.name, artifact_key, artifact_path
+                        ),
+                    });
+                }
                 let first_path_segment = artifact_path.split('/').next().unwrap_or(artifact_path);
                 if first_path_segment == DIFFERENTIAL_REPORT_ARTIFACT_NAME
                     || first_path_segment == DIFFERENTIAL_GATE_SUMMARY_ARTIFACT_NAME

@@ -2102,6 +2102,21 @@ fn differential_report_rejects_invalid_case_artifact_references() {
         ),
         (
             "runtimeTrace",
+            "reports /runtime.json",
+            "artifact runtimeTrace path reports /runtime.json contained path segment with leading or trailing whitespace",
+        ),
+        (
+            "runtimeTrace",
+            "reports/ runtime.json",
+            "artifact runtimeTrace path reports/ runtime.json contained path segment with leading or trailing whitespace",
+        ),
+        (
+            "runtimeTrace",
+            "reports/runtime.json ",
+            "artifact runtimeTrace path contained leading or trailing whitespace",
+        ),
+        (
+            "runtimeTrace",
             "differential_report.json",
             "artifact runtimeTrace path differential_report.json collided with canonical differential artifact namespace",
         ),
