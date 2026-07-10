@@ -1499,7 +1499,10 @@ impl DifferentialReport {
                     || path.components().any(|component| {
                         matches!(
                             component,
-                            Component::ParentDir | Component::RootDir | Component::Prefix(_)
+                            Component::CurDir
+                                | Component::ParentDir
+                                | Component::RootDir
+                                | Component::Prefix(_)
                         )
                     })
                 {

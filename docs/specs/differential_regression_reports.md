@@ -75,7 +75,7 @@ Supported statuses are:
 - `case.name` is non-empty and unique within the report
 - present `case.surface` and `case.member` values are non-empty
 - case artifact keys and paths are non-empty, and artifact paths are relative
-  paths that stay within the report output root
+  paths without `.` or `..` components that stay within the report output root
 - `statusCounts` equals the status histogram reconstructed from `cases`
 - present `context` string fields and list entries are non-empty, and context
   lists do not contain duplicates

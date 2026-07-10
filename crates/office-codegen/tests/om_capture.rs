@@ -1652,6 +1652,16 @@ fn differential_report_rejects_invalid_case_artifact_references() {
         ),
         (
             "runtimeTrace",
+            ".",
+            "artifact runtimeTrace path . must be relative",
+        ),
+        (
+            "runtimeTrace",
+            "./runtime.json",
+            "artifact runtimeTrace path ./runtime.json must be relative",
+        ),
+        (
+            "runtimeTrace",
             "/tmp/runtime.json",
             "artifact runtimeTrace path /tmp/runtime.json must be relative",
         ),
