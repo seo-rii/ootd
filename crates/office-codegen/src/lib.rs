@@ -1642,6 +1642,14 @@ impl DifferentialReport {
                         ),
                     });
                 }
+                if !artifact_path.contains('/') {
+                    return Err(DifferentialReportLoadError::Contract {
+                        message: format!(
+                            "differential report case {} artifact {} path {} must be under an artifact subdirectory",
+                            case.name, artifact_key, artifact_path
+                        ),
+                    });
+                }
             }
         }
         let mut expected_counts = DifferentialStatusCounts::default();
