@@ -93,6 +93,8 @@ Supported statuses are:
   unique within the report under exact and ASCII case-insensitive matching
 - present `case.surface` and `case.member` values are non-blank ASCII
   identifiers without leading or trailing whitespace
+- present `case.expected`, `case.actual`, and `case.message` values are
+  non-blank and contain no leading or trailing whitespace
 - case artifact keys are non-blank ASCII identifiers without leading or
   trailing whitespace and without ASCII case-insensitive collisions within a
   case; artifact paths are non-blank forward-slash relative paths without `.`,

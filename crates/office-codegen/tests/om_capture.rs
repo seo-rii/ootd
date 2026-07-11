@@ -2932,6 +2932,26 @@ fn differential_report_rejects_untrimmed_contract_strings() {
         },
         {
             let mut report = base_report.clone();
+            report.cases[0].expected = Some("".to_string());
+            (report, "expected was empty")
+        },
+        {
+            let mut report = base_report.clone();
+            report.cases[0].actual = Some(" 16.0".to_string());
+            (report, "actual contained leading or trailing whitespace")
+        },
+        {
+            let mut report = base_report.clone();
+            report.cases[0].message = Some(" ".to_string());
+            (report, "message was empty")
+        },
+        {
+            let mut report = base_report.clone();
+            report.cases[0].message = Some(" runtime mismatch ".to_string());
+            (report, "message contained leading or trailing whitespace")
+        },
+        {
+            let mut report = base_report.clone();
             report.cases[0].artifacts = BTreeMap::from([(
                 " runtimeTrace".to_string(),
                 "reports/runtime.json".to_string(),

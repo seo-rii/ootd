@@ -1925,6 +1925,30 @@ impl DifferentialReport {
                     });
                 }
             }
+            for (field_name, field_value) in [
+                ("expected", case.expected.as_deref()),
+                ("actual", case.actual.as_deref()),
+                ("message", case.message.as_deref()),
+            ] {
+                if let Some(field_value) = field_value {
+                    if is_blank_contract_string(field_value) {
+                        return Err(DifferentialReportLoadError::Contract {
+                            message: format!(
+                                "differential report case {} {field_name} was empty",
+                                case.name
+                            ),
+                        });
+                    }
+                    if has_surrounding_contract_whitespace(field_value) {
+                        return Err(DifferentialReportLoadError::Contract {
+                            message: format!(
+                                "differential report case {} {field_name} contained leading or trailing whitespace",
+                                case.name
+                            ),
+                        });
+                    }
+                }
+            }
             let mut seen_casefold_artifact_keys = BTreeSet::new();
             for (artifact_key, artifact_path) in &case.artifacts {
                 if is_blank_contract_string(artifact_key) {
