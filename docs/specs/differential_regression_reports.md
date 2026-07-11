@@ -182,6 +182,8 @@ Non-blocking statuses are:
 - `passed` is true exactly when `blockingCaseCount == 0`
 - `blockingCaseCount` equals `failedCaseCount + incompleteOracleCount +
   missingRuntimeCount`, with overflow rejected as a contract error
+- `unsupportedCaseCount + skippedCaseCount` overflow is rejected as a contract
+  error
 - `blockingCases` contains non-blank, trimmed case names that are unique under
   exact and ASCII case-insensitive matching
 

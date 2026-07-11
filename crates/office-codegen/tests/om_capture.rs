@@ -1876,6 +1876,21 @@ fn loads_differential_gate_summary_and_rejects_stale_contract() {
         other => panic!("unexpected error: {other:?}"),
     }
 
+    let overflow_non_blocking_status_count = gate_json
+        .replace(
+            r#""unsupportedCaseCount": 0"#,
+            &format!(r#""unsupportedCaseCount": {}"#, usize::MAX),
+        )
+        .replace(r#""skippedCaseCount": 0"#, r#""skippedCaseCount": 1"#);
+    let error = load_differential_gate_from_json(&overflow_non_blocking_status_count)
+        .expect_err("overflowing non-blocking status count should fail");
+    match error {
+        DifferentialReportLoadError::Contract { message } => {
+            assert!(message.contains("non-blocking status counts overflowed"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+
     let mut duplicate_gate = gate.clone();
     duplicate_gate.blocking_case_count = 2;
     duplicate_gate.failed_case_count = 2;

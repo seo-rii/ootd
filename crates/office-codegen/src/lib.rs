@@ -2334,6 +2334,11 @@ impl DifferentialGateSummary {
                 ),
             });
         }
+        self.unsupported_case_count
+            .checked_add(self.skipped_case_count)
+            .ok_or_else(|| DifferentialReportLoadError::Contract {
+                message: "differential gate non-blocking status counts overflowed".to_string(),
+            })?;
         let mut seen_blocking_cases = BTreeSet::new();
         let mut seen_casefold_blocking_cases = BTreeSet::new();
         for blocking_case in &self.blocking_cases {
