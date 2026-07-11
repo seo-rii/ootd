@@ -2696,6 +2696,22 @@ fn preflight_differential_json_artifact_path(
             ),
         });
     }
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        if parent
+            .symlink_metadata()
+            .is_ok_and(|metadata| metadata.file_type().is_symlink())
+        {
+            return Err(DifferentialReportLoadError::Contract {
+                message: format!(
+                    "differential artifact parent path {} was a symlink",
+                    parent.display()
+                ),
+            });
+        }
+    }
     Ok(())
 }
 
