@@ -251,6 +251,56 @@ fn source_registry_rejects_malformed_identifier_fields() {
             ),
             "source registry default_profile excel_2019 did not match a profile key",
         ),
+        (
+            registry_toml
+                .replace("synthetic = true", "synthetic = false")
+                .replace("real_world = true", "real_world = false")
+                .replace("enabled = true", "enabled = false"),
+            "source registry enabled corpus groups was empty",
+        ),
+        (
+            registry_toml
+                .replace(
+                    "office_scripts_samples = true",
+                    "office_scripts_samples = false",
+                )
+                .replace(
+                    "data_validation_examples = true",
+                    "data_validation_examples = false",
+                )
+                .replace(
+                    "power_bi_financial_sample = true",
+                    "power_bi_financial_sample = false",
+                )
+                .replace(
+                    "mos_excel_course_materials = true",
+                    "mos_excel_course_materials = false",
+                )
+                .replace(
+                    "mos_excel_expert_course_materials = true",
+                    "mos_excel_expert_course_materials = false",
+                )
+                .replace("open_xml_sdk = true", "open_xml_sdk = false")
+                .replace(
+                    "apache_poi_test_data = true",
+                    "apache_poi_test_data = false",
+                )
+                .replace(
+                    "libreoffice_sc_qa_unit_data = true",
+                    "libreoffice_sc_qa_unit_data = false",
+                )
+                .replace("synthetic = true", "synthetic = false")
+                .replace("real_world = true", "real_world = false"),
+            "source registry enabled corpus source count 0 did not cover enabled corpus groups length 2",
+        ),
+        (
+            registry_toml
+                .replace("openxml_validator = true", "openxml_validator = false")
+                .replace("excel_oracle = true", "excel_oracle = false")
+                .replace("render_snapshot = true", "render_snapshot = false")
+                .replace("fuzz = true", "fuzz = false"),
+            "source registry validation modes was empty",
+        ),
     ] {
         let error = summarize_source_registry_toml(&malformed_toml)
             .expect_err("malformed source registry should fail");

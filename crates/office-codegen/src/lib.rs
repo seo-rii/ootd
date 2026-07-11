@@ -1439,6 +1439,27 @@ fn validate_source_registry_manifest(
         });
     }
 
+    let summary = SourceRegistrySummary::from_manifest(manifest);
+    if summary.enabled_corpus_groups.is_empty() {
+        return Err(OmSourcesLoadError::Contract {
+            message: "source registry enabled corpus groups was empty".to_string(),
+        });
+    }
+    if summary.enabled_corpus_source_count < summary.enabled_corpus_groups.len() {
+        return Err(OmSourcesLoadError::Contract {
+            message: format!(
+                "source registry enabled corpus source count {} did not cover enabled corpus groups length {}",
+                summary.enabled_corpus_source_count,
+                summary.enabled_corpus_groups.len()
+            ),
+        });
+    }
+    if summary.validation_modes.is_empty() {
+        return Err(OmSourcesLoadError::Contract {
+            message: "source registry validation modes was empty".to_string(),
+        });
+    }
+
     Ok(())
 }
 
