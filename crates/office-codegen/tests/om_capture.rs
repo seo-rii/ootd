@@ -403,6 +403,19 @@ fn differential_report_rejects_malformed_source_context_shape() {
         },
         {
             let mut report = base_report.clone();
+            report
+                .context
+                .as_mut()
+                .expect("context")
+                .enabled_corpus_groups
+                .push("Official_MS".to_string());
+            (
+                report,
+                "duplicate enabled corpus group Official_MS under ASCII case-insensitive matching",
+            )
+        },
+        {
+            let mut report = base_report.clone();
             let context = report.context.as_mut().expect("context");
             context.enabled_corpus_groups.clear();
             context.enabled_corpus_source_count = 0;
@@ -439,6 +452,19 @@ fn differential_report_rejects_malformed_source_context_shape() {
                 .validation_modes
                 .push("   ".to_string());
             (report, "validationModes contained empty value")
+        },
+        {
+            let mut report = base_report.clone();
+            report
+                .context
+                .as_mut()
+                .expect("context")
+                .validation_modes
+                .push("OpenXML_Validator".to_string());
+            (
+                report,
+                "duplicate validation mode OpenXML_Validator under ASCII case-insensitive matching",
+            )
         },
         {
             let mut report = base_report.clone();

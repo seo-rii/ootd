@@ -1487,6 +1487,7 @@ impl DifferentialReport {
                 });
             }
             let mut seen_corpus_groups = BTreeSet::new();
+            let mut seen_casefold_corpus_groups = BTreeSet::new();
             for group in &context.enabled_corpus_groups {
                 if is_blank_contract_string(group) {
                     return Err(DifferentialReportLoadError::Contract {
@@ -1509,8 +1510,16 @@ impl DifferentialReport {
                         ),
                     });
                 }
+                if !seen_casefold_corpus_groups.insert(group.to_ascii_uppercase()) {
+                    return Err(DifferentialReportLoadError::Contract {
+                        message: format!(
+                            "differential report context duplicate enabled corpus group {group} under ASCII case-insensitive matching"
+                        ),
+                    });
+                }
             }
             let mut seen_validation_modes = BTreeSet::new();
+            let mut seen_casefold_validation_modes = BTreeSet::new();
             for mode in &context.validation_modes {
                 if is_blank_contract_string(mode) {
                     return Err(DifferentialReportLoadError::Contract {
@@ -1530,6 +1539,13 @@ impl DifferentialReport {
                     return Err(DifferentialReportLoadError::Contract {
                         message: format!(
                             "differential report context duplicate validation mode {mode}"
+                        ),
+                    });
+                }
+                if !seen_casefold_validation_modes.insert(mode.to_ascii_uppercase()) {
+                    return Err(DifferentialReportLoadError::Contract {
+                        message: format!(
+                            "differential report context duplicate validation mode {mode} under ASCII case-insensitive matching"
                         ),
                     });
                 }

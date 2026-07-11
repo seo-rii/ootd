@@ -89,6 +89,7 @@ Supported statuses are:
 - `statusCounts` equals the status histogram reconstructed from `cases`
 - present `context` string fields and list entries are non-blank, contain no
   leading or trailing whitespace, and context lists do not contain duplicates
+  under exact or ASCII case-insensitive matching
 - present `context.enabledCorpusGroups` and `context.validationModes` are
   non-empty, and `enabledCorpusSourceCount` covers the enabled corpus groups
 - when `context` is present, `profile` equals `context.defaultProfile`
