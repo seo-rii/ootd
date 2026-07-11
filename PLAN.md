@@ -4859,6 +4859,8 @@
   - 범위: 단일 `load_differential_report_from_path`/`load_differential_gate_from_path` 경로도 source가 directory 또는 symlink이면 contract error로 거부하도록 보강해 canonical output-root loader를 우회한 직접 artifact import에서도 platform I/O error 누수나 symlink-follow가 발생하지 않도록 고정
   - `Step 7.107 DONE` codegen differential direct artifact parent symlink preflight
   - 범위: 단일 differential report/gate load/write path의 parent directory가 symlink인 경우도 contract error로 거부하도록 보강해 직접 artifact API가 symlink parent 아래의 우회 경로를 따라 읽거나 쓰지 못하도록 고정
+  - `Step 7.108 DONE` codegen differential output-root parent symlink preflight
+  - 범위: canonical output-root writer/loader도 output root parent directory가 symlink인 경우를 contract error로 거부하도록 보강해 output-root API가 새 artifact root를 symlink parent 아래 우회 경로에 만들거나 가져오지 못하도록 고정
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.

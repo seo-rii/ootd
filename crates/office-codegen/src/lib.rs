@@ -2650,6 +2650,23 @@ fn preflight_differential_artifact_output_paths(
             ),
         });
     }
+    if let Some(parent) = paths
+        .output_root_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        if parent
+            .symlink_metadata()
+            .is_ok_and(|metadata| metadata.file_type().is_symlink())
+        {
+            return Err(DifferentialReportLoadError::Contract {
+                message: format!(
+                    "differential output root parent path {} was a symlink",
+                    parent.display()
+                ),
+            });
+        }
+    }
     for artifact_path in [&paths.report_path, &paths.gate_summary_path] {
         if artifact_path
             .symlink_metadata()

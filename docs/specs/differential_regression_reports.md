@@ -213,10 +213,11 @@ If the runner owns the output directory, it should prefer
 `write_differential_report_and_gate_to_output_root`. That path writes both
 canonical artifacts under the output root and returns the exact paths used. It
 preflights report counts and source registry context before creating the output
-directory, and rejects output roots that are files or symlinks plus canonical
-artifact paths that are already directories or symlinks, so context mismatch or
-path conflicts cannot leave a report-only partial artifact or follow artifact
-links outside the output root.
+directory, and rejects output roots that are files or symlinks, output roots
+whose parent directory is a symlink, plus canonical artifact paths that are
+already directories or symlinks, so context mismatch or path conflicts cannot
+leave a report-only partial artifact or follow artifact links outside the output
+root.
 
 Downstream CI can validate a completed output directory with
 `load_differential_artifacts_from_output_root`. That path loads both canonical
