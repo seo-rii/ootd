@@ -1525,6 +1525,13 @@ impl DifferentialReport {
                                 .to_string(),
                     });
                 }
+                if !is_contract_identifier(group) {
+                    return Err(DifferentialReportLoadError::Contract {
+                        message: format!(
+                            "differential report context enabledCorpusGroups value {group} must be an ASCII identifier"
+                        ),
+                    });
+                }
                 if !seen_corpus_groups.insert(group.clone()) {
                     return Err(DifferentialReportLoadError::Contract {
                         message: format!(
@@ -1555,6 +1562,13 @@ impl DifferentialReport {
                         message:
                             "differential report context validationModes contained value with leading or trailing whitespace"
                                 .to_string(),
+                    });
+                }
+                if !is_contract_identifier(mode) {
+                    return Err(DifferentialReportLoadError::Contract {
+                        message: format!(
+                            "differential report context validationModes value {mode} must be an ASCII identifier"
+                        ),
                     });
                 }
                 if !seen_validation_modes.insert(mode.clone()) {

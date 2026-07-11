@@ -457,9 +457,35 @@ fn differential_report_rejects_malformed_source_context_shape() {
                 .context
                 .as_mut()
                 .expect("context")
+                .enabled_corpus_groups
+                .push("official ms".to_string());
+            (
+                report,
+                "enabledCorpusGroups value official ms must be an ASCII identifier",
+            )
+        },
+        {
+            let mut report = base_report.clone();
+            report
+                .context
+                .as_mut()
+                .expect("context")
                 .validation_modes
                 .push("   ".to_string());
             (report, "validationModes contained empty value")
+        },
+        {
+            let mut report = base_report.clone();
+            report
+                .context
+                .as_mut()
+                .expect("context")
+                .validation_modes
+                .push("render snapshot".to_string());
+            (
+                report,
+                "validationModes value render snapshot must be an ASCII identifier",
+            )
         },
         {
             let mut report = base_report.clone();

@@ -93,6 +93,8 @@ Supported statuses are:
 - present `context.defaultProfile`, `context.defaultMode`,
   `context.primaryOmArtifact`, and `context.primaryOoxmlSource` are ASCII
   identifiers
+- present `context.enabledCorpusGroups` and `context.validationModes` entries
+  are ASCII identifiers
 - present `context.enabledCorpusGroups` and `context.validationModes` are
   non-empty, and `enabledCorpusSourceCount` covers the enabled corpus groups
 - when `context` is present, `profile` equals `context.defaultProfile`
