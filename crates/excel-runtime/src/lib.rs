@@ -8291,6 +8291,18 @@ impl ExcelRuntime {
                                     chart.bubble_scale = None;
                                     chart.show_negative_bubbles = None;
                                     chart.has_3d_shading = None;
+                                    chart.size_represents = None;
+                                }
+                                if !chart_type_supports_first_slice_angle(&chart.chart_type) {
+                                    chart.first_slice_angle = None;
+                                }
+                                if !chart_type_supports_doughnut_hole_size(&chart.chart_type) {
+                                    chart.doughnut_hole_size = None;
+                                }
+                                if !chart_type_supports_of_pie_settings(&chart.chart_type) {
+                                    chart.second_plot_size = None;
+                                    chart.split_type = None;
+                                    chart.split_value = None;
                                 }
                                 if let Some(has_3d_shading) = chart_type_bubble_3d {
                                     chart.has_3d_shading = Some(has_3d_shading);
@@ -40431,6 +40443,28 @@ fn chart_type_supports_explosion(chart_type: &ChartType) -> bool {
             | ChartType::PieExploded
             | ChartType::Pie3DExploded
     )
+}
+
+fn chart_type_supports_first_slice_angle(chart_type: &ChartType) -> bool {
+    matches!(
+        chart_type,
+        ChartType::Doughnut
+            | ChartType::DoughnutExploded
+            | ChartType::Pie
+            | ChartType::Pie3D
+            | ChartType::PieExploded
+            | ChartType::Pie3DExploded
+            | ChartType::PieOfPie
+            | ChartType::BarOfPie
+    )
+}
+
+fn chart_type_supports_doughnut_hole_size(chart_type: &ChartType) -> bool {
+    matches!(chart_type, ChartType::Doughnut | ChartType::DoughnutExploded)
+}
+
+fn chart_type_supports_of_pie_settings(chart_type: &ChartType) -> bool {
+    matches!(chart_type, ChartType::PieOfPie | ChartType::BarOfPie)
 }
 
 fn chart_explosion_xml_value(chart: &ChartModel) -> Option<String> {
@@ -126678,6 +126712,12 @@ mod tests {
             assert_eq!(chart.bubble_scale, None);
             assert_eq!(chart.show_negative_bubbles, None);
             assert_eq!(chart.has_3d_shading, None);
+            assert_eq!(chart.first_slice_angle, None);
+            assert_eq!(chart.doughnut_hole_size, None);
+            assert_eq!(chart.second_plot_size, None);
+            assert_eq!(chart.size_represents, None);
+            assert_eq!(chart.split_type, None);
+            assert_eq!(chart.split_value, None);
         }
 
         let saved = runtime
@@ -126705,6 +126745,12 @@ mod tests {
         assert!(!saved_chart_xml.contains("<c:bubbleScale"));
         assert!(!saved_chart_xml.contains("<c:showNegBubbles"));
         assert!(!saved_chart_xml.contains("<c:bubble3D"));
+        assert!(!saved_chart_xml.contains("<c:firstSliceAng"));
+        assert!(!saved_chart_xml.contains("<c:holeSize"));
+        assert!(!saved_chart_xml.contains("<c:secondPieSize"));
+        assert!(!saved_chart_xml.contains("<c:sizeRepresents"));
+        assert!(!saved_chart_xml.contains("<c:splitType"));
+        assert!(!saved_chart_xml.contains("<c:splitPos"));
 
         let mut reopened_runtime = ExcelRuntime::new();
         let reopened_workbook = reopened_runtime
@@ -126766,6 +126812,21 @@ mod tests {
                 .expect("reopened ChartGroup.Has3DShading"),
             OmValue::Bool(false)
         );
+        for (member, expected) in [
+            ("FirstSliceAngle", 0.0),
+            ("DoughnutHoleSize", 75.0),
+            ("SecondPlotSize", 75.0),
+            ("SizeRepresents", f64::from(super::XL_SIZE_IS_AREA)),
+            ("SplitType", f64::from(super::XL_SPLIT_BY_POSITION)),
+            ("SplitValue", 0.0),
+        ] {
+            assert_eq!(
+                reopened_runtime
+                    .dispatch_get(reopened_chart_group, member, &[])
+                    .expect("reopened ChartGroup chart-type-specific setting"),
+                OmValue::Number(expected)
+            );
+        }
     }
 
     #[test]
@@ -128586,6 +128647,12 @@ mod tests {
             assert_eq!(chart.bubble_scale, None);
             assert_eq!(chart.show_negative_bubbles, None);
             assert_eq!(chart.has_3d_shading, None);
+            assert_eq!(chart.first_slice_angle, None);
+            assert_eq!(chart.doughnut_hole_size, None);
+            assert_eq!(chart.second_plot_size, None);
+            assert_eq!(chart.size_represents, None);
+            assert_eq!(chart.split_type, None);
+            assert_eq!(chart.split_value, None);
         }
 
         let saved = runtime
@@ -128613,6 +128680,12 @@ mod tests {
         assert!(!saved_chart_xml.contains("<c:bubbleScale"));
         assert!(!saved_chart_xml.contains("<c:showNegBubbles"));
         assert!(!saved_chart_xml.contains("<c:bubble3D"));
+        assert!(!saved_chart_xml.contains("<c:firstSliceAng"));
+        assert!(!saved_chart_xml.contains("<c:holeSize"));
+        assert!(!saved_chart_xml.contains("<c:secondPieSize"));
+        assert!(!saved_chart_xml.contains("<c:sizeRepresents"));
+        assert!(!saved_chart_xml.contains("<c:splitType"));
+        assert!(!saved_chart_xml.contains("<c:splitPos"));
     }
 
     #[test]
