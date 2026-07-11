@@ -3297,6 +3297,135 @@ fn writes_differential_report_to_path_and_reloads_it() {
 }
 
 #[test]
+fn direct_differential_writers_reject_directory_paths() {
+    let report = build_differential_report(
+        "Excel",
+        "16.0",
+        "excel_365",
+        vec![DifferentialCaseResult {
+            name: "Application.Name".to_string(),
+            surface: Some("Application".to_string()),
+            member: Some("Name".to_string()),
+            status: DifferentialCaseStatus::Passed,
+            expected: Some("Microsoft Excel".to_string()),
+            actual: Some("Microsoft Excel".to_string()),
+            message: None,
+            artifacts: BTreeMap::new(),
+        }],
+    );
+    let gate = summarize_differential_gate(&report);
+    let unique_suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time")
+        .as_nanos();
+
+    for (path, write_error) in [
+        {
+            let path = std::env::temp_dir().join(format!(
+                "ootd-differential-report-direct-dir-{unique_suffix}"
+            ));
+            fs::create_dir_all(&path).expect("report directory path");
+            let error = write_differential_report_to_path(&report, &path)
+                .expect_err("report directory path should fail write");
+            (path, error)
+        },
+        {
+            let path = std::env::temp_dir()
+                .join(format!("ootd-differential-gate-direct-dir-{unique_suffix}"));
+            fs::create_dir_all(&path).expect("gate directory path");
+            let error = write_differential_gate_to_path(&gate, &path)
+                .expect_err("gate directory path should fail write");
+            (path, error)
+        },
+    ] {
+        match write_error {
+            DifferentialReportLoadError::Contract { message } => {
+                assert!(message.contains("differential artifact path"));
+                assert!(message.contains("was a directory"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+        assert!(path.is_dir());
+        fs::remove_dir_all(path).expect("remove directory path");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn direct_differential_writers_reject_symlink_paths() {
+    let report = build_differential_report(
+        "Excel",
+        "16.0",
+        "excel_365",
+        vec![DifferentialCaseResult {
+            name: "Application.Name".to_string(),
+            surface: Some("Application".to_string()),
+            member: Some("Name".to_string()),
+            status: DifferentialCaseStatus::Passed,
+            expected: Some("Microsoft Excel".to_string()),
+            actual: Some("Microsoft Excel".to_string()),
+            message: None,
+            artifacts: BTreeMap::new(),
+        }],
+    );
+    let gate = summarize_differential_gate(&report);
+    let unique_suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time")
+        .as_nanos();
+    let report_target = std::env::temp_dir().join(format!(
+        "ootd-differential-report-direct-symlink-target-{unique_suffix}.json"
+    ));
+    let report_path = std::env::temp_dir().join(format!(
+        "ootd-differential-report-direct-symlink-{unique_suffix}.json"
+    ));
+    let gate_target = std::env::temp_dir().join(format!(
+        "ootd-differential-gate-direct-symlink-target-{unique_suffix}.json"
+    ));
+    let gate_path = std::env::temp_dir().join(format!(
+        "ootd-differential-gate-direct-symlink-{unique_suffix}.json"
+    ));
+    fs::write(&report_target, b"unchanged report").expect("report symlink target");
+    fs::write(&gate_target, b"unchanged gate").expect("gate symlink target");
+    std::os::unix::fs::symlink(&report_target, &report_path).expect("report symlink path");
+    std::os::unix::fs::symlink(&gate_target, &gate_path).expect("gate symlink path");
+
+    for (path, target, write_error) in [
+        (
+            report_path.as_path(),
+            report_target.as_path(),
+            write_differential_report_to_path(&report, &report_path)
+                .expect_err("report symlink path should fail write"),
+        ),
+        (
+            gate_path.as_path(),
+            gate_target.as_path(),
+            write_differential_gate_to_path(&gate, &gate_path)
+                .expect_err("gate symlink path should fail write"),
+        ),
+    ] {
+        match write_error {
+            DifferentialReportLoadError::Contract { message } => {
+                assert!(message.contains("differential artifact path"));
+                assert!(message.contains("was a symlink"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+        assert!(path.is_symlink());
+        assert!(
+            fs::read_to_string(target)
+                .expect("symlink target contents")
+                .starts_with("unchanged")
+        );
+    }
+
+    fs::remove_file(report_path).expect("remove report symlink path");
+    fs::remove_file(report_target).expect("remove report symlink target");
+    fs::remove_file(gate_path).expect("remove gate symlink path");
+    fs::remove_file(gate_target).expect("remove gate symlink target");
+}
+
+#[test]
 fn write_differential_report_rejects_stale_summary_counts() {
     let mut report = build_differential_report(
         "Excel",

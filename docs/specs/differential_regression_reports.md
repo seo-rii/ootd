@@ -138,6 +138,9 @@ Relevant APIs:
 - `load_differential_report_from_path`
 - `write_differential_report_to_path`
 
+`write_differential_report_to_path` validates the report before writing and
+rejects a destination path that already exists as a directory or symlink.
+
 Use `build_differential_report` only for local or legacy fixtures that are not
 intended to drive CI gating.
 
@@ -189,6 +192,9 @@ Relevant APIs:
 - `load_differential_gate_from_path_with_source_context`
 - `write_differential_gate_to_path`
 - `write_differential_gate_from_report_path_with_source_context`
+
+`write_differential_gate_to_path` validates the gate summary before writing and
+rejects a destination path that already exists as a directory or symlink.
 
 CI should prefer `write_differential_gate_from_report_path_with_source_context`.
 That path loads the report, validates stale report counts, validates source

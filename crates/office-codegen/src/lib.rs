@@ -2265,6 +2265,7 @@ impl DifferentialReport {
         path: impl AsRef<Path>,
     ) -> Result<(), DifferentialReportLoadError> {
         self.validate()?;
+        preflight_differential_json_artifact_path(path.as_ref())?;
         let payload = serde_json::to_vec_pretty(self)?;
         fs::write(path, payload)?;
         Ok(())
@@ -2383,6 +2384,7 @@ impl DifferentialGateSummary {
         path: impl AsRef<Path>,
     ) -> Result<(), DifferentialReportLoadError> {
         self.validate()?;
+        preflight_differential_json_artifact_path(path.as_ref())?;
         let payload = serde_json::to_vec_pretty(self)?;
         fs::write(path, payload)?;
         Ok(())
@@ -2666,6 +2668,31 @@ fn preflight_differential_artifact_output_paths(
                 ),
             });
         }
+    }
+    Ok(())
+}
+
+fn preflight_differential_json_artifact_path(
+    path: &Path,
+) -> Result<(), DifferentialReportLoadError> {
+    if path
+        .symlink_metadata()
+        .is_ok_and(|metadata| metadata.file_type().is_symlink())
+    {
+        return Err(DifferentialReportLoadError::Contract {
+            message: format!(
+                "differential artifact path {} was a symlink",
+                path.display()
+            ),
+        });
+    }
+    if path.is_dir() {
+        return Err(DifferentialReportLoadError::Contract {
+            message: format!(
+                "differential artifact path {} was a directory",
+                path.display()
+            ),
+        });
     }
     Ok(())
 }
