@@ -4873,6 +4873,8 @@
   - 범위: `Chart.ChartType`을 bubble chart에서 non-bubble chart로 변경하면 `Series.BubbleSizes`, `Series.Formula`, model source, saved chart XML에서 stale `bubbleSize` source가 제거되는지 회귀 테스트로 고정해 chart type 변환 후 버블 전용 source가 남아 object model/save 경계에 노출되지 않도록 보강
   - `Step 7.114 DONE` excel-runtime series chart type bubble source clearing regression
   - 범위: `Series.ChartType` 경로로 bubble chart를 non-bubble chart로 변경해도 `Series.BubbleSizes`, `Series.Formula`, saved chart XML에서 stale `bubbleSize` source가 제거되는지 회귀 테스트로 고정해 series-level chart type setter가 chart-level 정리 invariant를 우회하지 못하도록 보강
+  - `Step 7.115 DONE` excel-runtime chart group chart type bubble source clearing regression
+  - 범위: `ChartGroup.ChartType` 경로로 bubble chart를 non-bubble chart로 변경해도 `Series.BubbleSizes`, `Series.Formula`, saved chart XML에서 stale `bubbleSize` source가 제거되는지 회귀 테스트로 고정해 chart-group-level chart type setter가 chart-level 정리 invariant를 우회하지 못하도록 보강
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.

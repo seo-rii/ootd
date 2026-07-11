@@ -126514,6 +126514,36 @@ mod tests {
                 .code,
             OmErrorCode::TypeMismatch
         );
+        let series = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[OmValue::Number(1.0)])
+                .expect("Chart.SeriesCollection(1) before ChartGroup.ChartType"),
+        );
+        runtime
+            .dispatch_set(
+                chart_group,
+                "ChartType",
+                OmValue::Number(f64::from(super::XL_BUBBLE)),
+                &[],
+            )
+            .expect("set ChartGroup.ChartType to bubble");
+        runtime
+            .dispatch_set(
+                series,
+                "Formula",
+                OmValue::Text(
+                    "=SERIES(Sheet1!$C$1,Sheet1!$A$1:$A$3,Sheet1!$B$1:$B$3,1,Sheet1!$D$1:$D$3)"
+                        .to_string(),
+                ),
+                &[],
+            )
+            .expect("set bubble Series.Formula before ChartGroup.ChartType");
+        assert_eq!(
+            runtime
+                .dispatch_get(series, "BubbleSizes", &[])
+                .expect("Series.BubbleSizes before ChartGroup.ChartType"),
+            OmValue::Text("=Sheet1!$D$1:$D$3".to_string())
+        );
         let search_range = expect_object_handle(
             runtime
                 .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
@@ -126569,6 +126599,20 @@ mod tests {
             ),
             f64::from(super::XL_LINE_MARKERS)
         );
+        assert_eq!(
+            runtime
+                .dispatch_get(series, "BubbleSizes", &[])
+                .expect("Series.BubbleSizes after ChartGroup.ChartType"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(series, "Formula", &[])
+                    .expect("Series.Formula after ChartGroup.ChartType")
+            ),
+            "=SERIES(Sheet1!$C$1,Sheet1!$A$1:$A$3,Sheet1!$B$1:$B$3,1)"
+        );
 
         let saved = runtime
             .save_workbook(
@@ -126591,6 +126635,7 @@ mod tests {
         .expect("saved chart xml utf8");
         assert!(saved_chart_xml.contains("<c:lineChart>"));
         assert!(!saved_chart_xml.contains("<c:barChart>"));
+        assert!(!saved_chart_xml.contains("<c:bubbleSize>"));
 
         let mut reopened_runtime = ExcelRuntime::new();
         let reopened_workbook = reopened_runtime
