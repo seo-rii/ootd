@@ -245,6 +245,10 @@ fn source_registry_rejects_malformed_identifier_fields() {
             "source registry binary_formats key value xls b must be an ASCII identifier",
         ),
         (
+            registry_toml.replace("xlsb = \"MS-XLSB\"", "xlsb = \"MS-XLSB\"\nXLSB = \"MS-XLSB\""),
+            "source registry duplicate binary_formats key xlsb under ASCII case-insensitive matching",
+        ),
+        (
             registry_toml.replace("xlsb = \"MS-XLSB\"", "xlsb = \"MS XLSB\""),
             "source registry binary_formats.xlsb value MS XLSB must be an ASCII token",
         ),
@@ -258,6 +262,13 @@ fn source_registry_rejects_malformed_identifier_fields() {
         (
             registry_toml.replace(
                 "compatibility = \"function_version_behavior\"",
+                "compatibility = \"function_version_behavior\"\nCompatibility = \"function_version_behavior\"",
+            ),
+            "source registry duplicate behavior key compatibility under ASCII case-insensitive matching",
+        ),
+        (
+            registry_toml.replace(
+                "compatibility = \"function_version_behavior\"",
                 "compatibility = \"function version behavior\"",
             ),
             "source registry behavior.compatibility value function version behavior must be an ASCII token",
@@ -265,6 +276,13 @@ fn source_registry_rejects_malformed_identifier_fields() {
         (
             registry_toml.replace("[profiles.excel_365]", "[profiles.\"excel 365\"]"),
             "source registry profiles key value excel 365 must be an ASCII identifier",
+        ),
+        (
+            registry_toml.replace(
+                "[profiles.excel_365]",
+                "[profiles.Excel_365]\ndynamic_arrays = true\nimplicit_intersection_at = true\nstrict_write = false\n\n[profiles.excel_365]",
+            ),
+            "source registry duplicate profiles key excel_365 under ASCII case-insensitive matching",
         ),
         (
             registry_toml.replace(

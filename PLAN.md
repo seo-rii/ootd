@@ -4833,6 +4833,8 @@
   - 범위: source registry TOML load가 enabled corpus groups, group-covering enabled corpus source count, validation modes를 non-empty contract로 검증해 differential report context 생성 뒤가 아니라 source registry boundary에서 빈 corpus/validation provenance를 즉시 거부하도록 고정
   - `Step 7.94 DONE` codegen source registry auxiliary map token validation
   - 범위: source registry TOML load가 `binary_formats`/`behavior` map keys를 ASCII identifier로, values를 non-blank ASCII token으로 검증해 auxiliary provenance map이 whitespace/display-name 형태 source ids를 포함한 채 registry boundary를 통과하지 못하도록 고정
+  - `Step 7.95 DONE` codegen source registry case-insensitive key collision validation
+  - 범위: source registry TOML load가 profile keys와 `binary_formats`/`behavior` map keys의 ASCII case-insensitive duplicate를 contract error로 거부하도록 추가해 `excel_365`/`Excel_365`, `xlsb`/`XLSB`, `compatibility`/`Compatibility` 같은 provenance key drift가 registry boundary를 통과하지 못하도록 고정
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.

@@ -1455,13 +1455,31 @@ fn validate_source_registry_manifest(
     for profile_key in manifest.profiles.keys() {
         validate_source_registry_identifier("profiles key", profile_key)?;
     }
+    let mut seen_casefold_profile_keys = BTreeSet::new();
+    for profile_key in manifest.profiles.keys() {
+        if !seen_casefold_profile_keys.insert(profile_key.to_ascii_uppercase()) {
+            return Err(OmSourcesLoadError::Contract {
+                message: format!(
+                    "source registry duplicate profiles key {profile_key} under ASCII case-insensitive matching"
+                ),
+            });
+        }
+    }
 
     for (section_name, entries) in [
         ("binary_formats", &manifest.binary_formats),
         ("behavior", &manifest.behavior),
     ] {
+        let mut seen_casefold_keys = BTreeSet::new();
         for (key, value) in entries {
             validate_source_registry_identifier(&format!("{section_name} key"), key)?;
+            if !seen_casefold_keys.insert(key.to_ascii_uppercase()) {
+                return Err(OmSourcesLoadError::Contract {
+                    message: format!(
+                        "source registry duplicate {section_name} key {key} under ASCII case-insensitive matching"
+                    ),
+                });
+            }
             validate_source_registry_token(&format!("{section_name}.{key}"), value)?;
         }
     }
