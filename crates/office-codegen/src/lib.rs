@@ -1497,6 +1497,30 @@ fn validate_source_registry_manifest(
     }
 
     let summary = SourceRegistrySummary::from_manifest(manifest);
+    if manifest.test_corpus.official_ms.enabled && summary.official_ms_corpus_sources.is_empty() {
+        return Err(OmSourcesLoadError::Contract {
+            message: "source registry official_ms corpus was enabled without enabled sources"
+                .to_string(),
+        });
+    }
+    if !manifest.test_corpus.official_ms.enabled && !summary.official_ms_corpus_sources.is_empty() {
+        return Err(OmSourcesLoadError::Contract {
+            message: "source registry official_ms corpus had enabled sources while disabled"
+                .to_string(),
+        });
+    }
+    if manifest.test_corpus.open_source.enabled && summary.open_source_corpus_sources.is_empty() {
+        return Err(OmSourcesLoadError::Contract {
+            message: "source registry open_source corpus was enabled without enabled sources"
+                .to_string(),
+        });
+    }
+    if !manifest.test_corpus.open_source.enabled && !summary.open_source_corpus_sources.is_empty() {
+        return Err(OmSourcesLoadError::Contract {
+            message: "source registry open_source corpus had enabled sources while disabled"
+                .to_string(),
+        });
+    }
     if summary.enabled_corpus_groups.is_empty() {
         return Err(OmSourcesLoadError::Contract {
             message: "source registry enabled corpus groups was empty".to_string(),

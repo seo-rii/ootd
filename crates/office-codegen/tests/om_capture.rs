@@ -295,8 +295,90 @@ fn source_registry_rejects_malformed_identifier_fields() {
             registry_toml
                 .replace("synthetic = true", "synthetic = false")
                 .replace("real_world = true", "real_world = false")
-                .replace("enabled = true", "enabled = false"),
+                .replace("enabled = true", "enabled = false")
+                .replace(
+                    "office_scripts_samples = true",
+                    "office_scripts_samples = false",
+                )
+                .replace(
+                    "data_validation_examples = true",
+                    "data_validation_examples = false",
+                )
+                .replace(
+                    "power_bi_financial_sample = true",
+                    "power_bi_financial_sample = false",
+                )
+                .replace(
+                    "mos_excel_course_materials = true",
+                    "mos_excel_course_materials = false",
+                )
+                .replace(
+                    "mos_excel_expert_course_materials = true",
+                    "mos_excel_expert_course_materials = false",
+                )
+                .replace("open_xml_sdk = true", "open_xml_sdk = false")
+                .replace(
+                    "apache_poi_test_data = true",
+                    "apache_poi_test_data = false",
+                )
+                .replace(
+                    "libreoffice_sc_qa_unit_data = true",
+                    "libreoffice_sc_qa_unit_data = false",
+                ),
             "source registry enabled corpus groups was empty",
+        ),
+        (
+            registry_toml
+                .replace(
+                    "[test_corpus.official_ms]\nenabled = true",
+                    "[test_corpus.official_ms]\nenabled = false",
+                ),
+            "source registry official_ms corpus had enabled sources while disabled",
+        ),
+        (
+            registry_toml
+                .replace(
+                    "[test_corpus.open_source]\nenabled = true",
+                    "[test_corpus.open_source]\nenabled = false",
+                ),
+            "source registry open_source corpus had enabled sources while disabled",
+        ),
+        (
+            registry_toml
+                .replace(
+                    "office_scripts_samples = true",
+                    "office_scripts_samples = false",
+                )
+                .replace(
+                    "data_validation_examples = true",
+                    "data_validation_examples = false",
+                )
+                .replace(
+                    "power_bi_financial_sample = true",
+                    "power_bi_financial_sample = false",
+                )
+                .replace(
+                    "mos_excel_course_materials = true",
+                    "mos_excel_course_materials = false",
+                )
+                .replace(
+                    "mos_excel_expert_course_materials = true",
+                    "mos_excel_expert_course_materials = false",
+                ),
+            "source registry official_ms corpus was enabled without enabled sources",
+        ),
+        (
+            registry_toml
+                .replace("open_xml_sdk = true", "open_xml_sdk = false")
+                .replace(
+                    "apache_poi_test_data = true",
+                    "apache_poi_test_data = false",
+                )
+                .replace(
+                    "libreoffice_sc_qa_unit_data = true",
+                    "libreoffice_sc_qa_unit_data = false",
+                ),
+            "source registry open_source corpus was enabled without enabled sources",
         ),
         (
             registry_toml
@@ -331,7 +413,7 @@ fn source_registry_rejects_malformed_identifier_fields() {
                 )
                 .replace("synthetic = true", "synthetic = false")
                 .replace("real_world = true", "real_world = false"),
-            "source registry enabled corpus source count 0 did not cover enabled corpus groups length 2",
+            "source registry official_ms corpus was enabled without enabled sources",
         ),
         (
             registry_toml

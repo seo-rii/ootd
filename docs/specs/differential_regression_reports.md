@@ -45,7 +45,9 @@ map keys are ASCII identifiers without ASCII case-insensitive collisions, and
 their values are non-blank ASCII tokens. Profile keys also cannot collide under
 ASCII case-insensitive matching. The registry must also enable at least one
 corpus group, provide enough enabled corpus sources to cover those groups, and
-enable at least one validation mode.
+enable at least one validation mode. Corpus groups with child source toggles
+must enable at least one child source when the group is enabled, and cannot
+leave child sources enabled when the group is disabled.
 
 ## Differential Report JSON
 
