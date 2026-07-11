@@ -3297,6 +3297,121 @@ fn writes_differential_report_to_path_and_reloads_it() {
 }
 
 #[test]
+fn direct_differential_loaders_reject_directory_paths() {
+    let unique_suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time")
+        .as_nanos();
+
+    for (path, load_error) in [
+        {
+            let path = std::env::temp_dir().join(format!(
+                "ootd-differential-report-direct-load-dir-{unique_suffix}"
+            ));
+            fs::create_dir_all(&path).expect("report loader directory path");
+            let error = load_differential_report_from_path(&path)
+                .expect_err("report directory path should fail load");
+            (path, error)
+        },
+        {
+            let path = std::env::temp_dir().join(format!(
+                "ootd-differential-gate-direct-load-dir-{unique_suffix}"
+            ));
+            fs::create_dir_all(&path).expect("gate loader directory path");
+            let error = load_differential_gate_from_path(&path)
+                .expect_err("gate directory path should fail load");
+            (path, error)
+        },
+    ] {
+        match load_error {
+            DifferentialReportLoadError::Contract { message } => {
+                assert!(message.contains("differential artifact path"));
+                assert!(message.contains("was a directory"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+        assert!(path.is_dir());
+        fs::remove_dir_all(path).expect("remove directory path");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn direct_differential_loaders_reject_symlink_paths() {
+    let report = build_differential_report(
+        "Excel",
+        "16.0",
+        "excel_365",
+        vec![DifferentialCaseResult {
+            name: "Application.Name".to_string(),
+            surface: Some("Application".to_string()),
+            member: Some("Name".to_string()),
+            status: DifferentialCaseStatus::Passed,
+            expected: Some("Microsoft Excel".to_string()),
+            actual: Some("Microsoft Excel".to_string()),
+            message: None,
+            artifacts: BTreeMap::new(),
+        }],
+    );
+    let gate = summarize_differential_gate(&report);
+    let unique_suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time")
+        .as_nanos();
+    let report_target = std::env::temp_dir().join(format!(
+        "ootd-differential-report-direct-load-symlink-target-{unique_suffix}.json"
+    ));
+    let report_path = std::env::temp_dir().join(format!(
+        "ootd-differential-report-direct-load-symlink-{unique_suffix}.json"
+    ));
+    let gate_target = std::env::temp_dir().join(format!(
+        "ootd-differential-gate-direct-load-symlink-target-{unique_suffix}.json"
+    ));
+    let gate_path = std::env::temp_dir().join(format!(
+        "ootd-differential-gate-direct-load-symlink-{unique_suffix}.json"
+    ));
+    fs::write(
+        &report_target,
+        serde_json::to_string(&report).expect("report json"),
+    )
+    .expect("report symlink target");
+    fs::write(
+        &gate_target,
+        serde_json::to_string(&gate).expect("gate json"),
+    )
+    .expect("gate symlink target");
+    std::os::unix::fs::symlink(&report_target, &report_path).expect("report symlink path");
+    std::os::unix::fs::symlink(&gate_target, &gate_path).expect("gate symlink path");
+
+    for (path, load_error) in [
+        (
+            report_path.as_path(),
+            load_differential_report_from_path(&report_path)
+                .expect_err("report symlink path should fail load"),
+        ),
+        (
+            gate_path.as_path(),
+            load_differential_gate_from_path(&gate_path)
+                .expect_err("gate symlink path should fail load"),
+        ),
+    ] {
+        match load_error {
+            DifferentialReportLoadError::Contract { message } => {
+                assert!(message.contains("differential artifact path"));
+                assert!(message.contains("was a symlink"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+        assert!(path.is_symlink());
+    }
+
+    fs::remove_file(report_path).expect("remove report symlink path");
+    fs::remove_file(report_target).expect("remove report symlink target");
+    fs::remove_file(gate_path).expect("remove gate symlink path");
+    fs::remove_file(gate_target).expect("remove gate symlink target");
+}
+
+#[test]
 fn direct_differential_writers_reject_directory_paths() {
     let report = build_differential_report(
         "Excel",

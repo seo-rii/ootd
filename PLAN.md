@@ -4855,6 +4855,8 @@
   - 범위: differential report root/context/case와 gate summary JSON에서 unknown field를 deserialize 단계에서 거부하도록 고정해 후속 runner/CI artifact schema drift가 조용히 무시된 채 gating boundary를 통과하지 못하도록 보강
   - `Step 7.105 DONE` codegen differential direct writer path preflight
   - 범위: 단일 `write_differential_report_to_path`/`write_differential_gate_to_path` 경로도 destination이 directory 또는 symlink이면 contract error로 거부하도록 보강해 canonical output-root writer를 우회한 직접 artifact materialization에서도 platform I/O error 누수나 symlink overwrite가 발생하지 않도록 고정
+  - `Step 7.106 DONE` codegen differential direct loader path preflight
+  - 범위: 단일 `load_differential_report_from_path`/`load_differential_gate_from_path` 경로도 source가 directory 또는 symlink이면 contract error로 거부하도록 보강해 canonical output-root loader를 우회한 직접 artifact import에서도 platform I/O error 누수나 symlink-follow가 발생하지 않도록 고정
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.

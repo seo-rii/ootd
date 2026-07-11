@@ -2256,6 +2256,7 @@ impl DifferentialReport {
     }
 
     pub fn from_json_path(path: impl AsRef<Path>) -> Result<Self, DifferentialReportLoadError> {
+        preflight_differential_json_artifact_path(path.as_ref())?;
         let input = fs::read_to_string(path)?;
         Self::from_json_str(&input)
     }
@@ -2375,6 +2376,7 @@ impl DifferentialGateSummary {
     }
 
     pub fn from_json_path(path: impl AsRef<Path>) -> Result<Self, DifferentialReportLoadError> {
+        preflight_differential_json_artifact_path(path.as_ref())?;
         let input = fs::read_to_string(path)?;
         Self::from_json_str(&input)
     }
