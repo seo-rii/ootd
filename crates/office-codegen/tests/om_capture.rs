@@ -7,13 +7,14 @@ use std::{
 
 use office_codegen::{
     CanonicalOmGenerationError, CodegenSummary, DifferentialCaseResult, DifferentialCaseStatus,
-    DifferentialReportLoadError, OmCaptureBundleError, OmSourcesManifest, PiaCaptureClass,
-    PiaCaptureInterface, PiaPublicSurfaceCapture, SourceRegistryManifest, TypelibIdentityCapture,
-    build_coverage_report, build_coverage_report_from_json, build_coverage_report_from_path,
-    build_differential_report, build_differential_report_with_source_context,
-    build_focus_surface_registry, build_focus_surface_registry_from_json,
-    build_focus_surface_registry_from_path, differential_artifact_contract,
-    differential_artifact_paths, generate_canonical_office_idl_from_dir, load_capture_bundle,
+    DifferentialReportLoadError, OmCaptureBundleError, OmSourcesLoadError, OmSourcesManifest,
+    PiaCaptureClass, PiaCaptureInterface, PiaPublicSurfaceCapture, SourceRegistryManifest,
+    TypelibIdentityCapture, build_coverage_report, build_coverage_report_from_json,
+    build_coverage_report_from_path, build_differential_report,
+    build_differential_report_with_source_context, build_focus_surface_registry,
+    build_focus_surface_registry_from_json, build_focus_surface_registry_from_path,
+    differential_artifact_contract, differential_artifact_paths,
+    generate_canonical_office_idl_from_dir, load_capture_bundle,
     load_differential_artifacts_from_output_root, load_differential_gate_from_json,
     load_differential_gate_from_path, load_differential_gate_from_path_with_source_context,
     load_differential_report_from_json, load_differential_report_from_path,
@@ -206,6 +207,63 @@ fn loads_source_registry_and_reports_enabled_test_corpus() {
         ]
     );
     assert_eq!(summary.profile_count, 3);
+}
+
+#[test]
+fn source_registry_rejects_malformed_identifier_fields() {
+    let registry_toml =
+        fs::read_to_string(repo_root().join("specs/sources.toml")).expect("source registry");
+
+    for (malformed_toml, expected_message) in [
+        (
+            registry_toml.replace(
+                "default_profile = \"excel_365\"",
+                "default_profile = \"excel 365\"",
+            ),
+            "source registry project.default_profile value excel 365 must be an ASCII identifier",
+        ),
+        (
+            registry_toml.replace(
+                "default_mode = \"lossless\"",
+                "default_mode = \" lossless\"",
+            ),
+            "source registry project.default_mode contained leading or trailing whitespace",
+        ),
+        (
+            registry_toml.replace(
+                "primary = \"excel_type_library\"",
+                "primary = \"excel type library\"",
+            ),
+            "source registry om_contract.primary value excel type library must be an ASCII identifier",
+        ),
+        (
+            registry_toml.replace("primary = \"ecma_376\"", "primary = \"ecma 376\""),
+            "source registry ooxml.primary value ecma 376 must be an ASCII identifier",
+        ),
+        (
+            registry_toml.replace("[profiles.excel_365]", "[profiles.\"excel 365\"]"),
+            "source registry profiles key value excel 365 must be an ASCII identifier",
+        ),
+        (
+            registry_toml.replace(
+                "default_profile = \"excel_365\"",
+                "default_profile = \"excel_2019\"",
+            ),
+            "source registry default_profile excel_2019 did not match a profile key",
+        ),
+    ] {
+        let error = summarize_source_registry_toml(&malformed_toml)
+            .expect_err("malformed source registry should fail");
+        match error {
+            OmSourcesLoadError::Contract { message } => {
+                assert!(
+                    message.contains(expected_message),
+                    "{message:?} did not contain {expected_message:?}"
+                );
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
 }
 
 #[test]

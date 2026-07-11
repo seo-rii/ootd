@@ -36,6 +36,12 @@ context. Context mismatch is a contract error, not a test failure.
 `validate_differential_report_source_context` validates the report contract
 before comparing the source registry context.
 
+`summarize_source_registry_toml` rejects malformed registry machine keys before
+building the context. `project.default_profile`, `project.default_mode`, OM
+artifact ids, OOXML source ids, and profile keys are non-blank ASCII
+identifiers without leading or trailing whitespace; `project.default_profile`
+must match a declared profile key.
+
 ## Differential Report JSON
 
 The report contains:

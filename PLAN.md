@@ -4827,6 +4827,8 @@
   - 범위: differential report `profile`과 context routing/source id fields(`defaultProfile`, `defaultMode`, `primaryOmArtifact`, `primaryOoxmlSource`)가 ASCII identifier가 아닌 경우를 contract error로 거부하도록 추가해 profile/source provenance key가 whitespace 또는 display-name 형태로 CI artifact boundary를 통과하지 못하도록 고정
   - `Step 7.91 DONE` codegen differential source context list identifier validation
   - 범위: differential report context의 `enabledCorpusGroups`와 `validationModes` list entries가 ASCII identifier가 아닌 경우를 contract error로 거부하도록 추가해 `official ms`, `render snapshot` 같은 display-name 형태 provenance가 source registry context boundary를 통과하지 못하도록 고정
+  - `Step 7.92 DONE` codegen source registry identifier validation
+  - 범위: source registry TOML load가 `default_profile`, `default_mode`, OM artifact ids, OOXML source ids, profile keys를 ASCII identifier로 검증하고 `default_profile`이 declared profile key와 매칭되는지도 확인해 malformed registry provenance가 differential report context 생성 전 boundary를 통과하지 못하도록 고정
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.

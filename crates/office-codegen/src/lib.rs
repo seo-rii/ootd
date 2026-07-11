@@ -28,6 +28,7 @@ pub struct CodegenSummary {
 pub enum OmSourcesLoadError {
     Io(std::io::Error),
     Toml(toml::de::Error),
+    Contract { message: String },
 }
 
 #[derive(Debug)]
@@ -800,7 +801,9 @@ impl OmSourcesManifest {
 
 impl SourceRegistryManifest {
     pub fn from_toml_str(input: &str) -> Result<Self, OmSourcesLoadError> {
-        Ok(toml::from_str(input)?)
+        let manifest = toml::from_str(input)?;
+        validate_source_registry_manifest(&manifest)?;
+        Ok(manifest)
     }
 
     pub fn from_toml_path(path: impl AsRef<Path>) -> Result<Self, OmSourcesLoadError> {
@@ -1341,6 +1344,102 @@ fn is_contract_identifier(value: &str) -> bool {
     };
     (first.is_ascii_alphabetic() || first == '_')
         && chars.all(|character| character.is_ascii_alphanumeric() || character == '_')
+}
+
+fn validate_source_registry_identifier(
+    field_name: &str,
+    field_value: &str,
+) -> Result<(), OmSourcesLoadError> {
+    if is_blank_contract_string(field_value) {
+        return Err(OmSourcesLoadError::Contract {
+            message: format!("source registry {field_name} was empty"),
+        });
+    }
+    if has_surrounding_contract_whitespace(field_value) {
+        return Err(OmSourcesLoadError::Contract {
+            message: format!(
+                "source registry {field_name} contained leading or trailing whitespace"
+            ),
+        });
+    }
+    if !is_contract_identifier(field_value) {
+        return Err(OmSourcesLoadError::Contract {
+            message: format!(
+                "source registry {field_name} value {field_value} must be an ASCII identifier"
+            ),
+        });
+    }
+    Ok(())
+}
+
+fn validate_source_registry_manifest(
+    manifest: &SourceRegistryManifest,
+) -> Result<(), OmSourcesLoadError> {
+    if is_blank_contract_string(&manifest.project.name) {
+        return Err(OmSourcesLoadError::Contract {
+            message: "source registry project.name was empty".to_string(),
+        });
+    }
+    if has_surrounding_contract_whitespace(&manifest.project.name) {
+        return Err(OmSourcesLoadError::Contract {
+            message: "source registry project.name contained leading or trailing whitespace"
+                .to_string(),
+        });
+    }
+
+    for (field_name, field_value) in [
+        (
+            "project.default_profile",
+            manifest.project.default_profile.as_str(),
+        ),
+        (
+            "project.default_mode",
+            manifest.project.default_mode.as_str(),
+        ),
+        ("om_contract.primary", manifest.om_contract.primary.as_str()),
+        (
+            "om_contract.secondary",
+            manifest.om_contract.secondary.as_str(),
+        ),
+        (
+            "om_contract.docs_primary",
+            manifest.om_contract.docs_primary.as_str(),
+        ),
+        ("ooxml.primary", manifest.ooxml.primary.as_str()),
+        ("ooxml.packaging", manifest.ooxml.packaging.as_str()),
+        (
+            "ooxml.implementation_notes",
+            manifest.ooxml.implementation_notes.as_str(),
+        ),
+        (
+            "ooxml.excel_extensions",
+            manifest.ooxml.excel_extensions.as_str(),
+        ),
+        (
+            "ooxml.shared_structures",
+            manifest.ooxml.shared_structures.as_str(),
+        ),
+    ] {
+        validate_source_registry_identifier(field_name, field_value)?;
+    }
+
+    for profile_key in manifest.profiles.keys() {
+        validate_source_registry_identifier("profiles key", profile_key)?;
+    }
+
+    if !manifest
+        .profiles
+        .contains_key(&manifest.project.default_profile)
+    {
+        return Err(OmSourcesLoadError::Contract {
+            message: format!(
+                "source registry default_profile {} did not match a profile key",
+                manifest.project.default_profile
+            ),
+        });
+    }
+
+    Ok(())
 }
 
 fn is_reserved_artifact_path_character(character: char) -> bool {
