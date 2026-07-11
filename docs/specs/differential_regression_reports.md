@@ -93,13 +93,14 @@ Supported statuses are:
 - present `case.surface` and `case.member` values are non-blank ASCII
   identifiers without leading or trailing whitespace
 - case artifact keys are non-blank ASCII identifiers without leading or
-  trailing whitespace; artifact paths are non-blank forward-slash relative
-  paths without `.`, `..`, empty path segments, Windows-reserved portable path
-  characters, device-name segments, trailing-dot segments, or leading/trailing
-  whitespace on any path segment that stay within the report output root under
-  an artifact subdirectory; case artifact paths are unique within the report
-  under exact and ASCII case-insensitive matching and cannot use canonical
-  differential artifact filenames as their top-level namespace
+  trailing whitespace and without ASCII case-insensitive collisions within a
+  case; artifact paths are non-blank forward-slash relative paths without `.`,
+  `..`, empty path segments, Windows-reserved portable path characters,
+  device-name segments, trailing-dot segments, or leading/trailing whitespace on
+  any path segment that stay within the report output root under an artifact
+  subdirectory; case artifact paths are unique within the report under exact and
+  ASCII case-insensitive matching and cannot use canonical differential
+  artifact filenames as their top-level namespace
 - `statusCounts` equals the status histogram reconstructed from `cases`
 - present `context` string fields and list entries are non-blank, contain no
   leading or trailing whitespace, and context lists do not contain duplicates

@@ -2755,6 +2755,59 @@ fn differential_report_rejects_duplicate_case_artifact_paths() {
         other => panic!("unexpected error: {other:?}"),
     }
     assert!(!casefold_path.exists());
+
+    let casefold_key_report = build_differential_report(
+        "Excel",
+        "16.0",
+        "excel_365",
+        vec![DifferentialCaseResult {
+            name: "Application.Version".to_string(),
+            surface: Some("Application".to_string()),
+            member: Some("Version".to_string()),
+            status: DifferentialCaseStatus::Passed,
+            expected: Some("16.0".to_string()),
+            actual: Some("16.0".to_string()),
+            message: None,
+            artifacts: BTreeMap::from([
+                (
+                    "runtimeTrace".to_string(),
+                    "reports/runtime-trace.json".to_string(),
+                ),
+                (
+                    "RuntimeTrace".to_string(),
+                    "reports/runtime-trace-copy.json".to_string(),
+                ),
+            ]),
+        }],
+    );
+    let casefold_key_json =
+        serde_json::to_string(&casefold_key_report).expect("casefold key report json");
+    let casefold_key_load_error = load_differential_report_from_json(&casefold_key_json)
+        .expect_err("case-insensitive duplicate artifact key should fail load");
+    match casefold_key_load_error {
+        DifferentialReportLoadError::Contract { message } => {
+            assert!(message.contains(
+                "case Application.Version duplicate artifact key runtimeTrace under ASCII case-insensitive matching"
+            ));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    let casefold_key_path = std::env::temp_dir().join(format!(
+        "ootd-differential-report-casefold-artifact-key-{unique_suffix}.json"
+    ));
+    let casefold_key_write_error =
+        write_differential_report_to_path(&casefold_key_report, &casefold_key_path)
+            .expect_err("case-insensitive duplicate artifact key should fail write");
+    match casefold_key_write_error {
+        DifferentialReportLoadError::Contract { message } => {
+            assert!(message.contains(
+                "case Application.Version duplicate artifact key runtimeTrace under ASCII case-insensitive matching"
+            ));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+    assert!(!casefold_key_path.exists());
 }
 
 #[test]

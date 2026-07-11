@@ -1909,6 +1909,7 @@ impl DifferentialReport {
                     });
                 }
             }
+            let mut seen_casefold_artifact_keys = BTreeSet::new();
             for (artifact_key, artifact_path) in &case.artifacts {
                 if is_blank_contract_string(artifact_key) {
                     return Err(DifferentialReportLoadError::Contract {
@@ -1930,6 +1931,14 @@ impl DifferentialReport {
                     return Err(DifferentialReportLoadError::Contract {
                         message: format!(
                             "differential report case {} artifact key {} must be an ASCII identifier",
+                            case.name, artifact_key
+                        ),
+                    });
+                }
+                if !seen_casefold_artifact_keys.insert(artifact_key.to_ascii_uppercase()) {
+                    return Err(DifferentialReportLoadError::Contract {
+                        message: format!(
+                            "differential report case {} duplicate artifact key {} under ASCII case-insensitive matching",
                             case.name, artifact_key
                         ),
                     });
