@@ -217,6 +217,13 @@ fn source_registry_rejects_malformed_identifier_fields() {
     for (malformed_toml, expected_message) in [
         (
             registry_toml.replace(
+                "name = \"excel-compat-core\"",
+                "name = \"excel compat core\"",
+            ),
+            "source registry project.name value excel compat core must be an ASCII token",
+        ),
+        (
+            registry_toml.replace(
                 "default_profile = \"excel_365\"",
                 "default_profile = \"excel 365\"",
             ),
@@ -620,6 +627,15 @@ fn differential_report_rejects_malformed_source_context_shape() {
             let mut report = base_report.clone();
             report.context.as_mut().expect("context").project_name = "   ".to_string();
             (report, "context projectName was empty")
+        },
+        {
+            let mut report = base_report.clone();
+            report.context.as_mut().expect("context").project_name =
+                "excel compat core".to_string();
+            (
+                report,
+                "context projectName value excel compat core must be an ASCII token",
+            )
         },
         {
             let mut report = base_report.clone();

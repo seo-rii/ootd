@@ -1346,6 +1346,12 @@ fn is_contract_identifier(value: &str) -> bool {
         && chars.all(|character| character.is_ascii_alphanumeric() || character == '_')
 }
 
+fn is_contract_token(value: &str) -> bool {
+    value
+        .chars()
+        .all(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | '-' | '.'))
+}
+
 fn validate_source_registry_identifier(
     field_name: &str,
     field_value: &str,
@@ -1388,10 +1394,7 @@ fn validate_source_registry_token(
             ),
         });
     }
-    if !field_value
-        .chars()
-        .all(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | '-' | '.'))
-    {
+    if !is_contract_token(field_value) {
         return Err(OmSourcesLoadError::Contract {
             message: format!(
                 "source registry {field_name} value {field_value} must be an ASCII token"
@@ -1413,6 +1416,14 @@ fn validate_source_registry_manifest(
         return Err(OmSourcesLoadError::Contract {
             message: "source registry project.name contained leading or trailing whitespace"
                 .to_string(),
+        });
+    }
+    if !is_contract_token(&manifest.project.name) {
+        return Err(OmSourcesLoadError::Contract {
+            message: format!(
+                "source registry project.name value {} must be an ASCII token",
+                manifest.project.name
+            ),
         });
     }
 
@@ -1666,6 +1677,14 @@ impl DifferentialReport {
                         ),
                     });
                 }
+            }
+            if !is_contract_token(&context.project_name) {
+                return Err(DifferentialReportLoadError::Contract {
+                    message: format!(
+                        "differential report context projectName value {} must be an ASCII token",
+                        context.project_name
+                    ),
+                });
             }
             for (field_name, field_value) in [
                 ("defaultProfile", context.default_profile.as_str()),
