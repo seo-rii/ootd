@@ -393,6 +393,14 @@ fn differential_report_rejects_malformed_source_context_shape() {
         },
         {
             let mut report = base_report.clone();
+            report.context.as_mut().expect("context").default_mode = "lossless mode".to_string();
+            (
+                report,
+                "context defaultMode value lossless mode must be an ASCII identifier",
+            )
+        },
+        {
+            let mut report = base_report.clone();
             report
                 .context
                 .as_mut()
@@ -2516,6 +2524,11 @@ fn differential_report_rejects_untrimmed_contract_strings() {
             let mut report = base_report.clone();
             report.profile = " excel_365 ".to_string();
             (report, "profile contained leading or trailing whitespace")
+        },
+        {
+            let mut report = base_report.clone();
+            report.profile = "excel 365".to_string();
+            (report, "profile excel 365 must be an ASCII identifier")
         },
         {
             let mut report = base_report.clone();

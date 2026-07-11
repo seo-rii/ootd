@@ -4823,6 +4823,8 @@
   - 범위: differential report `case.name`과 gate `blockingCases` validation이 exact match뿐 아니라 ASCII case-insensitive match로도 중복 거부하도록 추가해 `Application.Version`과 `application.version` 같은 regression identity drift가 CI gate/report boundary를 통과하지 못하도록 고정
   - `Step 7.89 DONE` codegen differential source context case-insensitive duplicate validation
   - 범위: differential report context의 `enabledCorpusGroups`와 `validationModes` list validation이 exact match뿐 아니라 ASCII case-insensitive match로도 중복 거부하도록 추가해 `official_ms`/`Official_MS`, `openxml_validator`/`OpenXML_Validator` 같은 provenance drift가 source registry context boundary를 통과하지 못하도록 고정
+  - `Step 7.90 DONE` codegen differential profile/context identifier validation
+  - 범위: differential report `profile`과 context routing/source id fields(`defaultProfile`, `defaultMode`, `primaryOmArtifact`, `primaryOoxmlSource`)가 ASCII identifier가 아닌 경우를 contract error로 거부하도록 추가해 profile/source provenance key가 whitespace 또는 display-name 형태로 CI artifact boundary를 통과하지 못하도록 고정
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.

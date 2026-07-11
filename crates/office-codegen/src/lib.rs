@@ -1437,6 +1437,14 @@ impl DifferentialReport {
                     .to_string(),
             });
         }
+        if !is_contract_identifier(&self.profile) {
+            return Err(DifferentialReportLoadError::Contract {
+                message: format!(
+                    "differential report profile {} must be an ASCII identifier",
+                    self.profile
+                ),
+            });
+        }
         if let Some(context) = self.context.as_ref() {
             for (field_name, field_value) in [
                 ("projectName", context.project_name.as_str()),
@@ -1454,6 +1462,20 @@ impl DifferentialReport {
                     return Err(DifferentialReportLoadError::Contract {
                         message: format!(
                             "differential report context {field_name} contained leading or trailing whitespace"
+                        ),
+                    });
+                }
+            }
+            for (field_name, field_value) in [
+                ("defaultProfile", context.default_profile.as_str()),
+                ("defaultMode", context.default_mode.as_str()),
+                ("primaryOmArtifact", context.primary_om_artifact.as_str()),
+                ("primaryOoxmlSource", context.primary_ooxml_source.as_str()),
+            ] {
+                if !is_contract_identifier(field_value) {
+                    return Err(DifferentialReportLoadError::Contract {
+                        message: format!(
+                            "differential report context {field_name} value {field_value} must be an ASCII identifier"
                         ),
                     });
                 }

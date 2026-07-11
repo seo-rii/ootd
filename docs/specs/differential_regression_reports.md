@@ -71,7 +71,7 @@ Supported statuses are:
 `office-codegen` validates that:
 
 - `library`, `version`, and `profile` are non-blank and contain no leading or
-  trailing whitespace
+  trailing whitespace; `profile` is an ASCII identifier
 - `caseCount` equals `cases.length`
 - `cases` is non-empty
 - `case.name` is non-blank, contains no leading or trailing whitespace, and is
@@ -90,6 +90,9 @@ Supported statuses are:
 - present `context` string fields and list entries are non-blank, contain no
   leading or trailing whitespace, and context lists do not contain duplicates
   under exact or ASCII case-insensitive matching
+- present `context.defaultProfile`, `context.defaultMode`,
+  `context.primaryOmArtifact`, and `context.primaryOoxmlSource` are ASCII
+  identifiers
 - present `context.enabledCorpusGroups` and `context.validationModes` are
   non-empty, and `enabledCorpusSourceCount` covers the enabled corpus groups
 - when `context` is present, `profile` equals `context.defaultProfile`
