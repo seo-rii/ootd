@@ -4839,6 +4839,8 @@
   - 범위: source registry TOML load가 `official_ms`/`open_source` parent corpus enable flag와 child source toggles의 불일치를 contract error로 거부해 disabled group의 stray source와 enabled group의 empty source set이 differential context provenance로 요약되지 않도록 고정
   - `Step 7.97 DONE` codegen source project name token validation
   - 범위: source registry `project.name`과 differential report context `projectName`이 ASCII token이 아닌 경우를 contract error로 거부하도록 추가해 `excel compat core` 같은 display-name 형태 project provenance가 source registry/report boundary를 통과하지 못하도록 고정
+  - `Step 7.98 DONE` codegen differential case surface/member identifier validation
+  - 범위: differential report case의 optional `surface`/`member`가 ASCII identifier가 아닌 경우를 contract error로 거부하도록 추가해 `Application Object`, `Value 2` 같은 display-name 형태 OM dispatch key가 regression report boundary를 통과하지 못하도록 고정
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.

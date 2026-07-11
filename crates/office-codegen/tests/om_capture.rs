@@ -2849,8 +2849,21 @@ fn differential_report_rejects_untrimmed_contract_strings() {
         },
         {
             let mut report = base_report.clone();
+            report.cases[0].surface = Some("Application Object".to_string());
+            (
+                report,
+                "surface Application Object must be an ASCII identifier",
+            )
+        },
+        {
+            let mut report = base_report.clone();
             report.cases[0].member = Some(" Version".to_string());
             (report, "member contained leading or trailing whitespace")
+        },
+        {
+            let mut report = base_report.clone();
+            report.cases[0].member = Some("Value 2".to_string());
+            (report, "member Value 2 must be an ASCII identifier")
         },
         {
             let mut report = base_report.clone();

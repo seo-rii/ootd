@@ -1872,6 +1872,16 @@ impl DifferentialReport {
                     ),
                 });
             }
+            if let Some(surface) = &case.surface {
+                if !is_contract_identifier(surface) {
+                    return Err(DifferentialReportLoadError::Contract {
+                        message: format!(
+                            "differential report case {} surface {} must be an ASCII identifier",
+                            case.name, surface
+                        ),
+                    });
+                }
+            }
             if case.member.as_deref().is_some_and(is_blank_contract_string) {
                 return Err(DifferentialReportLoadError::Contract {
                     message: format!("differential report case {} has empty member", case.name),
@@ -1888,6 +1898,16 @@ impl DifferentialReport {
                         case.name
                     ),
                 });
+            }
+            if let Some(member) = &case.member {
+                if !is_contract_identifier(member) {
+                    return Err(DifferentialReportLoadError::Contract {
+                        message: format!(
+                            "differential report case {} member {} must be an ASCII identifier",
+                            case.name, member
+                        ),
+                    });
+                }
             }
             for (artifact_key, artifact_path) in &case.artifacts {
                 if is_blank_contract_string(artifact_key) {
