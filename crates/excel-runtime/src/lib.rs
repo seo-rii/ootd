@@ -43130,12 +43130,17 @@ fn patch_loaded_chart_model_xml(
                         continue;
                     }
                 } else if current_chart_group_depth == Some(element_stack.len())
-                    && let Some((setting_index, (_, _, _))) = expected_chart_group_numeric_settings
+                    && let Some((setting_index, (_, _, expected))) = expected_chart_group_numeric_settings
                         .iter()
                         .enumerate()
                         .find(|(_, (name, _, _))| local_name.as_slice() == *name)
                 {
                     chart_group_numeric_setting_seen[setting_index] = true;
+                    if expected.is_none() {
+                        skip_depth = 1;
+                        buffer.clear();
+                        continue;
+                    }
                 } else if current_chart_group_depth == Some(element_stack.len())
                     && let Some((flag_index, (_, _, expected))) = expected_chart_group_line_flags
                         .iter()
@@ -44979,12 +44984,16 @@ fn patch_loaded_chart_model_xml(
                         continue;
                     }
                 } else if current_chart_group_depth == Some(element_stack.len())
-                    && let Some((setting_index, (_, _, _))) = expected_chart_group_numeric_settings
+                    && let Some((setting_index, (_, _, expected))) = expected_chart_group_numeric_settings
                         .iter()
                         .enumerate()
                         .find(|(_, (name, _, _))| local_name.as_slice() == *name)
                 {
                     chart_group_numeric_setting_seen[setting_index] = true;
+                    if expected.is_none() {
+                        buffer.clear();
+                        continue;
+                    }
                 } else if current_chart_group_depth == Some(element_stack.len())
                     && let Some((flag_index, (_, _, expected))) = expected_chart_group_line_flags
                         .iter()
@@ -126541,11 +126550,38 @@ mod tests {
                 &[],
             )
             .expect("set bubble Series.Formula before ChartGroup.ChartType");
+        runtime
+            .dispatch_set(chart_group, "BubbleScale", OmValue::Number(155.0), &[])
+            .expect("set ChartGroup.BubbleScale before ChartGroup.ChartType");
+        runtime
+            .dispatch_set(chart_group, "ShowNegativeBubbles", OmValue::Bool(true), &[])
+            .expect("set ChartGroup.ShowNegativeBubbles before ChartGroup.ChartType");
+        runtime
+            .dispatch_set(chart_group, "Has3DShading", OmValue::Bool(true), &[])
+            .expect("set ChartGroup.Has3DShading before ChartGroup.ChartType");
         assert_eq!(
             runtime
                 .dispatch_get(series, "BubbleSizes", &[])
                 .expect("Series.BubbleSizes before ChartGroup.ChartType"),
             OmValue::Text("=Sheet1!$D$1:$D$3".to_string())
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_group, "BubbleScale", &[])
+                .expect("ChartGroup.BubbleScale before ChartGroup.ChartType"),
+            OmValue::Number(155.0)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_group, "ShowNegativeBubbles", &[])
+                .expect("ChartGroup.ShowNegativeBubbles before ChartGroup.ChartType"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_group, "Has3DShading", &[])
+                .expect("ChartGroup.Has3DShading before ChartGroup.ChartType"),
+            OmValue::Bool(true)
         );
         let search_range = expect_object_handle(
             runtime
@@ -126616,6 +126652,33 @@ mod tests {
             ),
             "=SERIES(Sheet1!$C$1,Sheet1!$A$1:$A$3,Sheet1!$B$1:$B$3,1)"
         );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_group, "BubbleScale", &[])
+                .expect("ChartGroup.BubbleScale after ChartGroup.ChartType"),
+            OmValue::Number(100.0)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_group, "ShowNegativeBubbles", &[])
+                .expect("ChartGroup.ShowNegativeBubbles after ChartGroup.ChartType"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_group, "Has3DShading", &[])
+                .expect("ChartGroup.Has3DShading after ChartGroup.ChartType"),
+            OmValue::Bool(false)
+        );
+        {
+            let state = runtime
+                .workbook_state(workbook)
+                .expect("workbook state after ChartGroup.ChartType");
+            let chart = state.charts.values().next().expect("chart model");
+            assert_eq!(chart.bubble_scale, None);
+            assert_eq!(chart.show_negative_bubbles, None);
+            assert_eq!(chart.has_3d_shading, None);
+        }
 
         let saved = runtime
             .save_workbook(
@@ -126639,6 +126702,9 @@ mod tests {
         assert!(saved_chart_xml.contains("<c:lineChart>"));
         assert!(!saved_chart_xml.contains("<c:barChart>"));
         assert!(!saved_chart_xml.contains("<c:bubbleSize>"));
+        assert!(!saved_chart_xml.contains("<c:bubbleScale"));
+        assert!(!saved_chart_xml.contains("<c:showNegBubbles"));
+        assert!(!saved_chart_xml.contains("<c:bubble3D"));
 
         let mut reopened_runtime = ExcelRuntime::new();
         let reopened_workbook = reopened_runtime
@@ -126681,6 +126747,24 @@ mod tests {
                     .expect("reopened ChartGroup.ChartType")
             ),
             f64::from(super::XL_LINE_MARKERS)
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_chart_group, "BubbleScale", &[])
+                .expect("reopened ChartGroup.BubbleScale"),
+            OmValue::Number(100.0)
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_chart_group, "ShowNegativeBubbles", &[])
+                .expect("reopened ChartGroup.ShowNegativeBubbles"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_chart_group, "Has3DShading", &[])
+                .expect("reopened ChartGroup.Has3DShading"),
+            OmValue::Bool(false)
         );
     }
 
@@ -128372,6 +128456,11 @@ mod tests {
                 .dispatch_get(chart, "SeriesCollection", &[OmValue::Number(1.0)])
                 .expect("Chart.SeriesCollection(1)"),
         );
+        let chart_group = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartGroups", &[OmValue::Number(1.0)])
+                .expect("Chart.ChartGroups(1)"),
+        );
         assert_eq!(
             expect_number(
                 runtime
@@ -128399,11 +128488,38 @@ mod tests {
                 &[],
             )
             .expect("set bubble Series.Formula after Series.ChartType");
+        runtime
+            .dispatch_set(chart_group, "BubbleScale", OmValue::Number(155.0), &[])
+            .expect("set ChartGroup.BubbleScale before Series.ChartType");
+        runtime
+            .dispatch_set(chart_group, "ShowNegativeBubbles", OmValue::Bool(true), &[])
+            .expect("set ChartGroup.ShowNegativeBubbles before Series.ChartType");
+        runtime
+            .dispatch_set(chart_group, "Has3DShading", OmValue::Bool(true), &[])
+            .expect("set ChartGroup.Has3DShading before Series.ChartType");
         assert_eq!(
             runtime
                 .dispatch_get(series, "BubbleSizes", &[])
                 .expect("Series.BubbleSizes before Series.ChartType change"),
             OmValue::Text("=Sheet1!$D$1:$D$3".to_string())
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_group, "BubbleScale", &[])
+                .expect("ChartGroup.BubbleScale before Series.ChartType"),
+            OmValue::Number(155.0)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_group, "ShowNegativeBubbles", &[])
+                .expect("ChartGroup.ShowNegativeBubbles before Series.ChartType"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_group, "Has3DShading", &[])
+                .expect("ChartGroup.Has3DShading before Series.ChartType"),
+            OmValue::Bool(true)
         );
 
         runtime
@@ -128444,6 +128560,33 @@ mod tests {
             ),
             f64::from(super::XL_LINE_MARKERS)
         );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_group, "BubbleScale", &[])
+                .expect("ChartGroup.BubbleScale after Series.ChartType"),
+            OmValue::Number(100.0)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_group, "ShowNegativeBubbles", &[])
+                .expect("ChartGroup.ShowNegativeBubbles after Series.ChartType"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_group, "Has3DShading", &[])
+                .expect("ChartGroup.Has3DShading after Series.ChartType"),
+            OmValue::Bool(false)
+        );
+        {
+            let state = runtime
+                .workbook_state(workbook)
+                .expect("workbook state after Series.ChartType");
+            let chart = state.charts.values().next().expect("chart model");
+            assert_eq!(chart.bubble_scale, None);
+            assert_eq!(chart.show_negative_bubbles, None);
+            assert_eq!(chart.has_3d_shading, None);
+        }
 
         let saved = runtime
             .save_workbook(
@@ -128467,6 +128610,9 @@ mod tests {
         assert!(saved_chart_xml.contains("<c:lineChart>"));
         assert!(!saved_chart_xml.contains("<c:barChart>"));
         assert!(!saved_chart_xml.contains("<c:bubbleSize>"));
+        assert!(!saved_chart_xml.contains("<c:bubbleScale"));
+        assert!(!saved_chart_xml.contains("<c:showNegBubbles"));
+        assert!(!saved_chart_xml.contains("<c:bubble3D"));
     }
 
     #[test]
