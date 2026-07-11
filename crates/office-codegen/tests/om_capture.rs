@@ -2093,6 +2093,125 @@ fn loads_differential_report_from_json_and_rejects_stale_counts() {
 }
 
 #[test]
+fn differential_report_rejects_malformed_status_outcomes() {
+    for (case, expected_message) in [
+        (
+            DifferentialCaseResult {
+                name: "PassedMissingExpected".to_string(),
+                surface: Some("Application".to_string()),
+                member: Some("Version".to_string()),
+                status: DifferentialCaseStatus::Passed,
+                expected: None,
+                actual: Some("16.0".to_string()),
+                message: None,
+                artifacts: BTreeMap::new(),
+            },
+            "passed status required expected and actual",
+        ),
+        (
+            DifferentialCaseResult {
+                name: "FailedMissingMessage".to_string(),
+                surface: Some("Range".to_string()),
+                member: Some("Value2".to_string()),
+                status: DifferentialCaseStatus::Failed,
+                expected: Some("[[1],[2]]".to_string()),
+                actual: Some("1".to_string()),
+                message: None,
+                artifacts: BTreeMap::new(),
+            },
+            "failed status required expected, actual, and message",
+        ),
+        (
+            DifferentialCaseResult {
+                name: "MissingOracleWithExpected".to_string(),
+                surface: Some("Chart".to_string()),
+                member: Some("SetSourceData".to_string()),
+                status: DifferentialCaseStatus::MissingOracle,
+                expected: Some("completed".to_string()),
+                actual: Some("completed".to_string()),
+                message: Some("Excel oracle result was not captured".to_string()),
+                artifacts: BTreeMap::new(),
+            },
+            "missingOracle status must not include expected",
+        ),
+        (
+            DifferentialCaseResult {
+                name: "MissingRuntimeWithActual".to_string(),
+                surface: Some("WorksheetFunction".to_string()),
+                member: Some("XLookup".to_string()),
+                status: DifferentialCaseStatus::MissingRuntime,
+                expected: Some("matched".to_string()),
+                actual: Some("matched".to_string()),
+                message: Some("runtime function is not implemented".to_string()),
+                artifacts: BTreeMap::new(),
+            },
+            "missingRuntime status must not include actual",
+        ),
+        (
+            DifferentialCaseResult {
+                name: "UnsupportedWithExpected".to_string(),
+                surface: Some("Chart".to_string()),
+                member: Some("Refresh".to_string()),
+                status: DifferentialCaseStatus::Unsupported,
+                expected: Some("pivot".to_string()),
+                actual: None,
+                message: Some("pivot charts are preserve-only".to_string()),
+                artifacts: BTreeMap::new(),
+            },
+            "unsupported status required message and no expected or actual",
+        ),
+        (
+            DifferentialCaseResult {
+                name: "SkippedMissingMessage".to_string(),
+                surface: Some("Workbook".to_string()),
+                member: Some("UpdateLink".to_string()),
+                status: DifferentialCaseStatus::Skipped,
+                expected: None,
+                actual: None,
+                message: None,
+                artifacts: BTreeMap::new(),
+            },
+            "skipped status required message and no expected or actual",
+        ),
+    ] {
+        let report = build_differential_report("Excel", "16.0", "excel_365", vec![case]);
+        let json = serde_json::to_string(&report).expect("report json");
+
+        let load_error = load_differential_report_from_json(&json)
+            .expect_err("malformed status outcome should fail load");
+        match load_error {
+            DifferentialReportLoadError::Contract { message } => {
+                assert!(
+                    message.contains(expected_message),
+                    "{message:?} did not contain {expected_message:?}"
+                );
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "ootd-differential-report-status-outcome-{unique_suffix}.json"
+        ));
+        let write_error = write_differential_report_to_path(&report, &path)
+            .expect_err("malformed status outcome should fail write");
+        match write_error {
+            DifferentialReportLoadError::Contract { message } => {
+                assert!(
+                    message.contains(expected_message),
+                    "{message:?} did not contain {expected_message:?}"
+                );
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+        assert!(!path.exists());
+    }
+}
+
+#[test]
 fn differential_report_rejects_empty_case_set() {
     let report = build_differential_report("Excel", "16.0", "excel_365", Vec::new());
     let json = serde_json::to_string(&report).expect("report json");

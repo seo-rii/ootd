@@ -95,6 +95,12 @@ Supported statuses are:
   identifiers without leading or trailing whitespace
 - present `case.expected`, `case.actual`, and `case.message` values are
   non-blank and contain no leading or trailing whitespace
+- `case.status` determines the outcome field shape: `passed` requires
+  `expected` and `actual`; `failed` requires `expected`, `actual`, and
+  `message`; `missingOracle` requires `actual` and `message` without
+  `expected`; `missingRuntime` requires `expected` and `message` without
+  `actual`; `unsupported` and `skipped` require `message` without `expected`
+  or `actual`
 - case artifact keys are non-blank ASCII identifiers without leading or
   trailing whitespace and without ASCII case-insensitive collisions within a
   case; artifact paths are non-blank forward-slash relative paths without `.`,

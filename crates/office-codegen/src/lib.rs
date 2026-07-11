@@ -1949,6 +1949,84 @@ impl DifferentialReport {
                     }
                 }
             }
+            match case.status {
+                DifferentialCaseStatus::Passed => {
+                    if case.expected.is_none() || case.actual.is_none() {
+                        return Err(DifferentialReportLoadError::Contract {
+                            message: format!(
+                                "differential report case {} passed status required expected and actual",
+                                case.name
+                            ),
+                        });
+                    }
+                }
+                DifferentialCaseStatus::Failed => {
+                    if case.expected.is_none() || case.actual.is_none() || case.message.is_none() {
+                        return Err(DifferentialReportLoadError::Contract {
+                            message: format!(
+                                "differential report case {} failed status required expected, actual, and message",
+                                case.name
+                            ),
+                        });
+                    }
+                }
+                DifferentialCaseStatus::MissingOracle => {
+                    if case.expected.is_some() {
+                        return Err(DifferentialReportLoadError::Contract {
+                            message: format!(
+                                "differential report case {} missingOracle status must not include expected",
+                                case.name
+                            ),
+                        });
+                    }
+                    if case.actual.is_none() || case.message.is_none() {
+                        return Err(DifferentialReportLoadError::Contract {
+                            message: format!(
+                                "differential report case {} missingOracle status required actual and message",
+                                case.name
+                            ),
+                        });
+                    }
+                }
+                DifferentialCaseStatus::MissingRuntime => {
+                    if case.actual.is_some() {
+                        return Err(DifferentialReportLoadError::Contract {
+                            message: format!(
+                                "differential report case {} missingRuntime status must not include actual",
+                                case.name
+                            ),
+                        });
+                    }
+                    if case.expected.is_none() || case.message.is_none() {
+                        return Err(DifferentialReportLoadError::Contract {
+                            message: format!(
+                                "differential report case {} missingRuntime status required expected and message",
+                                case.name
+                            ),
+                        });
+                    }
+                }
+                DifferentialCaseStatus::Unsupported => {
+                    if case.expected.is_some() || case.actual.is_some() || case.message.is_none() {
+                        return Err(DifferentialReportLoadError::Contract {
+                            message: format!(
+                                "differential report case {} unsupported status required message and no expected or actual",
+                                case.name
+                            ),
+                        });
+                    }
+                }
+                DifferentialCaseStatus::Skipped => {
+                    if case.expected.is_some() || case.actual.is_some() || case.message.is_none() {
+                        return Err(DifferentialReportLoadError::Contract {
+                            message: format!(
+                                "differential report case {} skipped status required message and no expected or actual",
+                                case.name
+                            ),
+                        });
+                    }
+                }
+            }
             let mut seen_casefold_artifact_keys = BTreeSet::new();
             for (artifact_key, artifact_path) in &case.artifacts {
                 if is_blank_contract_string(artifact_key) {
