@@ -1372,6 +1372,35 @@ fn validate_source_registry_identifier(
     Ok(())
 }
 
+fn validate_source_registry_token(
+    field_name: &str,
+    field_value: &str,
+) -> Result<(), OmSourcesLoadError> {
+    if is_blank_contract_string(field_value) {
+        return Err(OmSourcesLoadError::Contract {
+            message: format!("source registry {field_name} was empty"),
+        });
+    }
+    if has_surrounding_contract_whitespace(field_value) {
+        return Err(OmSourcesLoadError::Contract {
+            message: format!(
+                "source registry {field_name} contained leading or trailing whitespace"
+            ),
+        });
+    }
+    if !field_value
+        .chars()
+        .all(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | '-' | '.'))
+    {
+        return Err(OmSourcesLoadError::Contract {
+            message: format!(
+                "source registry {field_name} value {field_value} must be an ASCII token"
+            ),
+        });
+    }
+    Ok(())
+}
+
 fn validate_source_registry_manifest(
     manifest: &SourceRegistryManifest,
 ) -> Result<(), OmSourcesLoadError> {
@@ -1425,6 +1454,16 @@ fn validate_source_registry_manifest(
 
     for profile_key in manifest.profiles.keys() {
         validate_source_registry_identifier("profiles key", profile_key)?;
+    }
+
+    for (section_name, entries) in [
+        ("binary_formats", &manifest.binary_formats),
+        ("behavior", &manifest.behavior),
+    ] {
+        for (key, value) in entries {
+            validate_source_registry_identifier(&format!("{section_name} key"), key)?;
+            validate_source_registry_token(&format!("{section_name}.{key}"), value)?;
+        }
     }
 
     if !manifest

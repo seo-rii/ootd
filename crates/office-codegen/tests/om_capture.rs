@@ -241,6 +241,28 @@ fn source_registry_rejects_malformed_identifier_fields() {
             "source registry ooxml.primary value ecma 376 must be an ASCII identifier",
         ),
         (
+            registry_toml.replace("xlsb = \"MS-XLSB\"", "\"xls b\" = \"MS-XLSB\""),
+            "source registry binary_formats key value xls b must be an ASCII identifier",
+        ),
+        (
+            registry_toml.replace("xlsb = \"MS-XLSB\"", "xlsb = \"MS XLSB\""),
+            "source registry binary_formats.xlsb value MS XLSB must be an ASCII token",
+        ),
+        (
+            registry_toml.replace(
+                "compatibility = \"function_version_behavior\"",
+                "\"compatibility mode\" = \"function_version_behavior\"",
+            ),
+            "source registry behavior key value compatibility mode must be an ASCII identifier",
+        ),
+        (
+            registry_toml.replace(
+                "compatibility = \"function_version_behavior\"",
+                "compatibility = \"function version behavior\"",
+            ),
+            "source registry behavior.compatibility value function version behavior must be an ASCII token",
+        ),
+        (
             registry_toml.replace("[profiles.excel_365]", "[profiles.\"excel 365\"]"),
             "source registry profiles key value excel 365 must be an ASCII identifier",
         ),

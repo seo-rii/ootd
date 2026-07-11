@@ -40,9 +40,10 @@ before comparing the source registry context.
 building the context. `project.default_profile`, `project.default_mode`, OM
 artifact ids, OOXML source ids, and profile keys are non-blank ASCII
 identifiers without leading or trailing whitespace; `project.default_profile`
-must match a declared profile key. The registry must also enable at least one
-corpus group, provide enough enabled corpus sources to cover those groups, and
-enable at least one validation mode.
+must match a declared profile key. Auxiliary `binary_formats` and `behavior`
+map keys are ASCII identifiers, and their values are non-blank ASCII tokens.
+The registry must also enable at least one corpus group, provide enough enabled
+corpus sources to cover those groups, and enable at least one validation mode.
 
 ## Differential Report JSON
 
