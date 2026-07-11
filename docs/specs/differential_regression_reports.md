@@ -92,7 +92,8 @@ Supported statuses are:
 - `case.name` is non-blank, contains no leading or trailing whitespace, and is
   unique within the report under exact and ASCII case-insensitive matching
 - present `case.surface` and `case.member` values are non-blank ASCII
-  identifiers without leading or trailing whitespace
+  identifiers without leading or trailing whitespace, and `case.member` is only
+  allowed when `case.surface` is also present
 - present `case.expected`, `case.actual`, and `case.message` values are
   non-blank and contain no leading or trailing whitespace
 - `case.status` determines the outcome field shape: `passed` requires

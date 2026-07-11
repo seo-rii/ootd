@@ -1925,6 +1925,14 @@ impl DifferentialReport {
                     });
                 }
             }
+            if case.member.is_some() && case.surface.is_none() {
+                return Err(DifferentialReportLoadError::Contract {
+                    message: format!(
+                        "differential report case {} member was present without surface",
+                        case.name
+                    ),
+                });
+            }
             for (field_name, field_value) in [
                 ("expected", case.expected.as_deref()),
                 ("actual", case.actual.as_deref()),

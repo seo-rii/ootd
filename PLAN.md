@@ -4849,6 +4849,8 @@
   - 범위: differential report case의 optional `expected`/`actual`/`message`가 present일 때 빈 문자열이거나 leading/trailing whitespace를 포함하면 contract error로 거부하도록 추가해 outcome payload가 의미 없는 blank 또는 trim-sensitive display text로 report boundary를 통과하지 못하도록 고정
   - `Step 7.102 DONE` codegen differential status outcome shape validation
   - 범위: differential report case status별 `expected`/`actual`/`message` 필수/금지 조합을 contract error로 검증해 `passed`, `failed`, `missingOracle`, `missingRuntime`, `unsupported`, `skipped` outcome shape가 downstream gate와 리포트 작성 규칙 사이에서 drift되지 않도록 고정
+  - `Step 7.103 DONE` codegen differential case member surface pairing validation
+  - 범위: differential report case에서 `member`가 present이면 `surface`도 반드시 present하도록 contract error로 검증해 member-level regression identity가 어느 OM surface에 속하는지 잃은 채 report/gate boundary를 통과하지 못하도록 고정
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.

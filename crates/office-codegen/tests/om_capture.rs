@@ -2414,7 +2414,7 @@ fn differential_report_rejects_empty_case_names() {
 }
 
 #[test]
-fn differential_report_rejects_empty_case_surface_or_member() {
+fn differential_report_rejects_malformed_case_surface_or_member() {
     for (surface, member, expected_message) in [
         (
             Some(String::new()),
@@ -2436,6 +2436,11 @@ fn differential_report_rejects_empty_case_surface_or_member() {
             Some("   ".to_string()),
             "empty member",
         ),
+        (
+            None,
+            Some("Version".to_string()),
+            "member was present without surface",
+        ),
     ] {
         let report = build_differential_report(
             "Excel",
@@ -2455,7 +2460,7 @@ fn differential_report_rejects_empty_case_surface_or_member() {
         let json = serde_json::to_string(&report).expect("report json");
 
         let error = load_differential_report_from_json(&json)
-            .expect_err("empty surface/member should fail load");
+            .expect_err("malformed surface/member should fail load");
         match error {
             DifferentialReportLoadError::Contract { message } => {
                 assert!(
@@ -2471,10 +2476,10 @@ fn differential_report_rejects_empty_case_surface_or_member() {
             .expect("system time")
             .as_nanos();
         let path = std::env::temp_dir().join(format!(
-            "ootd-differential-report-empty-surface-member-{unique_suffix}.json"
+            "ootd-differential-report-malformed-surface-member-{unique_suffix}.json"
         ));
         let write_error = write_differential_report_to_path(&report, &path)
-            .expect_err("empty surface/member should fail write");
+            .expect_err("malformed surface/member should fail write");
         match write_error {
             DifferentialReportLoadError::Contract { message } => {
                 assert!(
