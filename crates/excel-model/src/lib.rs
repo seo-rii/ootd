@@ -59,9 +59,14 @@ impl WorkbookState {
         for chart in self.charts.values_mut() {
             chart.workbook_id = workbook_id;
             for series in &mut chart.series {
-                for source in [&mut series.name, &mut series.x_values, &mut series.values]
-                    .into_iter()
-                    .flatten()
+                for source in [
+                    &mut series.name,
+                    &mut series.x_values,
+                    &mut series.values,
+                    &mut series.bubble_size,
+                ]
+                .into_iter()
+                .flatten()
                 {
                     if let Some(ReferenceTarget::Range(range)) = source.resolved.as_mut()
                         && let Ok(updated_range) =
@@ -1195,8 +1200,37 @@ mod tests {
                 chart_type: ChartType::Bar,
                 style: None,
                 series: vec![super::SeriesModel {
-                    name: None,
-                    x_values: None,
+                    name: Some(ChartSourceExpr {
+                        raw: formula_source("Sheet1!$A$1"),
+                        resolved: Some(ReferenceTarget::Range(
+                            RangeSet::single_rect(
+                                state.model.id,
+                                sheet_id,
+                                Rect::single_cell(1, 1),
+                            )
+                            .expect("name range set"),
+                        )),
+                        cache: None,
+                        dirty: false,
+                    }),
+                    x_values: Some(ChartSourceExpr {
+                        raw: formula_source("Sheet1!$A$2:$A$3"),
+                        resolved: Some(ReferenceTarget::Range(
+                            RangeSet::single_rect(
+                                state.model.id,
+                                sheet_id,
+                                Rect {
+                                    row_first: 2,
+                                    row_last: 3,
+                                    col_first: 1,
+                                    col_last: 1,
+                                },
+                            )
+                            .expect("x values range set"),
+                        )),
+                        cache: None,
+                        dirty: false,
+                    }),
                     values: Some(ChartSourceExpr {
                         raw: formula_source("Sheet1!$A$1"),
                         resolved: Some(ReferenceTarget::Range(
@@ -1210,7 +1244,24 @@ mod tests {
                         cache: None,
                         dirty: false,
                     }),
-                    bubble_size: None,
+                    bubble_size: Some(ChartSourceExpr {
+                        raw: formula_source("Sheet1!$B$2:$B$3"),
+                        resolved: Some(ReferenceTarget::Range(
+                            RangeSet::single_rect(
+                                state.model.id,
+                                sheet_id,
+                                Rect {
+                                    row_first: 2,
+                                    row_last: 3,
+                                    col_first: 2,
+                                    col_last: 2,
+                                },
+                            )
+                            .expect("bubble size range set"),
+                        )),
+                        cache: None,
+                        dirty: false,
+                    }),
                     bar_shape: None,
                     smooth: None,
                     marker_style: None,
@@ -1306,16 +1357,17 @@ mod tests {
         assert_eq!(state.worksheets[0].workbook_id, WorkbookId(99));
         let chart = state.charts.get(&chart_id).expect("chart");
         assert_eq!(chart.workbook_id, WorkbookId(99));
-        let Some(ReferenceTarget::Range(range)) = chart.series[0]
-            .values
-            .as_ref()
-            .expect("values")
-            .resolved
-            .as_ref()
-        else {
-            panic!("expected range source");
-        };
-        assert_eq!(range.workbook_id(), WorkbookId(99));
+        for source in [
+            chart.series[0].name.as_ref().expect("name"),
+            chart.series[0].x_values.as_ref().expect("x values"),
+            chart.series[0].values.as_ref().expect("values"),
+            chart.series[0].bubble_size.as_ref().expect("bubble size"),
+        ] {
+            let Some(ReferenceTarget::Range(range)) = source.resolved.as_ref() else {
+                panic!("expected range source");
+            };
+            assert_eq!(range.workbook_id(), WorkbookId(99));
+        }
         let drawing = state.drawings.get(&drawing_id).expect("drawing");
         assert_eq!(drawing.workbook_id, WorkbookId(99));
         let DrawingObjectModel::ChartFrame(chart_object) = &drawing.objects[0] else {

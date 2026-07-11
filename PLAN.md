@@ -4867,6 +4867,8 @@
   - 범위: differential report nested `statusCounts` JSON에서도 unknown field를 deserialize 단계에서 거부하도록 고정해 status histogram schema drift가 report root unknown-field guard를 우회해 조용히 무시되지 않도록 보강
   - `Step 7.111 DONE` codegen differential gate non-blocking count overflow validation
   - 범위: standalone differential gate summary validation이 `unsupportedCaseCount + skippedCaseCount` overflow를 contract error로 거부하도록 추가해 malformed gate artifact의 non-blocking status summary가 debug/release별 산술 차이나 downstream overflow로 누수되지 않도록 고정
+  - `Step 7.112 DONE` excel-model chart bubble source workbook id reassignment
+  - 범위: `WorkbookState::assign_workbook_id`가 chart series의 `name`, `x_values`, `values`뿐 아니라 `bubble_size` source의 resolved `RangeSet` workbook id도 함께 갱신하도록 보강해 workbook copy/move 후 bubble chart size source가 이전 workbook id를 유지하지 않도록 고정
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.
