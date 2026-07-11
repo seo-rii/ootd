@@ -1336,6 +1336,52 @@ fn output_root_writer_rejects_parent_symlink_before_partial_write() {
 }
 
 #[test]
+fn output_root_writer_rejects_parent_file_before_partial_write() {
+    let registry_toml =
+        fs::read_to_string(repo_root().join("specs/sources.toml")).expect("source registry");
+    let source_summary = summarize_source_registry_toml(&registry_toml).expect("source summary");
+    let report = build_differential_report_with_source_context(
+        "Excel",
+        "16.0",
+        &source_summary,
+        vec![DifferentialCaseResult {
+            name: "Application.Version".to_string(),
+            surface: Some("Application".to_string()),
+            member: Some("Version".to_string()),
+            status: DifferentialCaseStatus::Passed,
+            expected: Some("16.0".to_string()),
+            actual: Some("16.0".to_string()),
+            message: None,
+            artifacts: BTreeMap::new(),
+        }],
+    );
+    let unique_suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time")
+        .as_nanos();
+    let parent_file = std::env::temp_dir().join(format!(
+        "ootd-differential-output-root-parent-file-{unique_suffix}"
+    ));
+    fs::write(&parent_file, b"not a directory").expect("output root parent file");
+    let output_root = parent_file.join("artifacts");
+
+    let error =
+        write_differential_report_and_gate_to_output_root(&report, &source_summary, &output_root)
+            .expect_err("output root parent file should fail before write");
+
+    match error {
+        DifferentialReportLoadError::Contract { message } => {
+            assert!(message.contains("differential output root parent path"));
+            assert!(message.contains("was not a directory"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+    assert!(parent_file.is_file());
+
+    fs::remove_file(parent_file).expect("remove output root parent file");
+}
+
+#[test]
 fn output_root_writer_rejects_output_root_file_before_partial_write() {
     let registry_toml =
         fs::read_to_string(repo_root().join("specs/sources.toml")).expect("source registry");
@@ -1590,6 +1636,36 @@ fn output_root_loader_rejects_parent_symlink_as_contract_error() {
 
     fs::remove_file(symlink_parent).expect("remove output root parent symlink");
     fs::remove_dir_all(symlink_target).expect("remove output root parent symlink target");
+}
+
+#[test]
+fn output_root_loader_rejects_parent_file_as_contract_error() {
+    let registry_toml =
+        fs::read_to_string(repo_root().join("specs/sources.toml")).expect("source registry");
+    let source_summary = summarize_source_registry_toml(&registry_toml).expect("source summary");
+    let unique_suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time")
+        .as_nanos();
+    let parent_file = std::env::temp_dir().join(format!(
+        "ootd-differential-output-root-load-parent-file-{unique_suffix}"
+    ));
+    fs::write(&parent_file, b"not a directory").expect("output root parent file");
+    let output_root = parent_file.join("artifacts");
+
+    let error = load_differential_artifacts_from_output_root(&output_root, &source_summary)
+        .expect_err("output root parent file should fail before import");
+
+    match error {
+        DifferentialReportLoadError::Contract { message } => {
+            assert!(message.contains("differential output root parent path"));
+            assert!(message.contains("was not a directory"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+    assert!(parent_file.is_file());
+
+    fs::remove_file(parent_file).expect("remove output root parent file");
 }
 
 #[test]
@@ -3589,6 +3665,44 @@ fn direct_differential_loaders_reject_parent_symlink_paths() {
 }
 
 #[test]
+fn direct_differential_loaders_reject_parent_file_paths() {
+    let unique_suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time")
+        .as_nanos();
+    let report_parent = std::env::temp_dir().join(format!(
+        "ootd-differential-report-direct-load-parent-file-{unique_suffix}"
+    ));
+    let gate_parent = std::env::temp_dir().join(format!(
+        "ootd-differential-gate-direct-load-parent-file-{unique_suffix}"
+    ));
+    fs::write(&report_parent, b"not a directory").expect("report parent file");
+    fs::write(&gate_parent, b"not a directory").expect("gate parent file");
+    let report_path = report_parent.join("differential_report.json");
+    let gate_path = gate_parent.join("differential_gate_summary.json");
+
+    for load_error in [
+        load_differential_report_from_path(&report_path)
+            .expect_err("report parent file path should fail load"),
+        load_differential_gate_from_path(&gate_path)
+            .expect_err("gate parent file path should fail load"),
+    ] {
+        match load_error {
+            DifferentialReportLoadError::Contract { message } => {
+                assert!(message.contains("differential artifact parent path"));
+                assert!(message.contains("was not a directory"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+    assert!(report_parent.is_file());
+    assert!(gate_parent.is_file());
+
+    fs::remove_file(report_parent).expect("remove report parent file");
+    fs::remove_file(gate_parent).expect("remove gate parent file");
+}
+
+#[test]
 fn direct_differential_writers_reject_directory_paths() {
     let report = build_differential_report(
         "Excel",
@@ -3772,6 +3886,60 @@ fn direct_differential_writers_reject_parent_symlink_paths() {
 
     fs::remove_file(symlink_dir).expect("remove parent symlink dir");
     fs::remove_dir_all(target_dir).expect("remove parent symlink target dir");
+}
+
+#[test]
+fn direct_differential_writers_reject_parent_file_paths() {
+    let report = build_differential_report(
+        "Excel",
+        "16.0",
+        "excel_365",
+        vec![DifferentialCaseResult {
+            name: "Application.Name".to_string(),
+            surface: Some("Application".to_string()),
+            member: Some("Name".to_string()),
+            status: DifferentialCaseStatus::Passed,
+            expected: Some("Microsoft Excel".to_string()),
+            actual: Some("Microsoft Excel".to_string()),
+            message: None,
+            artifacts: BTreeMap::new(),
+        }],
+    );
+    let gate = summarize_differential_gate(&report);
+    let unique_suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time")
+        .as_nanos();
+    let report_parent = std::env::temp_dir().join(format!(
+        "ootd-differential-report-direct-write-parent-file-{unique_suffix}"
+    ));
+    let gate_parent = std::env::temp_dir().join(format!(
+        "ootd-differential-gate-direct-write-parent-file-{unique_suffix}"
+    ));
+    fs::write(&report_parent, b"not a directory").expect("report parent file");
+    fs::write(&gate_parent, b"not a directory").expect("gate parent file");
+    let report_path = report_parent.join("differential_report.json");
+    let gate_path = gate_parent.join("differential_gate_summary.json");
+
+    for write_error in [
+        write_differential_report_to_path(&report, &report_path)
+            .expect_err("report parent file path should fail write"),
+        write_differential_gate_to_path(&gate, &gate_path)
+            .expect_err("gate parent file path should fail write"),
+    ] {
+        match write_error {
+            DifferentialReportLoadError::Contract { message } => {
+                assert!(message.contains("differential artifact parent path"));
+                assert!(message.contains("was not a directory"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+    assert!(report_parent.is_file());
+    assert!(gate_parent.is_file());
+
+    fs::remove_file(report_parent).expect("remove report parent file");
+    fs::remove_file(gate_parent).expect("remove gate parent file");
 }
 
 #[test]

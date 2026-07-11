@@ -139,10 +139,10 @@ Relevant APIs:
 - `write_differential_report_to_path`
 
 `load_differential_report_from_path` rejects a source path that is a directory,
-symlink, or whose parent directory is a symlink.
+symlink, or whose parent path exists but is not a directory or is a symlink.
 `write_differential_report_to_path` validates the report before writing and
 rejects a destination path that already exists as a directory, symlink, or whose
-parent directory is a symlink.
+parent path exists but is not a directory or is a symlink.
 
 Use `build_differential_report` only for local or legacy fixtures that are not
 intended to drive CI gating.
@@ -197,10 +197,10 @@ Relevant APIs:
 - `write_differential_gate_from_report_path_with_source_context`
 
 `load_differential_gate_from_path` rejects a source path that is a directory,
-symlink, or whose parent directory is a symlink.
+symlink, or whose parent path exists but is not a directory or is a symlink.
 `write_differential_gate_to_path` validates the gate summary before writing and
 rejects a destination path that already exists as a directory, symlink, or whose
-parent directory is a symlink.
+parent path exists but is not a directory or is a symlink.
 
 CI should prefer `write_differential_gate_from_report_path_with_source_context`.
 That path loads the report, validates stale report counts, validates source
@@ -214,10 +214,10 @@ If the runner owns the output directory, it should prefer
 canonical artifacts under the output root and returns the exact paths used. It
 preflights report counts and source registry context before creating the output
 directory, and rejects output roots that are files or symlinks, output roots
-whose parent directory is a symlink, plus canonical artifact paths that are
-already directories or symlinks, so context mismatch or path conflicts cannot
-leave a report-only partial artifact or follow artifact links outside the output
-root.
+whose parent path exists but is not a directory or is a symlink, plus canonical
+artifact paths that are already directories or symlinks, so context mismatch or
+path conflicts cannot leave a report-only partial artifact or follow artifact
+links outside the output root.
 
 Downstream CI can validate a completed output directory with
 `load_differential_artifacts_from_output_root`. That path loads both canonical

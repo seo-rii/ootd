@@ -2666,6 +2666,14 @@ fn preflight_differential_artifact_output_paths(
                 ),
             });
         }
+        if parent.exists() && !parent.is_dir() {
+            return Err(DifferentialReportLoadError::Contract {
+                message: format!(
+                    "differential output root parent path {} was not a directory",
+                    parent.display()
+                ),
+            });
+        }
     }
     for artifact_path in [&paths.report_path, &paths.gate_summary_path] {
         if artifact_path
@@ -2724,6 +2732,14 @@ fn preflight_differential_json_artifact_path(
             return Err(DifferentialReportLoadError::Contract {
                 message: format!(
                     "differential artifact parent path {} was a symlink",
+                    parent.display()
+                ),
+            });
+        }
+        if parent.exists() && !parent.is_dir() {
+            return Err(DifferentialReportLoadError::Contract {
+                message: format!(
+                    "differential artifact parent path {} was not a directory",
                     parent.display()
                 ),
             });
