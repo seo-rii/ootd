@@ -85,7 +85,8 @@ Supported statuses are:
 `office-codegen` validates that:
 
 - `library`, `version`, and `profile` are non-blank and contain no leading or
-  trailing whitespace; `profile` is an ASCII identifier
+  trailing whitespace; `library` and `version` are ASCII tokens, and `profile`
+  is an ASCII identifier
 - `caseCount` equals `cases.length`
 - `cases` is non-empty
 - `case.name` is non-blank, contains no leading or trailing whitespace, and is

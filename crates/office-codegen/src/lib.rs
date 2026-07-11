@@ -1627,6 +1627,14 @@ impl DifferentialReport {
                     .to_string(),
             });
         }
+        if !is_contract_token(&self.library) {
+            return Err(DifferentialReportLoadError::Contract {
+                message: format!(
+                    "differential report library {} must be an ASCII token",
+                    self.library
+                ),
+            });
+        }
         if is_blank_contract_string(&self.version) {
             return Err(DifferentialReportLoadError::Contract {
                 message: "differential report version was empty".to_string(),
@@ -1636,6 +1644,14 @@ impl DifferentialReport {
             return Err(DifferentialReportLoadError::Contract {
                 message: "differential report version contained leading or trailing whitespace"
                     .to_string(),
+            });
+        }
+        if !is_contract_token(&self.version) {
+            return Err(DifferentialReportLoadError::Contract {
+                message: format!(
+                    "differential report version {} must be an ASCII token",
+                    self.version
+                ),
             });
         }
         if is_blank_contract_string(&self.profile) {

@@ -4843,6 +4843,8 @@
   - 범위: differential report case의 optional `surface`/`member`가 ASCII identifier가 아닌 경우를 contract error로 거부하도록 추가해 `Application Object`, `Value 2` 같은 display-name 형태 OM dispatch key가 regression report boundary를 통과하지 못하도록 고정
   - `Step 7.99 DONE` codegen differential case artifact key case-insensitive collision validation
   - 범위: differential report case artifact keys의 ASCII case-insensitive duplicate를 contract error로 거부하도록 추가해 `runtimeTrace`/`RuntimeTrace` 같은 artifact logical-key drift가 case artifact map boundary를 통과하지 못하도록 고정
+  - `Step 7.100 DONE` codegen differential report metadata token validation
+  - 범위: differential report `library`와 `version`이 ASCII token이 아닌 경우를 contract error로 거부하도록 추가해 `Microsoft Excel`, `16.0 beta` 같은 display-name 형태 report provenance가 metadata boundary를 통과하지 못하도록 고정
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.

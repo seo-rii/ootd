@@ -2374,8 +2374,20 @@ fn differential_report_rejects_empty_report_metadata() {
     for (library, version, profile, expected_message) in [
         ("", "16.0", "excel_365", "library was empty"),
         ("   ", "16.0", "excel_365", "library was empty"),
+        (
+            "Microsoft Excel",
+            "16.0",
+            "excel_365",
+            "library Microsoft Excel must be an ASCII token",
+        ),
         ("Excel", "", "excel_365", "version was empty"),
         ("Excel", "   ", "excel_365", "version was empty"),
+        (
+            "Excel",
+            "16.0 beta",
+            "excel_365",
+            "version 16.0 beta must be an ASCII token",
+        ),
         ("Excel", "16.0", "", "profile was empty"),
         ("Excel", "16.0", "   ", "profile was empty"),
     ] {
