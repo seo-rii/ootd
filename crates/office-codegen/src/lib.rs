@@ -286,6 +286,7 @@ pub struct DifferentialStatusCounts {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 pub struct DifferentialCaseResult {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -305,6 +306,7 @@ pub struct DifferentialCaseResult {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 pub struct DifferentialReportContext {
     pub project_name: String,
     pub default_profile: String,
@@ -318,6 +320,7 @@ pub struct DifferentialReportContext {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 pub struct DifferentialReport {
     pub library: String,
     pub version: String,
@@ -331,6 +334,7 @@ pub struct DifferentialReport {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 pub struct DifferentialGateSummary {
     pub passed: bool,
     pub blocking_case_count: usize,

@@ -4851,6 +4851,8 @@
   - 범위: differential report case status별 `expected`/`actual`/`message` 필수/금지 조합을 contract error로 검증해 `passed`, `failed`, `missingOracle`, `missingRuntime`, `unsupported`, `skipped` outcome shape가 downstream gate와 리포트 작성 규칙 사이에서 drift되지 않도록 고정
   - `Step 7.103 DONE` codegen differential case member surface pairing validation
   - 범위: differential report case에서 `member`가 present이면 `surface`도 반드시 present하도록 contract error로 검증해 member-level regression identity가 어느 OM surface에 속하는지 잃은 채 report/gate boundary를 통과하지 못하도록 고정
+  - `Step 7.104 DONE` codegen differential artifact unknown field validation
+  - 범위: differential report root/context/case와 gate summary JSON에서 unknown field를 deserialize 단계에서 거부하도록 고정해 후속 runner/CI artifact schema drift가 조용히 무시된 채 gating boundary를 통과하지 못하도록 보강
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.

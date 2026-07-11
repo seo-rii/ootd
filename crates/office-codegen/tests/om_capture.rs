@@ -2093,6 +2093,97 @@ fn loads_differential_report_from_json_and_rejects_stale_counts() {
 }
 
 #[test]
+fn differential_report_and_gate_reject_unknown_fields() {
+    let registry_toml =
+        fs::read_to_string(repo_root().join("specs/sources.toml")).expect("source registry");
+    let source_summary = summarize_source_registry_toml(&registry_toml).expect("source summary");
+    let report = build_differential_report_with_source_context(
+        "Excel",
+        "16.0",
+        &source_summary,
+        vec![DifferentialCaseResult {
+            name: "Application.Name".to_string(),
+            surface: Some("Application".to_string()),
+            member: Some("Name".to_string()),
+            status: DifferentialCaseStatus::Passed,
+            expected: Some("Microsoft Excel".to_string()),
+            actual: Some("Microsoft Excel".to_string()),
+            message: None,
+            artifacts: BTreeMap::new(),
+        }],
+    );
+    let gate = summarize_differential_gate(&report);
+
+    for (json, expected_message) in [
+        {
+            let mut value = serde_json::to_value(&report).expect("report value");
+            value
+                .as_object_mut()
+                .expect("report object")
+                .insert("unexpectedRoot".to_string(), serde_json::json!(true));
+            (
+                serde_json::to_string(&value).expect("unknown report root json"),
+                "unknown field `unexpectedRoot`",
+            )
+        },
+        {
+            let mut value = serde_json::to_value(&report).expect("report value");
+            value["context"]
+                .as_object_mut()
+                .expect("context object")
+                .insert("unexpectedContext".to_string(), serde_json::json!(true));
+            (
+                serde_json::to_string(&value).expect("unknown report context json"),
+                "unknown field `unexpectedContext`",
+            )
+        },
+        {
+            let mut value = serde_json::to_value(&report).expect("report value");
+            value["cases"][0]
+                .as_object_mut()
+                .expect("case object")
+                .insert("unexpectedCase".to_string(), serde_json::json!(true));
+            (
+                serde_json::to_string(&value).expect("unknown report case json"),
+                "unknown field `unexpectedCase`",
+            )
+        },
+    ] {
+        let error = load_differential_report_from_json(&json)
+            .expect_err("unknown report field should fail load");
+        match error {
+            DifferentialReportLoadError::Json(error) => {
+                let message = error.to_string();
+                assert!(
+                    message.contains(expected_message),
+                    "{message:?} did not contain {expected_message:?}"
+                );
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    let mut gate_value = serde_json::to_value(&gate).expect("gate value");
+    gate_value
+        .as_object_mut()
+        .expect("gate object")
+        .insert("unexpectedGate".to_string(), serde_json::json!(true));
+    let gate_json = serde_json::to_string(&gate_value).expect("unknown gate json");
+    let error =
+        load_differential_gate_from_json(&gate_json).expect_err("unknown gate field should fail");
+    match error {
+        DifferentialReportLoadError::Json(error) => {
+            let message = error.to_string();
+            assert!(
+                message.contains("unknown field `unexpectedGate`"),
+                "{message:?} did not contain unknown gate field"
+            );
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
 fn differential_report_rejects_malformed_status_outcomes() {
     for (case, expected_message) in [
         (
