@@ -275,6 +275,7 @@ pub enum DifferentialCaseStatus {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 pub struct DifferentialStatusCounts {
     pub passed: usize,
     pub failed: usize,

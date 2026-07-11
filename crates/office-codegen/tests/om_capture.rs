@@ -2327,6 +2327,17 @@ fn differential_report_and_gate_reject_unknown_fields() {
         },
         {
             let mut value = serde_json::to_value(&report).expect("report value");
+            value["statusCounts"]
+                .as_object_mut()
+                .expect("status counts object")
+                .insert("unexpectedStatus".to_string(), serde_json::json!(1));
+            (
+                serde_json::to_string(&value).expect("unknown report status counts json"),
+                "unknown field `unexpectedStatus`",
+            )
+        },
+        {
+            let mut value = serde_json::to_value(&report).expect("report value");
             value["cases"][0]
                 .as_object_mut()
                 .expect("case object")

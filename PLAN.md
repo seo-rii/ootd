@@ -4863,6 +4863,8 @@
   - 범위: canonical output-root writer/loader도 output root parent directory가 symlink인 경우를 contract error로 거부하도록 보강해 output-root API가 새 artifact root를 symlink parent 아래 우회 경로에 만들거나 가져오지 못하도록 고정
   - `Step 7.109 DONE` codegen differential parent file path preflight
   - 범위: direct artifact load/write와 canonical output-root writer/loader에서 parent path가 존재하지만 directory가 아닌 경우를 contract error로 거부하도록 추가해 parent file 아래 경로가 platform I/O error로 누수되지 않도록 고정
+  - `Step 7.110 DONE` codegen differential statusCounts unknown field validation
+  - 범위: differential report nested `statusCounts` JSON에서도 unknown field를 deserialize 단계에서 거부하도록 고정해 status histogram schema drift가 report root unknown-field guard를 우회해 조용히 무시되지 않도록 보강
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.

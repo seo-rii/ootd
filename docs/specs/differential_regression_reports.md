@@ -84,8 +84,8 @@ Supported statuses are:
 
 `office-codegen` validates that:
 
-- unknown JSON fields at the report, context, and case levels are rejected as
-  artifact contract drift
+- unknown JSON fields at the report, status counts, context, and case levels
+  are rejected as artifact contract drift
 - `library`, `version`, and `profile` are non-blank and contain no leading or
   trailing whitespace; `library` and `version` are ASCII tokens, and `profile`
   is an ASCII identifier
