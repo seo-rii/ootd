@@ -167939,6 +167939,138 @@ mod tests {
     }
 
     #[test]
+    fn chart_type_setter_clears_bubble_size_source_for_non_bubble_charts() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    chart_objects,
+                    "Add",
+                    &[
+                        OmValue::Number(12.0),
+                        OmValue::Number(18.0),
+                        OmValue::Number(240.0),
+                        OmValue::Number(160.0),
+                    ],
+                )
+                .expect("ChartObjects.Add"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection"),
+        );
+        let series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "NewSeries", &[])
+                .expect("SeriesCollection.NewSeries"),
+        );
+
+        runtime
+            .dispatch_set(
+                chart,
+                "ChartType",
+                OmValue::Number(f64::from(super::XL_BUBBLE)),
+                &[],
+            )
+            .expect("set Chart.ChartType to bubble");
+        runtime
+            .dispatch_set(
+                series,
+                "Formula",
+                OmValue::Text(
+                    "=SERIES(Sheet1!$C$1,Sheet1!$A$1:$A$3,Sheet1!$B$1:$B$3,1,Sheet1!$D$1:$D$3)"
+                        .to_string(),
+                ),
+                &[],
+            )
+            .expect("set bubble Series.Formula");
+        assert_eq!(
+            runtime
+                .dispatch_get(series, "BubbleSizes", &[])
+                .expect("Series.BubbleSizes before ChartType change"),
+            OmValue::Text("=Sheet1!$D$1:$D$3".to_string())
+        );
+
+        runtime
+            .dispatch_set(
+                chart,
+                "ChartType",
+                OmValue::Number(f64::from(super::XL_LINE)),
+                &[],
+            )
+            .expect("set Chart.ChartType away from bubble");
+
+        assert_eq!(
+            runtime
+                .dispatch_get(series, "BubbleSizes", &[])
+                .expect("Series.BubbleSizes after ChartType change"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(series, "Formula", &[])
+                    .expect("Series.Formula after ChartType change")
+            ),
+            "=SERIES(Sheet1!$C$1,Sheet1!$A$1:$A$3,Sheet1!$B$1:$B$3,1)"
+        );
+        {
+            let state = runtime
+                .workbook_state(workbook)
+                .expect("workbook state after ChartType change");
+            let chart = state.charts.values().next().expect("chart model");
+            assert_eq!(chart.chart_type, super::ChartType::Line);
+            assert!(chart.series[0].bubble_size.is_none());
+        }
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after non-bubble ChartType change");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = std::str::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(saved_chart_xml.contains("<c:lineChart>"));
+        assert!(!saved_chart_xml.contains("<c:bubbleSize>"));
+    }
+
+    #[test]
     fn chart_series_formula_setter_rebalances_plot_order() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime

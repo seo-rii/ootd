@@ -4869,6 +4869,8 @@
   - 범위: standalone differential gate summary validation이 `unsupportedCaseCount + skippedCaseCount` overflow를 contract error로 거부하도록 추가해 malformed gate artifact의 non-blocking status summary가 debug/release별 산술 차이나 downstream overflow로 누수되지 않도록 고정
   - `Step 7.112 DONE` excel-model chart bubble source workbook id reassignment
   - 범위: `WorkbookState::assign_workbook_id`가 chart series의 `name`, `x_values`, `values`뿐 아니라 `bubble_size` source의 resolved `RangeSet` workbook id도 함께 갱신하도록 보강해 workbook copy/move 후 bubble chart size source가 이전 workbook id를 유지하지 않도록 고정
+  - `Step 7.113 DONE` excel-runtime chart type bubble source clearing regression
+  - 범위: `Chart.ChartType`을 bubble chart에서 non-bubble chart로 변경하면 `Series.BubbleSizes`, `Series.Formula`, model source, saved chart XML에서 stale `bubbleSize` source가 제거되는지 회귀 테스트로 고정해 chart type 변환 후 버블 전용 source가 남아 object model/save 경계에 노출되지 않도록 보강
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.
