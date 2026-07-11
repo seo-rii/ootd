@@ -128332,6 +128332,31 @@ mod tests {
             ),
             f64::from(super::XL_BAR_CLUSTERED)
         );
+        runtime
+            .dispatch_set(
+                series,
+                "ChartType",
+                OmValue::Number(f64::from(super::XL_BUBBLE)),
+                &[],
+            )
+            .expect("set Series.ChartType to bubble");
+        runtime
+            .dispatch_set(
+                series,
+                "Formula",
+                OmValue::Text(
+                    "=SERIES(Sheet1!$C$1,Sheet1!$A$1:$A$3,Sheet1!$B$1:$B$3,1,Sheet1!$D$1:$D$3)"
+                        .to_string(),
+                ),
+                &[],
+            )
+            .expect("set bubble Series.Formula after Series.ChartType");
+        assert_eq!(
+            runtime
+                .dispatch_get(series, "BubbleSizes", &[])
+                .expect("Series.BubbleSizes before Series.ChartType change"),
+            OmValue::Text("=Sheet1!$D$1:$D$3".to_string())
+        );
 
         runtime
             .dispatch_set(
@@ -128348,6 +128373,20 @@ mod tests {
                     .expect("Series.ChartType after set")
             ),
             f64::from(super::XL_LINE_MARKERS)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(series, "BubbleSizes", &[])
+                .expect("Series.BubbleSizes after Series.ChartType"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(series, "Formula", &[])
+                    .expect("Series.Formula after Series.ChartType")
+            ),
+            "=SERIES(Sheet1!$C$1,Sheet1!$A$1:$A$3,Sheet1!$B$1:$B$3,1)"
         );
         assert_eq!(
             expect_number(
@@ -128379,6 +128418,7 @@ mod tests {
         .expect("saved chart xml utf8");
         assert!(saved_chart_xml.contains("<c:lineChart>"));
         assert!(!saved_chart_xml.contains("<c:barChart>"));
+        assert!(!saved_chart_xml.contains("<c:bubbleSize>"));
     }
 
     #[test]
