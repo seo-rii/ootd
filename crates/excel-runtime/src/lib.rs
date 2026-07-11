@@ -8304,6 +8304,13 @@ impl ExcelRuntime {
                                     chart.split_type = None;
                                     chart.split_value = None;
                                 }
+                                if !chart_type_supports_3d_view(&chart.chart_type) {
+                                    chart.view_3d = None;
+                                    chart.view_3d_dirty = true;
+                                }
+                                if !chart_type_supports_gap_depth(&chart.chart_type) {
+                                    chart.gap_depth = None;
+                                }
                                 if let Some(has_3d_shading) = chart_type_bubble_3d {
                                     chart.has_3d_shading = Some(has_3d_shading);
                                 }
@@ -130674,6 +130681,166 @@ mod tests {
                 .dispatch_get(reopened_chart, "RightAngleAxes", &[])
                 .expect("reopened Chart.RightAngleAxes"),
             OmValue::Bool(false)
+        );
+    }
+
+    #[test]
+    fn chart_type_setter_clears_3d_view_properties_for_2d_charts() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+
+        runtime
+            .dispatch_set(
+                chart,
+                "ChartType",
+                OmValue::Number(f64::from(super::XL_3D_COLUMN)),
+                &[],
+            )
+            .expect("set Chart.ChartType to 3D column");
+        for (member, value) in [
+            ("Elevation", OmValue::Number(34.0)),
+            ("HeightPercent", OmValue::Number(180.0)),
+            ("Rotation", OmValue::Number(31.0)),
+            ("DepthPercent", OmValue::Number(250.0)),
+            ("GapDepth", OmValue::Number(300.0)),
+            ("Perspective", OmValue::Number(70.0)),
+            ("RightAngleAxes", OmValue::Bool(false)),
+        ] {
+            runtime
+                .dispatch_set(chart, member, value, &[])
+                .unwrap_or_else(|error| panic!("set Chart.{member}: {error:?}"));
+        }
+
+        runtime
+            .dispatch_set(
+                chart,
+                "ChartType",
+                OmValue::Number(f64::from(super::XL_LINE)),
+                &[],
+            )
+            .expect("set Chart.ChartType to 2D line");
+        for member in [
+            "Elevation",
+            "HeightPercent",
+            "Rotation",
+            "DepthPercent",
+            "Perspective",
+            "RightAngleAxes",
+            "GapDepth",
+        ] {
+            let error = match runtime.dispatch_get(chart, member, &[]) {
+                Ok(value) => panic!(
+                    "Chart.{member} after 2D ChartType should reject, got {value:?}"
+                ),
+                Err(error) => error,
+            };
+            assert_eq!(
+                error.code,
+                OmErrorCode::Unsupported,
+                "Chart.{member} after 2D ChartType"
+            );
+        }
+        {
+            let state = runtime
+                .workbook_state(workbook)
+                .expect("workbook state after 2D ChartType");
+            let chart_model = state.charts.values().next().expect("chart model");
+            assert_eq!(chart_model.chart_type, super::ChartType::Line);
+            assert_eq!(chart_model.view_3d, None);
+            assert_eq!(chart_model.gap_depth, None);
+        }
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after 3D to 2D ChartType");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = String::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(saved_chart_xml.contains("<c:lineChart>"));
+        assert!(!saved_chart_xml.contains("<c:view3D>"));
+        assert!(!saved_chart_xml.contains("<c:gapDepth"));
+        assert!(!saved_chart_xml.contains("<c:rotX"));
+        assert!(!saved_chart_xml.contains("<c:hPercent"));
+        assert!(!saved_chart_xml.contains("<c:rotY"));
+        assert!(!saved_chart_xml.contains("<c:depthPercent"));
+        assert!(!saved_chart_xml.contains("<c:rAngAx"));
+        assert!(!saved_chart_xml.contains("<c:perspective"));
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after 3D to 2D ChartType");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "GapDepth", &[])
+                .expect_err("reopened 2D Chart.GapDepth rejects")
+                .code,
+            OmErrorCode::Unsupported
         );
     }
 

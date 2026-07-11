@@ -4881,6 +4881,8 @@
   - 범위: `Series.ChartType`과 `ChartGroup.ChartType` 위임 경로로 bubble chart를 non-bubble chart로 변경해도 `bubbleScale`, `showNegBubbles`, `bubble3D` 속성이 getter/model/saved XML/reopen 경계에서 제거되는지 회귀 테스트로 고정해 chart-level setter 외부 진입점이 bubble-only property 정리 invariant를 우회하지 못하도록 보강
   - `Step 7.118 DONE` excel-runtime chart type pie-group property clearing
   - 범위: `Chart.ChartType` 변경 경로가 대상 chart type에서 지원하지 않는 `firstSliceAng`, `holeSize`, `secondPieSize`, `sizeRepresents`, `splitType`, `splitPos` chart-group 설정을 model/saved XML/reopen 경계에서 제거하도록 보강해 pie/doughnut/of-pie/bubble-only numeric setting이 line/bar 등 호환되지 않는 chart group XML에 남는 경계를 차단
+  - `Step 7.119 DONE` excel-runtime chart type 3D property clearing
+  - 범위: 3D chart에서 2D chart로 `Chart.ChartType`을 변경하면 `view3D`와 `gapDepth` 설정을 model/saved XML/reopen 경계에서 제거하도록 보강해 `rotX`, `hPercent`, `rotY`, `depthPercent`, `rAngAx`, `perspective`, `gapDepth` 같은 3D-only chart XML이 2D chart group에 남는 경계를 차단
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.
