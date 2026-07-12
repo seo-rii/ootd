@@ -119207,6 +119207,16 @@ mod tests {
                 .dispatch_get(charts, "Item", &[OmValue::Number(1.0)])
                 .expect("read-only Charts.Item(1)"),
         );
+        let chart_area = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartArea", &[])
+                .expect("read-only chart sheet Chart.ChartArea before Copy"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("read-only chart sheet Chart.SeriesCollection before Copy"),
+        );
 
         runtime
             .dispatch_set(application, "CutCopyMode", OmValue::Bool(false), &[])
@@ -119290,6 +119300,22 @@ mod tests {
                     .expect("source Chart.ChartType after read-only Chart.Copy")
             ),
             f64::from(super::XL_LINE)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart_area, "Select", &[])
+                .expect("source chart sheet ChartArea remains live after read-only Chart.Copy"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(series_collection, "Count", &[])
+                    .expect(
+                        "source chart sheet SeriesCollection remains live after read-only Chart.Copy",
+                    )
+            ),
+            0.0
         );
     }
 
