@@ -119997,6 +119997,40 @@ mod tests {
         );
         assert_eq!(
             runtime
+                .dispatch_invoke(chart_area, "Select", &[])
+                .expect("embedded ChartArea remains live after Chart.Copy"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(plot_area, "Select", &[])
+                .expect("embedded PlotArea remains live after Chart.Copy"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(series_collection, "Count", &[])
+                    .expect("embedded SeriesCollection remains live after Chart.Copy")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(series, "PlotOrder", &[])
+                    .expect("embedded Series remains live after Chart.Copy")
+            ),
+            1.0
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(series_format, "Creator", &[])
+                .expect("embedded Series.Format remains live after Chart.Copy"),
+            OmValue::Number(f64::from(super::XL_CREATOR_CODE))
+        );
+        assert_eq!(
+            runtime
                 .dispatch_invoke(chart, "Copy", &[OmValue::Missing])
                 .expect_err("embedded Chart.Copy rejects arguments")
                 .code,
