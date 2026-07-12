@@ -2,11 +2,11 @@ use excel_model::{
     AxisModel, ChartAxisCrosses, ChartAxisDisplayUnit, ChartAxisGroup, ChartAxisKind,
     ChartAxisScaleType, ChartAxisTimeUnit, ChartBarShape, ChartBuiltInDisplayUnit,
     ChartDataLabelPosition, ChartDataLabelsModel, ChartDataTableModel, ChartDisplayBlanksAs,
-    ChartLegendPosition, ChartMarkerStyle, ChartModel, ChartObjectModel, ChartProtectionModel,
-    ChartSheetBinding, ChartSizeRepresents, ChartSourceExpr, ChartSplitType, ChartText,
-    ChartTickLabelPosition, ChartTickMark, ChartType, ChartView3DModel, DefinedNameTable,
-    DrawingModel, DrawingObjectModel, LegendModel, SeriesModel, WorkbookState, WorksheetData,
-    resolve_chart_source_reference_with_names,
+    ChartLayoutMode, ChartLegendPosition, ChartMarkerStyle, ChartModel, ChartObjectModel,
+    ChartProtectionModel, ChartSheetBinding, ChartSizeRepresents, ChartSourceExpr, ChartSplitType,
+    ChartText, ChartTickLabelPosition, ChartTickMark, ChartType, ChartView3DModel,
+    DefinedNameTable, DrawingModel, DrawingObjectModel, LegendModel, SeriesModel, WorkbookState,
+    WorksheetData, resolve_chart_source_reference_with_names,
 };
 use excel_xlsx::{
     ChartSupportRelationshipBinding, LoadedXlsxWorkbook, SheetDrawingSupportParts,
@@ -22614,6 +22614,7 @@ impl ExcelRuntime {
                             data_labels: None,
                             data_table: None,
                             data_table_dirty: false,
+                            plot_area_layout: None,
                             show_data_labels_over_maximum: None,
                             display_blanks_as: None,
                             plot_visible_only: None,
@@ -24460,7 +24461,56 @@ impl ExcelRuntime {
             | "InsideHeight"
                 if surface == "PlotArea" =>
             {
-                Ok(OmValue::Number(0.0))
+                let Some(layout) = self.chart_model(workbook, chart_id)?.plot_area_layout else {
+                    return Ok(OmValue::Number(0.0));
+                };
+                let state = &self.runtime_workbook(workbook)?.loaded.state;
+                let Some(chart_object) = state
+                    .drawings
+                    .values()
+                    .flat_map(|drawing| drawing.objects.iter())
+                    .find_map(|object| match object {
+                        DrawingObjectModel::ChartFrame(chart_object)
+                            if chart_object.chart_id == chart_id =>
+                        {
+                            Some(chart_object)
+                        }
+                        DrawingObjectModel::UnsupportedRaw { .. } => None,
+                        _ => None,
+                    })
+                else {
+                    return Ok(OmValue::Number(0.0));
+                };
+                let chart_width = Self::chart_object_geometry_value(chart_object, "Width")?;
+                let chart_height = Self::chart_object_geometry_value(chart_object, "Height")?;
+                let left_fraction = layout.x.unwrap_or(0.0);
+                let top_fraction = layout.y.unwrap_or(0.0);
+                let value = match member {
+                    "Left" | "InsideLeft" => left_fraction * chart_width,
+                    "Top" | "InsideTop" => top_fraction * chart_height,
+                    "Width" | "InsideWidth" => layout
+                        .width
+                        .map(|width| {
+                            if layout.width_mode == ChartLayoutMode::Edge {
+                                (width - left_fraction).max(0.0) * chart_width
+                            } else {
+                                width * chart_width
+                            }
+                        })
+                        .unwrap_or(0.0),
+                    "Height" | "InsideHeight" => layout
+                        .height
+                        .map(|height| {
+                            if layout.height_mode == ChartLayoutMode::Edge {
+                                (height - top_fraction).max(0.0) * chart_height
+                            } else {
+                                height * chart_height
+                            }
+                        })
+                        .unwrap_or(0.0),
+                    _ => unreachable!("PlotArea geometry member was matched"),
+                };
+                Ok(OmValue::Number(value))
             }
             "RoundedCorners" if surface == "ChartArea" => Ok(OmValue::Bool(
                 self.chart_model(workbook, chart_id)?
@@ -30584,6 +30634,7 @@ impl ExcelRuntime {
                         data_labels: None,
                         data_table: None,
                         data_table_dirty: false,
+                        plot_area_layout: None,
                         show_data_labels_over_maximum: None,
                         display_blanks_as: None,
                         plot_visible_only: None,
@@ -48415,10 +48466,54 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
     } else {
         chart_group_xml(&primary_series_xml, &all_axis_refs)
     };
+    let plot_area_layout_xml = chart
+        .plot_area_layout
+        .map(|layout| {
+            let target = match layout.target {
+                excel_model::ChartLayoutTarget::Inner => "inner",
+                excel_model::ChartLayoutTarget::Outer => "outer",
+            };
+            let x_mode = match layout.x_mode {
+                ChartLayoutMode::Edge => "edge",
+                ChartLayoutMode::Factor => "factor",
+            };
+            let y_mode = match layout.y_mode {
+                ChartLayoutMode::Edge => "edge",
+                ChartLayoutMode::Factor => "factor",
+            };
+            let width_mode = match layout.width_mode {
+                ChartLayoutMode::Edge => "edge",
+                ChartLayoutMode::Factor => "factor",
+            };
+            let height_mode = match layout.height_mode {
+                ChartLayoutMode::Edge => "edge",
+                ChartLayoutMode::Factor => "factor",
+            };
+            let x = layout
+                .x
+                .map(|value| format!(r#"<c:x val="{}"/>"#, chart_number_xml_value(value)))
+                .unwrap_or_default();
+            let y = layout
+                .y
+                .map(|value| format!(r#"<c:y val="{}"/>"#, chart_number_xml_value(value)))
+                .unwrap_or_default();
+            let width = layout
+                .width
+                .map(|value| format!(r#"<c:w val="{}"/>"#, chart_number_xml_value(value)))
+                .unwrap_or_default();
+            let height = layout
+                .height
+                .map(|value| format!(r#"<c:h val="{}"/>"#, chart_number_xml_value(value)))
+                .unwrap_or_default();
+            format!(
+                r#"<c:layout><c:manualLayout><c:layoutTarget val="{target}"/><c:xMode val="{x_mode}"/><c:yMode val="{y_mode}"/><c:wMode val="{width_mode}"/><c:hMode val="{height_mode}"/>{x}{y}{width}{height}</c:manualLayout></c:layout>"#
+            )
+        })
+        .unwrap_or_default();
     Ok(format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
-  {rounded_corners_xml}{chart_style_xml}{chart_protection_xml}<c:chart>{title_xml}{view_3d_xml}<c:plotArea>{chart_groups_xml}{axes_xml}{data_table_xml}</c:plotArea>{legend_xml}{plot_visible_only_xml}{display_blanks_as_xml}{show_data_labels_over_maximum_xml}</c:chart>
+  {rounded_corners_xml}{chart_style_xml}{chart_protection_xml}<c:chart>{title_xml}{view_3d_xml}<c:plotArea>{plot_area_layout_xml}{chart_groups_xml}{axes_xml}{data_table_xml}</c:plotArea>{legend_xml}{plot_visible_only_xml}{display_blanks_as_xml}{show_data_labels_over_maximum_xml}</c:chart>
 </c:chartSpace>"#
     )
     .into_bytes())
@@ -139077,6 +139172,107 @@ mod tests {
     }
 
     #[test]
+    fn loaded_plot_area_manual_layout_geometry_uses_chart_dimensions() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_manual_layout_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart manual layout");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let plot_area = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "PlotArea", &[])
+                .expect("Chart.PlotArea"),
+        );
+
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_object, "Width", &[])
+                    .expect("ChartObject.Width")
+            ),
+            100.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_object, "Height", &[])
+                    .expect("ChartObject.Height")
+            ),
+            50.0
+        );
+        for (member, expected) in [
+            ("Left", 10.0),
+            ("Top", 10.0),
+            ("Width", 70.0),
+            ("Height", 35.0),
+            ("InsideLeft", 10.0),
+            ("InsideTop", 10.0),
+            ("InsideWidth", 70.0),
+            ("InsideHeight", 35.0),
+        ] {
+            let actual = expect_number(
+                runtime
+                    .dispatch_get(plot_area, member, &[])
+                    .unwrap_or_else(|error| panic!("PlotArea.{member}: {error:?}")),
+            );
+            assert!(
+                (actual - expected).abs() < 1e-9,
+                "PlotArea.{member}: expected {expected}, got {actual}"
+            );
+        }
+
+        runtime
+            .dispatch_set(chart, "HasLegend", OmValue::Bool(false), &[])
+            .expect("Chart.HasLegend = False");
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook with chart manual layout");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = std::str::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(saved_chart_xml.contains(
+            r#"<c:manualLayout><c:layoutTarget val="inner"/><c:xMode val="edge"/><c:yMode val="edge"/><c:wMode val="edge"/><c:hMode val="edge"/><c:x val="0.1"/><c:y val="0.2"/><c:w val="0.8"/><c:h val="0.9"/></c:manualLayout>"#
+        ));
+    }
+
+    #[test]
     fn chart_headless_noops_allow_read_only_workbooks() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
@@ -181060,6 +181256,27 @@ mod tests {
             })
             .expect("add chart");
 
+        package.to_bytes().expect("package bytes")
+    }
+
+    fn synthetic_workbook_with_embedded_chart_manual_layout_bytes() -> Vec<u8> {
+        let mut package = OpcPackage::from_bytes(&synthetic_workbook_with_embedded_chart_bytes())
+            .expect("embedded chart package");
+        let chart_xml = String::from_utf8(
+            package
+                .part("xl/charts/chart1.xml")
+                .expect("chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("chart xml utf8")
+        .replace(
+            "<c:plotArea>",
+            r#"<c:plotArea><c:layout><c:manualLayout><c:layoutTarget val="inner"/><c:xMode val="edge"/><c:yMode val="edge"/><c:wMode val="edge"/><c:hMode val="edge"/><c:x val="0.1"/><c:y val="0.2"/><c:w val="0.8"/><c:h val="0.9"/></c:manualLayout></c:layout>"#,
+        );
+        package
+            .replace_part_bytes("xl/charts/chart1.xml", chart_xml.into_bytes())
+            .expect("replace chart xml");
         package.to_bytes().expect("package bytes")
     }
 

@@ -5,11 +5,12 @@ use excel_model::{
     AxisModel, CellData, ChartAxisCrosses, ChartAxisDisplayUnit, ChartAxisGroup, ChartAxisKind,
     ChartAxisScaleType, ChartAxisTimeUnit, ChartBarShape, ChartBuiltInDisplayUnit, ChartCacheKind,
     ChartCacheSnapshot, ChartCellMarkerXmlAttrs, ChartDataLabelPosition, ChartDataLabelsModel,
-    ChartDataTableModel, ChartDisplayBlanksAs, ChartLegendPosition, ChartMarkerStyle,
-    ChartMarkerXmlAttrs, ChartModel, ChartObjectModel, ChartPointModel, ChartProtectionModel,
-    ChartSheetBinding, ChartSizeRepresents, ChartSourceExpr, ChartSplitType, ChartText,
-    ChartTickLabelPosition, ChartTickMark, ChartType, ChartView3DModel, DefinedNameTable,
-    DrawingModel, DrawingObjectModel, LegendModel, SeriesModel, WorkbookState, WorksheetData,
+    ChartDataTableModel, ChartDisplayBlanksAs, ChartLayoutMode, ChartLayoutTarget,
+    ChartLegendPosition, ChartManualLayout, ChartMarkerStyle, ChartMarkerXmlAttrs, ChartModel,
+    ChartObjectModel, ChartPointModel, ChartProtectionModel, ChartSheetBinding,
+    ChartSizeRepresents, ChartSourceExpr, ChartSplitType, ChartText, ChartTickLabelPosition,
+    ChartTickMark, ChartType, ChartView3DModel, DefinedNameTable, DrawingModel, DrawingObjectModel,
+    LegendModel, SeriesModel, WorkbookState, WorksheetData,
     resolve_chart_source_reference_with_names,
 };
 use office_common::{
@@ -967,6 +968,7 @@ pub struct ChartPartSummary {
     pub split_value: Option<f64>,
     pub data_labels: Option<ChartDataLabelsSummary>,
     pub data_table: Option<ChartDataTableSummary>,
+    pub plot_area_layout: Option<ChartManualLayout>,
     pub show_data_labels_over_maximum: Option<bool>,
     pub display_blanks_as: Option<ChartDisplayBlanksAs>,
     pub plot_visible_only: Option<bool>,
@@ -4276,6 +4278,7 @@ fn build_chart_model_overlay(
                         .and_then(|summary| summary.data_table.as_ref())
                         .map(chart_data_table_model_from_summary),
                     data_table_dirty: false,
+                    plot_area_layout: summary.and_then(|summary| summary.plot_area_layout),
                     show_data_labels_over_maximum: summary
                         .and_then(|summary| summary.show_data_labels_over_maximum),
                     display_blanks_as: summary.and_then(|summary| summary.display_blanks_as),
@@ -21321,6 +21324,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
     let mut split_value = None;
     let mut data_labels = None::<ChartDataLabelsSummary>;
     let mut data_table = None::<ChartDataTableSummary>;
+    let mut plot_area_layout = None::<ChartManualLayout>;
     let mut show_data_labels_over_maximum = None;
     let mut display_blanks_as = None;
     let mut plot_visible_only = None;
@@ -21744,6 +21748,61 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     && element_path.last().is_some_and(|name| name == "plotArea")
                 {
                     data_table.get_or_insert_with(ChartDataTableSummary::default);
+                }
+                if local_name == b"manualLayout"
+                    && element_path.len() >= 2
+                    && element_path[element_path.len() - 2] == "plotArea"
+                    && element_path.last().is_some_and(|name| name == "layout")
+                {
+                    plot_area_layout.get_or_insert_with(ChartManualLayout::default);
+                }
+                if element_path.len() >= 3
+                    && element_path[element_path.len() - 3] == "plotArea"
+                    && element_path[element_path.len() - 2] == "layout"
+                    && element_path
+                        .last()
+                        .is_some_and(|name| name == "manualLayout")
+                {
+                    let layout = plot_area_layout.get_or_insert_with(ChartManualLayout::default);
+                    match local_name {
+                        b"layoutTarget" => {
+                            match parse_string_val_attr(&element, &reader)?.as_deref() {
+                                Some("inner") => layout.target = ChartLayoutTarget::Inner,
+                                Some("outer") => layout.target = ChartLayoutTarget::Outer,
+                                _ => {}
+                            }
+                        }
+                        b"xMode" => match parse_string_val_attr(&element, &reader)?.as_deref() {
+                            Some("edge") => layout.x_mode = ChartLayoutMode::Edge,
+                            Some("factor") => layout.x_mode = ChartLayoutMode::Factor,
+                            _ => {}
+                        },
+                        b"yMode" => match parse_string_val_attr(&element, &reader)?.as_deref() {
+                            Some("edge") => layout.y_mode = ChartLayoutMode::Edge,
+                            Some("factor") => layout.y_mode = ChartLayoutMode::Factor,
+                            _ => {}
+                        },
+                        b"wMode" => match parse_string_val_attr(&element, &reader)?.as_deref() {
+                            Some("edge") => layout.width_mode = ChartLayoutMode::Edge,
+                            Some("factor") => layout.width_mode = ChartLayoutMode::Factor,
+                            _ => {}
+                        },
+                        b"hMode" => match parse_string_val_attr(&element, &reader)?.as_deref() {
+                            Some("edge") => layout.height_mode = ChartLayoutMode::Edge,
+                            Some("factor") => layout.height_mode = ChartLayoutMode::Factor,
+                            _ => {}
+                        },
+                        b"x" => layout.x = parse_f64_val_attr(&element, &reader, "plot area x")?,
+                        b"y" => layout.y = parse_f64_val_attr(&element, &reader, "plot area y")?,
+                        b"w" => {
+                            layout.width = parse_f64_val_attr(&element, &reader, "plot area width")?
+                        }
+                        b"h" => {
+                            layout.height =
+                                parse_f64_val_attr(&element, &reader, "plot area height")?
+                        }
+                        _ => {}
+                    }
                 }
                 if element_path.last().is_some_and(|name| name == "dTable") {
                     let value = parse_bool_val_attr(&element, &reader)?.unwrap_or(true);
@@ -22610,6 +22669,61 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     && element_path.last().is_some_and(|name| name == "plotArea")
                 {
                     data_table.get_or_insert_with(ChartDataTableSummary::default);
+                }
+                if local_name == b"manualLayout"
+                    && element_path.len() >= 2
+                    && element_path[element_path.len() - 2] == "plotArea"
+                    && element_path.last().is_some_and(|name| name == "layout")
+                {
+                    plot_area_layout.get_or_insert_with(ChartManualLayout::default);
+                }
+                if element_path.len() >= 3
+                    && element_path[element_path.len() - 3] == "plotArea"
+                    && element_path[element_path.len() - 2] == "layout"
+                    && element_path
+                        .last()
+                        .is_some_and(|name| name == "manualLayout")
+                {
+                    let layout = plot_area_layout.get_or_insert_with(ChartManualLayout::default);
+                    match local_name {
+                        b"layoutTarget" => {
+                            match parse_string_val_attr(&element, &reader)?.as_deref() {
+                                Some("inner") => layout.target = ChartLayoutTarget::Inner,
+                                Some("outer") => layout.target = ChartLayoutTarget::Outer,
+                                _ => {}
+                            }
+                        }
+                        b"xMode" => match parse_string_val_attr(&element, &reader)?.as_deref() {
+                            Some("edge") => layout.x_mode = ChartLayoutMode::Edge,
+                            Some("factor") => layout.x_mode = ChartLayoutMode::Factor,
+                            _ => {}
+                        },
+                        b"yMode" => match parse_string_val_attr(&element, &reader)?.as_deref() {
+                            Some("edge") => layout.y_mode = ChartLayoutMode::Edge,
+                            Some("factor") => layout.y_mode = ChartLayoutMode::Factor,
+                            _ => {}
+                        },
+                        b"wMode" => match parse_string_val_attr(&element, &reader)?.as_deref() {
+                            Some("edge") => layout.width_mode = ChartLayoutMode::Edge,
+                            Some("factor") => layout.width_mode = ChartLayoutMode::Factor,
+                            _ => {}
+                        },
+                        b"hMode" => match parse_string_val_attr(&element, &reader)?.as_deref() {
+                            Some("edge") => layout.height_mode = ChartLayoutMode::Edge,
+                            Some("factor") => layout.height_mode = ChartLayoutMode::Factor,
+                            _ => {}
+                        },
+                        b"x" => layout.x = parse_f64_val_attr(&element, &reader, "plot area x")?,
+                        b"y" => layout.y = parse_f64_val_attr(&element, &reader, "plot area y")?,
+                        b"w" => {
+                            layout.width = parse_f64_val_attr(&element, &reader, "plot area width")?
+                        }
+                        b"h" => {
+                            layout.height =
+                                parse_f64_val_attr(&element, &reader, "plot area height")?
+                        }
+                        _ => {}
+                    }
                 }
                 if element_path.last().is_some_and(|name| name == "dTable") {
                     let value = parse_bool_val_attr(&element, &reader)?.unwrap_or(true);
@@ -23768,6 +23882,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
         split_value,
         data_labels,
         data_table,
+        plot_area_layout,
         show_data_labels_over_maximum,
         display_blanks_as,
         plot_visible_only,
@@ -27320,9 +27435,10 @@ mod tests {
         parse_workbook_relationships, parse_worksheet_cells, rewrite_worksheet_xml,
     };
     use excel_model::{
-        ChartCacheKind, ChartCellMarkerXmlAttrs, ChartDisplayBlanksAs, ChartMarkerXmlAttrs,
-        ChartObjectModel, ChartSizeRepresents, ChartSplitType, ChartType, DefinedNameTable,
-        DrawingObjectModel, resolve_chart_source_reference,
+        ChartCacheKind, ChartCellMarkerXmlAttrs, ChartDisplayBlanksAs, ChartLayoutMode,
+        ChartLayoutTarget, ChartManualLayout, ChartMarkerXmlAttrs, ChartObjectModel,
+        ChartSizeRepresents, ChartSplitType, ChartType, DefinedNameTable, DrawingObjectModel,
+        resolve_chart_source_reference,
     };
     use office_common::{
         CellError, CellMarker, CellValue, ChartId, ChartObjectId, DrawingAnchor, Emu,
@@ -37218,6 +37334,51 @@ mod tests {
         assert_eq!(summary.series[0].axis_group, ChartAxisGroup::Primary);
         assert_eq!(summary.series[1].axis_ids, vec!["10", "50"]);
         assert_eq!(summary.series[1].axis_group, ChartAxisGroup::Secondary);
+    }
+
+    #[test]
+    fn parse_chart_part_summary_collects_plot_area_manual_layout() {
+        let chart_xml = br#"<?xml version="1.0" encoding="UTF-8"?>
+<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart">
+  <c:chart>
+    <c:plotArea>
+      <c:layout>
+        <c:manualLayout>
+          <c:layoutTarget val="inner"/>
+          <c:xMode val="edge"/>
+          <c:yMode val="edge"/>
+          <c:wMode val="edge"/>
+          <c:hMode val="factor"/>
+          <c:x val="0.1"/>
+          <c:y val="0.2"/>
+          <c:w val="0.8"/>
+          <c:h val="0.6"/>
+        </c:manualLayout>
+      </c:layout>
+      <c:barChart/>
+    </c:plotArea>
+    <c:legend>
+      <c:layout><c:manualLayout><c:x val="0.9"/></c:manualLayout></c:layout>
+    </c:legend>
+  </c:chart>
+</c:chartSpace>"#;
+
+        let summary = super::parse_chart_part_summary(chart_xml).expect("chart summary");
+
+        assert_eq!(
+            summary.plot_area_layout,
+            Some(ChartManualLayout {
+                target: ChartLayoutTarget::Inner,
+                x_mode: ChartLayoutMode::Edge,
+                y_mode: ChartLayoutMode::Edge,
+                width_mode: ChartLayoutMode::Edge,
+                height_mode: ChartLayoutMode::Factor,
+                x: Some(0.1),
+                y: Some(0.2),
+                width: Some(0.8),
+                height: Some(0.6),
+            })
+        );
     }
 
     #[test]

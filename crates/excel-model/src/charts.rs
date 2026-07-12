@@ -43,6 +43,7 @@ pub struct ChartModel {
     pub data_labels: Option<ChartDataLabelsModel>,
     pub data_table: Option<ChartDataTableModel>,
     pub data_table_dirty: bool,
+    pub plot_area_layout: Option<ChartManualLayout>,
     pub show_data_labels_over_maximum: Option<bool>,
     pub display_blanks_as: Option<ChartDisplayBlanksAs>,
     pub plot_visible_only: Option<bool>,
@@ -53,6 +54,33 @@ pub struct ChartModel {
     pub protection_dirty: bool,
     pub raw_part_uri: Option<String>,
     pub dirty: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct ChartManualLayout {
+    pub target: ChartLayoutTarget,
+    pub x_mode: ChartLayoutMode,
+    pub y_mode: ChartLayoutMode,
+    pub width_mode: ChartLayoutMode,
+    pub height_mode: ChartLayoutMode,
+    pub x: Option<f64>,
+    pub y: Option<f64>,
+    pub width: Option<f64>,
+    pub height: Option<f64>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ChartLayoutTarget {
+    Inner,
+    #[default]
+    Outer,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ChartLayoutMode {
+    Edge,
+    #[default]
+    Factor,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
