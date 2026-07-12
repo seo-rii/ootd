@@ -8311,6 +8311,12 @@ impl ExcelRuntime {
                                 if !chart_type_supports_gap_depth(&chart.chart_type) {
                                     chart.gap_depth = None;
                                 }
+                                if !chart_type_supports_high_low_lines(&chart.chart_type) {
+                                    chart.has_hi_lo_lines = Some(false);
+                                }
+                                if !chart_type_supports_up_down_bars(&chart.chart_type) {
+                                    chart.has_up_down_bars = Some(false);
+                                }
                                 for series in &mut chart.series {
                                     if !chart_type_supports_explosion(&chart.chart_type) {
                                         series.points.clear();
@@ -40416,6 +40422,20 @@ fn chart_type_supports_series_marker(chart_type: &ChartType) -> bool {
     matches!(
         chart_group_xml_name(chart_type),
         Some("lineChart" | "scatterChart" | "radarChart")
+    )
+}
+
+fn chart_type_supports_high_low_lines(chart_type: &ChartType) -> bool {
+    matches!(
+        chart_group_xml_name(chart_type),
+        Some("lineChart" | "stockChart")
+    )
+}
+
+fn chart_type_supports_up_down_bars(chart_type: &ChartType) -> bool {
+    matches!(
+        chart_group_xml_name(chart_type),
+        Some("lineChart" | "stockChart")
     )
 }
 
@@ -152834,6 +152854,109 @@ mod tests {
                 f64::from(chart_type_value)
             );
         }
+    }
+
+    #[test]
+    fn chart_type_setter_clears_stock_line_flags_for_unsupported_chart_groups() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with embedded chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let chart_group = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartGroups", &[OmValue::Number(1.0)])
+                .expect("Chart.ChartGroups(1)"),
+        );
+
+        runtime
+            .dispatch_set(
+                chart,
+                "ChartType",
+                OmValue::Number(f64::from(super::XL_STOCK_OHLC)),
+                &[],
+            )
+            .expect("set Chart.ChartType to stock OHLC");
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_group, "HasHiLoLines", &[])
+                .expect("ChartGroup.HasHiLoLines for stock chart"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_group, "HasUpDownBars", &[])
+                .expect("ChartGroup.HasUpDownBars for stock chart"),
+            OmValue::Bool(true)
+        );
+
+        runtime
+            .dispatch_set(
+                chart,
+                "ChartType",
+                OmValue::Number(f64::from(super::XL_BAR_CLUSTERED)),
+                &[],
+            )
+            .expect("set Chart.ChartType away from stock");
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_group, "HasHiLoLines", &[])
+                .expect("ChartGroup.HasHiLoLines after bar conversion"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_group, "HasUpDownBars", &[])
+                .expect("ChartGroup.HasUpDownBars after bar conversion"),
+            OmValue::Bool(false)
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after stock line flag cleanup");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = std::str::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(saved_chart_xml.contains("<c:barChart>"));
+        assert!(!saved_chart_xml.contains("<c:hiLowLines"));
+        assert!(!saved_chart_xml.contains("<c:upDownBars"));
     }
 
     #[test]
