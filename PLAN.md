@@ -4921,6 +4921,8 @@
   - 범위: persisted embedded `ChartObject.Delete`가 `Chart`, `ChartArea`, `PlotArea`, `SeriesCollection`, `Series`, `Series.Format` handles까지 stale 처리하는지 회귀 테스트로 고정해 drawing container 삭제 경로가 삭제된 chart child runtime object를 계속 사용하지 못하도록 차단
   - `Step 7.138 DONE` excel-runtime chart objects delete child stale regression
   - 범위: `ChartObjects.Delete`가 collection에 속한 `ChartObject`, `Chart`, `ChartArea`, `PlotArea`, `SeriesCollection` handles까지 stale 처리하는지 회귀 테스트로 고정해 chart object collection 삭제 경로가 삭제된 chart child runtime object를 계속 사용하지 못하도록 차단
+  - `Step 7.139 DONE` excel-runtime chart location child stale regression
+  - 범위: embedded `Chart.Location(xlLocationAsNewSheet)`가 이전 embedded `Chart`, `ChartArea`, `SeriesCollection`, `Series`, `Series.Format` handles까지 stale 처리하는지 회귀 테스트로 고정해 chart host 이동 경로가 이전 host의 chart child runtime object를 계속 사용하지 못하도록 차단
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.
