@@ -153077,6 +153077,122 @@ mod tests {
     }
 
     #[test]
+    fn forwarded_chart_type_setters_clear_line_flags_for_standard_pie_groups() {
+        for (setter_owner, setter_member) in [
+            ("ChartGroup", "ChartType"),
+            ("Series", "ChartType"),
+        ] {
+            let mut runtime = ExcelRuntime::new();
+            let workbook = runtime
+                .open_workbook(OpenWorkbookSpec {
+                    bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                    format_hint: Some(FileFormat::Xlsx),
+                    profile: ExcelProfile::Excel365,
+                    read_only: false,
+                })
+                .expect("open workbook with embedded chart");
+            let worksheet = expect_object_handle(
+                runtime
+                    .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                    .expect("Workbook.Worksheets(1)"),
+            );
+            let chart_objects = expect_object_handle(
+                runtime
+                    .dispatch_get(worksheet, "ChartObjects", &[])
+                    .expect("Worksheet.ChartObjects"),
+            );
+            let chart_object = expect_object_handle(
+                runtime
+                    .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                    .expect("ChartObjects.Item(1)"),
+            );
+            let chart = expect_object_handle(
+                runtime
+                    .dispatch_get(chart_object, "Chart", &[])
+                    .expect("ChartObject.Chart"),
+            );
+            let chart_group = expect_object_handle(
+                runtime
+                    .dispatch_get(chart, "ChartGroups", &[OmValue::Number(1.0)])
+                    .expect("Chart.ChartGroups(1)"),
+            );
+            let series = expect_object_handle(
+                runtime
+                    .dispatch_get(chart, "SeriesCollection", &[OmValue::Number(1.0)])
+                    .expect("Chart.SeriesCollection(1)"),
+            );
+
+            runtime
+                .dispatch_set(chart_group, "HasSeriesLines", OmValue::Bool(true), &[])
+                .expect("set ChartGroup.HasSeriesLines");
+            runtime
+                .dispatch_set(chart_group, "HasDropLines", OmValue::Bool(true), &[])
+                .expect("set ChartGroup.HasDropLines");
+
+            let setter = match setter_owner {
+                "ChartGroup" => chart_group,
+                "Series" => series,
+                _ => unreachable!("known setter owner"),
+            };
+            runtime
+                .dispatch_set(
+                    setter,
+                    setter_member,
+                    OmValue::Number(f64::from(super::XL_PIE)),
+                    &[],
+                )
+                .expect("set forwarded ChartType to pie");
+
+            assert_eq!(
+                expect_number(
+                    runtime
+                        .dispatch_get(chart, "ChartType", &[])
+                        .expect("Chart.ChartType after forwarded set")
+                ),
+                f64::from(super::XL_PIE),
+                "{setter_owner}.{setter_member} should update Chart.ChartType"
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(chart_group, "HasSeriesLines", &[])
+                    .expect("ChartGroup.HasSeriesLines after forwarded pie conversion"),
+                OmValue::Bool(false),
+                "{setter_owner}.{setter_member} should clear HasSeriesLines"
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(chart_group, "HasDropLines", &[])
+                    .expect("ChartGroup.HasDropLines after forwarded pie conversion"),
+                OmValue::Bool(false),
+                "{setter_owner}.{setter_member} should clear HasDropLines"
+            );
+
+            let saved = runtime
+                .save_workbook(
+                    workbook,
+                    SaveWorkbookSpec {
+                        format: FileFormat::Xlsx,
+                        profile: ExcelProfile::Excel365,
+                        lossless: true,
+                    },
+                )
+                .expect("save workbook after forwarded pie line flag cleanup");
+            let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+            let saved_chart_xml = std::str::from_utf8(
+                saved_package
+                    .part("xl/charts/chart1.xml")
+                    .expect("saved chart part")
+                    .bytes
+                    .as_slice(),
+            )
+            .expect("saved chart xml utf8");
+            assert!(saved_chart_xml.contains("<c:pieChart>"));
+            assert!(!saved_chart_xml.contains("<c:serLines"));
+            assert!(!saved_chart_xml.contains("<c:dropLines"));
+        }
+    }
+
+    #[test]
     fn chart_type_setter_rejects_volume_stock_combo_chart_types() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
