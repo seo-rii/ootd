@@ -4981,6 +4981,8 @@
   - 범위: OOXML `c15:fullRef/c15:sqref`를 chart source의 typed full-reference overlay로 읽어 `ChartGroup.FullCategoryCollection`의 count/name과 `ChartCategory.IsFiltered`를 visible/full cell membership 기준으로 계산하고, workbook-id remap과 worksheet rename에서 전체 참조도 함께 갱신하며, source setter는 수정된 source의 stale `fullRef`만 제거하고 sibling/다른 source extension은 유지하도록 dirty chart XML patcher와 fallback serializer를 확장
   - `Step 7.168 DONE` filtered chart series collection and lossless mutation support
   - 범위: OOXML `c15:filtered*Series/c15:ser`를 stable `c:idx` identity와 함께 typed series overlay로 읽고, `SeriesCollection`은 visible series만, `FullSeriesCollection`은 filtered series를 포함한 plot order로 노출하며 `Series.IsFiltered` read/write와 dynamic parent를 pinned OM surface에 연결하고, loaded single-group chart에서는 원본 series subtree만 chart group과 filtered extension 사이에서 이동해 sibling extension/series formatting을 보존하며 새 chart fallback serializer도 schema-correct `c15:ser`를 생성하도록 구현
+  - `Step 7.169 DONE` combo and secondary filtered-series lossless structural mutation
+  - 범위: loaded chart의 series를 unique `c:idx`로 실제 chart group에 매핑하고 group별 direct-series insertion point와 `extLst` removal/addition을 독립 계획해 bar/line 등 각 group type에 맞는 `c15:filtered*Series` wrapper를 사용하며, combo/secondary filter-only save는 generic fallback serializer를 거치지 않고 원본 subtree/opaque sibling extension/formatting/axis binding을 보존하고 다른 chart content mutation과 혼합된 저장은 explicit unsupported로 차단하도록 chart content dirty 원인을 분리
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.
