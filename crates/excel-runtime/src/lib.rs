@@ -141867,6 +141867,143 @@ mod tests {
     }
 
     #[test]
+    fn read_only_chart_activation_and_selection_preserve_source_child_handles() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: true,
+            })
+            .expect("open read-only workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let shape_range = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "ShapeRange", &[])
+                .expect("ChartObject.ShapeRange"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let chart_area = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartArea", &[])
+                .expect("Chart.ChartArea before activation"),
+        );
+        let plot_area = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "PlotArea", &[])
+                .expect("Chart.PlotArea before activation"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection before activation"),
+        );
+        let series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("SeriesCollection.Item(1) before activation"),
+        );
+        let series_format = expect_object_handle(
+            runtime
+                .dispatch_get(series, "Format", &[])
+                .expect("Series.Format before activation"),
+        );
+
+        for (handle, owner, member, args) in [
+            (chart_object, "ChartObject", "Activate", Vec::new()),
+            (chart_object, "ChartObject", "Select", Vec::new()),
+            (
+                chart_objects,
+                "ChartObjects",
+                "Select",
+                vec![OmValue::Bool(false)],
+            ),
+            (
+                shape_range,
+                "ShapeRange",
+                "Select",
+                vec![OmValue::Bool(true)],
+            ),
+            (chart, "Chart", "Activate", Vec::new()),
+            (chart, "Chart", "Select", vec![OmValue::Bool(true)]),
+        ] {
+            runtime
+                .dispatch_invoke(handle, member, &args)
+                .unwrap_or_else(|error| panic!("{owner}.{member}: {error:?}"));
+        }
+        runtime
+            .dispatch_invoke(chart, "Deselect", &[])
+            .expect("Chart.Deselect");
+        assert_eq!(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveChart", &[])
+                .expect("Application.ActiveChart after Chart.Deselect"),
+            OmValue::Empty
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart_area, "Select", &[])
+                .expect("ChartArea remains live after activation and selection"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(plot_area, "Select", &[])
+                .expect("PlotArea remains live after activation and selection"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(series_collection, "Count", &[])
+                    .expect("SeriesCollection remains live after activation and selection")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(series, "PlotOrder", &[])
+                    .expect("Series remains live after activation and selection")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(series_format, "Creator", &[])
+                    .expect("Series.Format remains live after activation and selection")
+            ),
+            f64::from(super::XL_CREATOR_CODE)
+        );
+        assert!(expect_bool(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved after activation and selection")
+        ));
+    }
+
+    #[test]
     fn chart_cut_methods_reject_read_only_workbook() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
