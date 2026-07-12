@@ -4965,6 +4965,8 @@
   - 범위: writable workbook의 `ChartObject.Cut`, `ChartObjects.Cut`, `ShapeRange.Cut`가 headless cut mode를 설정할 때 기존 `ChartArea`, `PlotArea`, `SeriesCollection`, `Series` handles를 stale 처리하지 않고 유지하는지 회귀 테스트로 고정해 container/shape cut 경로가 source chart child runtime object를 잘못 무효화하지 않도록 차단
   - `Step 7.160 DONE` excel-runtime chart layout source child handle regression
   - 범위: `ChartObjects.Add`와 `ChartObject`/`ChartObjects`/`ShapeRange`의 z-order, 위치, 회전, 크기 변경을 연속 수행해도 기존 `ChartArea`, `PlotArea`, `SeriesCollection`, `Series`, `Series.Format` handles를 stale 처리하지 않고 유지하는지 회귀 테스트로 고정해 비파괴 drawing layout 변경이 source chart child runtime object를 잘못 무효화하지 않도록 차단
+  - `Step 7.161 DONE` excel-runtime read-only chart layout child handle regression
+  - 범위: read-only workbook의 `ChartObject`/`ChartObjects`/`ShapeRange` duplicate, add, z-order, 위치, 회전, 크기, flip 변경이 거부된 뒤에도 기존 `ChartArea`, `PlotArea`, `SeriesCollection`, `Series`, `Series.Format` handles를 stale 처리하지 않고 유지하는지 회귀 테스트로 고정해 rejected drawing layout mutation이 source chart child runtime object를 부분적으로 무효화하지 않도록 차단
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.
