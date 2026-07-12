@@ -159301,6 +159301,31 @@ mod tests {
                 .dispatch_get(legend, "Border", &[])
                 .expect("Legend.Border"),
         );
+        let legend_entries = expect_object_handle(
+            runtime
+                .dispatch_invoke(legend, "LegendEntries", &[])
+                .expect("Legend.LegendEntries"),
+        );
+        let legend_entry = expect_object_handle(
+            runtime
+                .dispatch_invoke(legend_entries, "Item", &[OmValue::Number(1.0)])
+                .expect("LegendEntries.Item(1)"),
+        );
+        let legend_entry_format = expect_object_handle(
+            runtime
+                .dispatch_get(legend_entry, "Format", &[])
+                .expect("LegendEntry.Format"),
+        );
+        let legend_key = expect_object_handle(
+            runtime
+                .dispatch_get(legend_entry, "LegendKey", &[])
+                .expect("LegendEntry.LegendKey"),
+        );
+        let legend_key_border = expect_object_handle(
+            runtime
+                .dispatch_get(legend_key, "Border", &[])
+                .expect("LegendKey.Border"),
+        );
         let category_axis = expect_object_handle(
             runtime
                 .dispatch_get(
@@ -159490,6 +159515,41 @@ mod tests {
             runtime
                 .dispatch_get(legend_border, "LineStyle", &[])
                 .expect_err("deleted Legend.Border handle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(legend_entries, "Count", &[])
+                .expect_err("LegendEntries handle should be stale after Legend.Delete")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(legend_entry, "Index", &[])
+                .expect_err("LegendEntry handle should be stale after Legend.Delete")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(legend_entry_format, "Creator", &[])
+                .expect_err("LegendEntry.Format should be stale after Legend.Delete")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(legend_key, "Creator", &[])
+                .expect_err("LegendKey handle should be stale after Legend.Delete")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(legend_key_border, "LineStyle", &[])
+                .expect_err("LegendKey.Border should be stale after Legend.Delete")
                 .code,
             OmErrorCode::InvalidState
         );
