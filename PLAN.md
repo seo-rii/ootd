@@ -4897,6 +4897,8 @@
   - 범위: `Chart.ChartType`을 표준 pie/doughnut 계열로 변경할 때 `serLines`/`dropLines` chart-group flags를 model/getter/saved XML 경계에서 제거하도록 보강해 bar/line 계열에서 켜진 line flags가 pie/doughnut chart XML에 남지 않도록 차단
   - `Step 7.126 DONE` excel-runtime forwarded chart type line flag cleanup regression
   - 범위: `Series.ChartType`과 `ChartGroup.ChartType` 위임 경로로 표준 pie 계열 전환을 수행해도 `serLines`/`dropLines` cleanup invariant가 getter/saved XML 경계에서 유지되는지 회귀 테스트로 고정해 chart-level setter 외부 진입점이 line flag 정리를 우회하지 못하도록 보강
+  - `Step 7.127 DONE` excel-runtime chart type line flag cleanup reopen regression
+  - 범위: stock-to-bar 및 bar-to-pie line flag cleanup 테스트가 saved XML뿐 아니라 reopen 후 `ChartGroup` object model getter에서도 제거 상태를 유지하는지 검증하도록 보강해 persistence/readback 경계에서 cleanup invariant가 drift되지 않도록 고정
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.
