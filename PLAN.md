@@ -4973,6 +4973,8 @@
   - 범위: writable workbook의 단일 `ShapeRange.Flip(msoFlipHorizontal)`과 복수 chart selection `ShapeRange.Flip(msoFlipVertical)`을 연속 수행해도 기존 `ChartArea`, `PlotArea`, `SeriesCollection`, `Series`, `Series.Format` handles를 stale 처리하지 않고 유지하는지 회귀 테스트로 고정해 drawing transform 변경이 source chart child runtime object를 잘못 무효화하지 않도록 차단
   - `Step 7.164 DONE` excel-runtime read-only chart activation and selection child handle regression
   - 범위: read-only workbook에서 `ChartObject.Activate`/`Select`, `ChartObjects.Select`, `ShapeRange.Select`, embedded `Chart.Activate`/`Select`/`Deselect`를 연속 수행해도 기존 `ChartArea`, `PlotArea`, `SeriesCollection`, `Series`, `Series.Format` handles와 workbook saved state를 유지하는지 회귀 테스트로 고정해 non-mutating selection state 변경이 chart child runtime object나 workbook dirty state를 잘못 변경하지 않도록 차단
+  - `Step 7.165 DONE` chart plot-area manual layout model and geometry support
+  - 범위: OOXML `plotArea/layout/manualLayout`의 target, edge/factor modes, x/y/width/height 비율을 typed `ChartManualLayout` overlay로 읽고 fallback chart serializer에도 보존하며, embedded chart container의 point 크기를 기준으로 `PlotArea.Left`/`Top`/`Width`/`Height`와 `Inside*` geometry를 계산하도록 연결하고 unrelated dirty chart save 후에도 manual layout XML이 유지되는지 회귀 테스트로 고정
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.
