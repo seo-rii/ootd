@@ -141644,6 +141644,41 @@ mod tests {
                 .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
                 .expect("ChartObjects.Item(1)"),
         );
+        let shape_range = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "ShapeRange", &[])
+                .expect("ChartObject.ShapeRange"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let chart_area = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartArea", &[])
+                .expect("Chart.ChartArea before rejected layout methods"),
+        );
+        let plot_area = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "PlotArea", &[])
+                .expect("Chart.PlotArea before rejected layout methods"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection before rejected layout methods"),
+        );
+        let series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("SeriesCollection.Item(1) before rejected layout methods"),
+        );
+        let series_format = expect_object_handle(
+            runtime
+                .dispatch_get(series, "Format", &[])
+                .expect("Series.Format before rejected layout methods"),
+        );
 
         for (handle, owner, member, args) in [
             (chart_object, "ChartObject", "Duplicate", Vec::new()),
@@ -141685,6 +141720,48 @@ mod tests {
                 "ScaleHeight",
                 vec![OmValue::Number(1.2), OmValue::Bool(false)],
             ),
+            (
+                shape_range,
+                "ShapeRange",
+                "ZOrder",
+                vec![OmValue::Number(f64::from(super::MSO_BRING_TO_FRONT))],
+            ),
+            (
+                shape_range,
+                "ShapeRange",
+                "IncrementLeft",
+                vec![OmValue::Number(2.0)],
+            ),
+            (
+                shape_range,
+                "ShapeRange",
+                "IncrementTop",
+                vec![OmValue::Number(2.0)],
+            ),
+            (
+                shape_range,
+                "ShapeRange",
+                "IncrementRotation",
+                vec![OmValue::Number(2.0)],
+            ),
+            (
+                shape_range,
+                "ShapeRange",
+                "ScaleWidth",
+                vec![OmValue::Number(1.2), OmValue::Bool(false)],
+            ),
+            (
+                shape_range,
+                "ShapeRange",
+                "ScaleHeight",
+                vec![OmValue::Number(1.2), OmValue::Bool(false)],
+            ),
+            (
+                shape_range,
+                "ShapeRange",
+                "Flip",
+                vec![OmValue::Number(f64::from(super::MSO_FLIP_HORIZONTAL))],
+            ),
             (chart_objects, "ChartObjects", "Duplicate", Vec::new()),
             (chart_objects, "ChartObjects", "BringToFront", Vec::new()),
             (chart_objects, "ChartObjects", "SendToBack", Vec::new()),
@@ -141722,6 +141799,42 @@ mod tests {
                     .expect("ChartObjects.Count after rejected mutating methods")
             ),
             1.0
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart_area, "Select", &[])
+                .expect("ChartArea remains live after rejected layout methods"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(plot_area, "Select", &[])
+                .expect("PlotArea remains live after rejected layout methods"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(series_collection, "Count", &[])
+                    .expect("SeriesCollection remains live after rejected layout methods")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(series, "PlotOrder", &[])
+                    .expect("Series remains live after rejected layout methods")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(series_format, "Creator", &[])
+                    .expect("Series.Format remains live after rejected layout methods")
+            ),
+            f64::from(super::XL_CREATOR_CODE)
         );
     }
 
