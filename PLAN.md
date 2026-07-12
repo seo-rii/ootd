@@ -4913,6 +4913,8 @@
   - 범위: `ChartArea.Clear`/`ClearContents`와 `PlotArea.Clear`/`ClearContents`가 series를 비울 때 기존 `Series`, `Series.Format`, `Points`, `Point`, point `Format`, `DataLabels`, data labels `Format`, `DataLabel`, data label `Border` handles까지 stale 처리하는지 회귀 테스트로 고정해 chart clear 경로가 삭제된 series child runtime object를 계속 사용하지 못하도록 차단
   - `Step 7.134 DONE` excel-runtime chart visibility child stale regression
   - 범위: `Chart.HasTitle = false`와 `Chart.HasLegend = false`가 `ChartTitle`, chart title `Format`, chart title `Border`, legend collection/item/key, legend entry `Format`, legend key `Border` handles까지 stale 처리하는지 회귀 테스트로 고정해 parent visibility setter 경로가 삭제된 title/legend child runtime object를 계속 사용하지 못하도록 차단
+  - `Step 7.135 DONE` excel-runtime SetElement child stale regression
+  - 범위: `Chart.SetElement(msoElementChartTitleNone)`와 `Chart.SetElement(msoElementLegendNone)`가 `ChartTitle`, chart title `Format`, chart title `Border`, legend collection/item/key, legend entry `Format`, legend key `Border` handles까지 stale 처리하는지 회귀 테스트로 고정해 layout helper 경로가 삭제된 title/legend child runtime object를 계속 사용하지 못하도록 차단
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.
