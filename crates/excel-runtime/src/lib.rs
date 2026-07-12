@@ -8252,6 +8252,7 @@ impl ExcelRuntime {
                             }
                         };
                         let mut stale_axis_handles = false;
+                        let mut stale_line_handles = Vec::new();
                         {
                             let runtime = self.runtime_workbook_mut(workbook)?;
                             if runtime.read_only {
@@ -8313,13 +8314,17 @@ impl ExcelRuntime {
                                 }
                                 if !chart_type_supports_high_low_lines(&chart.chart_type) {
                                     chart.has_hi_lo_lines = Some(false);
+                                    stale_line_handles.push(ChartGroupLineKind::HiLoLines);
                                 }
                                 if !chart_type_supports_up_down_bars(&chart.chart_type) {
                                     chart.has_up_down_bars = Some(false);
+                                    stale_line_handles.push(ChartGroupLineKind::UpBars);
                                 }
                                 if chart_type_clears_standard_line_flags(&chart.chart_type) {
                                     chart.has_series_lines = Some(false);
                                     chart.has_drop_lines = Some(false);
+                                    stale_line_handles.push(ChartGroupLineKind::SeriesLines);
+                                    stale_line_handles.push(ChartGroupLineKind::DropLines);
                                 }
                                 for series in &mut chart.series {
                                     if !chart_type_supports_explosion(&chart.chart_type) {
@@ -8360,6 +8365,11 @@ impl ExcelRuntime {
                         }
                         if stale_axis_handles {
                             self.stale_axis_handles_for_chart(workbook, chart_id);
+                        }
+                        for kind in stale_line_handles {
+                            self.stale_chart_group_line_handles_for_group(
+                                workbook, chart_id, 0, kind,
+                            );
                         }
                         Ok(())
                     }
@@ -152929,6 +152939,21 @@ mod tests {
                 .expect("ChartGroup.HasUpDownBars for stock chart"),
             OmValue::Bool(true)
         );
+        let stale_hi_lo_lines = expect_object_handle(
+            runtime
+                .dispatch_get(chart_group, "HiLoLines", &[])
+                .expect("ChartGroup.HiLoLines before bar conversion"),
+        );
+        let stale_up_bars = expect_object_handle(
+            runtime
+                .dispatch_get(chart_group, "UpBars", &[])
+                .expect("ChartGroup.UpBars before bar conversion"),
+        );
+        let stale_down_bars = expect_object_handle(
+            runtime
+                .dispatch_get(chart_group, "DownBars", &[])
+                .expect("ChartGroup.DownBars before bar conversion"),
+        );
 
         runtime
             .dispatch_set(
@@ -152949,6 +152974,27 @@ mod tests {
                 .dispatch_get(chart_group, "HasUpDownBars", &[])
                 .expect("ChartGroup.HasUpDownBars after bar conversion"),
             OmValue::Bool(false)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(stale_hi_lo_lines, "Name", &[])
+                .expect_err("HiLoLines handle should be stale after bar conversion")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(stale_up_bars, "Name", &[])
+                .expect_err("UpBars handle should be stale after bar conversion")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(stale_down_bars, "Name", &[])
+                .expect_err("DownBars handle should be stale after bar conversion")
+                .code,
+            OmErrorCode::InvalidState
         );
 
         let saved = runtime
@@ -153065,6 +153111,16 @@ mod tests {
         runtime
             .dispatch_set(chart_group, "HasDropLines", OmValue::Bool(true), &[])
             .expect("set ChartGroup.HasDropLines");
+        let stale_series_lines = expect_object_handle(
+            runtime
+                .dispatch_get(chart_group, "SeriesLines", &[])
+                .expect("ChartGroup.SeriesLines before pie conversion"),
+        );
+        let stale_drop_lines = expect_object_handle(
+            runtime
+                .dispatch_get(chart_group, "DropLines", &[])
+                .expect("ChartGroup.DropLines before pie conversion"),
+        );
         assert_eq!(
             runtime
                 .dispatch_get(chart_group, "HasSeriesLines", &[])
@@ -153097,6 +153153,20 @@ mod tests {
                 .dispatch_get(chart_group, "HasDropLines", &[])
                 .expect("ChartGroup.HasDropLines after pie conversion"),
             OmValue::Bool(false)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(stale_series_lines, "Name", &[])
+                .expect_err("SeriesLines handle should be stale after pie conversion")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(stale_drop_lines, "Name", &[])
+                .expect_err("DropLines handle should be stale after pie conversion")
+                .code,
+            OmErrorCode::InvalidState
         );
 
         let saved = runtime
