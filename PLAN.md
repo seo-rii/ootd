@@ -4905,6 +4905,8 @@
   - 범위: `Axis.Delete`와 `Chart.ChartType` 축 제거 경로가 `AxisTitle`, `TickLabels`, axis title border, child `Format` handles까지 stale 처리하는지 회귀 테스트로 고정해 축 컨테이너 삭제 후 하위 runtime object가 계속 사용되는 경계를 차단
   - `Step 7.130 DONE` excel-runtime legend child stale regression
   - 범위: `Legend.Delete`가 `LegendEntries`, `LegendEntry`, `LegendKey`, legend entry `Format`, legend key `Border` handles까지 stale 처리하는지 회귀 테스트로 고정해 legend 컨테이너 삭제 후 하위 runtime object가 계속 사용되는 경계를 차단
+  - `Step 7.131 DONE` excel-runtime data labels child stale regression
+  - 범위: `DataLabels.Delete`가 `DataLabels.Format`, format child, 개별 `DataLabel`, data label `Format`, data label `Border` handles까지 stale 처리하는지 회귀 테스트로 고정해 data labels collection 삭제 후 하위 runtime object가 계속 사용되는 경계를 차단
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.
