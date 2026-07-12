@@ -43332,6 +43332,15 @@ fn patch_loaded_chart_model_xml(
                 if !wrote_start_element
                     && local_name.as_slice() == b"explosion"
                     && parent_name == Some(b"dPt".as_slice())
+                    && !chart_type_supports_explosion(&chart.chart_type)
+                {
+                    skip_depth = 1;
+                    buffer.clear();
+                    continue;
+                }
+                if !wrote_start_element
+                    && local_name.as_slice() == b"explosion"
+                    && parent_name == Some(b"dPt".as_slice())
                     && let Some(series_index) = current_series_index
                     && let Some(point_index) = current_point_index
                     && let Some(explosion) = expected_point_explosion(series_index, point_index)
@@ -44784,6 +44793,13 @@ fn patch_loaded_chart_model_xml(
                         buffer.clear();
                         continue;
                     }
+                }
+                if local_name.as_slice() == b"explosion"
+                    && parent_name == Some(b"dPt".as_slice())
+                    && !chart_type_supports_explosion(&chart.chart_type)
+                {
+                    buffer.clear();
+                    continue;
                 }
                 if local_name.as_slice() == b"explosion"
                     && parent_name == Some(b"dPt".as_slice())
@@ -47807,11 +47823,13 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
             if let Some(explosion) = chart_explosion_xml_value(chart) {
                 series_xml.push_str(&format!(r#"<c:explosion val="{explosion}"/>"#));
             }
-            for (point_index, point) in &series.points {
-                if let Some(explosion) = point.explosion {
-                    series_xml.push_str(&format!(
-                        r#"<c:dPt><c:idx val="{point_index}"/><c:explosion val="{explosion}"/></c:dPt>"#
-                    ));
+            if chart_type_supports_explosion(&chart.chart_type) {
+                for (point_index, point) in &series.points {
+                    if let Some(explosion) = point.explosion {
+                        series_xml.push_str(&format!(
+                            r#"<c:dPt><c:idx val="{point_index}"/><c:explosion val="{explosion}"/></c:dPt>"#
+                        ));
+                    }
                 }
             }
             series_xml.push_str(&chart_series_data_labels_xml_string(series));
@@ -134655,6 +134673,120 @@ mod tests {
         .expect("saved chart xml utf8");
         assert!(saved_chart_xml.contains("<c:lineChart>"));
         assert!(!saved_chart_xml.contains("<c:dPt>"));
+        assert!(!saved_chart_xml.contains("<c:explosion"));
+    }
+
+    #[test]
+    fn chart_serializer_omits_point_explosions_for_unsupported_chart_types() {
+        let mut package = OpcPackage::from_bytes(&synthetic_workbook_with_embedded_chart_bytes())
+            .expect("embedded chart package");
+        let chart_xml = String::from_utf8(
+            package
+                .part("xl/charts/chart1.xml")
+                .expect("chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("chart xml utf8")
+        .replace(
+            r#"<c:ser><c:idx val="0"/><c:order val="0"/>"#,
+            r#"<c:ser><c:idx val="0"/><c:order val="0"/><c:dPt><c:idx val="0"/><c:explosion val="35"/></c:dPt>"#,
+        );
+        package
+            .replace_part_bytes("xl/charts/chart1.xml", chart_xml.into_bytes())
+            .expect("replace chart xml");
+
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: package.to_bytes().expect("package bytes"),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with unsupported point explosion");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection"),
+        );
+        let series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("SeriesCollection.Item(1)"),
+        );
+        let first_point = expect_object_handle(
+            runtime
+                .dispatch_get(series, "Points", &[OmValue::Number(1.0)])
+                .expect("Series.Points(1)"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(first_point, "Explosion", &[])
+                    .expect("loaded unsupported Point.Explosion")
+            ),
+            35.0
+        );
+
+        runtime
+            .dispatch_set(chart, "HasTitle", OmValue::Bool(true), &[])
+            .expect("set Chart.HasTitle");
+        let chart_title = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartTitle", &[])
+                .expect("Chart.ChartTitle"),
+        );
+        runtime
+            .dispatch_set(
+                chart_title,
+                "Text",
+                OmValue::Text("Dirty chart".to_string()),
+                &[],
+            )
+            .expect("set ChartTitle.Text");
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after unrelated chart edit");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = std::str::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(saved_chart_xml.contains("<c:barChart>"));
+        assert!(saved_chart_xml.contains("Dirty chart"));
         assert!(!saved_chart_xml.contains("<c:explosion"));
     }
 

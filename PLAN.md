@@ -4887,6 +4887,8 @@
   - 범위: `Chart.ChartType` 변경 경로가 대상 chart type에서 지원하지 않는 `Series.BarShape`, `Series.Smooth`, `Series.MarkerStyle`, `Series.MarkerSize` override를 model/saved XML 경계에서 제거하도록 보강해 3D bar shape와 line/scatter/radar marker/smooth formatting이 2D bar 등 호환되지 않는 chart XML에 남는 경계를 차단
   - `Step 7.121 DONE` excel-runtime chart type point explosion clearing
   - 범위: `Chart.ChartType` 변경 경로가 pie/doughnut 계열에서만 지원되는 point-level `Explosion` override를 대상 chart type에서 지원하지 않을 때 model/getter/saved XML 경계에서 제거하도록 보강해 line/bar 등 호환되지 않는 chart XML에 stale `<c:dPt><c:explosion>`이 남지 않도록 차단
+  - `Step 7.122 DONE` excel-runtime chart serializer point explosion guard
+  - 범위: dirty chart typed serializer가 chart type에서 지원하지 않는 point-level `Explosion` override를 XML로 재방출하지 않도록 보강해 로드된 malformed/legacy chart state가 제목 등 unrelated chart edit 후 non-pie chart XML에 stale `<c:dPt><c:explosion>`을 남기는 경계를 차단
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.
