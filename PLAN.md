@@ -4901,6 +4901,8 @@
   - 범위: stock-to-bar 및 bar-to-pie line flag cleanup 테스트가 saved XML뿐 아니라 reopen 후 `ChartGroup` object model getter에서도 제거 상태를 유지하는지 검증하도록 보강해 persistence/readback 경계에서 cleanup invariant가 drift되지 않도록 고정
   - `Step 7.128 DONE` excel-runtime chart type line flag stale handle cleanup
   - 범위: `Chart.ChartType` 변경이 `hiLowLines`/`upDownBars` 또는 `serLines`/`dropLines` chart-group flags를 제거할 때 기존 `HiLoLines`/`UpBars`/`DownBars`/`SeriesLines`/`DropLines` runtime handles도 stale 처리하도록 보강해 flag cleanup 후 삭제된 line object handle이 계속 사용되지 않도록 차단
+  - `Step 7.129 DONE` excel-runtime chart axis child stale regression
+  - 범위: `Axis.Delete`와 `Chart.ChartType` 축 제거 경로가 `AxisTitle`, `TickLabels`, axis title border, child `Format` handles까지 stale 처리하는지 회귀 테스트로 고정해 축 컨테이너 삭제 후 하위 runtime object가 계속 사용되는 경계를 차단
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.
