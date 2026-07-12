@@ -136766,10 +136766,30 @@ mod tests {
                 .dispatch_get(data_labels, "Border", &[])
                 .expect("DataLabels.Border"),
         );
+        let data_labels_format = expect_object_handle(
+            runtime
+                .dispatch_get(data_labels, "Format", &[])
+                .expect("DataLabels.Format"),
+        );
+        let data_labels_format_line = expect_object_handle(
+            runtime
+                .dispatch_get(data_labels_format, "Line", &[])
+                .expect("DataLabels.Format.Line"),
+        );
         let second_label = expect_object_handle(
             runtime
                 .dispatch_invoke(data_labels, "Item", &[OmValue::Number(2.0)])
                 .expect("DataLabels.Item(2) again"),
+        );
+        let second_label_format = expect_object_handle(
+            runtime
+                .dispatch_get(second_label, "Format", &[])
+                .expect("DataLabel.Format"),
+        );
+        let second_label_border = expect_object_handle(
+            runtime
+                .dispatch_get(second_label, "Border", &[])
+                .expect("DataLabel.Border"),
         );
         runtime
             .dispatch_set(second_label, "ShowCategoryName", OmValue::Bool(true), &[])
@@ -136828,8 +136848,43 @@ mod tests {
         );
         assert_eq!(
             runtime
+                .dispatch_get(data_labels_format, "Creator", &[])
+                .expect_err("DataLabels.Format should be stale after Delete")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(data_labels_format_line, "Creator", &[])
+                .expect_err("DataLabels.Format.Line should be stale after Delete")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
                 .dispatch_get(data_labels_border, "LineStyle", &[])
                 .expect_err("DataLabels.Border should be stale after Delete")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(second_label, "ShowCategoryName", &[])
+                .expect_err("DataLabel handle should be stale after DataLabels.Delete")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(second_label_format, "Creator", &[])
+                .expect_err("DataLabel.Format should be stale after DataLabels.Delete")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(second_label_border, "LineStyle", &[])
+                .expect_err("DataLabel.Border should be stale after DataLabels.Delete")
                 .code,
             OmErrorCode::InvalidState
         );
