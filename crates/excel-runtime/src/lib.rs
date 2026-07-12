@@ -115136,6 +115136,36 @@ mod tests {
                 .dispatch_get(workbook.0, "Charts", &[])
                 .expect("read-only Workbook.Charts"),
         );
+        let source_first_chart = expect_object_handle(
+            runtime
+                .dispatch_get(charts, "Item", &[OmValue::Number(1.0)])
+                .expect("read-only source Charts.Item(1) before Copy"),
+        );
+        let source_second_chart = expect_object_handle(
+            runtime
+                .dispatch_get(charts, "Item", &[OmValue::Number(2.0)])
+                .expect("read-only source Charts.Item(2) before Copy"),
+        );
+        let source_first_chart_area = expect_object_handle(
+            runtime
+                .dispatch_get(source_first_chart, "ChartArea", &[])
+                .expect("read-only source first Chart.ChartArea before Copy"),
+        );
+        let source_first_series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(source_first_chart, "SeriesCollection", &[])
+                .expect("read-only source first Chart.SeriesCollection before Copy"),
+        );
+        let source_second_chart_area = expect_object_handle(
+            runtime
+                .dispatch_get(source_second_chart, "ChartArea", &[])
+                .expect("read-only source second Chart.ChartArea before Copy"),
+        );
+        let source_second_series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(source_second_chart, "SeriesCollection", &[])
+                .expect("read-only source second Chart.SeriesCollection before Copy"),
+        );
 
         assert_eq!(
             runtime
@@ -115203,6 +115233,50 @@ mod tests {
                     .expect("source Charts.Count after read-only Charts.Copy")
             ),
             2.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(source_first_chart, "ChartType", &[])
+                    .expect("read-only source first Chart remains live after Copy")
+            ),
+            f64::from(super::XL_LINE)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(source_first_chart_area, "Select", &[])
+                .expect("read-only source first ChartArea remains live after Copy"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(source_first_series_collection, "Count", &[])
+                    .expect("read-only source first SeriesCollection remains live after Copy")
+            ),
+            0.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(source_second_chart, "ChartType", &[])
+                    .expect("read-only source second Chart remains live after Copy")
+            ),
+            f64::from(super::XL_PIE)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(source_second_chart_area, "Select", &[])
+                .expect("read-only source second ChartArea remains live after Copy"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(source_second_series_collection, "Count", &[])
+                    .expect("read-only source second SeriesCollection remains live after Copy")
+            ),
+            0.0
         );
     }
 
