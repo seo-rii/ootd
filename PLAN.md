@@ -4955,6 +4955,8 @@
   - 범위: read-only workbook의 embedded chart copy methods가 기존 `ChartArea`, `PlotArea`, `SeriesCollection`, `Series` handles를 stale 처리하지 않고 유지하는지 회귀 테스트로 고정해 read-only copy/copy-picture 경로가 chart child runtime object를 잘못 무효화하지 않도록 차단
   - `Step 7.155 DONE` excel-runtime chart object duplicate source child handle regression
   - 범위: `ChartObject.Duplicate`가 새 embedded chart object를 만들 때 기존 `Chart`, `ChartArea`, `PlotArea`, `SeriesCollection` handles를 stale 처리하지 않고 유지하는지 회귀 테스트로 고정해 duplicate 경로가 source chart child runtime object를 잘못 무효화하지 않도록 차단
+  - `Step 7.156 DONE` excel-runtime chart objects duplicate source child handle regression
+  - 범위: `ChartObjects.Duplicate`가 collection member를 복제할 때 기존 `ChartObject`, `Chart`, `ChartArea`, `PlotArea`, `SeriesCollection` handles를 stale 처리하지 않고 유지하는지 회귀 테스트로 고정해 collection-level duplicate 경로가 source chart child runtime object를 잘못 무효화하지 않도록 차단
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.
