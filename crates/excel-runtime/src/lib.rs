@@ -119803,6 +119803,26 @@ mod tests {
                 &[],
             )
             .expect("set embedded chart type before Chart.Location");
+        let embedded_chart_area = expect_object_handle(
+            runtime
+                .dispatch_get(embedded_chart, "ChartArea", &[])
+                .expect("embedded Chart.ChartArea before Chart.Location"),
+        );
+        let embedded_series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(embedded_chart, "SeriesCollection", &[])
+                .expect("embedded Chart.SeriesCollection before Chart.Location"),
+        );
+        let embedded_series = expect_object_handle(
+            runtime
+                .dispatch_invoke(embedded_series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("embedded SeriesCollection.Item(1) before Chart.Location"),
+        );
+        let embedded_series_format = expect_object_handle(
+            runtime
+                .dispatch_get(embedded_series, "Format", &[])
+                .expect("embedded Series.Format before Chart.Location"),
+        );
 
         let search_range = expect_object_handle(
             runtime
@@ -119903,6 +119923,36 @@ mod tests {
             runtime
                 .dispatch_get(embedded_chart, "ChartType", &[])
                 .expect_err("old embedded Chart handle should be stale after Chart.Location")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(embedded_chart_area, "Select", &[])
+                .expect_err("old embedded ChartArea handle should be stale after Chart.Location")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(embedded_series_collection, "Count", &[])
+                .expect_err(
+                    "old embedded SeriesCollection handle should be stale after Chart.Location"
+                )
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(embedded_series, "PlotOrder", &[])
+                .expect_err("old embedded Series handle should be stale after Chart.Location")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(embedded_series_format, "Creator", &[])
+                .expect_err("old embedded Series.Format handle should be stale after Chart.Location")
                 .code,
             OmErrorCode::InvalidState
         );
