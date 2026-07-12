@@ -141194,6 +141194,190 @@ mod tests {
     }
 
     #[test]
+    fn chart_layout_methods_preserve_source_child_handles() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let shape_range = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "ShapeRange", &[])
+                .expect("ChartObject.ShapeRange"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let chart_area = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartArea", &[])
+                .expect("Chart.ChartArea before layout methods"),
+        );
+        let plot_area = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "PlotArea", &[])
+                .expect("Chart.PlotArea before layout methods"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection before layout methods"),
+        );
+        let series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("SeriesCollection.Item(1) before layout methods"),
+        );
+        let series_format = expect_object_handle(
+            runtime
+                .dispatch_get(series, "Format", &[])
+                .expect("Series.Format before layout methods"),
+        );
+
+        expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    chart_objects,
+                    "Add",
+                    &[
+                        OmValue::Number(24.0),
+                        OmValue::Number(30.0),
+                        OmValue::Number(180.0),
+                        OmValue::Number(90.0),
+                    ],
+                )
+                .expect("ChartObjects.Add second chart"),
+        );
+
+        for (handle, owner, member, args) in [
+            (
+                chart_object,
+                "ChartObject",
+                "ZOrder",
+                vec![OmValue::Number(f64::from(super::MSO_BRING_TO_FRONT))],
+            ),
+            (chart_object, "ChartObject", "SendToBack", Vec::new()),
+            (chart_object, "ChartObject", "BringToFront", Vec::new()),
+            (
+                shape_range,
+                "ShapeRange",
+                "ZOrder",
+                vec![OmValue::Number(f64::from(super::MSO_SEND_BACKWARD))],
+            ),
+            (
+                chart_object,
+                "ChartObject",
+                "IncrementLeft",
+                vec![OmValue::Number(5.0)],
+            ),
+            (
+                chart_object,
+                "ChartObject",
+                "IncrementTop",
+                vec![OmValue::Number(4.0)],
+            ),
+            (
+                chart_object,
+                "ChartObject",
+                "IncrementRotation",
+                vec![OmValue::Number(15.0)],
+            ),
+            (
+                chart_object,
+                "ChartObject",
+                "ScaleWidth",
+                vec![OmValue::Number(1.1), OmValue::Bool(false)],
+            ),
+            (
+                chart_object,
+                "ChartObject",
+                "ScaleHeight",
+                vec![
+                    OmValue::Number(1.2),
+                    OmValue::Bool(false),
+                    OmValue::Number(f64::from(super::MSO_SCALE_FROM_MIDDLE)),
+                ],
+            ),
+            (chart_objects, "ChartObjects", "BringToFront", Vec::new()),
+            (chart_objects, "ChartObjects", "SendToBack", Vec::new()),
+        ] {
+            assert_eq!(
+                runtime
+                    .dispatch_invoke(handle, member, &args)
+                    .unwrap_or_else(|error| panic!("{owner}.{member}: {error:?}")),
+                OmValue::Empty,
+                "{owner}.{member} result"
+            );
+        }
+
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_objects, "Count", &[])
+                    .expect("ChartObjects.Count after layout methods")
+            ),
+            2.0
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart_area, "Select", &[])
+                .expect("ChartArea remains live after layout methods"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(plot_area, "Select", &[])
+                .expect("PlotArea remains live after layout methods"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(series_collection, "Count", &[])
+                    .expect("SeriesCollection remains live after layout methods")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(series, "PlotOrder", &[])
+                    .expect("Series remains live after layout methods")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(series_format, "Creator", &[])
+                    .expect("Series.Format remains live after layout methods")
+            ),
+            f64::from(super::XL_CREATOR_CODE)
+        );
+    }
+
+    #[test]
     fn chart_cut_methods_reject_read_only_workbook() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
