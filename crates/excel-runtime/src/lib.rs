@@ -141699,6 +141699,174 @@ mod tests {
     }
 
     #[test]
+    fn chart_shape_range_flip_preserves_source_child_handles() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let shape_range = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "ShapeRange", &[])
+                .expect("ChartObject.ShapeRange"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let chart_area = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartArea", &[])
+                .expect("Chart.ChartArea before ShapeRange.Flip"),
+        );
+        let plot_area = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "PlotArea", &[])
+                .expect("Chart.PlotArea before ShapeRange.Flip"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection before ShapeRange.Flip"),
+        );
+        let series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("SeriesCollection.Item(1) before ShapeRange.Flip"),
+        );
+        let series_format = expect_object_handle(
+            runtime
+                .dispatch_get(series, "Format", &[])
+                .expect("Series.Format before ShapeRange.Flip"),
+        );
+
+        runtime
+            .dispatch_invoke(
+                shape_range,
+                "Flip",
+                &[OmValue::Number(f64::from(super::MSO_FLIP_HORIZONTAL))],
+            )
+            .expect("single ShapeRange.Flip horizontal");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(shape_range, "HorizontalFlip", &[])
+                    .expect("single ShapeRange.HorizontalFlip after flip")
+            ),
+            f64::from(super::MSO_TRUE)
+        );
+
+        runtime
+            .dispatch_invoke(
+                chart_objects,
+                "Add",
+                &[
+                    OmValue::Number(20.0),
+                    OmValue::Number(30.0),
+                    OmValue::Number(180.0),
+                    OmValue::Number(90.0),
+                ],
+            )
+            .expect("ChartObjects.Add second chart");
+        let selection = OmArray::new(
+            1,
+            2,
+            vec![OmValue::Number(1.0), OmValue::Number(2.0)],
+        )
+        .expect("ShapeRange selection array");
+        let selected_shape_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Array(selection)])
+                .expect("ChartObjects.Item(array)"),
+        );
+        runtime
+            .dispatch_invoke(
+                selected_shape_range,
+                "Flip",
+                &[OmValue::Number(f64::from(super::MSO_FLIP_VERTICAL))],
+            )
+            .expect("multi ShapeRange.Flip vertical");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(selected_shape_range, "VerticalFlip", &[])
+                    .expect("multi ShapeRange.VerticalFlip after flip")
+            ),
+            f64::from(super::MSO_TRUE)
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart_area, "Select", &[])
+                .expect("ChartArea remains live after ShapeRange.Flip"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(plot_area, "Select", &[])
+                .expect("PlotArea remains live after ShapeRange.Flip"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(series_collection, "Count", &[])
+                    .expect("SeriesCollection remains live after ShapeRange.Flip")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(series, "PlotOrder", &[])
+                    .expect("Series remains live after ShapeRange.Flip")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(series_format, "Creator", &[])
+                    .expect("Series.Format remains live after ShapeRange.Flip")
+            ),
+            f64::from(super::XL_CREATOR_CODE)
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_objects, "Count", &[])
+                    .expect("ChartObjects.Count after ShapeRange.Flip")
+            ),
+            2.0
+        );
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved after ShapeRange.Flip")
+        ));
+    }
+
+    #[test]
     fn chart_cut_methods_reject_read_only_workbook() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
