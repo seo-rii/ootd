@@ -4933,6 +4933,8 @@
   - 범위: `Charts.Delete`가 collection에 속한 chart sheets의 `Chart`, `ChartArea`, `SeriesCollection` handles까지 stale 처리하는지 회귀 테스트로 고정해 chart sheet collection 삭제 경로가 삭제된 chart child runtime object를 계속 사용하지 못하도록 차단
   - `Step 7.144 DONE` excel-runtime charts copy source child handle regression
   - 범위: `Charts.Copy` without targets가 source workbook의 `Chart`, `ChartArea`, `SeriesCollection` handles를 stale 처리하지 않고 원본 chart sheet collection에 계속 연결해 두는지 회귀 테스트로 고정해 copy 경로가 source chart child runtime object를 새 workbook 이동/삭제처럼 잘못 무효화하지 않도록 차단
+  - `Step 7.145 DONE` excel-runtime charts copy placement source child handle regression
+  - 범위: placement target을 지정한 `Charts.Copy`가 source workbook의 `Chart`, `ChartArea`, `SeriesCollection` handles를 stale 처리하지 않고 원본 chart sheet collection에 계속 연결해 두는지 회귀 테스트로 고정해 in-workbook copy 경로가 source chart child runtime object를 이동/삭제처럼 잘못 무효화하지 않도록 차단
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.
