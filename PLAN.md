@@ -4961,6 +4961,8 @@
   - 범위: writable workbook의 `ChartObject.CopyPicture`, `ChartObjects.CopyPicture`, `Chart.CopyPicture`가 headless copy mode를 설정할 때 기존 `ChartArea`, `PlotArea`, `SeriesCollection`, `Series` handles를 stale 처리하지 않고 유지하는지 회귀 테스트로 고정해 picture-copy 경로가 source chart child runtime object를 잘못 무효화하지 않도록 차단
   - `Step 7.158 DONE` excel-runtime chart Copy source child handle regression
   - 범위: writable workbook의 `ChartObject.Copy`, `ChartObjects.Copy`, `ShapeRange.Copy`가 headless copy mode를 설정할 때 기존 `ChartArea`, `PlotArea`, `SeriesCollection`, `Series` handles를 stale 처리하지 않고 유지하는지 회귀 테스트로 고정해 container/shape copy 경로가 source chart child runtime object를 잘못 무효화하지 않도록 차단
+  - `Step 7.159 DONE` excel-runtime chart Cut source child handle regression
+  - 범위: writable workbook의 `ChartObject.Cut`, `ChartObjects.Cut`, `ShapeRange.Cut`가 headless cut mode를 설정할 때 기존 `ChartArea`, `PlotArea`, `SeriesCollection`, `Series` handles를 stale 처리하지 않고 유지하는지 회귀 테스트로 고정해 container/shape cut 경로가 source chart child runtime object를 잘못 무효화하지 않도록 차단
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.
