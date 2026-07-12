@@ -163410,6 +163410,26 @@ mod tests {
                 .expect("Axis.Border.Parent.Type"),
             OmValue::Number(f64::from(super::XL_VALUE))
         );
+        let value_axis_title = expect_object_handle(
+            runtime
+                .dispatch_get(value_axis, "AxisTitle", &[])
+                .expect("Axis.AxisTitle before Axis.Delete"),
+        );
+        let value_axis_title_format = expect_object_handle(
+            runtime
+                .dispatch_get(value_axis_title, "Format", &[])
+                .expect("AxisTitle.Format before Axis.Delete"),
+        );
+        let value_axis_tick_labels = expect_object_handle(
+            runtime
+                .dispatch_get(value_axis, "TickLabels", &[])
+                .expect("Axis.TickLabels before Axis.Delete"),
+        );
+        let value_axis_tick_labels_format = expect_object_handle(
+            runtime
+                .dispatch_get(value_axis_tick_labels, "Format", &[])
+                .expect("TickLabels.Format before Axis.Delete"),
+        );
         runtime
             .dispatch_invoke(value_axis, "Delete", &[])
             .expect("Axis.Delete");
@@ -163434,6 +163454,34 @@ mod tests {
                 .code,
             OmErrorCode::InvalidState
         );
+        assert_eq!(
+            runtime
+                .dispatch_get(value_axis_title, "Text", &[])
+                .expect_err("axis title handle should be stale after Axis.Delete")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(value_axis_title_format, "Creator", &[])
+                .expect_err("axis title format handle should be stale after Axis.Delete")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(value_axis_tick_labels, "Name", &[])
+                .expect_err("tick labels handle should be stale after Axis.Delete")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(value_axis_tick_labels_format, "Creator", &[])
+                .expect_err("tick labels format handle should be stale after Axis.Delete")
+                .code,
+            OmErrorCode::InvalidState
+        );
 
         let axes_after_axis_delete = expect_object_handle(
             runtime
@@ -163448,6 +163496,21 @@ mod tests {
                     &[OmValue::Number(f64::from(super::XL_CATEGORY))],
                 )
                 .expect("Axes.Item(xlCategory)"),
+        );
+        let category_axis_title = expect_object_handle(
+            runtime
+                .dispatch_get(category_axis, "AxisTitle", &[])
+                .expect("category Axis.AxisTitle before ChartType clears axes"),
+        );
+        let category_axis_title_border = expect_object_handle(
+            runtime
+                .dispatch_get(category_axis_title, "Border", &[])
+                .expect("category AxisTitle.Border before ChartType clears axes"),
+        );
+        let category_tick_labels = expect_object_handle(
+            runtime
+                .dispatch_get(category_axis, "TickLabels", &[])
+                .expect("category Axis.TickLabels before ChartType clears axes"),
         );
         runtime
             .dispatch_set(
@@ -163468,6 +163531,27 @@ mod tests {
             runtime
                 .dispatch_get(axes_after_axis_delete, "Count", &[])
                 .expect_err("axes handle should be stale after ChartType clears axes")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(category_axis_title, "Text", &[])
+                .expect_err("axis title handle should be stale after ChartType clears axes")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(category_axis_title_border, "LineStyle", &[])
+                .expect_err("axis title border should be stale after ChartType clears axes")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(category_tick_labels, "Name", &[])
+                .expect_err("tick labels handle should be stale after ChartType clears axes")
                 .code,
             OmErrorCode::InvalidState
         );
