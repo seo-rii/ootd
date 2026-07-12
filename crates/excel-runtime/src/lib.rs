@@ -146906,6 +146906,21 @@ mod tests {
                 .dispatch_get(chart, "ChartArea", &[])
                 .expect("Chart.ChartArea"),
         );
+        let plot_area = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "PlotArea", &[])
+                .expect("Chart.PlotArea"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection"),
+        );
+        let series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("SeriesCollection.Item(1)"),
+        );
         let shape_range = expect_object_handle(
             runtime
                 .dispatch_get(chart_object, "ShapeRange", &[])
@@ -146986,6 +147001,34 @@ mod tests {
                 runtime
                     .dispatch_get(chart_objects, "Count", &[])
                     .expect("ChartObjects.Count after read-only copy methods")
+            ),
+            1.0
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart_area, "Select", &[])
+                .expect("ChartArea remains live after read-only copy methods"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(plot_area, "Select", &[])
+                .expect("PlotArea remains live after read-only copy methods"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(series_collection, "Count", &[])
+                    .expect("SeriesCollection remains live after read-only copy methods")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(series, "PlotOrder", &[])
+                    .expect("Series remains live after read-only copy methods")
             ),
             1.0
         );
