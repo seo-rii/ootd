@@ -8,9 +8,9 @@ use excel_model::{
     ChartDataTableModel, ChartDisplayBlanksAs, ChartLayoutMode, ChartLayoutTarget,
     ChartLegendPosition, ChartManualLayout, ChartMarkerStyle, ChartMarkerXmlAttrs, ChartModel,
     ChartObjectModel, ChartPointModel, ChartProtectionModel, ChartSheetBinding,
-    ChartSizeRepresents, ChartSourceExpr, ChartSplitType, ChartText, ChartTickLabelPosition,
-    ChartTickMark, ChartType, ChartView3DModel, DefinedNameTable, DrawingModel, DrawingObjectModel,
-    LegendModel, SeriesModel, WorkbookState, WorksheetData,
+    ChartSizeRepresents, ChartSourceExpr, ChartSourceReference, ChartSplitType, ChartText,
+    ChartTickLabelPosition, ChartTickMark, ChartType, ChartView3DModel, DefinedNameTable,
+    DrawingModel, DrawingObjectModel, LegendModel, SeriesModel, WorkbookState, WorksheetData,
     resolve_chart_source_reference_with_names,
 };
 use office_common::{
@@ -1044,15 +1044,19 @@ pub struct ChartAxisSummary {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ChartSeriesSummary {
     pub name_ref: Option<String>,
+    pub name_full_ref: Option<String>,
     pub name_cache: Option<ChartCacheSummary>,
     pub name_literal: Option<ChartSourceLiteralSummary>,
     pub category_ref: Option<String>,
+    pub category_full_ref: Option<String>,
     pub category_cache: Option<ChartCacheSummary>,
     pub category_literal: Option<ChartSourceLiteralSummary>,
     pub values_ref: Option<String>,
+    pub values_full_ref: Option<String>,
     pub values_cache: Option<ChartCacheSummary>,
     pub values_literal: Option<ChartSourceLiteralSummary>,
     pub bubble_size_ref: Option<String>,
+    pub bubble_size_full_ref: Option<String>,
     pub bubble_size_cache: Option<ChartCacheSummary>,
     pub bubble_size_literal: Option<ChartSourceLiteralSummary>,
     pub bar_shape: Option<ChartBarShape>,
@@ -4704,22 +4708,39 @@ fn chart_series_from_summary(
         },
         point_count: summary.point_count,
     };
-    let source_from_ref = |reference: &String, cache: Option<&ChartCacheSummary>| ChartSourceExpr {
-        raw: FormulaSource {
-            text: reference.clone(),
-            is_r1c1: false,
-        },
-        resolved: resolve_chart_source_reference_with_names(
-            reference,
-            workbook_id,
-            workbook_display_name,
-            worksheets,
-            defined_names,
-            current_sheet,
-        ),
-        cache: cache.map(cache_snapshot_from_summary),
-        dirty: false,
-    };
+    let source_from_ref =
+        |reference: &String, full_reference: Option<&String>, cache: Option<&ChartCacheSummary>| {
+            ChartSourceExpr {
+                raw: FormulaSource {
+                    text: reference.clone(),
+                    is_r1c1: false,
+                },
+                resolved: resolve_chart_source_reference_with_names(
+                    reference,
+                    workbook_id,
+                    workbook_display_name,
+                    worksheets,
+                    defined_names,
+                    current_sheet,
+                ),
+                full_reference: full_reference.map(|full_reference| ChartSourceReference {
+                    raw: FormulaSource {
+                        text: full_reference.clone(),
+                        is_r1c1: false,
+                    },
+                    resolved: resolve_chart_source_reference_with_names(
+                        full_reference,
+                        workbook_id,
+                        workbook_display_name,
+                        worksheets,
+                        defined_names,
+                        current_sheet,
+                    ),
+                }),
+                cache: cache.map(cache_snapshot_from_summary),
+                dirty: false,
+            }
+        };
     let chart_number_literal_error = |text: &str| -> Option<CellError> {
         match text.trim().to_ascii_uppercase().as_str() {
             "#NULL!" => Some(CellError::Null),
@@ -4781,6 +4802,7 @@ fn chart_series_from_summary(
                     is_r1c1: false,
                 },
                 resolved: Some(ReferenceTarget::Value(value)),
+                full_reference: None,
                 cache: cache.map(cache_snapshot_from_summary),
                 dirty: false,
             });
@@ -4852,17 +4874,19 @@ fn chart_series_from_summary(
                 is_r1c1: false,
             },
             resolved: Some(ReferenceTarget::Array(array)),
+            full_reference: None,
             cache: cache.map(cache_snapshot_from_summary),
             dirty: false,
         })
     };
     let source_from_ref_or_literal = |reference: &Option<String>,
+                                      full_reference: &Option<String>,
                                       literal: &Option<ChartSourceLiteralSummary>,
                                       cache: Option<&ChartCacheSummary>,
                                       scalar_source: bool| {
         reference
             .as_ref()
-            .map(|reference| source_from_ref(reference, cache))
+            .map(|reference| source_from_ref(reference, full_reference.as_ref(), cache))
             .or_else(|| {
                 literal
                     .as_ref()
@@ -4878,24 +4902,28 @@ fn chart_series_from_summary(
             .map(|(index, series)| SeriesModel {
                 name: source_from_ref_or_literal(
                     &series.name_ref,
+                    &series.name_full_ref,
                     &series.name_literal,
                     series.name_cache.as_ref(),
                     true,
                 ),
                 x_values: source_from_ref_or_literal(
                     &series.category_ref,
+                    &series.category_full_ref,
                     &series.category_literal,
                     series.category_cache.as_ref(),
                     false,
                 ),
                 values: source_from_ref_or_literal(
                     &series.values_ref,
+                    &series.values_full_ref,
                     &series.values_literal,
                     series.values_cache.as_ref(),
                     false,
                 ),
                 bubble_size: source_from_ref_or_literal(
                     &series.bubble_size_ref,
+                    &series.bubble_size_full_ref,
                     &series.bubble_size_literal,
                     series.bubble_size_cache.as_ref(),
                     false,
@@ -4943,7 +4971,7 @@ fn chart_series_from_summary(
         .map(|(index, reference)| SeriesModel {
             name: None,
             x_values: None,
-            values: Some(source_from_ref(reference, None)),
+            values: Some(source_from_ref(reference, None, None)),
             bubble_size: None,
             bar_shape: None,
             smooth: None,
@@ -21339,6 +21367,9 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
     let mut formula_text = None::<String>;
     let mut formula_depth = 0usize;
     let mut formula_series_slot = None::<ChartSeriesFormulaSlot>;
+    let mut full_reference_text = None::<String>;
+    let mut full_reference_depth = 0usize;
+    let mut full_reference_series_slot = None::<ChartSeriesFormulaSlot>;
     let mut active_cache = None::<(ChartSeriesFormulaSlot, ChartCacheKindSummary, Option<u32>)>;
     let mut active_cache_depth = 0usize;
     let mut active_literal = None::<(
@@ -22585,6 +22616,17 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 } else if active_literal_value_depth > 0 {
                     active_literal_value_depth += 1;
                 }
+                if local_name == b"sqref"
+                    && element_path.last().is_some_and(|name| name == "fullRef")
+                {
+                    full_reference_text = Some(String::new());
+                    full_reference_depth = 1;
+                    full_reference_series_slot = active_series
+                        .as_ref()
+                        .and_then(|_| detect_series_formula_slot(&element_path));
+                } else if full_reference_depth > 0 {
+                    full_reference_depth += 1;
+                }
                 if local_name == b"f" {
                     formula_text = Some(String::new());
                     formula_depth = 1;
@@ -23450,6 +23492,9 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 if let Some(value) = &mut formula_text {
                     value.push_str(&text_value);
                 }
+                if let Some(value) = &mut full_reference_text {
+                    value.push_str(&text_value);
+                }
                 if let Some(value) = &mut active_literal_value_text {
                     value.push_str(&text_value);
                 }
@@ -23477,6 +23522,9 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
             Ok(Event::CData(text)) => {
                 let text_value = text.xml_content().map_err(xml_error)?;
                 if let Some(value) = &mut formula_text {
+                    value.push_str(&text_value);
+                }
+                if let Some(value) = &mut full_reference_text {
                     value.push_str(&text_value);
                 }
                 if let Some(value) = &mut active_literal_value_text {
@@ -23548,6 +23596,9 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 if let Some(value) = &mut formula_text {
                     value.push_str(&text_value);
                 }
+                if let Some(value) = &mut full_reference_text {
+                    value.push_str(&text_value);
+                }
                 if let Some(value) = &mut active_literal_value_text {
                     value.push_str(&text_value);
                 }
@@ -23571,6 +23622,35 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 if let Some(separator) = data_label_separator_text.as_mut() {
                     separator.push_str(&text_value);
                 }
+            }
+            Ok(Event::End(element)) if full_reference_depth > 0 => {
+                let element_name = element.name();
+                let local_name = xml_local_name(element_name.as_ref());
+                if local_name == b"sqref" && full_reference_depth == 1 {
+                    if let Some(value) = full_reference_text.take()
+                        && !value.is_empty()
+                        && let (Some(slot), Some(active_series)) =
+                            (full_reference_series_slot, active_series.as_mut())
+                    {
+                        match slot {
+                            ChartSeriesFormulaSlot::Name => {
+                                active_series.name_full_ref = Some(value)
+                            }
+                            ChartSeriesFormulaSlot::Category => {
+                                active_series.category_full_ref = Some(value)
+                            }
+                            ChartSeriesFormulaSlot::Values => {
+                                active_series.values_full_ref = Some(value)
+                            }
+                            ChartSeriesFormulaSlot::BubbleSize => {
+                                active_series.bubble_size_full_ref = Some(value)
+                            }
+                        }
+                    }
+                    full_reference_series_slot = None;
+                }
+                full_reference_depth -= 1;
+                element_path.pop();
             }
             Ok(Event::End(element)) if formula_depth > 0 => {
                 let element_name = element.name();
@@ -30794,18 +30874,22 @@ mod tests {
             chart_summary.series,
             vec![ChartSeriesSummary {
                 name_ref: Some("Sheet1!$C$1".to_string()),
+                name_full_ref: None,
                 name_cache: None,
                 name_literal: None,
                 category_ref: Some("Sheet1!$A$1:$B$1".to_string()),
+                category_full_ref: None,
                 category_cache: None,
                 category_literal: None,
                 values_ref: Some("Sheet1!$A$1:$C$1".to_string()),
+                values_full_ref: None,
                 values_cache: Some(ChartCacheSummary {
                     kind: ChartCacheKindSummary::Number,
                     point_count: Some(3),
                 }),
                 values_literal: None,
                 bubble_size_ref: None,
+                bubble_size_full_ref: None,
                 bubble_size_cache: None,
                 bubble_size_literal: None,
                 bar_shape: None,
@@ -37335,6 +37419,35 @@ mod tests {
         assert_eq!(summary.series[0].axis_group, ChartAxisGroup::Primary);
         assert_eq!(summary.series[1].axis_ids, vec!["10", "50"]);
         assert_eq!(summary.series[1].axis_group, ChartAxisGroup::Secondary);
+    }
+
+    #[test]
+    fn parse_chart_part_summary_collects_full_series_source_references() {
+        let chart_xml = br#"<?xml version="1.0" encoding="UTF-8"?>
+<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:c15="http://schemas.microsoft.com/office/drawing/2012/chart">
+  <c:chart><c:plotArea><c:barChart><c:ser>
+    <c:idx val="0"/><c:order val="0"/>
+    <c:cat><c:strRef><c:f>Sheet1!$A$1,Sheet1!$C$1</c:f><c:extLst><c:ext uri="urn:full-category-reference"><c15:fullRef><c15:sqref>Sheet1!$A$1:$C$1</c15:sqref></c15:fullRef></c:ext></c:extLst></c:strRef></c:cat>
+    <c:val><c:numRef><c:f>Sheet1!$A$2,Sheet1!$C$2</c:f><c:extLst><c:ext uri="urn:full-values-reference"><c15:fullRef><c15:sqref>Sheet1!$A$2:$C$2</c15:sqref></c15:fullRef></c:ext></c:extLst></c:numRef></c:val>
+  </c:ser></c:barChart></c:plotArea></c:chart>
+</c:chartSpace>"#;
+
+        let summary = super::parse_chart_part_summary(chart_xml).expect("chart summary");
+        let series = summary.series.first().expect("series summary");
+        assert_eq!(
+            series.category_ref.as_deref(),
+            Some("Sheet1!$A$1,Sheet1!$C$1")
+        );
+        assert_eq!(
+            series.category_full_ref.as_deref(),
+            Some("Sheet1!$A$1:$C$1")
+        );
+        assert_eq!(
+            series.values_ref.as_deref(),
+            Some("Sheet1!$A$2,Sheet1!$C$2")
+        );
+        assert_eq!(series.values_full_ref.as_deref(), Some("Sheet1!$A$2:$C$2"));
+        assert_eq!(summary.formula_refs.len(), 2);
     }
 
     #[test]

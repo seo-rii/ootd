@@ -4301,56 +4301,77 @@ impl ExcelRuntime {
                                     let Some(source) = source.as_mut() else {
                                         return Ok(false);
                                     };
+                                    let rewrite_range_raw =
+                                        |raw: &mut FormulaSource,
+                                         resolved: Option<&ReferenceTarget>|
+                                         -> OmResult<bool> {
+                                            let Some(ReferenceTarget::Range(range)) = resolved
+                                            else {
+                                                return Ok(false);
+                                            };
+                                            if range.workbook_id() != workbook_id {
+                                                return Ok(false);
+                                            }
+                                            let mut references_renamed_sheet = false;
+                                            let mut parts = Vec::with_capacity(range.areas().len());
+                                            for area in range.areas() {
+                                                let SheetScope::Single(area_sheet_id) = area.scope
+                                                else {
+                                                    return Ok(false);
+                                                };
+                                                if area_sheet_id == sheet_id {
+                                                    references_renamed_sheet = true;
+                                                }
+                                                let sheet_name = sheet_names
+                                                    .get(&area_sheet_id)
+                                                    .ok_or_else(|| {
+                                                        OmError::new(
+                                                            OmErrorCode::InvalidState,
+                                                            "chart source references an unknown sheet",
+                                                        )
+                                                    })?;
+                                                parts.push(format!(
+                                                    "{}{}",
+                                                    formula_sheet_address_qualifier(sheet_name),
+                                                    format_rect_address_with_flags(
+                                                        area.rect, true, true,
+                                                    )
+                                                ));
+                                            }
+                                            if !references_renamed_sheet {
+                                                return Ok(false);
+                                            }
+                                            let rewritten = parts.join(",");
+                                            if raw.text == rewritten {
+                                                return Ok(false);
+                                            }
+                                            raw.text = rewritten;
+                                            Ok(true)
+                                        };
+                                    let mut changed = false;
                                     if let Some(raw_text) =
                                         chart_source_defined_name_raw(source, current_sheet)
                                     {
                                         if source.raw.text != raw_text {
                                             source.raw.text = raw_text;
-                                            source.dirty = true;
-                                            return Ok(true);
+                                            changed = true;
                                         }
-                                        return Ok(false);
+                                    } else {
+                                        changed |= rewrite_range_raw(
+                                            &mut source.raw,
+                                            source.resolved.as_ref(),
+                                        )?;
                                     }
-                                    let Some(ReferenceTarget::Range(range)) =
-                                        source.resolved.as_ref()
-                                    else {
-                                        return Ok(false);
-                                    };
-                                    if range.workbook_id() != workbook_id {
-                                        return Ok(false);
+                                    if let Some(full_reference) = source.full_reference.as_mut() {
+                                        changed |= rewrite_range_raw(
+                                            &mut full_reference.raw,
+                                            full_reference.resolved.as_ref(),
+                                        )?;
                                     }
-                                    let mut references_renamed_sheet = false;
-                                    let mut parts = Vec::with_capacity(range.areas().len());
-                                    for area in range.areas() {
-                                        let SheetScope::Single(area_sheet_id) = area.scope else {
-                                            return Ok(false);
-                                        };
-                                        if area_sheet_id == sheet_id {
-                                            references_renamed_sheet = true;
-                                        }
-                                        let sheet_name =
-                                            sheet_names.get(&area_sheet_id).ok_or_else(|| {
-                                                OmError::new(
-                                                    OmErrorCode::InvalidState,
-                                                    "chart source references an unknown sheet",
-                                                )
-                                            })?;
-                                        parts.push(format!(
-                                            "{}{}",
-                                            formula_sheet_address_qualifier(sheet_name),
-                                            format_rect_address_with_flags(area.rect, true, true)
-                                        ));
+                                    if changed {
+                                        source.dirty = true;
                                     }
-                                    if !references_renamed_sheet {
-                                        return Ok(false);
-                                    }
-                                    let rewritten = parts.join(",");
-                                    if source.raw.text == rewritten {
-                                        return Ok(false);
-                                    }
-                                    source.raw.text = rewritten;
-                                    source.dirty = true;
-                                    Ok(true)
+                                    Ok(changed)
                                 };
                             for chart in runtime.loaded.state.charts.values_mut() {
                                 let mut chart_changed = false;
@@ -6203,6 +6224,7 @@ impl ExcelRuntime {
                                         resolved: Some(ReferenceTarget::Value(CellValue::Text(
                                             text,
                                         ))),
+                                        full_reference: None,
                                         cache: None,
                                         dirty: true,
                                     })
@@ -6222,6 +6244,7 @@ impl ExcelRuntime {
                                             is_r1c1: false,
                                         },
                                         resolved,
+                                        full_reference: None,
                                         cache: None,
                                         dirty: true,
                                     })
@@ -6281,6 +6304,7 @@ impl ExcelRuntime {
                                         is_r1c1: false,
                                     },
                                     resolved: Some(ReferenceTarget::Array(array)),
+                                    full_reference: None,
                                     cache: None,
                                     dirty: true,
                                 })
@@ -6485,6 +6509,7 @@ impl ExcelRuntime {
                                             is_r1c1: false,
                                         },
                                         resolved,
+                                        full_reference: None,
                                         cache: None,
                                         dirty: true,
                                     })
@@ -26231,6 +26256,7 @@ impl ExcelRuntime {
                     workbook,
                     chart_id,
                     group_index,
+                    full,
                 )? as f64))
             }
             "Item" => self.dispatch_invoke_category_collection(
@@ -26304,7 +26330,7 @@ impl ExcelRuntime {
                     ));
                 };
                 let category_count =
-                    self.chart_category_count_for_group(workbook, chart_id, group_index)?;
+                    self.chart_category_count_for_group(workbook, chart_id, group_index, full)?;
                 let category_index = match selector {
                     OmValue::Number(index) => {
                         let index = coerce_positive_index(*index, "CategoryCollection.Item index")?
@@ -26325,6 +26351,7 @@ impl ExcelRuntime {
                                     chart_id,
                                     group_index,
                                     index,
+                                    full,
                                 )?
                                 .eq_ignore_ascii_case(name)
                             {
@@ -26383,7 +26410,7 @@ impl ExcelRuntime {
             )));
         }
         let category_count =
-            self.chart_category_count_for_group(workbook, chart_id, group_index)?;
+            self.chart_category_count_for_group(workbook, chart_id, group_index, full)?;
         if category_index >= category_count {
             return Err(OmError::new(
                 OmErrorCode::NotFound,
@@ -26396,9 +26423,16 @@ impl ExcelRuntime {
                 chart_id,
                 group_index,
                 category_index,
+                full,
             )?)),
             "Index" => Ok(OmValue::Number((category_index + 1) as f64)),
-            "IsFiltered" => Ok(OmValue::Bool(false)),
+            "IsFiltered" => Ok(OmValue::Bool(self.chart_category_is_filtered_for_index(
+                workbook,
+                chart_id,
+                group_index,
+                category_index,
+                full,
+            )?)),
             "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
             "Application" => Ok(OmValue::Object(self.root_application())),
             "Parent" => Ok(OmValue::Object(
@@ -35075,6 +35109,7 @@ impl ExcelRuntime {
         workbook: WorkbookHandle,
         chart_id: ChartId,
         group_index: usize,
+        full: bool,
     ) -> OmResult<usize> {
         let chart = self.chart_group_model(workbook, chart_id, group_index)?;
         let axis_group = chart_group_axis_group(chart, group_index)?;
@@ -35082,7 +35117,7 @@ impl ExcelRuntime {
             .series
             .iter()
             .find(|series| series.axis_group == axis_group)
-            .map(chart_series_category_count)
+            .map(|series| chart_series_category_count(series, full))
             .unwrap_or(0))
     }
 
@@ -35092,6 +35127,7 @@ impl ExcelRuntime {
         chart_id: ChartId,
         group_index: usize,
         category_index: usize,
+        full: bool,
     ) -> OmResult<String> {
         let state = &self.runtime_workbook(workbook)?.loaded.state;
         let chart = state
@@ -35109,7 +35145,7 @@ impl ExcelRuntime {
                 "chart category not found",
             ));
         };
-        let category_count = chart_series_category_count(series);
+        let category_count = chart_series_category_count(series, full);
         if category_index >= category_count {
             return Err(OmError::new(
                 OmErrorCode::NotFound,
@@ -35119,8 +35155,34 @@ impl ExcelRuntime {
         Ok(series
             .x_values
             .as_ref()
-            .and_then(|source| chart_source_value_text_for_index(state, source, category_index))
+            .and_then(|source| {
+                chart_source_category_value_text_for_index(state, source, category_index, full)
+            })
             .unwrap_or_else(|| (category_index + 1).to_string()))
+    }
+
+    fn chart_category_is_filtered_for_index(
+        &self,
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        group_index: usize,
+        category_index: usize,
+        full: bool,
+    ) -> OmResult<bool> {
+        if !full {
+            return Ok(false);
+        }
+        let chart = self.chart_group_model(workbook, chart_id, group_index)?;
+        let axis_group = chart_group_axis_group(chart, group_index)?;
+        let Some(source) = chart
+            .series
+            .iter()
+            .find(|series| series.axis_group == axis_group)
+            .and_then(|series| series.x_values.as_ref())
+        else {
+            return Ok(false);
+        };
+        Ok(chart_source_full_category_is_filtered(source, category_index))
     }
 
     fn chart_group_radar_axis_index(
@@ -41459,16 +41521,29 @@ fn chart_series_point_count(series: &SeriesModel) -> usize {
         .unwrap_or(0)
 }
 
-fn chart_series_category_count(series: &SeriesModel) -> usize {
-    series
-        .x_values
-        .as_ref()
-        .map(chart_source_point_count)
-        .unwrap_or_else(|| chart_series_point_count(series))
+fn chart_series_category_count(series: &SeriesModel, full: bool) -> usize {
+    series.x_values.as_ref().map_or_else(
+        || chart_series_point_count(series),
+        |source| {
+            if full {
+                source
+                    .full_reference
+                    .as_ref()
+                    .map(|reference| chart_reference_target_point_count(reference.resolved.as_ref()))
+                    .unwrap_or_else(|| chart_source_point_count(source))
+            } else {
+                chart_source_point_count(source)
+            }
+        },
+    )
 }
 
 fn chart_source_point_count(source: &ChartSourceExpr) -> usize {
-    match source.resolved.as_ref() {
+    chart_reference_target_point_count(source.resolved.as_ref())
+}
+
+fn chart_reference_target_point_count(target: Option<&ReferenceTarget>) -> usize {
+    match target {
         Some(ReferenceTarget::Range(range)) => range
             .areas()
             .iter()
@@ -41483,9 +41558,35 @@ fn chart_source_point_count(source: &ChartSourceExpr) -> usize {
 fn chart_source_value_text_for_index(
     state: &WorkbookState,
     source: &ChartSourceExpr,
+    index: usize,
+) -> Option<String> {
+    chart_reference_target_value_text_for_index(state, source.resolved.as_ref(), index)
+}
+
+fn chart_source_category_value_text_for_index(
+    state: &WorkbookState,
+    source: &ChartSourceExpr,
+    index: usize,
+    full: bool,
+) -> Option<String> {
+    let target = if full {
+        source
+            .full_reference
+            .as_ref()
+            .and_then(|reference| reference.resolved.as_ref())
+            .or(source.resolved.as_ref())
+    } else {
+        source.resolved.as_ref()
+    };
+    chart_reference_target_value_text_for_index(state, target, index)
+}
+
+fn chart_reference_target_value_text_for_index(
+    state: &WorkbookState,
+    target: Option<&ReferenceTarget>,
     mut index: usize,
 ) -> Option<String> {
-    match source.resolved.as_ref() {
+    match target {
         Some(ReferenceTarget::Range(range)) => {
             for area in range.areas() {
                 let cell_count = area.rect.width() as usize * area.rect.height() as usize;
@@ -41513,6 +41614,60 @@ fn chart_source_value_text_for_index(
         Some(ReferenceTarget::Value(value)) if index == 0 => Some(find_cell_value_text(value)),
         _ => None,
     }
+}
+
+fn chart_source_full_category_is_filtered(source: &ChartSourceExpr, index: usize) -> bool {
+    let Some(full_reference) = source.full_reference.as_ref() else {
+        return false;
+    };
+    let Some(cell) = chart_reference_target_cell_for_index(full_reference.resolved.as_ref(), index)
+    else {
+        return false;
+    };
+    !chart_reference_target_contains_cell(source.resolved.as_ref(), cell)
+}
+
+fn chart_reference_target_cell_for_index(
+    target: Option<&ReferenceTarget>,
+    mut index: usize,
+) -> Option<(SheetId, u32, u32)> {
+    let Some(ReferenceTarget::Range(range)) = target else {
+        return None;
+    };
+    for area in range.areas() {
+        let cell_count = area.rect.width() as usize * area.rect.height() as usize;
+        if index >= cell_count {
+            index -= cell_count;
+            continue;
+        }
+        let SheetScope::Single(sheet_id) = area.scope else {
+            return None;
+        };
+        let row_offset = index / area.rect.width() as usize;
+        let col_offset = index % area.rect.width() as usize;
+        return Some((
+            sheet_id,
+            area.rect.row_first + row_offset as u32,
+            area.rect.col_first + col_offset as u32,
+        ));
+    }
+    None
+}
+
+fn chart_reference_target_contains_cell(
+    target: Option<&ReferenceTarget>,
+    (sheet_id, row, col): (SheetId, u32, u32),
+) -> bool {
+    let Some(ReferenceTarget::Range(range)) = target else {
+        return false;
+    };
+    range.areas().iter().any(|area| {
+        area.scope == SheetScope::Single(sheet_id)
+            && area.rect.row_first <= row
+            && row <= area.rect.row_last
+            && area.rect.col_first <= col
+            && col <= area.rect.col_last
+    })
 }
 
 fn om_value_text(value: &OmValue) -> Option<String> {
@@ -41582,8 +41737,19 @@ fn chart_source_container_xml_string(
         (_, ChartSourceXmlSlot::BubbleSize) => "numRef",
     };
     let formula = partial_escape(source.raw.text.trim_start_matches('=')).to_string();
+    let full_reference = source
+        .full_reference
+        .as_ref()
+        .map(|reference| {
+            let reference =
+                partial_escape(reference.raw.text.trim_start_matches('=')).to_string();
+            format!(
+                r#"<c:extLst><c:ext uri="{{02D57815-91ED-43cb-92C2-25804820EDAC}}"><c15:fullRef xmlns:c15="http://schemas.microsoft.com/office/drawing/2012/chart"><c15:sqref>{reference}</c15:sqref></c15:fullRef></c:ext></c:extLst>"#
+            )
+        })
+        .unwrap_or_default();
     Ok(format!(
-        r#"<c:{container_name}><c:{reference_name}><c:f>{formula}</c:f></c:{reference_name}></c:{container_name}>"#
+        r#"<c:{container_name}><c:{reference_name}><c:f>{formula}</c:f>{full_reference}</c:{reference_name}></c:{container_name}>"#
     ))
 }
 
@@ -41764,6 +41930,65 @@ fn chart_series_data_labels_xml_string(series: &SeriesModel) -> String {
     xml
 }
 
+fn chart_extension_without_full_reference(extension_xml: &[u8]) -> OmResult<Option<Vec<u8>>> {
+    let mut reader = Reader::from_reader(Cursor::new(extension_xml));
+    reader.config_mut().trim_text(false);
+    let mut writer = Writer::new(Cursor::new(Vec::new()));
+    let mut buffer = Vec::new();
+    let mut depth = 0usize;
+    let mut skip_depth = 0usize;
+    let mut retained_payload = false;
+
+    loop {
+        match reader.read_event_into(&mut buffer) {
+            Ok(Event::Start(_)) if skip_depth > 0 => skip_depth += 1,
+            Ok(Event::End(_)) if skip_depth > 0 => skip_depth -= 1,
+            Ok(_) if skip_depth > 0 => {}
+            Ok(Event::Start(element)) => {
+                let element_name = element.name();
+                let local_name = xml_local_name(element_name.as_ref());
+                if depth > 0 && local_name == b"fullRef" {
+                    skip_depth = 1;
+                } else {
+                    if depth == 1 {
+                        retained_payload = true;
+                    }
+                    writer
+                        .write_event(Event::Start(element.into_owned()))
+                        .map_err(runtime_xml_error)?;
+                    depth += 1;
+                }
+            }
+            Ok(Event::Empty(element)) => {
+                let element_name = element.name();
+                let local_name = xml_local_name(element_name.as_ref());
+                if !(depth > 0 && local_name == b"fullRef") {
+                    if depth == 1 {
+                        retained_payload = true;
+                    }
+                    writer
+                        .write_event(Event::Empty(element.into_owned()))
+                        .map_err(runtime_xml_error)?;
+                }
+            }
+            Ok(Event::End(element)) => {
+                writer
+                    .write_event(Event::End(element.into_owned()))
+                    .map_err(runtime_xml_error)?;
+                depth = depth.saturating_sub(1);
+            }
+            Ok(Event::Eof) => break,
+            Ok(event) => writer
+                .write_event(event.into_owned())
+                .map_err(runtime_xml_error)?,
+            Err(error) => return Err(runtime_xml_error(error)),
+        }
+        buffer.clear();
+    }
+
+    Ok(retained_payload.then(|| writer.into_inner().into_inner()))
+}
+
 fn patch_loaded_chart_model_xml(
     existing_chart_xml: &[u8],
     chart: &ChartModel,
@@ -41790,6 +42015,14 @@ fn patch_loaded_chart_model_xml(
                 count += 1;
             }
             if series.values.as_ref().is_some_and(|source| source.dirty) {
+                count += 1;
+            }
+            if chart_type_uses_bubble_size(&chart.chart_type)
+                && series
+                    .bubble_size
+                    .as_ref()
+                    .is_some_and(|source| source.dirty)
+            {
                 count += 1;
             }
             count
@@ -42012,6 +42245,8 @@ fn patch_loaded_chart_model_xml(
     let mut current_point_index = None::<u32>;
     let mut source_stack = Vec::<ChartSourceXmlSlot>::new();
     let mut current_formula = None::<(ChartSourceXmlSlot, bool)>;
+    let mut current_full_reference = None::<(ChartSourceXmlSlot, bool)>;
+    let mut dirty_source_extension = None::<(Writer<Cursor<Vec<u8>>>, usize)>;
     let mut source_slots_seen = vec![[false; 4]; chart.series.len()];
     let mut series_order_seen = vec![false; chart.series.len()];
     let mut series_order_written = vec![false; chart.series.len()];
@@ -42969,6 +43204,48 @@ fn patch_loaded_chart_model_xml(
 
     loop {
         match reader.read_event_into(&mut buffer) {
+            Ok(Event::Start(element)) if dirty_source_extension.is_some() => {
+                let (capture, depth) = dirty_source_extension
+                    .as_mut()
+                    .expect("dirty source extension capture");
+                capture
+                    .write_event(Event::Start(element.into_owned()))
+                    .map_err(runtime_xml_error)?;
+                *depth += 1;
+            }
+            Ok(Event::End(element)) if dirty_source_extension.is_some() => {
+                let capture_complete = {
+                    let (capture, depth) = dirty_source_extension
+                        .as_mut()
+                        .expect("dirty source extension capture");
+                    capture
+                        .write_event(Event::End(element.into_owned()))
+                        .map_err(runtime_xml_error)?;
+                    *depth = depth.saturating_sub(1);
+                    *depth == 0
+                };
+                if capture_complete {
+                    let (capture, _) = dirty_source_extension
+                        .take()
+                        .expect("completed dirty source extension capture");
+                    if let Some(extension_xml) = chart_extension_without_full_reference(
+                        capture.into_inner().into_inner().as_slice(),
+                    )? {
+                        writer
+                            .get_mut()
+                            .write_all(extension_xml.as_slice())
+                            .map_err(runtime_xml_error)?;
+                    }
+                }
+            }
+            Ok(event) if dirty_source_extension.is_some() => {
+                dirty_source_extension
+                    .as_mut()
+                    .expect("dirty source extension capture")
+                    .0
+                    .write_event(event.into_owned())
+                    .map_err(runtime_xml_error)?;
+            }
             Ok(Event::Start(_)) if skip_depth > 0 => {
                 skip_depth += 1;
             }
@@ -42985,6 +43262,20 @@ fn patch_loaded_chart_model_xml(
                     .and_then(|index| element_stack.get(index))
                     .map(Vec::as_slice);
                 let depth = element_stack.len() + 1;
+                if local_name.as_slice() == b"ext"
+                    && let Some(series_index) = current_series_index
+                    && let Some(slot) = source_stack.last().copied()
+                    && source_for_slot(series_index, slot)
+                        .is_some_and(|source| source.dirty && source.full_reference.is_none())
+                {
+                    let mut capture = Writer::new(Cursor::new(Vec::new()));
+                    capture
+                        .write_event(Event::Start(element.into_owned()))
+                        .map_err(runtime_xml_error)?;
+                    dirty_source_extension = Some((capture, 1));
+                    buffer.clear();
+                    continue;
+                }
                 if parent_name == Some(b"plotArea".as_slice())
                     && local_name.as_slice() != b"layout"
                     && !plot_area_layout_container_seen
@@ -43196,6 +43487,11 @@ fn patch_loaded_chart_model_xml(
                         if let Some(seen) = source_slots_seen.get_mut(series_index) {
                             seen[slot_index(slot)] = true;
                         }
+                    } else if local_name.as_slice() == b"sqref"
+                        && parent_name == Some(b"fullRef".as_slice())
+                        && let Some(slot) = source_stack.last().copied()
+                    {
+                        current_full_reference = Some((slot, false));
                     }
                 }
                 if let Some(axis_kind) = chart_axis_kind_from_xml_name(local_name.as_slice()) {
@@ -46046,6 +46342,20 @@ fn patch_loaded_chart_model_xml(
                         *written = true;
                         patched_sources += 1;
                     }
+                } else if let Some((slot, written)) = current_full_reference.as_mut()
+                    && let Some(series_index) = current_series_index
+                    && let Some(reference) = source_for_slot(series_index, *slot)
+                        .and_then(|source| source.full_reference.as_ref())
+                    && source_for_slot(series_index, *slot).is_some_and(|source| source.dirty)
+                {
+                    if !*written {
+                        writer
+                            .write_event(Event::Text(BytesText::from_escaped(partial_escape(
+                                reference.raw.text.trim_start_matches('='),
+                            ))))
+                            .map_err(runtime_xml_error)?;
+                        *written = true;
+                    }
                 } else {
                     writer
                         .write_event(Event::Text(text.into_owned()))
@@ -46132,6 +46442,20 @@ fn patch_loaded_chart_model_xml(
                         *written = true;
                         patched_sources += 1;
                     }
+                } else if let Some((slot, written)) = current_full_reference.as_mut()
+                    && let Some(series_index) = current_series_index
+                    && let Some(reference) = source_for_slot(series_index, *slot)
+                        .and_then(|source| source.full_reference.as_ref())
+                    && source_for_slot(series_index, *slot).is_some_and(|source| source.dirty)
+                {
+                    if !*written {
+                        writer
+                            .write_event(Event::Text(BytesText::from_escaped(partial_escape(
+                                reference.raw.text.trim_start_matches('='),
+                            ))))
+                            .map_err(runtime_xml_error)?;
+                        *written = true;
+                    }
                 } else {
                     writer
                         .write_event(Event::CData(data.into_owned()))
@@ -46209,6 +46533,20 @@ fn patch_loaded_chart_model_xml(
                         *written = true;
                         patched_sources += 1;
                     }
+                } else if let Some((slot, written)) = current_full_reference.as_mut()
+                    && let Some(series_index) = current_series_index
+                    && let Some(reference) = source_for_slot(series_index, *slot)
+                        .and_then(|source| source.full_reference.as_ref())
+                    && source_for_slot(series_index, *slot).is_some_and(|source| source.dirty)
+                {
+                    if !*written {
+                        writer
+                            .write_event(Event::Text(BytesText::from_escaped(partial_escape(
+                                reference.raw.text.trim_start_matches('='),
+                            ))))
+                            .map_err(runtime_xml_error)?;
+                        *written = true;
+                    }
                 } else {
                     writer
                         .write_event(Event::GeneralRef(reference.into_owned()))
@@ -46236,6 +46574,20 @@ fn patch_loaded_chart_model_xml(
                         ))))
                         .map_err(runtime_xml_error)?;
                     patched_sources += 1;
+                }
+                if local_name.as_slice() == b"sqref"
+                    && let Some((slot, written)) = current_full_reference.take()
+                    && !written
+                    && let Some(series_index) = current_series_index
+                    && let Some(reference) = source_for_slot(series_index, slot)
+                        .and_then(|source| source.full_reference.as_ref())
+                    && source_for_slot(series_index, slot).is_some_and(|source| source.dirty)
+                {
+                    writer
+                        .write_event(Event::Text(BytesText::from_escaped(partial_escape(
+                            reference.raw.text.trim_start_matches('='),
+                        ))))
+                        .map_err(runtime_xml_error)?;
                 }
                 if local_name.as_slice() == b"marker"
                     && let Some(series_index) = current_series_marker_index
@@ -49018,6 +49370,7 @@ fn chart_source_expr_for_range_areas(
             workbook_id,
             range_areas,
         )?)),
+        full_reference: None,
         cache: None,
         dirty: true,
     })
@@ -129761,6 +130114,252 @@ mod tests {
     }
 
     #[test]
+    fn chart_group_full_category_collection_reports_filtered_categories() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_filtered_chart_categories_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with filtered chart categories");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let chart_group = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartGroups", &[OmValue::Number(1.0)])
+                .expect("Chart.ChartGroups(1)"),
+        );
+        let visible_categories = expect_object_handle(
+            runtime
+                .dispatch_get(chart_group, "CategoryCollection", &[])
+                .expect("ChartGroup.CategoryCollection"),
+        );
+        let full_categories = expect_object_handle(
+            runtime
+                .dispatch_get(chart_group, "FullCategoryCollection", &[])
+                .expect("ChartGroup.FullCategoryCollection"),
+        );
+
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(visible_categories, "Count", &[])
+                    .expect("visible category count")
+            ),
+            2.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(full_categories, "Count", &[])
+                    .expect("full category count")
+            ),
+            3.0
+        );
+        for (index, expected_name, expected_filtered) in
+            [
+                (1.0, "42", false),
+                (2.0, "SHARED", true),
+                (3.0, "shared", false),
+            ]
+        {
+            let category = expect_object_handle(
+                runtime
+                    .dispatch_invoke(full_categories, "Item", &[OmValue::Number(index)])
+                    .expect("FullCategoryCollection.Item"),
+            );
+            assert_eq!(
+                expect_text(
+                    runtime
+                        .dispatch_get(category, "Name", &[])
+                        .expect("ChartCategory.Name")
+                ),
+                expected_name
+            );
+            assert_eq!(
+                expect_bool(
+                    runtime
+                        .dispatch_get(category, "IsFiltered", &[])
+                        .expect("ChartCategory.IsFiltered")
+                ),
+                expected_filtered
+            );
+        }
+        let visible_second = expect_object_handle(
+            runtime
+                .dispatch_invoke(visible_categories, "Item", &[OmValue::Number(2.0)])
+                .expect("CategoryCollection.Item(2)"),
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(visible_second, "Name", &[])
+                    .expect("visible category name")
+            ),
+            "shared"
+        );
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(visible_second, "IsFiltered", &[])
+                .expect("visible category filtered state")
+        ));
+    }
+
+    #[test]
+    fn chart_series_source_setter_removes_only_its_stale_full_reference() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_filtered_chart_categories_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with filtered chart categories");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection"),
+        );
+        let series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("SeriesCollection.Item(1)"),
+        );
+
+        runtime
+            .dispatch_set(
+                series,
+                "XValues",
+                OmValue::Text("=Sheet1!$B$1:$C$1".to_string()),
+                &[],
+            )
+            .expect("set Series.XValues");
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after Series.XValues");
+        let package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let chart_xml = std::str::from_utf8(
+            package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(chart_xml.contains("Sheet1!$B$1:$C$1"));
+        assert!(!chart_xml.contains("urn:full-category-reference"));
+        assert!(chart_xml.contains("urn:keep-category-extension"));
+        assert!(chart_xml.contains("value=\"category\""));
+        assert!(chart_xml.contains("urn:full-values-reference"));
+        assert!(chart_xml.contains("<c15:sqref>Sheet1!$A$1:$C$1</c15:sqref>"));
+        assert_eq!(chart_xml.matches("fullRef").count(), 2);
+
+        let mut reopened = ExcelRuntime::new();
+        let reopened_workbook = reopened
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen workbook after Series.XValues");
+        let reopened_worksheet = expect_object_handle(
+            reopened
+                .dispatch_get(
+                    reopened_workbook.0,
+                    "Worksheets",
+                    &[OmValue::Number(1.0)],
+                )
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened
+                .dispatch_invoke(
+                    reopened_chart_objects,
+                    "Item",
+                    &[OmValue::Number(1.0)],
+                )
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        let reopened_group = expect_object_handle(
+            reopened
+                .dispatch_get(reopened_chart, "ChartGroups", &[OmValue::Number(1.0)])
+                .expect("reopened Chart.ChartGroups(1)"),
+        );
+        let full_categories = expect_object_handle(
+            reopened
+                .dispatch_get(reopened_group, "FullCategoryCollection", &[])
+                .expect("reopened ChartGroup.FullCategoryCollection"),
+        );
+        assert_eq!(
+            expect_number(
+                reopened
+                    .dispatch_get(full_categories, "Count", &[])
+                    .expect("reopened full category count")
+            ),
+            2.0
+        );
+    }
+
+    #[test]
     fn chart_series_chart_type_uses_chart_type_rewrite_path() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
@@ -130302,6 +130901,64 @@ mod tests {
             r#"<c:numCache><c:ptCount val="3"/><c:pt idx="0"><c:v>42</c:v></c:pt></c:numCache>"#
         ));
         assert!(!saved_chart_xml.contains("Sheet1!$A$1:$C$1"));
+    }
+
+    #[test]
+    fn loaded_chart_source_rename_updates_full_references() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_filtered_chart_categories_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with full chart references");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        runtime
+            .dispatch_set(
+                worksheet,
+                "Name",
+                OmValue::Text("Filtered Data".to_string()),
+                &[],
+            )
+            .expect("rename chart source worksheet");
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save renamed chart source workbook");
+        let package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let chart_xml = std::str::from_utf8(
+            package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved chart xml utf8");
+
+        assert!(chart_xml.contains(
+            "<c:f>'Filtered Data'!$A$1,'Filtered Data'!$C$1</c:f>"
+        ));
+        assert_eq!(
+            chart_xml
+                .matches("<c15:sqref>'Filtered Data'!$A$1:$C$1</c15:sqref>")
+                .count(),
+            2
+        );
+        assert!(chart_xml.contains("urn:keep-category-extension"));
+        assert!(!chart_xml.contains("Sheet1!"));
     }
 
     #[test]
@@ -182033,6 +182690,35 @@ mod tests {
             })
             .expect("add chart");
 
+        package.to_bytes().expect("package bytes")
+    }
+
+    fn synthetic_workbook_with_filtered_chart_categories_bytes() -> Vec<u8> {
+        let mut package = OpcPackage::from_bytes(&synthetic_workbook_with_embedded_chart_bytes())
+            .expect("embedded chart package");
+        let chart_xml = String::from_utf8(
+            package
+                .part("xl/charts/chart1.xml")
+                .expect("chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("chart xml utf8")
+        .replace(
+            r#"xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main""#,
+            r#"xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:c15="http://schemas.microsoft.com/office/drawing/2012/chart""#,
+        )
+        .replace(
+            r#"<c:cat><c:strRef><c:f>Sheet1!$A$1:$B$1</c:f></c:strRef></c:cat>"#,
+            r#"<c:cat><c:strRef><c:f>Sheet1!$A$1,Sheet1!$C$1</c:f><c:extLst><c:ext uri="urn:full-category-reference"><c15:fullRef><c15:sqref>Sheet1!$A$1:$C$1</c15:sqref></c15:fullRef></c:ext><c:ext uri="urn:keep-category-extension"><test:keep xmlns:test="urn:test" value="category"/></c:ext></c:extLst></c:strRef></c:cat>"#,
+        )
+        .replace(
+            r#"<c:val><c:numRef><c:f>Sheet1!$A$1:$C$1</c:f></c:numRef></c:val>"#,
+            r#"<c:val><c:numRef><c:f>Sheet1!$A$1:$C$1</c:f><c:extLst><c:ext uri="urn:full-values-reference"><c15:fullRef><c15:sqref>Sheet1!$A$1:$C$1</c15:sqref></c15:fullRef></c:ext></c:extLst></c:numRef></c:val>"#,
+        );
+        package
+            .replace_part_bytes("xl/charts/chart1.xml", chart_xml.into_bytes())
+            .expect("replace chart xml");
         package.to_bytes().expect("package bytes")
     }
 

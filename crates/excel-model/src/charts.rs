@@ -296,8 +296,15 @@ pub struct ChartDataTableModel {
 pub struct ChartSourceExpr {
     pub raw: FormulaSource,
     pub resolved: Option<ReferenceTarget>,
+    pub full_reference: Option<ChartSourceReference>,
     pub cache: Option<ChartCacheSnapshot>,
     pub dirty: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChartSourceReference {
+    pub raw: FormulaSource,
+    pub resolved: Option<ReferenceTarget>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

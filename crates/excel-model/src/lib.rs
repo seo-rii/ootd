@@ -17,9 +17,10 @@ pub use charts::{
     ChartDataTableModel, ChartDisplayBlanksAs, ChartLayoutMode, ChartLayoutTarget,
     ChartLegendPosition, ChartManualLayout, ChartMarkerStyle, ChartMarkerXmlAttrs, ChartModel,
     ChartObjectModel, ChartPointModel, ChartProtectionModel, ChartSheetBinding,
-    ChartSizeRepresents, ChartSourceExpr, ChartSplitType, ChartText, ChartTickLabelPosition,
-    ChartTickMark, ChartType, ChartView3DModel, DrawingModel, DrawingObjectModel, LegendModel,
-    SeriesModel, resolve_chart_source_reference, resolve_chart_source_reference_with_names,
+    ChartSizeRepresents, ChartSourceExpr, ChartSourceReference, ChartSplitType, ChartText,
+    ChartTickLabelPosition, ChartTickMark, ChartType, ChartView3DModel, DrawingModel,
+    DrawingObjectModel, LegendModel, SeriesModel, resolve_chart_source_reference,
+    resolve_chart_source_reference_with_names,
 };
 pub use names::DefinedNameTable;
 
@@ -69,6 +70,15 @@ impl WorkbookState {
                 .flatten()
                 {
                     if let Some(ReferenceTarget::Range(range)) = source.resolved.as_mut()
+                        && let Ok(updated_range) =
+                            RangeSet::new(workbook_id, range.areas().to_vec())
+                    {
+                        *range = updated_range;
+                    }
+                    if let Some(ReferenceTarget::Range(range)) = source
+                        .full_reference
+                        .as_mut()
+                        .and_then(|reference| reference.resolved.as_mut())
                         && let Ok(updated_range) =
                             RangeSet::new(workbook_id, range.areas().to_vec())
                     {
@@ -1212,6 +1222,7 @@ mod tests {
                             )
                             .expect("name range set"),
                         )),
+                        full_reference: None,
                         cache: None,
                         dirty: false,
                     }),
@@ -1230,6 +1241,22 @@ mod tests {
                             )
                             .expect("x values range set"),
                         )),
+                        full_reference: Some(super::ChartSourceReference {
+                            raw: formula_source("Sheet1!$A$1:$A$3"),
+                            resolved: Some(ReferenceTarget::Range(
+                                RangeSet::single_rect(
+                                    state.model.id,
+                                    sheet_id,
+                                    Rect {
+                                        row_first: 1,
+                                        row_last: 3,
+                                        col_first: 1,
+                                        col_last: 1,
+                                    },
+                                )
+                                .expect("full x values range set"),
+                            )),
+                        }),
                         cache: None,
                         dirty: false,
                     }),
@@ -1243,6 +1270,7 @@ mod tests {
                             )
                             .expect("range set"),
                         )),
+                        full_reference: None,
                         cache: None,
                         dirty: false,
                     }),
@@ -1261,6 +1289,7 @@ mod tests {
                             )
                             .expect("bubble size range set"),
                         )),
+                        full_reference: None,
                         cache: None,
                         dirty: false,
                     }),
@@ -1372,6 +1401,15 @@ mod tests {
             };
             assert_eq!(range.workbook_id(), WorkbookId(99));
         }
+        let Some(ReferenceTarget::Range(full_range)) = chart.series[0]
+            .x_values
+            .as_ref()
+            .and_then(|source| source.full_reference.as_ref())
+            .and_then(|reference| reference.resolved.as_ref())
+        else {
+            panic!("expected full x values range source");
+        };
+        assert_eq!(full_range.workbook_id(), WorkbookId(99));
         let drawing = state.drawings.get(&drawing_id).expect("drawing");
         assert_eq!(drawing.workbook_id, WorkbookId(99));
         let DrawingObjectModel::ChartFrame(chart_object) = &drawing.objects[0] else {
