@@ -143043,6 +143043,43 @@ mod tests {
                     .dispatch_get(series, "Points", &[])
                     .expect("Series.Points before ChartArea clear"),
             );
+            let point = expect_object_handle(
+                runtime
+                    .dispatch_invoke(points, "Item", &[OmValue::Number(1.0)])
+                    .expect("Series.Points(1) before ChartArea clear"),
+            );
+            let point_format = expect_object_handle(
+                runtime
+                    .dispatch_get(point, "Format", &[])
+                    .expect("Point.Format before ChartArea clear"),
+            );
+            runtime
+                .dispatch_invoke(
+                    series,
+                    "ApplyDataLabels",
+                    &[OmValue::Number(f64::from(super::XL_DATA_LABELS_SHOW_VALUE))],
+                )
+                .expect("Series.ApplyDataLabels before ChartArea clear");
+            let data_labels = expect_object_handle(
+                runtime
+                    .dispatch_get(series, "DataLabels", &[])
+                    .expect("Series.DataLabels before ChartArea clear"),
+            );
+            let data_labels_format = expect_object_handle(
+                runtime
+                    .dispatch_get(data_labels, "Format", &[])
+                    .expect("DataLabels.Format before ChartArea clear"),
+            );
+            let data_label = expect_object_handle(
+                runtime
+                    .dispatch_invoke(data_labels, "Item", &[OmValue::Number(1.0)])
+                    .expect("DataLabels.Item(1) before ChartArea clear"),
+            );
+            let data_label_border = expect_object_handle(
+                runtime
+                    .dispatch_get(data_label, "Border", &[])
+                    .expect("DataLabel.Border before ChartArea clear"),
+            );
             let error = runtime
                 .dispatch_invoke(chart_area, member, &[OmValue::Missing])
                 .expect_err("ChartArea clear should reject arguments");
@@ -143085,6 +143122,48 @@ mod tests {
                 runtime
                     .dispatch_get(points, "Count", &[])
                     .expect_err("Series.Points handle should be stale after ChartArea clear")
+                    .code,
+                OmErrorCode::InvalidState
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(point, "Name", &[])
+                    .expect_err("Series.Points(1) handle should be stale after ChartArea clear")
+                    .code,
+                OmErrorCode::InvalidState
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(point_format, "Creator", &[])
+                    .expect_err("Point.Format handle should be stale after ChartArea clear")
+                    .code,
+                OmErrorCode::InvalidState
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(data_labels, "Count", &[])
+                    .expect_err("Series.DataLabels handle should be stale after ChartArea clear")
+                    .code,
+                OmErrorCode::InvalidState
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(data_labels_format, "Creator", &[])
+                    .expect_err("DataLabels.Format handle should be stale after ChartArea clear")
+                    .code,
+                OmErrorCode::InvalidState
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(data_label, "ShowValue", &[])
+                    .expect_err("DataLabel handle should be stale after ChartArea clear")
+                    .code,
+                OmErrorCode::InvalidState
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(data_label_border, "LineStyle", &[])
+                    .expect_err("DataLabel.Border handle should be stale after ChartArea clear")
                     .code,
                 OmErrorCode::InvalidState
             );
@@ -143234,6 +143313,43 @@ mod tests {
                     .dispatch_get(first_series, "Points", &[])
                     .expect("Series.Points before PlotArea clear"),
             );
+            let first_point = expect_object_handle(
+                runtime
+                    .dispatch_invoke(first_series_points, "Item", &[OmValue::Number(1.0)])
+                    .expect("Series.Points(1) before PlotArea clear"),
+            );
+            let first_point_format = expect_object_handle(
+                runtime
+                    .dispatch_get(first_point, "Format", &[])
+                    .expect("Point.Format before PlotArea clear"),
+            );
+            runtime
+                .dispatch_invoke(
+                    first_series,
+                    "ApplyDataLabels",
+                    &[OmValue::Number(f64::from(super::XL_DATA_LABELS_SHOW_VALUE))],
+                )
+                .expect("Series.ApplyDataLabels before PlotArea clear");
+            let first_data_labels = expect_object_handle(
+                runtime
+                    .dispatch_get(first_series, "DataLabels", &[])
+                    .expect("Series.DataLabels before PlotArea clear"),
+            );
+            let first_data_labels_format = expect_object_handle(
+                runtime
+                    .dispatch_get(first_data_labels, "Format", &[])
+                    .expect("DataLabels.Format before PlotArea clear"),
+            );
+            let first_data_label = expect_object_handle(
+                runtime
+                    .dispatch_invoke(first_data_labels, "Item", &[OmValue::Number(1.0)])
+                    .expect("DataLabels.Item(1) before PlotArea clear"),
+            );
+            let first_data_label_border = expect_object_handle(
+                runtime
+                    .dispatch_get(first_data_label, "Border", &[])
+                    .expect("DataLabel.Border before PlotArea clear"),
+            );
             assert_eq!(
                 expect_number(
                     runtime
@@ -143270,6 +143386,48 @@ mod tests {
                 runtime
                     .dispatch_get(first_series_points, "Count", &[])
                     .expect_err("Series.Points handle should be stale after PlotArea clear")
+                    .code,
+                OmErrorCode::InvalidState
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(first_point, "Name", &[])
+                    .expect_err("Series.Points(1) handle should be stale after PlotArea clear")
+                    .code,
+                OmErrorCode::InvalidState
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(first_point_format, "Creator", &[])
+                    .expect_err("Point.Format handle should be stale after PlotArea clear")
+                    .code,
+                OmErrorCode::InvalidState
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(first_data_labels, "Count", &[])
+                    .expect_err("Series.DataLabels handle should be stale after PlotArea clear")
+                    .code,
+                OmErrorCode::InvalidState
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(first_data_labels_format, "Creator", &[])
+                    .expect_err("DataLabels.Format handle should be stale after PlotArea clear")
+                    .code,
+                OmErrorCode::InvalidState
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(first_data_label, "ShowValue", &[])
+                    .expect_err("DataLabel handle should be stale after PlotArea clear")
+                    .code,
+                OmErrorCode::InvalidState
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(first_data_label_border, "LineStyle", &[])
+                    .expect_err("DataLabel.Border handle should be stale after PlotArea clear")
                     .code,
                 OmErrorCode::InvalidState
             );
