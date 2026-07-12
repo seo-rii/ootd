@@ -115262,6 +115262,26 @@ mod tests {
                 &[],
             )
             .expect("set second source chart type");
+        let first_chart_area = expect_object_handle(
+            runtime
+                .dispatch_get(first_chart, "ChartArea", &[])
+                .expect("first source Chart.ChartArea before placement Charts.Copy"),
+        );
+        let first_series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(first_chart, "SeriesCollection", &[])
+                .expect("first source Chart.SeriesCollection before placement Charts.Copy"),
+        );
+        let second_chart_area = expect_object_handle(
+            runtime
+                .dispatch_get(second_chart, "ChartArea", &[])
+                .expect("second source Chart.ChartArea before placement Charts.Copy"),
+        );
+        let second_series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(second_chart, "SeriesCollection", &[])
+                .expect("second source Chart.SeriesCollection before placement Charts.Copy"),
+        );
 
         assert_eq!(
             runtime
@@ -115322,6 +115342,52 @@ mod tests {
                     .expect("copied second chart type")
             ),
             f64::from(super::XL_PIE)
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(first_chart, "ChartType", &[])
+                    .expect("source first Chart handle remains live after placement Charts.Copy")
+            ),
+            f64::from(super::XL_LINE)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(first_chart_area, "Select", &[])
+                .expect("source first ChartArea remains live after placement Charts.Copy"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(first_series_collection, "Count", &[])
+                    .expect("source first SeriesCollection remains live after placement Charts.Copy")
+            ),
+            0.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(second_chart, "ChartType", &[])
+                    .expect("source second Chart handle remains live after placement Charts.Copy")
+            ),
+            f64::from(super::XL_PIE)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(second_chart_area, "Select", &[])
+                .expect("source second ChartArea remains live after placement Charts.Copy"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(second_series_collection, "Count", &[])
+                    .expect(
+                        "source second SeriesCollection remains live after placement Charts.Copy",
+                    )
+            ),
+            0.0
         );
         let saved = runtime
             .save_workbook(
