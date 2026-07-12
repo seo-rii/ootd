@@ -116777,6 +116777,26 @@ mod tests {
                 .dispatch_get(workbook.0, "Charts", &[])
                 .expect("read-only Workbook.Charts"),
         );
+        let first_chart = expect_object_handle(
+            runtime
+                .dispatch_get(charts, "Item", &[OmValue::Number(1.0)])
+                .expect("read-only Charts.Item(1) before rejected mutators"),
+        );
+        let first_chart_area = expect_object_handle(
+            runtime
+                .dispatch_get(first_chart, "ChartArea", &[])
+                .expect("read-only Chart.ChartArea before rejected mutators"),
+        );
+        let first_series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(first_chart, "SeriesCollection", &[])
+                .expect("read-only Chart.SeriesCollection before rejected mutators"),
+        );
+        let original_chart_type = expect_number(
+            runtime
+                .dispatch_get(first_chart, "ChartType", &[])
+                .expect("read-only Chart.ChartType before rejected mutators"),
+        );
 
         for member in ["Add", "Delete", "Move"] {
             let error = match runtime.dispatch_invoke(charts, member, &[]) {
@@ -116820,6 +116840,28 @@ mod tests {
                     .expect("Charts.Visible after rejected setter")
             ),
             f64::from(super::XL_SHEET_VISIBLE)
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(first_chart, "ChartType", &[])
+                    .expect("read-only Chart handle remains live after rejected mutators")
+            ),
+            original_chart_type
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(first_chart_area, "Select", &[])
+                .expect("read-only ChartArea remains live after rejected mutators"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(first_series_collection, "Count", &[])
+                    .expect("read-only SeriesCollection remains live after rejected mutators")
+            ),
+            0.0
         );
     }
 
