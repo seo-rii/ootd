@@ -4883,6 +4883,8 @@
   - 범위: `Chart.ChartType` 변경 경로가 대상 chart type에서 지원하지 않는 `firstSliceAng`, `holeSize`, `secondPieSize`, `sizeRepresents`, `splitType`, `splitPos` chart-group 설정을 model/saved XML/reopen 경계에서 제거하도록 보강해 pie/doughnut/of-pie/bubble-only numeric setting이 line/bar 등 호환되지 않는 chart group XML에 남는 경계를 차단
   - `Step 7.119 DONE` excel-runtime chart type 3D property clearing
   - 범위: 3D chart에서 2D chart로 `Chart.ChartType`을 변경하면 `view3D`와 `gapDepth` 설정을 model/saved XML/reopen 경계에서 제거하도록 보강해 `rotX`, `hPercent`, `rotY`, `depthPercent`, `rAngAx`, `perspective`, `gapDepth` 같은 3D-only chart XML이 2D chart group에 남는 경계를 차단
+  - `Step 7.120 DONE` excel-runtime chart type unsupported series formatting clearing
+  - 범위: `Chart.ChartType` 변경 경로가 대상 chart type에서 지원하지 않는 `Series.BarShape`, `Series.Smooth`, `Series.MarkerStyle`, `Series.MarkerSize` override를 model/saved XML 경계에서 제거하도록 보강해 3D bar shape와 line/scatter/radar marker/smooth formatting이 2D bar 등 호환되지 않는 chart XML에 남는 경계를 차단
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.

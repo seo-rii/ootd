@@ -8311,6 +8311,18 @@ impl ExcelRuntime {
                                 if !chart_type_supports_gap_depth(&chart.chart_type) {
                                     chart.gap_depth = None;
                                 }
+                                for series in &mut chart.series {
+                                    if !chart_type_supports_bar_shape(&chart.chart_type) {
+                                        series.bar_shape = None;
+                                    }
+                                    if !chart_type_supports_series_smooth(&chart.chart_type) {
+                                        series.smooth = None;
+                                    }
+                                    if !chart_type_supports_series_marker(&chart.chart_type) {
+                                        series.marker_style = None;
+                                        series.marker_size = None;
+                                    }
+                                }
                                 if let Some(has_3d_shading) = chart_type_bubble_3d {
                                     chart.has_3d_shading = Some(has_3d_shading);
                                 }
@@ -131648,6 +131660,171 @@ mod tests {
             ),
             11.0
         );
+    }
+
+    #[test]
+    fn chart_type_setter_clears_unsupported_series_formatting() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection"),
+        );
+        let series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("SeriesCollection.Item(1)"),
+        );
+
+        runtime
+            .dispatch_set(
+                chart,
+                "ChartType",
+                OmValue::Number(f64::from(super::XL_3D_COLUMN)),
+                &[],
+            )
+            .expect("set Chart.ChartType to 3D column");
+        runtime
+            .dispatch_set(
+                series,
+                "BarShape",
+                OmValue::Number(f64::from(super::XL_PYRAMID_TO_MAX)),
+                &[],
+            )
+            .expect("set Series.BarShape");
+        {
+            let state = runtime
+                .workbook_state(workbook)
+                .expect("workbook state after Series.BarShape");
+            let chart_model = state.charts.values().next().expect("chart model");
+            assert_eq!(
+                chart_model.series[0].bar_shape,
+                Some(super::ChartBarShape::PyramidToMax)
+            );
+        }
+
+        runtime
+            .dispatch_set(
+                chart,
+                "ChartType",
+                OmValue::Number(f64::from(super::XL_LINE_MARKERS)),
+                &[],
+            )
+            .expect("set Chart.ChartType to line markers");
+        runtime
+            .dispatch_set(series, "Smooth", OmValue::Bool(true), &[])
+            .expect("set Series.Smooth");
+        runtime
+            .dispatch_set(
+                series,
+                "MarkerStyle",
+                OmValue::Number(f64::from(super::XL_MARKER_STYLE_DIAMOND)),
+                &[],
+            )
+            .expect("set Series.MarkerStyle");
+        runtime
+            .dispatch_set(series, "MarkerSize", OmValue::Number(11.0), &[])
+            .expect("set Series.MarkerSize");
+        {
+            let state = runtime
+                .workbook_state(workbook)
+                .expect("workbook state after line marker formatting");
+            let chart_model = state.charts.values().next().expect("chart model");
+            let series_model = &chart_model.series[0];
+            assert_eq!(series_model.bar_shape, None);
+            assert_eq!(series_model.smooth, Some(true));
+            assert_eq!(
+                series_model.marker_style,
+                Some(super::ChartMarkerStyle::Diamond)
+            );
+            assert_eq!(series_model.marker_size, Some(11));
+        }
+
+        runtime
+            .dispatch_set(
+                chart,
+                "ChartType",
+                OmValue::Number(f64::from(super::XL_BAR_CLUSTERED)),
+                &[],
+            )
+            .expect("set Chart.ChartType to 2D bar");
+        for member in ["BarShape", "Smooth", "MarkerStyle", "MarkerSize"] {
+            let error = match runtime.dispatch_get(series, member, &[]) {
+                Ok(value) => panic!(
+                    "Series.{member} after unsupported ChartType should reject, got {value:?}"
+                ),
+                Err(error) => error,
+            };
+            assert_eq!(
+                error.code,
+                OmErrorCode::Unsupported,
+                "Series.{member} after unsupported ChartType"
+            );
+        }
+        {
+            let state = runtime
+                .workbook_state(workbook)
+                .expect("workbook state after unsupported ChartType");
+            let chart_model = state.charts.values().next().expect("chart model");
+            let series_model = &chart_model.series[0];
+            assert_eq!(chart_model.chart_type, super::ChartType::Bar);
+            assert_eq!(series_model.bar_shape, None);
+            assert_eq!(series_model.smooth, None);
+            assert_eq!(series_model.marker_style, None);
+            assert_eq!(series_model.marker_size, None);
+        }
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after unsupported series formatting ChartType");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = String::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(saved_chart_xml.contains("<c:barChart>"));
+        assert!(!saved_chart_xml.contains(r#"<c:shape val="pyramidToMax"/>"#));
+        assert!(!saved_chart_xml.contains("<c:smooth"));
+        assert!(!saved_chart_xml.contains("<c:marker"));
     }
 
     #[test]
