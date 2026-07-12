@@ -115806,6 +115806,26 @@ mod tests {
                 &[],
             )
             .expect("set second source chart type");
+        let first_chart_area = expect_object_handle(
+            runtime
+                .dispatch_get(first_chart, "ChartArea", &[])
+                .expect("first source Chart.ChartArea before placement Charts.Move"),
+        );
+        let first_series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(first_chart, "SeriesCollection", &[])
+                .expect("first source Chart.SeriesCollection before placement Charts.Move"),
+        );
+        let second_chart_area = expect_object_handle(
+            runtime
+                .dispatch_get(second_chart, "ChartArea", &[])
+                .expect("second source Chart.ChartArea before placement Charts.Move"),
+        );
+        let second_series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(second_chart, "SeriesCollection", &[])
+                .expect("second source Chart.SeriesCollection before placement Charts.Move"),
+        );
 
         runtime
             .dispatch_invoke(
@@ -115865,6 +115885,34 @@ mod tests {
                     .expect("second chart type after same-workbook Move")
             ),
             f64::from(super::XL_PIE)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(first_chart_area, "Select", &[])
+                .expect("first ChartArea remains live after same-workbook Move"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(first_series_collection, "Count", &[])
+                    .expect("first SeriesCollection remains live after same-workbook Move")
+            ),
+            0.0
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(second_chart_area, "Select", &[])
+                .expect("second ChartArea remains live after same-workbook Move"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(second_series_collection, "Count", &[])
+                    .expect("second SeriesCollection remains live after same-workbook Move")
+            ),
+            0.0
         );
 
         runtime
