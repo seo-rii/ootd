@@ -1043,6 +1043,7 @@ pub struct ChartAxisSummary {
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ChartSeriesSummary {
+    pub is_filtered: bool,
     pub name_ref: Option<String>,
     pub name_full_ref: Option<String>,
     pub name_cache: Option<ChartCacheSummary>,
@@ -1067,6 +1068,7 @@ pub struct ChartSeriesSummary {
     pub point_explosions: BTreeMap<u32, u16>,
     pub data_labels: Option<ChartDataLabelsSummary>,
     pub point_data_labels: BTreeMap<u32, ChartDataLabelsSummary>,
+    pub raw_index: Option<u32>,
     pub order: Option<u32>,
     pub axis_ids: Vec<String>,
     pub axis_group: ChartAxisGroup,
@@ -4958,8 +4960,11 @@ fn chart_series_from_summary(
                         (*index, chart_data_labels_model_from_summary(data_labels))
                     })
                     .collect(),
+                raw_index: series.raw_index,
                 order: series.order.or_else(|| u32::try_from(index).ok()),
                 axis_group: series.axis_group,
+                is_filtered: series.is_filtered,
+                filter_dirty: false,
             })
             .collect();
     }
@@ -4981,8 +4986,11 @@ fn chart_series_from_summary(
             points: BTreeMap::new(),
             data_labels: None,
             point_data_labels: BTreeMap::new(),
+            raw_index: None,
             order: u32::try_from(index).ok(),
             axis_group: ChartAxisGroup::Primary,
+            is_filtered: false,
+            filter_dirty: false,
         })
         .collect()
 }
@@ -22558,7 +22566,33 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     axes[axis_index].minor_unit = Some(value);
                 }
                 if local_name == b"ser" && active_series.is_none() {
-                    active_series = Some(ChartSeriesSummary::default());
+                    let mut series_summary = ChartSeriesSummary::default();
+                    series_summary.is_filtered = element_path.len() >= 4
+                        && element_path[element_path.len() - 3] == "extLst"
+                        && element_path[element_path.len() - 2] == "ext"
+                        && matches!(
+                            element_path.last().map(String::as_str),
+                            Some(
+                                "filteredAreaSeries"
+                                    | "filteredBarSeries"
+                                    | "filteredLineSeries"
+                                    | "filteredScatterSeries"
+                                    | "filteredBubbleSeries"
+                                    | "filteredPieSeries"
+                                    | "filteredRadarSeries"
+                                    | "filteredSurfaceSeries"
+                            )
+                        )
+                        && element_path[element_path.len() - 4].ends_with("Chart")
+                        && element_path[element_path.len() - 4] != "chart";
+                    active_series = Some(series_summary);
+                }
+                if local_name == b"idx"
+                    && element_path.last().is_some_and(|name| name == "ser")
+                    && let Some(active_series) = active_series.as_mut()
+                    && let Some(raw_index) = parse_u32_val_attr(&element, &reader, "series index")?
+                {
+                    active_series.raw_index = Some(raw_index);
                 }
                 if local_name == b"order"
                     && let Some(active_series) = active_series.as_mut()
@@ -23435,6 +23469,13 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     && let Some(order) = parse_u32_val_attr(&element, &reader, "series order")?
                 {
                     active_series.order = Some(order);
+                }
+                if local_name == b"idx"
+                    && element_path.last().is_some_and(|name| name == "ser")
+                    && let Some(active_series) = active_series.as_mut()
+                    && let Some(raw_index) = parse_u32_val_attr(&element, &reader, "series index")?
+                {
+                    active_series.raw_index = Some(raw_index);
                 }
                 if local_name == b"ptCount"
                     && let Some((_, _, point_count)) = active_cache.as_mut()
@@ -30873,6 +30914,7 @@ mod tests {
         assert_eq!(
             chart_summary.series,
             vec![ChartSeriesSummary {
+                is_filtered: false,
                 name_ref: Some("Sheet1!$C$1".to_string()),
                 name_full_ref: None,
                 name_cache: None,
@@ -30912,6 +30954,7 @@ mod tests {
                     separator: Some("; ".to_string()),
                 }),
                 point_data_labels: BTreeMap::new(),
+                raw_index: Some(0),
                 order: Some(0),
                 axis_ids: Vec::new(),
                 axis_group: ChartAxisGroup::Primary,
@@ -37448,6 +37491,73 @@ mod tests {
         );
         assert_eq!(series.values_full_ref.as_deref(), Some("Sheet1!$A$2:$C$2"));
         assert_eq!(summary.formula_refs.len(), 2);
+    }
+
+    #[test]
+    fn parse_chart_part_summary_marks_filtered_series_extensions() {
+        let chart_xml = br#"<?xml version="1.0" encoding="UTF-8"?>
+<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:c15="http://schemas.microsoft.com/office/drawing/2012/chart">
+  <c:chart><c:plotArea><c:barChart>
+    <c:ser><c:idx val="0"></c:idx><c:order val="0"/><c:tx><c:v>Visible</c:v></c:tx><c:val><c:numRef><c:f>Sheet1!$A$1:$A$2</c:f></c:numRef></c:val></c:ser>
+    <c:axId val="10"/><c:axId val="20"/>
+    <c:extLst><c:ext uri="urn:filtered-bar-series"><c15:filteredBarSeries><c15:ser><c:idx val="1"/><c:order val="1"/><c:tx><c:v>Filtered</c:v></c:tx><c:val><c:numRef><c:f>Sheet1!$B$1:$B$2</c:f></c:numRef></c:val></c15:ser></c15:filteredBarSeries></c:ext></c:extLst>
+  </c:barChart></c:plotArea></c:chart>
+</c:chartSpace>"#;
+
+        let summary = super::parse_chart_part_summary(chart_xml).expect("chart summary");
+
+        assert_eq!(summary.series.len(), 2);
+        assert!(!summary.series[0].is_filtered);
+        assert!(summary.series[1].is_filtered);
+        assert_eq!(summary.series[0].raw_index, Some(0));
+        assert_eq!(summary.series[1].raw_index, Some(1));
+        assert_eq!(
+            summary.series[0].values_ref.as_deref(),
+            Some("Sheet1!$A$1:$A$2")
+        );
+        assert_eq!(
+            summary.series[1].values_ref.as_deref(),
+            Some("Sheet1!$B$1:$B$2")
+        );
+        assert_eq!(summary.series[0].axis_ids, vec!["10", "20"]);
+        assert_eq!(summary.series[1].axis_ids, vec!["10", "20"]);
+
+        let model_series = super::chart_series_from_summary(
+            Some(&summary),
+            WorkbookId(1),
+            None,
+            &[],
+            &DefinedNameTable::default(),
+            None,
+        );
+        assert_eq!(model_series[0].raw_index, Some(0));
+        assert_eq!(model_series[1].raw_index, Some(1));
+        assert!(!model_series[0].is_filtered);
+        assert!(model_series[1].is_filtered);
+        assert!(!model_series[0].filter_dirty);
+        assert!(!model_series[1].filter_dirty);
+    }
+
+    #[test]
+    fn parse_chart_part_summary_requires_exact_filtered_series_wrapper_path() {
+        let chart_xml = br#"<?xml version="1.0" encoding="UTF-8"?>
+<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:x15="http://schemas.microsoft.com/office/drawing/2012/chart">
+  <c:chart><c:plotArea><c:barChart>
+    <c:extLst><c:ext uri="urn:alternate-prefix"><x15:filteredBarSeries><x15:ser><c:idx val="7"/></x15:ser></x15:filteredBarSeries></c:ext></c:extLst>
+    <c:extLst><c:ext uri="urn:similar-name"><x15:filteredBarSeriesExtra><x15:ser><c:idx val="8"/></x15:ser></x15:filteredBarSeriesExtra></c:ext></c:extLst>
+    <x15:filteredBarSeries><x15:ser><c:idx val="9"/></x15:ser></x15:filteredBarSeries>
+  </c:barChart></c:plotArea></c:chart>
+</c:chartSpace>"#;
+
+        let summary = super::parse_chart_part_summary(chart_xml).expect("chart summary");
+
+        assert_eq!(summary.series.len(), 3);
+        assert!(summary.series[0].is_filtered);
+        assert!(!summary.series[1].is_filtered);
+        assert!(!summary.series[2].is_filtered);
+        assert_eq!(summary.series[0].raw_index, Some(7));
+        assert_eq!(summary.series[1].raw_index, Some(8));
+        assert_eq!(summary.series[2].raw_index, Some(9));
     }
 
     #[test]

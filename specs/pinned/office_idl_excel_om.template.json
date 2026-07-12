@@ -63020,6 +63020,33 @@
           "access": "readwrite"
         },
         {
+          "name": "IsFiltered",
+          "memberKind": "property",
+          "support": "stub",
+          "metadata": {
+            "capture": {
+              "origins": [
+                {
+                  "kind": "property_get",
+                  "sourceInterface": "Series",
+                  "sourceMember": "IsFiltered"
+                }
+              ],
+              "typeInfo": {
+                "kind": "primitive",
+                "name": "bool",
+                "aliasOf": "VARIANT_BOOL"
+              }
+            }
+          },
+          "returnType": {
+            "kind": "primitive",
+            "name": "bool",
+            "aliasOf": "VARIANT_BOOL"
+          },
+          "access": "readwrite"
+        },
+        {
           "name": "Creator",
           "memberKind": "property",
           "support": "stub",

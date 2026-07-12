@@ -1178,6 +1178,7 @@ enum RuntimeObjectKind {
         workbook: WorkbookHandle,
         chart_id: ChartId,
         axis_group_filter: Option<ChartAxisGroup>,
+        full: bool,
         chart_object_parent: Option<ChartObjectsParent>,
     },
     Series {
@@ -3563,11 +3564,13 @@ impl ExcelRuntime {
                 workbook,
                 chart_id,
                 axis_group_filter,
+                full,
                 chart_object_parent,
             } => self.dispatch_get_series_collection(
                 workbook,
                 chart_id,
                 axis_group_filter,
+                full,
                 chart_object_parent,
                 member,
                 args,
@@ -5856,6 +5859,46 @@ impl ExcelRuntime {
                     )
                 };
                 match member {
+                    "IsFiltered" => {
+                        let OmValue::Bool(is_filtered) = value else {
+                            return Err(OmError::type_mismatch(
+                                "Series.IsFiltered expects a boolean value",
+                            ));
+                        };
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart = runtime
+                            .loaded
+                            .state
+                            .charts
+                            .get_mut(&chart_id)
+                            .ok_or_else(|| {
+                                OmError::new(OmErrorCode::NotFound, "chart not found")
+                            })?;
+                        if chart_filtered_series_wrapper_name(&chart.chart_type).is_none() {
+                            return Err(OmError::unsupported(
+                                "Series.IsFiltered is unavailable for this chart type",
+                            ));
+                        }
+                        let series = chart.series.get_mut(series_index).ok_or_else(|| {
+                            OmError::new(OmErrorCode::NotFound, "series not found")
+                        })?;
+                        if series.is_filtered != is_filtered {
+                            series.is_filtered = is_filtered;
+                            series.filter_dirty = true;
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                            self.find_state = None;
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
+                        }
+                        Ok(())
+                    }
                     "ChartType" => {
                         self.series_model(workbook, chart_id, series_index)?;
                         let chart = self.register_chart_handle_with_chart_object_parent_origin(
@@ -15329,6 +15372,7 @@ impl ExcelRuntime {
                                     &source_range,
                                     plot_by,
                                     0,
+                                    0,
                                     series_labels,
                                     category_labels,
                                 )?;
@@ -15737,8 +15781,11 @@ impl ExcelRuntime {
                                 points: BTreeMap::new(),
                                 data_labels: None,
                                 point_data_labels: BTreeMap::new(),
+                                raw_index: Some(0),
                                 order: Some(0),
                                 axis_group: ChartAxisGroup::Primary,
+                                is_filtered: false,
+                                filter_dirty: false,
                             });
                             chart.dirty = true;
                             runtime.dirty = true;
@@ -16687,6 +16734,7 @@ impl ExcelRuntime {
                         &source_range,
                         plot_by,
                         0,
+                        0,
                         false,
                         false,
                     )?;
@@ -17119,11 +17167,13 @@ impl ExcelRuntime {
                 workbook,
                 chart_id,
                 axis_group_filter,
+                full,
                 chart_object_parent,
             } => self.dispatch_invoke_series_collection(
                 workbook,
                 chart_id,
                 axis_group_filter,
+                full,
                 chart_object_parent,
                 member,
                 args,
@@ -19632,6 +19682,7 @@ impl ExcelRuntime {
                             | "Points"
                             | "PlotOrder"
                             | "InvertIfNegative"
+                            | "IsFiltered"
                             | "Creator"
                             | "Application"
                             | "Parent"
@@ -24460,7 +24511,7 @@ impl ExcelRuntime {
             }
             "FullSeriesCollection" => {
                 let handle = self
-                    .register_series_collection_handle_with_chart_object_parent_origin(
+                    .register_full_series_collection_handle_with_chart_object_parent_origin(
                         workbook,
                         chart_id,
                         chart_object_parent,
@@ -25835,6 +25886,7 @@ impl ExcelRuntime {
                     workbook,
                     chart_id,
                     axis_group_filter: Some(axis_group),
+                    full: false,
                     chart_object_parent,
                 });
                 if args.is_empty() {
@@ -27236,6 +27288,7 @@ impl ExcelRuntime {
         workbook: WorkbookHandle,
         chart_id: ChartId,
         axis_group_filter: Option<ChartAxisGroup>,
+        full: bool,
         chart_object_parent: Option<ChartObjectsParent>,
         member: &str,
         args: &[OmValue],
@@ -27252,21 +27305,15 @@ impl ExcelRuntime {
                     ));
                 }
                 let chart = self.chart_model(workbook, chart_id)?;
-                let count = chart
-                    .series
-                    .iter()
-                    .filter(|series| {
-                        axis_group_filter
-                            .map(|axis_group| series.axis_group == axis_group)
-                            .unwrap_or(true)
-                    })
-                    .count();
+                let count =
+                    series_collection_indices(chart, axis_group_filter, full).len();
                 Ok(OmValue::Number(count as f64))
             }
             "Item" => self.dispatch_invoke_series_collection(
                 workbook,
                 chart_id,
                 axis_group_filter,
+                full,
                 chart_object_parent,
                 member,
                 args,
@@ -27313,6 +27360,7 @@ impl ExcelRuntime {
         workbook: WorkbookHandle,
         chart_id: ChartId,
         axis_group_filter: Option<ChartAxisGroup>,
+        full: bool,
         chart_object_parent: Option<ChartObjectsParent>,
         member: &str,
         args: &[OmValue],
@@ -27332,17 +27380,8 @@ impl ExcelRuntime {
                     OmValue::Number(_) => {
                         let index = coerce_u32_arg(index, "SeriesCollection.Item index")? as usize;
                         let chart = self.chart_model(workbook, chart_id)?;
-                        let matching_indices = chart
-                            .series
-                            .iter()
-                            .enumerate()
-                            .filter_map(|(series_index, series)| {
-                                axis_group_filter
-                                    .map(|axis_group| series.axis_group == axis_group)
-                                    .unwrap_or(true)
-                                    .then_some(series_index)
-                            })
-                            .collect::<Vec<_>>();
+                        let matching_indices =
+                            series_collection_indices(chart, axis_group_filter, full);
                         if index == 0 || index > matching_indices.len() {
                             return Err(OmError::invalid_argument(
                                 "SeriesCollection.Item index is out of bounds",
@@ -27357,13 +27396,10 @@ impl ExcelRuntime {
                             OmError::new(OmErrorCode::NotFound, "chart not found")
                         })?;
                         let mut matched_index = None;
-                        for (series_index, series) in chart.series.iter().enumerate() {
-                            if axis_group_filter
-                                .map(|axis_group| series.axis_group != axis_group)
-                                .unwrap_or(false)
-                            {
-                                continue;
-                            }
+                        for series_index in
+                            series_collection_indices(chart, axis_group_filter, full)
+                        {
+                            let series = &chart.series[series_index];
                             let Some(source) = series.name.as_ref() else {
                                 continue;
                             };
@@ -27407,6 +27443,11 @@ impl ExcelRuntime {
                 ))
             }
             "NewSeries" => {
+                if full {
+                    return Err(OmError::unsupported(
+                        "FullSeriesCollection.NewSeries is not supported",
+                    ));
+                }
                 if !args.is_empty() {
                     return Err(OmError::invalid_argument(
                         "SeriesCollection.NewSeries does not accept arguments",
@@ -27437,6 +27478,7 @@ impl ExcelRuntime {
                         .get_mut(&chart_id)
                         .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart not found"))?;
                     let series_index = chart.series.len();
+                    let raw_index = next_chart_series_raw_index(chart)?;
                     chart.series.push(SeriesModel {
                         name: None,
                         x_values: None,
@@ -27450,8 +27492,11 @@ impl ExcelRuntime {
                         points: BTreeMap::new(),
                         data_labels: None,
                         point_data_labels: BTreeMap::new(),
+                        raw_index: Some(raw_index),
                         order: u32::try_from(series_index).ok(),
                         axis_group,
+                        is_filtered: false,
+                        filter_dirty: false,
                     });
                     if let Some(plot_order) = series_index
                         .checked_add(1)
@@ -27476,6 +27521,11 @@ impl ExcelRuntime {
                 ))
             }
             "Add" => {
+                if full {
+                    return Err(OmError::unsupported(
+                        "FullSeriesCollection.Add is not supported",
+                    ));
+                }
                 if args.is_empty() || args.len() > 5 {
                     return Err(OmError::invalid_argument(
                         "SeriesCollection.Add expects Source and optional Rowcol, SeriesLabels, CategoryLabels, and Replace arguments",
@@ -27510,12 +27560,15 @@ impl ExcelRuntime {
                     .unwrap_or(false);
                 let source_range =
                     self.chart_source_range_from_arg(workbook, &args[0], "SeriesCollection.Add")?;
-                let existing_series_len = self.chart_model(workbook, chart_id)?.series.len();
+                let chart = self.chart_model(workbook, chart_id)?;
+                let existing_series_len = chart.series.len();
+                let first_raw_index = next_chart_series_raw_index(chart)?;
                 let mut new_series = self.chart_series_models_for_range_source(
                     workbook,
                     &source_range,
                     plot_by,
                     existing_series_len,
+                    first_raw_index,
                     series_labels,
                     category_labels,
                 )?;
@@ -27656,6 +27709,7 @@ impl ExcelRuntime {
         source_range: &RangeSet,
         plot_by: Option<i32>,
         first_order: usize,
+        first_raw_index: u32,
         series_labels: bool,
         category_labels: bool,
     ) -> OmResult<Vec<SeriesModel>> {
@@ -27670,6 +27724,9 @@ impl ExcelRuntime {
                                x_values: Option<ChartSourceExpr>,
                                values: ChartSourceExpr| {
             let order = u32::try_from(first_order + new_series.len()).ok();
+            let raw_index = u32::try_from(new_series.len())
+                .ok()
+                .and_then(|offset| first_raw_index.checked_add(offset));
             new_series.push(SeriesModel {
                 name,
                 x_values,
@@ -27683,8 +27740,11 @@ impl ExcelRuntime {
                 points: BTreeMap::new(),
                 data_labels: None,
                 point_data_labels: BTreeMap::new(),
+                raw_index,
                 order,
                 axis_group: ChartAxisGroup::Primary,
+                is_filtered: false,
+                filter_dirty: false,
             });
         };
         match plot_by {
@@ -28020,6 +28080,10 @@ impl ExcelRuntime {
                 let series = self.series_model(workbook, chart_id, series_index)?;
                 Ok(OmValue::Bool(series.invert_if_negative.unwrap_or(false)))
             }
+            "IsFiltered" => Ok(OmValue::Bool(
+                self.series_model(workbook, chart_id, series_index)?
+                    .is_filtered,
+            )),
             "Formula" => {
                 let series = self.series_model(workbook, chart_id, series_index)?;
                 Ok(OmValue::Text(series_formula_text(series, series_index)))
@@ -28095,13 +28159,25 @@ impl ExcelRuntime {
             )))),
             "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
             "Application" => Ok(OmValue::Object(self.root_application())),
-            "Parent" => Ok(OmValue::Object(
-                self.register_series_collection_handle_with_chart_object_parent_origin(
-                    workbook,
-                    chart_id,
-                    chart_object_parent,
-                ),
-            )),
+            "Parent" => {
+                let is_filtered = self
+                    .series_model(workbook, chart_id, series_index)?
+                    .is_filtered;
+                let parent = if is_filtered {
+                    self.register_full_series_collection_handle_with_chart_object_parent_origin(
+                        workbook,
+                        chart_id,
+                        chart_object_parent,
+                    )
+                } else {
+                    self.register_series_collection_handle_with_chart_object_parent_origin(
+                        workbook,
+                        chart_id,
+                        chart_object_parent,
+                    )
+                };
+                Ok(OmValue::Object(parent))
+            }
             _ => Err(OmError::unsupported(format!(
                 "Series.{member} is not implemented"
             ))),
@@ -33742,6 +33818,22 @@ impl ExcelRuntime {
             workbook,
             chart_id,
             axis_group_filter: None,
+            full: false,
+            chart_object_parent,
+        })
+    }
+
+    fn register_full_series_collection_handle_with_chart_object_parent_origin(
+        &mut self,
+        workbook: WorkbookHandle,
+        chart_id: ChartId,
+        chart_object_parent: Option<ChartObjectsParent>,
+    ) -> ObjectHandle {
+        self.register_object(RuntimeObjectKind::SeriesCollection {
+            workbook,
+            chart_id,
+            axis_group_filter: None,
+            full: true,
             chart_object_parent,
         })
     }
@@ -40157,6 +40249,124 @@ fn chart_group_xml_name(chart_type: &ChartType) -> Option<&'static str> {
     }
 }
 
+fn chart_filtered_series_wrapper_name(chart_type: &ChartType) -> Option<&'static str> {
+    match chart_type {
+        ChartType::Area
+        | ChartType::Area3D
+        | ChartType::AreaStacked
+        | ChartType::Area3DStacked
+        | ChartType::AreaStacked100
+        | ChartType::Area3DStacked100 => Some("filteredAreaSeries"),
+        ChartType::Bar
+        | ChartType::Bar3DClustered
+        | ChartType::BarStacked
+        | ChartType::Bar3DStacked
+        | ChartType::BarStacked100
+        | ChartType::Bar3DStacked100
+        | ChartType::Column
+        | ChartType::Column3D
+        | ChartType::Column3DClustered
+        | ChartType::ColumnStacked
+        | ChartType::Column3DStacked
+        | ChartType::ColumnStacked100
+        | ChartType::Column3DStacked100
+        | ChartType::CylinderColumn
+        | ChartType::CylinderColumnClustered
+        | ChartType::CylinderColumnStacked
+        | ChartType::CylinderColumnStacked100
+        | ChartType::CylinderBarClustered
+        | ChartType::CylinderBarStacked
+        | ChartType::CylinderBarStacked100
+        | ChartType::ConeColumn
+        | ChartType::ConeColumnClustered
+        | ChartType::ConeColumnStacked
+        | ChartType::ConeColumnStacked100
+        | ChartType::ConeBarClustered
+        | ChartType::ConeBarStacked
+        | ChartType::ConeBarStacked100
+        | ChartType::PyramidColumn
+        | ChartType::PyramidColumnClustered
+        | ChartType::PyramidColumnStacked
+        | ChartType::PyramidColumnStacked100
+        | ChartType::PyramidBarClustered
+        | ChartType::PyramidBarStacked
+        | ChartType::PyramidBarStacked100 => Some("filteredBarSeries"),
+        ChartType::Line
+        | ChartType::Line3D
+        | ChartType::LineMarkers
+        | ChartType::LineMarkersStacked
+        | ChartType::LineMarkersStacked100
+        | ChartType::LineStacked
+        | ChartType::LineStacked100 => Some("filteredLineSeries"),
+        ChartType::Scatter
+        | ChartType::ScatterLines
+        | ChartType::ScatterLinesNoMarkers
+        | ChartType::ScatterSmooth
+        | ChartType::ScatterSmoothNoMarkers => Some("filteredScatterSeries"),
+        ChartType::Bubble | ChartType::Bubble3DEffect => Some("filteredBubbleSeries"),
+        ChartType::Doughnut
+        | ChartType::DoughnutExploded
+        | ChartType::Pie
+        | ChartType::Pie3D
+        | ChartType::PieExploded
+        | ChartType::Pie3DExploded
+        | ChartType::PieOfPie
+        | ChartType::BarOfPie => Some("filteredPieSeries"),
+        ChartType::Radar | ChartType::RadarMarkers | ChartType::RadarFilled => {
+            Some("filteredRadarSeries")
+        }
+        ChartType::Surface
+        | ChartType::SurfaceWireframe
+        | ChartType::SurfaceTopView
+        | ChartType::SurfaceTopViewWireframe => Some("filteredSurfaceSeries"),
+        ChartType::StockHLC
+        | ChartType::StockOHLC
+        | ChartType::Unknown
+        | ChartType::Unsupported(_) => None,
+    }
+}
+
+fn series_collection_indices(
+    chart: &ChartModel,
+    axis_group_filter: Option<ChartAxisGroup>,
+    full: bool,
+) -> Vec<usize> {
+    let mut indices = chart
+        .series
+        .iter()
+        .enumerate()
+        .filter_map(|(series_index, series)| {
+            ((full || !series.is_filtered)
+                && axis_group_filter
+                    .map(|axis_group| series.axis_group == axis_group)
+                    .unwrap_or(true))
+            .then_some(series_index)
+        })
+        .collect::<Vec<_>>();
+    if full {
+        indices.sort_by_key(|series_index| {
+            (
+                chart.series[*series_index]
+                    .order
+                    .unwrap_or(*series_index as u32),
+                *series_index,
+            )
+        });
+    }
+    indices
+}
+
+fn next_chart_series_raw_index(chart: &ChartModel) -> OmResult<u32> {
+    let next = chart
+        .series
+        .iter()
+        .filter_map(|series| series.raw_index)
+        .max()
+        .map(|index| index.checked_add(1))
+        .unwrap_or(Some(0));
+    next.ok_or_else(|| OmError::invalid_argument("chart series index space is exhausted"))
+}
+
 fn chart_type_uses_xy_values(chart_type: &ChartType) -> bool {
     matches!(
         chart_type,
@@ -41989,10 +42199,578 @@ fn chart_extension_without_full_reference(extension_xml: &[u8]) -> OmResult<Opti
     Ok(retained_payload.then(|| writer.into_inner().into_inner()))
 }
 
+#[derive(Debug)]
+struct LoadedChartXmlElementSpan {
+    start: usize,
+    end: usize,
+    end_tag_start: usize,
+    parent_start: Option<usize>,
+    child_element_count: usize,
+}
+
+#[derive(Debug)]
+struct LoadedChartXmlGroupSpan {
+    local_name: Vec<u8>,
+    end_tag_start: usize,
+    last_direct_series_end: Option<usize>,
+    first_after_series_start: Option<usize>,
+    direct_ext_lst_start: Option<usize>,
+}
+
+#[derive(Debug)]
+struct LoadedChartXmlSeriesSpan {
+    start: usize,
+    end: usize,
+    raw_index: Option<u32>,
+    order: Option<u32>,
+    is_filtered: bool,
+    wrapper_start: Option<usize>,
+    extension_start: Option<usize>,
+    group_index: usize,
+}
+
+#[derive(Debug)]
+struct LoadedChartXmlFrame {
+    local_name: Vec<u8>,
+    start: usize,
+    parent_start: Option<usize>,
+    child_element_count: usize,
+    group_index: Option<usize>,
+    series_index: Option<usize>,
+}
+
+fn is_chart_filtered_series_wrapper_name(local_name: &[u8]) -> bool {
+    matches!(
+        local_name,
+        b"filteredAreaSeries"
+            | b"filteredBarSeries"
+            | b"filteredLineSeries"
+            | b"filteredScatterSeries"
+            | b"filteredBubbleSeries"
+            | b"filteredPieSeries"
+            | b"filteredRadarSeries"
+            | b"filteredSurfaceSeries"
+    )
+}
+
+fn chart_group_child_precedes_series(local_name: &[u8]) -> bool {
+    matches!(
+        local_name,
+        b"barDir"
+            | b"grouping"
+            | b"varyColors"
+            | b"scatterStyle"
+            | b"radarStyle"
+            | b"ofPieType"
+            | b"wireframe"
+    )
+}
+
+fn rewrite_chart_series_outer_name(
+    series_xml: &[u8],
+    qualified_name: &str,
+) -> OmResult<Vec<u8>> {
+    let mut reader = Reader::from_reader(Cursor::new(series_xml));
+    reader.config_mut().trim_text(false);
+    let mut writer = Writer::new(Cursor::new(Vec::new()));
+    let mut buffer = Vec::new();
+    let mut depth = 0usize;
+    loop {
+        match reader.read_event_into(&mut buffer) {
+            Ok(Event::Start(element)) => {
+                depth += 1;
+                if depth == 1 && xml_local_name(element.name().as_ref()) == b"ser" {
+                    let mut replacement = BytesStart::new(qualified_name);
+                    let mut has_chart_namespace = false;
+                    for attr in element.attributes() {
+                        let attr = attr.map_err(runtime_xml_error)?;
+                        has_chart_namespace |= attr.key.as_ref() == b"xmlns:c";
+                        replacement.push_attribute(attr.to_owned());
+                    }
+                    if qualified_name == "c:ser" && !has_chart_namespace {
+                        replacement.push_attribute((
+                            "xmlns:c",
+                            "http://schemas.openxmlformats.org/drawingml/2006/chart",
+                        ));
+                    }
+                    writer
+                        .write_event(Event::Start(replacement))
+                        .map_err(runtime_xml_error)?;
+                } else {
+                    writer
+                        .write_event(Event::Start(element.into_owned()))
+                        .map_err(runtime_xml_error)?;
+                }
+            }
+            Ok(Event::End(element)) => {
+                if depth == 1 && xml_local_name(element.name().as_ref()) == b"ser" {
+                    writer
+                        .write_event(Event::End(BytesEnd::new(qualified_name)))
+                        .map_err(runtime_xml_error)?;
+                } else {
+                    writer
+                        .write_event(Event::End(element.into_owned()))
+                        .map_err(runtime_xml_error)?;
+                }
+                depth = depth.saturating_sub(1);
+            }
+            Ok(Event::Eof) => break,
+            Ok(event) => writer
+                .write_event(event.into_owned())
+                .map_err(runtime_xml_error)?,
+            Err(error) => return Err(runtime_xml_error(error)),
+        }
+        buffer.clear();
+    }
+    Ok(writer.into_inner().into_inner())
+}
+
+fn rewrite_loaded_chart_series_filtering(
+    existing_chart_xml: &[u8],
+    chart: &ChartModel,
+) -> OmResult<Vec<u8>> {
+    let mut reader = Reader::from_reader(Cursor::new(existing_chart_xml));
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+    let mut frames = Vec::<LoadedChartXmlFrame>::new();
+    let mut element_spans = BTreeMap::<usize, LoadedChartXmlElementSpan>::new();
+    let mut groups = Vec::<LoadedChartXmlGroupSpan>::new();
+    let mut series_spans = Vec::<LoadedChartXmlSeriesSpan>::new();
+
+    let parse_val = |element: &BytesStart<'_>,
+                     decoder: quick_xml::encoding::Decoder|
+     -> OmResult<Option<u32>> {
+        for attr in element.attributes() {
+            let attr = attr.map_err(runtime_xml_error)?;
+            if xml_local_name(attr.key.as_ref()) == b"val" {
+                return Ok(attr
+                    .decode_and_unescape_value(decoder)
+                    .map_err(runtime_xml_error)?
+                    .parse::<u32>()
+                    .ok());
+            }
+        }
+        Ok(None)
+    };
+
+    loop {
+        let event_start = usize::try_from(reader.buffer_position()).map_err(|_| {
+            OmError::new(OmErrorCode::InvalidState, "chart XML position overflow")
+        })?;
+        match reader.read_event_into(&mut buffer) {
+            Ok(Event::Start(element)) => {
+                let local_name = xml_local_name(element.name().as_ref()).to_vec();
+                let parent_local_name = frames.last().map(|frame| frame.local_name.clone());
+                let parent_start = frames.last().map(|frame| frame.start);
+                if let Some(parent) = frames.last_mut() {
+                    parent.child_element_count += 1;
+                }
+
+                let mut group_index = frames.last().and_then(|frame| frame.group_index);
+                if parent_local_name.as_deref() == Some(b"plotArea".as_slice())
+                    && chart_type_from_group_name(local_name.as_slice()).is_some()
+                {
+                    group_index = Some(groups.len());
+                    groups.push(LoadedChartXmlGroupSpan {
+                        local_name: local_name.clone(),
+                        end_tag_start: 0,
+                        last_direct_series_end: None,
+                        first_after_series_start: None,
+                        direct_ext_lst_start: None,
+                    });
+                } else if let Some(group_index) = group_index {
+                    let is_direct_group_child = frames.last().is_some_and(|frame| {
+                        frame.group_index == Some(group_index)
+                            && chart_type_from_group_name(frame.local_name.as_slice()).is_some()
+                    });
+                    if is_direct_group_child {
+                        if local_name.as_slice() == b"extLst" {
+                            groups[group_index].direct_ext_lst_start = Some(event_start);
+                        }
+                        if local_name.as_slice() != b"ser"
+                            && !chart_group_child_precedes_series(local_name.as_slice())
+                            && groups[group_index].first_after_series_start.is_none()
+                        {
+                            groups[group_index].first_after_series_start = Some(event_start);
+                        }
+                    }
+                }
+
+                let mut series_index = frames.last().and_then(|frame| frame.series_index);
+                if local_name.as_slice() == b"ser" && series_index.is_none() {
+                    let wrapper_frame = frames
+                        .iter()
+                        .rev()
+                        .find(|frame| {
+                            is_chart_filtered_series_wrapper_name(frame.local_name.as_slice())
+                        });
+                    let is_filtered = wrapper_frame.is_some_and(|wrapper| {
+                        let mut ancestors = frames.iter().rev();
+                        ancestors.next().is_some_and(|frame| frame.start == wrapper.start)
+                            && ancestors
+                                .next()
+                                .is_some_and(|frame| frame.local_name.as_slice() == b"ext")
+                            && ancestors
+                                .next()
+                                .is_some_and(|frame| frame.local_name.as_slice() == b"extLst")
+                    });
+                    let group_index = group_index.ok_or_else(|| {
+                        OmError::unsupported(
+                            "Series.IsFiltered requires a series inside a chart group",
+                        )
+                    })?;
+                    let wrapper_start = is_filtered.then(|| wrapper_frame.map(|frame| frame.start)).flatten();
+                    let extension_start = wrapper_start.and_then(|wrapper_start| {
+                        frames
+                            .iter()
+                            .rev()
+                            .skip_while(|frame| frame.start != wrapper_start)
+                            .nth(1)
+                            .filter(|frame| frame.local_name.as_slice() == b"ext")
+                            .map(|frame| frame.start)
+                    });
+                    series_index = Some(series_spans.len());
+                    series_spans.push(LoadedChartXmlSeriesSpan {
+                        start: event_start,
+                        end: 0,
+                        raw_index: None,
+                        order: None,
+                        is_filtered,
+                        wrapper_start,
+                        extension_start,
+                        group_index,
+                    });
+                } else if let Some(series_index) = series_index
+                    && frames.last().is_some_and(|frame| {
+                        frame.series_index == Some(series_index)
+                            && frame.local_name.as_slice() == b"ser"
+                    })
+                {
+                    if local_name.as_slice() == b"idx" {
+                        series_spans[series_index].raw_index =
+                            parse_val(&element, reader.decoder())?;
+                    } else if local_name.as_slice() == b"order" {
+                        series_spans[series_index].order =
+                            parse_val(&element, reader.decoder())?;
+                    }
+                }
+
+                frames.push(LoadedChartXmlFrame {
+                    local_name,
+                    start: event_start,
+                    parent_start,
+                    child_element_count: 0,
+                    group_index,
+                    series_index,
+                });
+            }
+            Ok(Event::Empty(element)) => {
+                if let Some(parent) = frames.last_mut() {
+                    parent.child_element_count += 1;
+                }
+                let local_name = xml_local_name(element.name().as_ref()).to_vec();
+                if let Some(series_index) = frames.last().and_then(|frame| frame.series_index)
+                    && frames.last().is_some_and(|frame| frame.local_name.as_slice() == b"ser")
+                {
+                    if local_name.as_slice() == b"idx" {
+                        series_spans[series_index].raw_index =
+                            parse_val(&element, reader.decoder())?;
+                    } else if local_name.as_slice() == b"order" {
+                        series_spans[series_index].order =
+                            parse_val(&element, reader.decoder())?;
+                    }
+                }
+                if let Some(group_index) = frames.last().and_then(|frame| frame.group_index)
+                    && frames.last().is_some_and(|frame| {
+                        chart_type_from_group_name(frame.local_name.as_slice()).is_some()
+                    })
+                    && local_name.as_slice() != b"ser"
+                    && !chart_group_child_precedes_series(local_name.as_slice())
+                    && groups[group_index].first_after_series_start.is_none()
+                {
+                    groups[group_index].first_after_series_start = Some(event_start);
+                }
+            }
+            Ok(Event::End(element)) => {
+                let event_end = usize::try_from(reader.buffer_position()).map_err(|_| {
+                    OmError::new(OmErrorCode::InvalidState, "chart XML position overflow")
+                })?;
+                let frame = frames.pop().ok_or_else(|| {
+                    OmError::new(OmErrorCode::Parse, "chart XML has an unmatched end element")
+                })?;
+                if xml_local_name(element.name().as_ref()) != frame.local_name.as_slice() {
+                    return Err(OmError::new(
+                        OmErrorCode::Parse,
+                        "chart XML has mismatched element nesting",
+                    ));
+                }
+                if frame.local_name.as_slice() == b"ser"
+                    && let Some(series_index) = frame.series_index
+                    && series_spans[series_index].start == frame.start
+                {
+                    series_spans[series_index].end = event_end;
+                    if !series_spans[series_index].is_filtered {
+                        groups[series_spans[series_index].group_index]
+                            .last_direct_series_end = Some(event_end);
+                    }
+                }
+                if chart_type_from_group_name(frame.local_name.as_slice()).is_some()
+                    && let Some(group_index) = frame.group_index
+                {
+                    groups[group_index].end_tag_start = event_start;
+                }
+                element_spans.insert(
+                    frame.start,
+                    LoadedChartXmlElementSpan {
+                        start: frame.start,
+                        end: event_end,
+                        end_tag_start: event_start,
+                        parent_start: frame.parent_start,
+                        child_element_count: frame.child_element_count,
+                    },
+                );
+            }
+            Ok(Event::Eof) => break,
+            Ok(_) => {}
+            Err(error) => return Err(runtime_xml_error(error)),
+        }
+        buffer.clear();
+    }
+
+    if groups.len() != 1 {
+        return Err(OmError::unsupported(
+            "Series.IsFiltered on loaded combo charts is not supported losslessly",
+        ));
+    }
+    if chart
+        .series
+        .iter()
+        .any(|series| series.axis_group == ChartAxisGroup::Secondary)
+    {
+        return Err(OmError::unsupported(
+            "Series.IsFiltered on loaded secondary chart groups is not supported losslessly",
+        ));
+    }
+
+    let mut used_loaded_series = vec![false; series_spans.len()];
+    let mut model_to_loaded = vec![None; chart.series.len()];
+    for (model_index, series) in chart.series.iter().enumerate() {
+        let matched = series_spans.iter().enumerate().find_map(|(loaded_index, loaded)| {
+            (!used_loaded_series[loaded_index]
+                && series
+                    .raw_index
+                    .zip(loaded.raw_index)
+                    .is_some_and(|(model, loaded)| model == loaded))
+            .then_some(loaded_index)
+        });
+        let matched = matched.or_else(|| {
+            series_spans.iter().enumerate().find_map(|(loaded_index, loaded)| {
+                (!used_loaded_series[loaded_index]
+                    && series
+                        .order
+                        .zip(loaded.order)
+                        .is_some_and(|(model, loaded)| model == loaded))
+                .then_some(loaded_index)
+            })
+        });
+        let matched = matched.or_else(|| {
+            (series_spans.len() == chart.series.len()
+                && model_index < series_spans.len()
+                && !used_loaded_series[model_index])
+                .then_some(model_index)
+        });
+        if let Some(loaded_index) = matched {
+            used_loaded_series[loaded_index] = true;
+            model_to_loaded[model_index] = Some(loaded_index);
+        }
+    }
+
+    #[derive(Debug)]
+    struct ByteEdit {
+        start: usize,
+        end: usize,
+        replacement: Vec<u8>,
+    }
+
+    let group = &groups[0];
+    let expected_group_name = chart_group_xml_name(&chart.chart_type).ok_or_else(|| {
+        OmError::unsupported("Series.IsFiltered requires a supported chart type")
+    })?;
+    if group.local_name.as_slice() != expected_group_name.as_bytes() {
+        return Err(OmError::unsupported(
+            "Series.IsFiltered cannot rewrite a loaded chart group of another type losslessly",
+        ));
+    }
+    let wrapper_name = chart_filtered_series_wrapper_name(&chart.chart_type).ok_or_else(|| {
+        OmError::unsupported("Series.IsFiltered requires a supported chart type")
+    })?;
+    let mut edits = Vec::<ByteEdit>::new();
+    let mut direct_additions = Vec::<Vec<u8>>::new();
+    let mut filtered_additions = Vec::<Vec<u8>>::new();
+    let mut removal_starts = BTreeSet::<usize>::new();
+    let mut removed_extension_starts = BTreeSet::<usize>::new();
+
+    for (model_index, series) in chart.series.iter().enumerate() {
+        if !series.filter_dirty {
+            continue;
+        }
+        let loaded_index = model_to_loaded[model_index].ok_or_else(|| {
+            OmError::unsupported(
+                "Series.IsFiltered could not match the loaded series without rebuilding the chart",
+            )
+        })?;
+        let loaded = &series_spans[loaded_index];
+        if loaded.group_index != 0 {
+            return Err(OmError::unsupported(
+                "Series.IsFiltered cannot move a series across loaded chart groups",
+            ));
+        }
+        if loaded.is_filtered == series.is_filtered {
+            continue;
+        }
+        let original_series = &existing_chart_xml[loaded.start..loaded.end];
+        if series.is_filtered {
+            removal_starts.insert(loaded.start);
+            edits.push(ByteEdit {
+                start: loaded.start,
+                end: loaded.end,
+                replacement: Vec::new(),
+            });
+            filtered_additions.push(rewrite_chart_series_outer_name(
+                original_series,
+                "c15:ser",
+            )?);
+        } else {
+            let removal_start = loaded
+                .extension_start
+                .filter(|extension_start| {
+                    element_spans
+                        .get(extension_start)
+                        .is_some_and(|span| span.child_element_count == 1)
+                })
+                .or(loaded.wrapper_start)
+                .ok_or_else(|| {
+                    OmError::unsupported(
+                        "Series.IsFiltered cannot identify the filtered-series wrapper",
+                    )
+                })?;
+            let removal = element_spans.get(&removal_start).ok_or_else(|| {
+                OmError::new(
+                    OmErrorCode::Parse,
+                    "filtered-series wrapper span is missing",
+                )
+            })?;
+            if removal_starts.insert(removal.start) {
+                edits.push(ByteEdit {
+                    start: removal.start,
+                    end: removal.end,
+                    replacement: Vec::new(),
+                });
+            }
+            if loaded.extension_start == Some(removal_start) {
+                removed_extension_starts.insert(removal_start);
+            }
+            direct_additions.push(rewrite_chart_series_outer_name(
+                original_series,
+                "c:ser",
+            )?);
+        }
+    }
+
+    if !direct_additions.is_empty() {
+        let insertion_position = group
+            .last_direct_series_end
+            .or(group.first_after_series_start)
+            .unwrap_or(group.end_tag_start);
+        edits.push(ByteEdit {
+            start: insertion_position,
+            end: insertion_position,
+            replacement: direct_additions.concat(),
+        });
+    }
+
+    if !filtered_additions.is_empty() {
+        let mut extension_xml = Vec::new();
+        for series_xml in filtered_additions {
+            extension_xml.extend_from_slice(
+                format!(
+                    r#"<c:ext xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" uri="{{02D57815-91ED-43cb-92C2-25804820EDAC}}"><c15:{wrapper_name} xmlns:c15="http://schemas.microsoft.com/office/drawing/2012/chart">"#
+                )
+                .as_bytes(),
+            );
+            extension_xml.extend_from_slice(&series_xml);
+            extension_xml.extend_from_slice(format!("</c15:{wrapper_name}></c:ext>").as_bytes());
+        }
+        if let Some(ext_lst_start) = group.direct_ext_lst_start {
+            let ext_lst = element_spans.get(&ext_lst_start).ok_or_else(|| {
+                OmError::new(OmErrorCode::Parse, "chart-group extension list span is missing")
+            })?;
+            edits.push(ByteEdit {
+                start: ext_lst.end_tag_start,
+                end: ext_lst.end_tag_start,
+                replacement: extension_xml,
+            });
+        } else {
+            let mut ext_lst_xml = br#"<c:extLst xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart">"#.to_vec();
+            ext_lst_xml.extend_from_slice(&extension_xml);
+            ext_lst_xml.extend_from_slice(b"</c:extLst>");
+            edits.push(ByteEdit {
+                start: group.end_tag_start,
+                end: group.end_tag_start,
+                replacement: ext_lst_xml,
+            });
+        }
+    } else if let Some(ext_lst_start) = group.direct_ext_lst_start {
+        let ext_lst = element_spans.get(&ext_lst_start).ok_or_else(|| {
+            OmError::new(OmErrorCode::Parse, "chart-group extension list span is missing")
+        })?;
+        if ext_lst.child_element_count > 0
+            && ext_lst.child_element_count == removed_extension_starts.len()
+            && ext_lst.parent_start.is_some()
+            && removal_starts.insert(ext_lst.start)
+        {
+            edits.retain(|edit| {
+                !removed_extension_starts.contains(&edit.start)
+                    && !(edit.start > ext_lst.start && edit.end < ext_lst.end)
+            });
+            edits.push(ByteEdit {
+                start: ext_lst.start,
+                end: ext_lst.end,
+                replacement: Vec::new(),
+            });
+        }
+    }
+
+    edits.sort_by_key(|edit| (edit.start, if edit.start == edit.end { 0 } else { 1 }));
+    let mut rewritten = Vec::with_capacity(existing_chart_xml.len());
+    let mut cursor = 0usize;
+    for edit in edits {
+        if edit.start < cursor {
+            if edit.start == edit.end {
+                rewritten.extend_from_slice(&edit.replacement);
+            }
+            continue;
+        }
+        rewritten.extend_from_slice(&existing_chart_xml[cursor..edit.start]);
+        rewritten.extend_from_slice(&edit.replacement);
+        cursor = edit.end;
+    }
+    rewritten.extend_from_slice(&existing_chart_xml[cursor..]);
+    Ok(rewritten)
+}
+
 fn patch_loaded_chart_model_xml(
     existing_chart_xml: &[u8],
     chart: &ChartModel,
 ) -> OmResult<Option<Vec<u8>>> {
+    let rewritten_chart_xml;
+    let existing_chart_xml = if chart.series.iter().any(|series| series.filter_dirty) {
+        rewritten_chart_xml = rewrite_loaded_chart_series_filtering(existing_chart_xml, chart)?;
+        rewritten_chart_xml.as_slice()
+    } else {
+        existing_chart_xml
+    };
+
     // Secondary series require separate chart groups; the loaded-chart patcher
     // only rewrites existing element content and cannot safely reshape that tree.
     if chart
@@ -42531,12 +43309,17 @@ fn patch_loaded_chart_model_xml(
         };
         Ok(text_value)
     };
-    let mut loaded_series_signatures = Vec::<[Option<String>; 4]>::new();
+    struct LoadedSeriesSignature {
+        raw_index: Option<u32>,
+        sources: [Option<String>; 4],
+    }
+    let mut loaded_series_signatures = Vec::<LoadedSeriesSignature>::new();
     {
         let mut signature_reader = Reader::from_reader(Cursor::new(existing_chart_xml));
         signature_reader.config_mut().trim_text(false);
         let mut signature_buffer = Vec::new();
-        let mut active_signature = None::<[Option<String>; 4]>;
+        let mut active_signature = None::<LoadedSeriesSignature>;
+        let mut active_signature_depth = 0usize;
         let mut signature_source_stack = Vec::<ChartSourceXmlSlot>::new();
         let mut signature_formula = None::<(ChartSourceXmlSlot, String, usize)>;
 
@@ -42545,8 +43328,29 @@ fn patch_loaded_chart_model_xml(
                 Ok(Event::Start(element)) => {
                     let local_name = xml_local_name(element.name().as_ref()).to_vec();
                     if local_name.as_slice() == b"ser" && active_signature.is_none() {
-                        active_signature = Some([None, None, None, None]);
+                        active_signature = Some(LoadedSeriesSignature {
+                            raw_index: None,
+                            sources: [None, None, None, None],
+                        });
+                        active_signature_depth = 1;
                     } else if active_signature.is_some() {
+                        if active_signature_depth == 1
+                            && local_name.as_slice() == b"idx"
+                            && let Some(signature) = active_signature.as_mut()
+                        {
+                            for attr in element.attributes() {
+                                let attr = attr.map_err(runtime_xml_error)?;
+                                if xml_local_name(attr.key.as_ref()) == b"val" {
+                                    signature.raw_index = attr
+                                        .decode_and_unescape_value(signature_reader.decoder())
+                                        .map_err(runtime_xml_error)?
+                                        .parse::<u32>()
+                                        .ok();
+                                    break;
+                                }
+                            }
+                        }
+                        active_signature_depth += 1;
                         if let Some((_, _, depth)) = signature_formula.as_mut() {
                             *depth += 1;
                         } else if let Some(slot) = source_container_slot(local_name.as_slice()) {
@@ -42555,6 +43359,24 @@ fn patch_loaded_chart_model_xml(
                             && let Some(slot) = signature_source_stack.last().copied()
                         {
                             signature_formula = Some((slot, String::new(), 1));
+                        }
+                    }
+                }
+                Ok(Event::Empty(element)) => {
+                    if active_signature_depth == 1
+                        && xml_local_name(element.name().as_ref()) == b"idx"
+                        && let Some(signature) = active_signature.as_mut()
+                    {
+                        for attr in element.attributes() {
+                            let attr = attr.map_err(runtime_xml_error)?;
+                            if xml_local_name(attr.key.as_ref()) == b"val" {
+                                signature.raw_index = attr
+                                    .decode_and_unescape_value(signature_reader.decoder())
+                                    .map_err(runtime_xml_error)?
+                                    .parse::<u32>()
+                                    .ok();
+                                break;
+                            }
                         }
                     }
                 }
@@ -42575,12 +43397,15 @@ fn patch_loaded_chart_model_xml(
                 }
                 Ok(Event::End(element)) => {
                     let local_name = xml_local_name(element.name().as_ref()).to_vec();
+                    let closes_series = local_name.as_slice() == b"ser"
+                        && active_signature_depth == 1;
                     if let Some((slot, formula, depth)) = signature_formula.as_mut() {
                         if local_name.as_slice() == b"f" && *depth == 1 {
                             if !formula.is_empty()
                                 && let Some(signature) = active_signature.as_mut()
                             {
-                                signature[slot_index(*slot)].get_or_insert_with(|| formula.clone());
+                                signature.sources[slot_index(*slot)]
+                                    .get_or_insert_with(|| formula.clone());
                             }
                             signature_formula = None;
                         } else {
@@ -42591,11 +43416,15 @@ fn patch_loaded_chart_model_xml(
                         b"tx" | b"cat" | b"val" | b"xVal" | b"yVal" | b"bubbleSize"
                     ) {
                         signature_source_stack.pop();
-                    } else if local_name.as_slice() == b"ser"
-                        && let Some(signature) = active_signature.take()
-                    {
-                        loaded_series_signatures.push(signature);
-                        signature_source_stack.clear();
+                    }
+                    if closes_series {
+                        if let Some(signature) = active_signature.take() {
+                            loaded_series_signatures.push(signature);
+                            signature_source_stack.clear();
+                        }
+                        active_signature_depth = 0;
+                    } else if active_signature_depth > 0 {
+                        active_signature_depth -= 1;
                     }
                 }
                 Ok(Event::Eof) => break,
@@ -42606,8 +43435,15 @@ fn patch_loaded_chart_model_xml(
         }
     }
     let model_series_matches_signature = |series: &SeriesModel,
-                                          signature: &[Option<String>; 4]|
+                                          signature: &LoadedSeriesSignature|
      -> bool {
+        if series
+            .raw_index
+            .zip(signature.raw_index)
+            .is_some_and(|(model, loaded)| model == loaded)
+        {
+            return true;
+        }
         let sources = [
             series.name.as_ref(),
             series.x_values.as_ref(),
@@ -42616,7 +43452,7 @@ fn patch_loaded_chart_model_xml(
         ];
         sources
             .iter()
-            .zip(signature.iter())
+            .zip(signature.sources.iter())
             .all(|(source, formula)| match (source, formula) {
                 (Some(source), Some(formula)) => source.raw.text.trim_start_matches('=') == formula,
                 (None, None) => true,
@@ -47411,7 +48247,10 @@ fn patch_loaded_chart_model_xml(
                         writer
                             .write_event(Event::Start(BytesStart::new("c:ser")))
                             .map_err(runtime_xml_error)?;
-                        let series_index_text = series_index.to_string();
+                        let series_index_text = series
+                            .raw_index
+                            .unwrap_or(series_index as u32)
+                            .to_string();
                         let mut idx_element = BytesStart::new("c:idx");
                         idx_element.push_attribute(("val", series_index_text.as_str()));
                         writer
@@ -48629,16 +49468,21 @@ fn patch_loaded_chart_model_xml(
 }
 
 fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
-    let series_xml_for_axis_group = |axis_group: ChartAxisGroup| -> OmResult<String> {
+    let series_xml_for_axis_group =
+        |axis_group: ChartAxisGroup| -> OmResult<(String, String)> {
         let mut series_xml = String::new();
+        let mut filtered_series_extensions_xml = String::new();
         for (series_index, series) in chart.series.iter().enumerate() {
             if series.axis_group != axis_group {
                 continue;
             }
+            let series_start = series_xml.len();
             let order = series.order.unwrap_or(series_index as u32);
+            let raw_index = series.raw_index.unwrap_or(series_index as u32);
+            let series_tag = if series.is_filtered { "c15:ser" } else { "c:ser" };
             series_xml.push_str(&format!(
-                r#"<c:ser><c:idx val="{}"/><c:order val="{}"/>"#,
-                series_index, order
+                r#"<{series_tag}><c:idx val="{}"/><c:order val="{}"/>"#,
+                raw_index, order,
             ));
             if let Some(explosion) = chart_explosion_xml_value(chart) {
                 series_xml.push_str(&format!(r#"<c:explosion val="{explosion}"/>"#));
@@ -48716,12 +49560,26 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
                     if smooth { "1" } else { "0" }
                 ));
             }
-            series_xml.push_str("</c:ser>");
+            series_xml.push_str(&format!("</{series_tag}>"));
+            if series.is_filtered {
+                let series_fragment = series_xml.split_off(series_start);
+                let wrapper_name = chart_filtered_series_wrapper_name(&chart.chart_type)
+                    .ok_or_else(|| {
+                        OmError::unsupported(
+                            "saving filtered series requires a supported chart type",
+                        )
+                    })?;
+                filtered_series_extensions_xml.push_str(&format!(
+                    r#"<c:ext uri="{{02D57815-91ED-43cb-92C2-25804820EDAC}}"><c15:{wrapper_name} xmlns:c15="http://schemas.microsoft.com/office/drawing/2012/chart">{series_fragment}</c15:{wrapper_name}></c:ext>"#
+                ));
+            }
         }
-        Ok(series_xml)
+        Ok((series_xml, filtered_series_extensions_xml))
     };
-    let primary_series_xml = series_xml_for_axis_group(ChartAxisGroup::Primary)?;
-    let secondary_series_xml = series_xml_for_axis_group(ChartAxisGroup::Secondary)?;
+    let (primary_series_xml, primary_filtered_series_xml) =
+        series_xml_for_axis_group(ChartAxisGroup::Primary)?;
+    let (secondary_series_xml, secondary_filtered_series_xml) =
+        series_xml_for_axis_group(ChartAxisGroup::Secondary)?;
     let chart_group_name = chart_group_xml_name(&chart.chart_type).ok_or_else(|| {
         OmError::unsupported("saving dirty charts requires a supported chart type")
     })?;
@@ -48937,7 +49795,8 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
         .map(chart_data_table_xml_string)
         .unwrap_or_default();
     let chart_has_axes = chart_type_has_axes(&chart.chart_type);
-    let has_secondary_series = !secondary_series_xml.is_empty();
+    let has_secondary_series =
+        !secondary_series_xml.is_empty() || !secondary_filtered_series_xml.is_empty();
     let has_secondary_category_axis = chart.axes.iter().any(|axis| {
         axis.axis_group == ChartAxisGroup::Secondary
             && matches!(axis.kind, ChartAxisKind::Category | ChartAxisKind::Date)
@@ -49167,23 +50026,38 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
     if secondary_axis_refs.is_empty() {
         secondary_axis_refs.push_str(&all_axis_refs);
     }
-    let chart_group_xml = |series_xml: &str, axis_refs: &str| {
+    let chart_group_xml =
+        |series_xml: &str, filtered_series_xml: &str, axis_refs: &str| {
+        let filtered_series_extensions_xml = if filtered_series_xml.is_empty() {
+            String::new()
+        } else {
+            format!("<c:extLst>{filtered_series_xml}</c:extLst>")
+        };
         format!(
-            r#"<c:{chart_group_name}>{bar_direction_xml}{chart_grouping_xml}{bar_shape_xml}{line_marker_xml}{scatter_style_xml}{radar_style_xml}{of_pie_type_xml}{surface_wireframe_xml}{vary_colors_xml}{series_xml}{gap_width_xml}{gap_depth_xml}{overlap_xml}{first_slice_angle_xml}{bubble_scale_xml}{show_negative_bubbles_xml}{has_3d_shading_xml}{doughnut_hole_size_xml}{second_plot_size_xml}{size_represents_xml}{split_type_xml}{split_value_xml}{data_labels_xml}{series_lines_xml}{drop_lines_xml}{hi_lo_lines_xml}{up_down_bars_xml}{axis_refs}</c:{chart_group_name}>"#
+            r#"<c:{chart_group_name}>{bar_direction_xml}{chart_grouping_xml}{bar_shape_xml}{line_marker_xml}{scatter_style_xml}{radar_style_xml}{of_pie_type_xml}{surface_wireframe_xml}{vary_colors_xml}{series_xml}{gap_width_xml}{gap_depth_xml}{overlap_xml}{first_slice_angle_xml}{bubble_scale_xml}{show_negative_bubbles_xml}{has_3d_shading_xml}{doughnut_hole_size_xml}{second_plot_size_xml}{size_represents_xml}{split_type_xml}{split_value_xml}{data_labels_xml}{series_lines_xml}{drop_lines_xml}{hi_lo_lines_xml}{up_down_bars_xml}{axis_refs}{filtered_series_extensions_xml}</c:{chart_group_name}>"#
         )
     };
     let chart_groups_xml = if has_secondary_series {
         let mut chart_groups_xml = String::new();
-        if !primary_series_xml.is_empty() {
-            chart_groups_xml.push_str(&chart_group_xml(&primary_series_xml, &primary_axis_refs));
+        if !primary_series_xml.is_empty() || !primary_filtered_series_xml.is_empty() {
+            chart_groups_xml.push_str(&chart_group_xml(
+                &primary_series_xml,
+                &primary_filtered_series_xml,
+                &primary_axis_refs,
+            ));
         }
         chart_groups_xml.push_str(&chart_group_xml(
             &secondary_series_xml,
+            &secondary_filtered_series_xml,
             &secondary_axis_refs,
         ));
         chart_groups_xml
     } else {
-        chart_group_xml(&primary_series_xml, &all_axis_refs)
+        chart_group_xml(
+            &primary_series_xml,
+            &primary_filtered_series_xml,
+            &all_axis_refs,
+        )
     };
     let plot_area_layout_xml = chart
         .plot_area_layout
@@ -72464,6 +73338,7 @@ mod tests {
             "HasLeaderLines",
             "PlotOrder",
             "InvertIfNegative",
+            "IsFiltered",
         ] {
             let member = series
                 .members
@@ -128000,6 +128875,557 @@ mod tests {
     }
 
     #[test]
+    fn filtered_series_collections_and_is_filtered_roundtrip() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_filtered_chart_series_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with filtered chart series");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let visible_series = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection"),
+        );
+        let full_series = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "FullSeriesCollection", &[])
+                .expect("Chart.FullSeriesCollection"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(visible_series, "Count", &[])
+                .expect("SeriesCollection.Count"),
+            OmValue::Number(2.0)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(full_series, "Count", &[])
+                .expect("FullSeriesCollection.Count"),
+            OmValue::Number(3.0)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    visible_series,
+                    "Item",
+                    &[OmValue::Text("Filtered Series".to_string())],
+                )
+                .expect_err("filtered series is absent from SeriesCollection")
+                .code,
+            OmErrorCode::NotFound
+        );
+        let filtered_series = expect_object_handle(
+            runtime
+                .dispatch_invoke(full_series, "Item", &[OmValue::Number(2.0)])
+                .expect("FullSeriesCollection.Item(2)"),
+        );
+        let filtered_series_by_name = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    full_series,
+                    "Item",
+                    &[OmValue::Text("Filtered Series".to_string())],
+                )
+                .expect("FullSeriesCollection.Item filtered name"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(filtered_series, "Name", &[])
+                .expect("filtered Series.Name"),
+            OmValue::Text("=\"Filtered Series\"".to_string())
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(filtered_series_by_name, "Values", &[])
+                .expect("filtered Series.Values"),
+            OmValue::Text("=Sheet1!$B$1".to_string())
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(filtered_series, "PlotOrder", &[])
+                .expect("filtered Series.PlotOrder"),
+            OmValue::Number(2.0)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(filtered_series, "IsFiltered", &[])
+                .expect("filtered Series.IsFiltered"),
+            OmValue::Bool(true)
+        );
+        let filtered_parent = expect_object_handle(
+            runtime
+                .dispatch_get(filtered_series, "Parent", &[])
+                .expect("filtered Series.Parent"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(filtered_parent, "Count", &[])
+                .expect("filtered Series.Parent.Count"),
+            OmValue::Number(3.0)
+        );
+
+        runtime
+            .dispatch_set(workbook.0, "Saved", OmValue::Bool(true), &[])
+            .expect("mark workbook saved before no-op filter set");
+        runtime
+            .dispatch_set(filtered_series, "IsFiltered", OmValue::Bool(true), &[])
+            .expect("no-op Series.IsFiltered true");
+        assert_eq!(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved after no-op filter set"),
+            OmValue::Bool(true)
+        );
+        runtime
+            .dispatch_set(filtered_series, "IsFiltered", OmValue::Bool(false), &[])
+            .expect("unfilter series");
+        assert_eq!(
+            runtime
+                .dispatch_get(visible_series, "Count", &[])
+                .expect("SeriesCollection.Count after unfilter"),
+            OmValue::Number(3.0)
+        );
+        let visible_parent = expect_object_handle(
+            runtime
+                .dispatch_get(filtered_series, "Parent", &[])
+                .expect("unfiltered Series.Parent"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(visible_parent, "Count", &[])
+                .expect("unfiltered Series.Parent.Count"),
+            OmValue::Number(3.0)
+        );
+
+        let unfiltered_saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save unfiltered series");
+        let unfiltered_package =
+            OpcPackage::from_bytes(&unfiltered_saved).expect("unfiltered package");
+        let unfiltered_xml = std::str::from_utf8(
+            &unfiltered_package
+                .part("xl/charts/chart1.xml")
+                .expect("unfiltered chart part")
+                .bytes,
+        )
+        .expect("unfiltered chart XML");
+        assert!(!unfiltered_xml.contains("filteredBarSeries"));
+        assert!(unfiltered_xml.contains(r#"<c:ext uri="urn:filtered-series-sibling""#));
+        assert!(unfiltered_xml.contains(r#"<a:ln w="12700"/>"#));
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: unfiltered_saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen unfiltered series");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(
+                    reopened_workbook.0,
+                    "Worksheets",
+                    &[OmValue::Number(1.0)],
+                )
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(
+                    reopened_chart_objects,
+                    "Item",
+                    &[OmValue::Number(1.0)],
+                )
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        let reopened_full = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "FullSeriesCollection", &[])
+                .expect("reopened FullSeriesCollection"),
+        );
+        let reopened_second = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(reopened_full, "Item", &[OmValue::Number(2.0)])
+                .expect("reopened FullSeriesCollection.Item(2)"),
+        );
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(reopened_second, "IsFiltered", &[])
+                .expect("reopened Series.IsFiltered false"),
+            OmValue::Bool(false)
+        );
+        reopened_runtime
+            .dispatch_set(reopened_second, "IsFiltered", OmValue::Bool(true), &[])
+            .expect("filter reopened series");
+        let refiltered_saved = reopened_runtime
+            .save_workbook(
+                reopened_workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save refiltered series");
+        let refiltered_package =
+            OpcPackage::from_bytes(&refiltered_saved).expect("refiltered package");
+        let refiltered_xml = std::str::from_utf8(
+            &refiltered_package
+                .part("xl/charts/chart1.xml")
+                .expect("refiltered chart part")
+                .bytes,
+        )
+        .expect("refiltered chart XML");
+        assert!(refiltered_xml.contains("<c15:filteredBarSeries"));
+        assert!(refiltered_xml.contains("<c15:ser"));
+        assert!(!refiltered_xml.contains("<c15:filteredBarSeries><c:ser>"));
+        assert!(refiltered_xml.contains(r#"<c:ext uri="urn:filtered-series-sibling""#));
+        assert!(refiltered_xml.contains(r#"<a:ln w="12700"/>"#));
+
+        let mut final_runtime = ExcelRuntime::new();
+        let final_workbook = final_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: refiltered_saved.clone(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen refiltered series");
+        let final_worksheet = expect_object_handle(
+            final_runtime
+                .dispatch_get(final_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("final Workbook.Worksheets(1)"),
+        );
+        let final_chart_objects = expect_object_handle(
+            final_runtime
+                .dispatch_get(final_worksheet, "ChartObjects", &[])
+                .expect("final Worksheet.ChartObjects"),
+        );
+        let final_chart_object = expect_object_handle(
+            final_runtime
+                .dispatch_invoke(final_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("final ChartObjects.Item(1)"),
+        );
+        let final_chart = expect_object_handle(
+            final_runtime
+                .dispatch_get(final_chart_object, "Chart", &[])
+                .expect("final ChartObject.Chart"),
+        );
+        let final_visible = expect_object_handle(
+            final_runtime
+                .dispatch_get(final_chart, "SeriesCollection", &[])
+                .expect("final SeriesCollection"),
+        );
+        let final_full = expect_object_handle(
+            final_runtime
+                .dispatch_get(final_chart, "FullSeriesCollection", &[])
+                .expect("final FullSeriesCollection"),
+        );
+        assert_eq!(
+            final_runtime
+                .dispatch_get(final_visible, "Count", &[])
+                .expect("final SeriesCollection.Count"),
+            OmValue::Number(2.0)
+        );
+        assert_eq!(
+            final_runtime
+                .dispatch_get(final_full, "Count", &[])
+                .expect("final FullSeriesCollection.Count"),
+            OmValue::Number(3.0)
+        );
+        let final_filtered = expect_object_handle(
+            final_runtime
+                .dispatch_invoke(final_full, "Item", &[OmValue::Number(2.0)])
+                .expect("final FullSeriesCollection.Item(2)"),
+        );
+        assert_eq!(
+            final_runtime
+                .dispatch_get(final_filtered, "IsFiltered", &[])
+                .expect("final Series.IsFiltered"),
+            OmValue::Bool(true)
+        );
+
+        let mut read_only_runtime = ExcelRuntime::new();
+        let read_only_workbook = read_only_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: refiltered_saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: true,
+            })
+            .expect("open filtered series read-only");
+        let read_only_worksheet = expect_object_handle(
+            read_only_runtime
+                .dispatch_get(
+                    read_only_workbook.0,
+                    "Worksheets",
+                    &[OmValue::Number(1.0)],
+                )
+                .expect("read-only Workbook.Worksheets(1)"),
+        );
+        let read_only_chart_objects = expect_object_handle(
+            read_only_runtime
+                .dispatch_get(read_only_worksheet, "ChartObjects", &[])
+                .expect("read-only Worksheet.ChartObjects"),
+        );
+        let read_only_chart_object = expect_object_handle(
+            read_only_runtime
+                .dispatch_invoke(
+                    read_only_chart_objects,
+                    "Item",
+                    &[OmValue::Number(1.0)],
+                )
+                .expect("read-only ChartObjects.Item(1)"),
+        );
+        let read_only_chart = expect_object_handle(
+            read_only_runtime
+                .dispatch_get(read_only_chart_object, "Chart", &[])
+                .expect("read-only ChartObject.Chart"),
+        );
+        let read_only_full = expect_object_handle(
+            read_only_runtime
+                .dispatch_get(read_only_chart, "FullSeriesCollection", &[])
+                .expect("read-only FullSeriesCollection"),
+        );
+        let read_only_filtered = expect_object_handle(
+            read_only_runtime
+                .dispatch_invoke(read_only_full, "Item", &[OmValue::Number(2.0)])
+                .expect("read-only FullSeriesCollection.Item(2)"),
+        );
+        assert_eq!(
+            read_only_runtime
+                .dispatch_set(
+                    read_only_filtered,
+                    "IsFiltered",
+                    OmValue::Bool(false),
+                    &[],
+                )
+                .expect_err("read-only Series.IsFiltered setter")
+                .code,
+            OmErrorCode::InvalidState
+        );
+    }
+
+    #[test]
+    fn newly_created_filtered_series_serializes_with_c15_series() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook for new filtered series");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    chart_objects,
+                    "Add",
+                    &[
+                        OmValue::Number(10.0),
+                        OmValue::Number(20.0),
+                        OmValue::Number(240.0),
+                        OmValue::Number(160.0),
+                    ],
+                )
+                .expect("ChartObjects.Add"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let visible_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection"),
+        );
+        let series = expect_object_handle(
+            runtime
+                .dispatch_invoke(visible_collection, "NewSeries", &[])
+                .expect("SeriesCollection.NewSeries"),
+        );
+        runtime
+            .dispatch_set(
+                series,
+                "Name",
+                OmValue::Text("New Filtered Series".to_string()),
+                &[],
+            )
+            .expect("set new Series.Name");
+        runtime
+            .dispatch_set(
+                series,
+                "Values",
+                OmValue::Text("=Sheet1!$A$1".to_string()),
+                &[],
+            )
+            .expect("set new Series.Values");
+        runtime
+            .dispatch_set(series, "IsFiltered", OmValue::Bool(true), &[])
+            .expect("filter new series");
+        let full_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "FullSeriesCollection", &[])
+                .expect("Chart.FullSeriesCollection"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(visible_collection, "Count", &[])
+                .expect("new SeriesCollection.Count"),
+            OmValue::Number(0.0)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(full_collection, "Count", &[])
+                .expect("new FullSeriesCollection.Count"),
+            OmValue::Number(1.0)
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save new filtered series");
+        let package = OpcPackage::from_bytes(&saved).expect("new filtered series package");
+        let chart_xml = std::str::from_utf8(
+            &package
+                .part("xl/charts/chart1.xml")
+                .expect("new filtered chart part")
+                .bytes,
+        )
+        .expect("new filtered chart XML");
+        assert!(chart_xml.contains("<c15:filteredBarSeries"));
+        assert!(chart_xml.contains("<c15:ser>"));
+        assert!(chart_xml.contains(r#"<c:idx val="0"/>"#));
+        assert!(!chart_xml.contains("<c:barChart><c:ser>"));
+
+        let mut reopened = ExcelRuntime::new();
+        let reopened_workbook = reopened
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen new filtered series");
+        let reopened_worksheet = expect_object_handle(
+            reopened
+                .dispatch_get(
+                    reopened_workbook.0,
+                    "Worksheets",
+                    &[OmValue::Number(1.0)],
+                )
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened
+                .dispatch_invoke(
+                    reopened_chart_objects,
+                    "Item",
+                    &[OmValue::Number(1.0)],
+                )
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        let reopened_visible = expect_object_handle(
+            reopened
+                .dispatch_get(reopened_chart, "SeriesCollection", &[])
+                .expect("reopened SeriesCollection"),
+        );
+        let reopened_full = expect_object_handle(
+            reopened
+                .dispatch_get(reopened_chart, "FullSeriesCollection", &[])
+                .expect("reopened FullSeriesCollection"),
+        );
+        assert_eq!(
+            reopened
+                .dispatch_get(reopened_visible, "Count", &[])
+                .expect("reopened SeriesCollection.Count"),
+            OmValue::Number(0.0)
+        );
+        let reopened_series = expect_object_handle(
+            reopened
+                .dispatch_invoke(reopened_full, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened FullSeriesCollection.Item(1)"),
+        );
+        assert_eq!(
+            reopened
+                .dispatch_get(reopened_series, "IsFiltered", &[])
+                .expect("reopened Series.IsFiltered"),
+            OmValue::Bool(true)
+        );
+    }
+
+    #[test]
     fn chart_group_vary_by_categories_setter_roundtrips() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
@@ -182611,6 +184037,30 @@ mod tests {
         ]);
 
         package.to_bytes().expect("package bytes")
+    }
+
+    fn synthetic_workbook_with_filtered_chart_series_bytes() -> Vec<u8> {
+        let mut package = OpcPackage::from_bytes(&synthetic_workbook_with_embedded_chart_bytes())
+            .expect("embedded chart package");
+        package
+            .replace_part_bytes(
+                "xl/charts/chart1.xml",
+                br#"<?xml version="1.0" encoding="UTF-8"?>
+<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:c15="http://schemas.microsoft.com/office/drawing/2012/chart" xmlns:test="urn:filtered-series-test">
+  <c:chart><c:plotArea><c:barChart><c:barDir val="col"/><c:grouping val="clustered"/>
+    <c:ser><c:idx val="10"/><c:order val="0"/><c:tx><c:v>First Visible</c:v></c:tx><c:val><c:numRef><c:f>Sheet1!$A$1</c:f></c:numRef></c:val></c:ser>
+    <c:ser><c:idx val="30"/><c:order val="2"/><c:tx><c:v>Last Visible</c:v></c:tx><c:val><c:numRef><c:f>Sheet1!$C$1</c:f></c:numRef></c:val></c:ser>
+    <c:axId val="10"/><c:axId val="20"/>
+    <c:extLst>
+      <c:ext uri="{02D57815-91ED-43cb-92C2-25804820EDAC}"><c15:filteredBarSeries><c15:ser><c:idx val="20"/><c:order val="1"/><c:tx><c:v>Filtered Series</c:v></c:tx><c:spPr><a:ln w="12700"/></c:spPr><c:val><c:numRef><c:f>Sheet1!$B$1</c:f></c:numRef></c:val></c15:ser></c15:filteredBarSeries></c:ext>
+      <c:ext uri="urn:filtered-series-sibling"><test:opaque keep="true"/></c:ext>
+    </c:extLst>
+  </c:barChart><c:catAx><c:axId val="10"/></c:catAx><c:valAx><c:axId val="20"/></c:valAx></c:plotArea></c:chart>
+</c:chartSpace>"#
+                    .to_vec(),
+            )
+            .expect("replace filtered chart XML");
+        package.to_bytes().expect("filtered chart package bytes")
     }
 
     fn synthetic_workbook_with_embedded_chart_bytes() -> Vec<u8> {

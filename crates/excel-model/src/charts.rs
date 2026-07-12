@@ -255,8 +255,11 @@ pub struct SeriesModel {
     pub points: BTreeMap<u32, ChartPointModel>,
     pub data_labels: Option<ChartDataLabelsModel>,
     pub point_data_labels: BTreeMap<u32, ChartDataLabelsModel>,
+    pub raw_index: Option<u32>,
     pub order: Option<u32>,
     pub axis_group: ChartAxisGroup,
+    pub is_filtered: bool,
+    pub filter_dirty: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
