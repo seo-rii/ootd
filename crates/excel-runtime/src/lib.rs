@@ -115375,6 +115375,16 @@ mod tests {
                 &[],
             )
             .expect("set second source chart type");
+        let first_chart_area = expect_object_handle(
+            runtime
+                .dispatch_get(first_chart, "ChartArea", &[])
+                .expect("first source Chart.ChartArea before Charts.Move"),
+        );
+        let first_series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(first_chart, "SeriesCollection", &[])
+                .expect("first source Chart.SeriesCollection before Charts.Move"),
+        );
 
         assert_eq!(
             runtime
@@ -115444,6 +115454,20 @@ mod tests {
             runtime
                 .dispatch_get(first_chart, "ChartType", &[])
                 .expect_err("moved source Chart handle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(first_chart_area, "Select", &[])
+                .expect_err("moved source ChartArea handle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(first_series_collection, "Count", &[])
+                .expect_err("moved source SeriesCollection handle should be stale")
                 .code,
             OmErrorCode::InvalidState
         );
