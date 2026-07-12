@@ -8312,6 +8312,9 @@ impl ExcelRuntime {
                                     chart.gap_depth = None;
                                 }
                                 for series in &mut chart.series {
+                                    if !chart_type_supports_explosion(&chart.chart_type) {
+                                        series.points.clear();
+                                    }
                                     if !chart_type_supports_bar_shape(&chart.chart_type) {
                                         series.bar_shape = None;
                                     }
@@ -134537,6 +134540,122 @@ mod tests {
             ),
             10.0
         );
+    }
+
+    #[test]
+    fn chart_type_setter_clears_unsupported_point_explosions() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        runtime
+            .dispatch_set(
+                chart,
+                "ChartType",
+                OmValue::Number(f64::from(super::XL_PIE)),
+                &[],
+            )
+            .expect("set Chart.ChartType to pie");
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection"),
+        );
+        let series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("SeriesCollection.Item(1)"),
+        );
+        let first_point = expect_object_handle(
+            runtime
+                .dispatch_get(series, "Points", &[OmValue::Number(1.0)])
+                .expect("Series.Points(1)"),
+        );
+        let second_point = expect_object_handle(
+            runtime
+                .dispatch_get(series, "Points", &[OmValue::Number(2.0)])
+                .expect("Series.Points(2)"),
+        );
+        runtime
+            .dispatch_set(first_point, "Explosion", OmValue::Number(35.0), &[])
+            .expect("set first Point.Explosion");
+        runtime
+            .dispatch_set(second_point, "Explosion", OmValue::Number(10.0), &[])
+            .expect("set second Point.Explosion");
+
+        runtime
+            .dispatch_set(
+                chart,
+                "ChartType",
+                OmValue::Number(f64::from(super::XL_LINE)),
+                &[],
+            )
+            .expect("set Chart.ChartType to line");
+
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(first_point, "Explosion", &[])
+                    .expect("first Point.Explosion after line conversion")
+            ),
+            0.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(second_point, "Explosion", &[])
+                    .expect("second Point.Explosion after line conversion")
+            ),
+            0.0
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after point explosion cleanup");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = std::str::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(saved_chart_xml.contains("<c:lineChart>"));
+        assert!(!saved_chart_xml.contains("<c:dPt>"));
+        assert!(!saved_chart_xml.contains("<c:explosion"));
     }
 
     #[test]
