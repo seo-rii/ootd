@@ -4979,6 +4979,8 @@
   - 범위: embedded chart의 `PlotArea.Left`/`Top`/`Width`/`Height`와 `Inside*` point setter를 edge/factor `ChartManualLayout` mutation으로 연결하고 read-only/invalid geometry rejection, find/copy state reset, source child handle 유지, save/reopen을 회귀 테스트로 고정하며, 기존 `manualLayout`만 교체하거나 layout이 없으면 schema 순서상 첫 child로 생성하고 layout-level `extLst`만 있는 경우에도 extension 앞에 한 번만 삽입해 unknown subtree를 보존하도록 dirty chart XML patcher를 확장
   - `Step 7.167 DONE` filtered chart category full-reference support
   - 범위: OOXML `c15:fullRef/c15:sqref`를 chart source의 typed full-reference overlay로 읽어 `ChartGroup.FullCategoryCollection`의 count/name과 `ChartCategory.IsFiltered`를 visible/full cell membership 기준으로 계산하고, workbook-id remap과 worksheet rename에서 전체 참조도 함께 갱신하며, source setter는 수정된 source의 stale `fullRef`만 제거하고 sibling/다른 source extension은 유지하도록 dirty chart XML patcher와 fallback serializer를 확장
+  - `Step 7.168 DONE` filtered chart series collection and lossless mutation support
+  - 범위: OOXML `c15:filtered*Series/c15:ser`를 stable `c:idx` identity와 함께 typed series overlay로 읽고, `SeriesCollection`은 visible series만, `FullSeriesCollection`은 filtered series를 포함한 plot order로 노출하며 `Series.IsFiltered` read/write와 dynamic parent를 pinned OM surface에 연결하고, loaded single-group chart에서는 원본 series subtree만 chart group과 filtered extension 사이에서 이동해 sibling extension/series formatting을 보존하며 새 chart fallback serializer도 schema-correct `c15:ser`를 생성하도록 구현
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.
