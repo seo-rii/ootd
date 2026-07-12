@@ -147286,6 +147286,21 @@ mod tests {
                 .dispatch_get(chart, "ChartTitle", &[])
                 .expect("Chart.ChartTitle before SetElement"),
         );
+        let chart_title_format = expect_object_handle(
+            runtime
+                .dispatch_get(chart_title, "Format", &[])
+                .expect("ChartTitle.Format before SetElement title none"),
+        );
+        let chart_title_line = expect_object_handle(
+            runtime
+                .dispatch_get(chart_title_format, "Line", &[])
+                .expect("ChartTitle.Format.Line before SetElement title none"),
+        );
+        let chart_title_border = expect_object_handle(
+            runtime
+                .dispatch_get(chart_title, "Border", &[])
+                .expect("ChartTitle.Border before SetElement title none"),
+        );
         runtime
             .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
             .expect("Range.Find before Chart.SetElement title");
@@ -147331,6 +147346,27 @@ mod tests {
             runtime
                 .dispatch_get(chart_title, "Text", &[])
                 .expect_err("ChartTitle handle should be stale after SetElement title none")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_title_format, "Creator", &[])
+                .expect_err("ChartTitle.Format should be stale after SetElement title none")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_title_line, "Creator", &[])
+                .expect_err("ChartTitle.Format.Line should be stale after SetElement title none")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_title_border, "LineStyle", &[])
+                .expect_err("ChartTitle.Border should be stale after SetElement title none")
                 .code,
             OmErrorCode::InvalidState
         );
@@ -149056,6 +149092,31 @@ mod tests {
                 .dispatch_get(chart, "Legend", &[])
                 .expect("Chart.Legend before SetElement"),
         );
+        let legend_entries = expect_object_handle(
+            runtime
+                .dispatch_invoke(legend, "LegendEntries", &[])
+                .expect("Legend.LegendEntries before SetElement legend none"),
+        );
+        let legend_entry = expect_object_handle(
+            runtime
+                .dispatch_invoke(legend_entries, "Item", &[OmValue::Number(1.0)])
+                .expect("LegendEntries.Item(1) before SetElement legend none"),
+        );
+        let legend_entry_format = expect_object_handle(
+            runtime
+                .dispatch_get(legend_entry, "Format", &[])
+                .expect("LegendEntry.Format before SetElement legend none"),
+        );
+        let legend_key = expect_object_handle(
+            runtime
+                .dispatch_get(legend_entry, "LegendKey", &[])
+                .expect("LegendEntry.LegendKey before SetElement legend none"),
+        );
+        let legend_key_border = expect_object_handle(
+            runtime
+                .dispatch_get(legend_key, "Border", &[])
+                .expect("LegendKey.Border before SetElement legend none"),
+        );
         runtime
             .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
             .expect("Range.Find before Chart.SetElement legend");
@@ -149193,6 +149254,41 @@ mod tests {
             runtime
                 .dispatch_get(legend, "Position", &[])
                 .expect_err("Legend handle should be stale after SetElement legend none")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(legend_entries, "Count", &[])
+                .expect_err("LegendEntries should be stale after SetElement legend none")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(legend_entry, "Index", &[])
+                .expect_err("LegendEntry should be stale after SetElement legend none")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(legend_entry_format, "Creator", &[])
+                .expect_err("LegendEntry.Format should be stale after SetElement legend none")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(legend_key, "Creator", &[])
+                .expect_err("LegendKey should be stale after SetElement legend none")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(legend_key_border, "LineStyle", &[])
+                .expect_err("LegendKey.Border should be stale after SetElement legend none")
                 .code,
             OmErrorCode::InvalidState
         );
