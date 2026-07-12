@@ -113892,16 +113892,41 @@ mod tests {
                 .dispatch_invoke(charts, "Add", &[])
                 .expect("first Charts.Add"),
         );
+        let second_chart = expect_object_handle(
+            runtime
+                .dispatch_invoke(charts, "Add", &[])
+                .expect("second Charts.Add"),
+        );
+        let first_chart_area = expect_object_handle(
+            runtime
+                .dispatch_get(first_chart, "ChartArea", &[])
+                .expect("first Chart.ChartArea before Charts.Delete"),
+        );
+        let first_series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(first_chart, "SeriesCollection", &[])
+                .expect("first Chart.SeriesCollection before Charts.Delete"),
+        );
+        let second_chart_area = expect_object_handle(
+            runtime
+                .dispatch_get(second_chart, "ChartArea", &[])
+                .expect("second Chart.ChartArea before Charts.Delete"),
+        );
+        let second_series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(second_chart, "SeriesCollection", &[])
+                .expect("second Chart.SeriesCollection before Charts.Delete"),
+        );
         runtime
             .dispatch_invoke(charts, "Add", &[])
-            .expect("second Charts.Add");
+            .expect("third Charts.Add");
         assert_eq!(
             expect_number(
                 runtime
                     .dispatch_get(charts, "Count", &[])
                     .expect("Charts.Count before Delete")
             ),
-            2.0
+            3.0
         );
         runtime
             .dispatch_set(application, "DisplayAlerts", OmValue::Bool(false), &[])
@@ -113942,6 +113967,41 @@ mod tests {
                 .code,
             OmErrorCode::InvalidState
         );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(first_chart_area, "Select", &[])
+                .expect_err("deleted collection first ChartArea handle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(first_series_collection, "Count", &[])
+                .expect_err("deleted collection first SeriesCollection handle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(second_chart, "ChartType", &[])
+                .expect_err("deleted collection second Chart handle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(second_chart_area, "Select", &[])
+                .expect_err("deleted collection second ChartArea handle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(second_series_collection, "Count", &[])
+                .expect_err("deleted collection second SeriesCollection handle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
 
         let saved = runtime
             .save_workbook(
@@ -113956,8 +114016,10 @@ mod tests {
         let saved_package = OpcPackage::from_bytes(&saved).expect("saved Charts.Delete package");
         assert!(!saved_package.contains("xl/chartsheets/sheet1.xml"));
         assert!(!saved_package.contains("xl/chartsheets/sheet2.xml"));
+        assert!(!saved_package.contains("xl/chartsheets/sheet3.xml"));
         assert!(!saved_package.contains("xl/charts/chart1.xml"));
         assert!(!saved_package.contains("xl/charts/chart2.xml"));
+        assert!(!saved_package.contains("xl/charts/chart3.xml"));
     }
 
     #[test]
