@@ -4975,6 +4975,8 @@
   - 범위: read-only workbook에서 `ChartObject.Activate`/`Select`, `ChartObjects.Select`, `ShapeRange.Select`, embedded `Chart.Activate`/`Select`/`Deselect`를 연속 수행해도 기존 `ChartArea`, `PlotArea`, `SeriesCollection`, `Series`, `Series.Format` handles와 workbook saved state를 유지하는지 회귀 테스트로 고정해 non-mutating selection state 변경이 chart child runtime object나 workbook dirty state를 잘못 변경하지 않도록 차단
   - `Step 7.165 DONE` chart plot-area manual layout model and geometry support
   - 범위: OOXML `plotArea/layout/manualLayout`의 target, edge/factor modes, x/y/width/height 비율을 typed `ChartManualLayout` overlay로 읽고 fallback chart serializer에도 보존하며, embedded chart container의 point 크기를 기준으로 `PlotArea.Left`/`Top`/`Width`/`Height`와 `Inside*` geometry를 계산하도록 연결하고 unrelated dirty chart save 후에도 manual layout XML이 유지되는지 회귀 테스트로 고정
+  - `Step 7.166 DONE` chart PlotArea geometry setter and lossless manual-layout patch support
+  - 범위: embedded chart의 `PlotArea.Left`/`Top`/`Width`/`Height`와 `Inside*` point setter를 edge/factor `ChartManualLayout` mutation으로 연결하고 read-only/invalid geometry rejection, find/copy state reset, source child handle 유지, save/reopen을 회귀 테스트로 고정하며, 기존 `manualLayout`만 교체하거나 layout이 없으면 schema 순서상 첫 child로 생성하고 layout-level `extLst`만 있는 경우에도 extension 앞에 한 번만 삽입해 unknown subtree를 보존하도록 dirty chart XML patcher를 확장
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.
