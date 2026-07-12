@@ -164719,6 +164719,21 @@ mod tests {
                 .dispatch_get(first_chart_object, "Chart", &[])
                 .expect("first ChartObject.Chart"),
         );
+        let first_chart_area = expect_object_handle(
+            runtime
+                .dispatch_get(first_chart, "ChartArea", &[])
+                .expect("first Chart.ChartArea before ChartObjects.Delete"),
+        );
+        let first_plot_area = expect_object_handle(
+            runtime
+                .dispatch_get(first_chart, "PlotArea", &[])
+                .expect("first Chart.PlotArea before ChartObjects.Delete"),
+        );
+        let first_series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(first_chart, "SeriesCollection", &[])
+                .expect("first Chart.SeriesCollection before ChartObjects.Delete"),
+        );
         runtime
             .dispatch_invoke(
                 chart_objects,
@@ -164765,6 +164780,27 @@ mod tests {
             runtime
                 .dispatch_get(first_chart, "ChartType", &[])
                 .expect_err("deleted collection Chart handle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(first_chart_area, "Select", &[])
+                .expect_err("deleted collection ChartArea handle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(first_plot_area, "Select", &[])
+                .expect_err("deleted collection PlotArea handle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(first_series_collection, "Count", &[])
+                .expect_err("deleted collection SeriesCollection handle should be stale")
                 .code,
             OmErrorCode::InvalidState
         );
