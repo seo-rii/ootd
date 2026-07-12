@@ -4927,6 +4927,8 @@
   - 범위: embedded `Chart.Move`가 이전 embedded `Chart`, `ChartArea`, `SeriesCollection`, `Series`, `Series.Format` handles까지 stale 처리하는지 회귀 테스트로 고정해 chart sheet promotion 경로가 이전 embedded host의 chart child runtime object를 계속 사용하지 못하도록 차단
   - `Step 7.141 DONE` excel-runtime charts move child stale regression
   - 범위: `Charts.Move`가 source workbook의 `Chart`, `ChartArea`, `SeriesCollection` handles까지 stale 처리하는지 회귀 테스트로 고정해 chart sheet workbook 이동 경로가 source workbook의 chart child runtime object를 계속 사용하지 못하도록 차단
+  - `Step 7.142 DONE` excel-runtime chart location as object child stale regression
+  - 범위: chart sheet `Chart.Location(xlLocationAsObject)`가 기존 chart-sheet `Chart`, `ChartArea`, `SeriesCollection`, `Series`, `Series.Format` handles까지 stale 처리하는지 회귀 테스트로 고정해 chart sheet에서 embedded host로 내려오는 이동 경로가 이전 chart-sheet child runtime object를 계속 사용하지 못하도록 차단
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.
