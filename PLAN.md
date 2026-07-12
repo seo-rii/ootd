@@ -4937,6 +4937,8 @@
   - 범위: placement target을 지정한 `Charts.Copy`가 source workbook의 `Chart`, `ChartArea`, `SeriesCollection` handles를 stale 처리하지 않고 원본 chart sheet collection에 계속 연결해 두는지 회귀 테스트로 고정해 in-workbook copy 경로가 source chart child runtime object를 이동/삭제처럼 잘못 무효화하지 않도록 차단
   - `Step 7.146 DONE` excel-runtime charts move placement child handle regression
   - 범위: placement target을 지정한 `Charts.Move`가 같은 workbook 내 chart sheet 순서 이동 후에도 기존 `Chart`, `ChartArea`, `SeriesCollection` handles를 stale 처리하지 않고 유지하는지 회귀 테스트로 고정해 in-workbook move 경로가 chart child runtime object를 workbook 이동/삭제처럼 잘못 무효화하지 않도록 차단
+  - `Step 7.147 DONE` excel-runtime charts move all source child stale regression
+  - 범위: `Charts.Move` without targets가 source workbook에서 이동되는 모든 chart sheet의 `Chart`, `ChartArea`, `SeriesCollection` handles를 stale 처리하는지 회귀 테스트로 고정해 새 workbook 이동 경로가 일부 source chart child runtime object만 무효화하고 나머지를 남기지 않도록 차단
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.
