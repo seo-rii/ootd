@@ -160038,10 +160038,50 @@ mod tests {
                 .dispatch_get(chart, "ChartTitle", &[])
                 .expect("Chart.ChartTitle"),
         );
+        let chart_title_format = expect_object_handle(
+            runtime
+                .dispatch_get(chart_title, "Format", &[])
+                .expect("ChartTitle.Format before HasTitle clear"),
+        );
+        let chart_title_line = expect_object_handle(
+            runtime
+                .dispatch_get(chart_title_format, "Line", &[])
+                .expect("ChartTitle.Format.Line before HasTitle clear"),
+        );
+        let chart_title_border = expect_object_handle(
+            runtime
+                .dispatch_get(chart_title, "Border", &[])
+                .expect("ChartTitle.Border before HasTitle clear"),
+        );
         let legend = expect_object_handle(
             runtime
                 .dispatch_get(chart, "Legend", &[])
                 .expect("Chart.Legend"),
+        );
+        let legend_entries = expect_object_handle(
+            runtime
+                .dispatch_invoke(legend, "LegendEntries", &[])
+                .expect("Legend.LegendEntries before HasLegend clear"),
+        );
+        let legend_entry = expect_object_handle(
+            runtime
+                .dispatch_invoke(legend_entries, "Item", &[OmValue::Number(1.0)])
+                .expect("LegendEntries.Item(1) before HasLegend clear"),
+        );
+        let legend_entry_format = expect_object_handle(
+            runtime
+                .dispatch_get(legend_entry, "Format", &[])
+                .expect("LegendEntry.Format before HasLegend clear"),
+        );
+        let legend_key = expect_object_handle(
+            runtime
+                .dispatch_get(legend_entry, "LegendKey", &[])
+                .expect("LegendEntry.LegendKey before HasLegend clear"),
+        );
+        let legend_key_border = expect_object_handle(
+            runtime
+                .dispatch_get(legend_key, "Border", &[])
+                .expect("LegendKey.Border before HasLegend clear"),
         );
         let category_axis = expect_object_handle(
             runtime
@@ -160085,6 +160125,27 @@ mod tests {
         );
         assert_eq!(
             runtime
+                .dispatch_get(chart_title_format, "Creator", &[])
+                .expect_err("ChartTitle.Format removed through HasTitle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_title_line, "Creator", &[])
+                .expect_err("ChartTitle.Format.Line removed through HasTitle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_title_border, "LineStyle", &[])
+                .expect_err("ChartTitle.Border removed through HasTitle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
                 .dispatch_get(chart, "HasTitle", &[])
                 .expect("Chart.HasTitle after clearing title"),
             OmValue::Bool(false)
@@ -160097,6 +160158,41 @@ mod tests {
             runtime
                 .dispatch_get(legend, "Position", &[])
                 .expect_err("Legend handle removed through HasLegend should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(legend_entries, "Count", &[])
+                .expect_err("LegendEntries removed through HasLegend should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(legend_entry, "Index", &[])
+                .expect_err("LegendEntry removed through HasLegend should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(legend_entry_format, "Creator", &[])
+                .expect_err("LegendEntry.Format removed through HasLegend should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(legend_key, "Creator", &[])
+                .expect_err("LegendKey removed through HasLegend should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(legend_key_border, "LineStyle", &[])
+                .expect_err("LegendKey.Border removed through HasLegend should be stale")
                 .code,
             OmErrorCode::InvalidState
         );
