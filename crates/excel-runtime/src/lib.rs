@@ -167208,6 +167208,61 @@ mod tests {
                 .dispatch_invoke(series_collection, "NewSeries", &[])
                 .expect("SeriesCollection.NewSeries second"),
         );
+        let values_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) for first Series.Values"),
+        );
+        runtime
+            .dispatch_set(first_series, "Values", OmValue::Object(values_range), &[])
+            .expect("set first Series.Values");
+        runtime
+            .dispatch_invoke(
+                first_series,
+                "ApplyDataLabels",
+                &[OmValue::Number(f64::from(super::XL_DATA_LABELS_SHOW_VALUE))],
+            )
+            .expect("first Series.ApplyDataLabels");
+        let first_series_format = expect_object_handle(
+            runtime
+                .dispatch_get(first_series, "Format", &[])
+                .expect("first Series.Format before delete"),
+        );
+        let first_series_points = expect_object_handle(
+            runtime
+                .dispatch_get(first_series, "Points", &[])
+                .expect("first Series.Points before delete"),
+        );
+        let first_point = expect_object_handle(
+            runtime
+                .dispatch_invoke(first_series_points, "Item", &[OmValue::Number(1.0)])
+                .expect("first Series.Points(1) before delete"),
+        );
+        let first_point_format = expect_object_handle(
+            runtime
+                .dispatch_get(first_point, "Format", &[])
+                .expect("first Point.Format before delete"),
+        );
+        let first_series_data_labels = expect_object_handle(
+            runtime
+                .dispatch_get(first_series, "DataLabels", &[])
+                .expect("first Series.DataLabels before delete"),
+        );
+        let first_series_data_labels_format = expect_object_handle(
+            runtime
+                .dispatch_get(first_series_data_labels, "Format", &[])
+                .expect("first DataLabels.Format before delete"),
+        );
+        let first_data_label = expect_object_handle(
+            runtime
+                .dispatch_invoke(first_series_data_labels, "Item", &[OmValue::Number(1.0)])
+                .expect("first DataLabels.Item(1) before delete"),
+        );
+        let first_data_label_border = expect_object_handle(
+            runtime
+                .dispatch_get(first_data_label, "Border", &[])
+                .expect("first DataLabel.Border before delete"),
+        );
         assert_eq!(
             expect_number(
                 runtime
@@ -167254,6 +167309,62 @@ mod tests {
             runtime
                 .dispatch_get(first_series, "PlotOrder", &[])
                 .expect_err("deleted series handle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(first_series_format, "Creator", &[])
+                .expect_err("deleted series Format should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(first_series_points, "Count", &[])
+                .expect_err("deleted series Points handle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(first_point, "Name", &[])
+                .expect_err("deleted series Point handle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(first_point_format, "Creator", &[])
+                .expect_err("deleted series Point.Format should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(first_series_data_labels, "Count", &[])
+                .expect_err("deleted series DataLabels handle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(first_series_data_labels_format, "Creator", &[])
+                .expect_err("deleted series DataLabels.Format should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(first_data_label, "ShowValue", &[])
+                .expect_err("deleted series DataLabel handle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(first_data_label_border, "LineStyle", &[])
+                .expect_err("deleted series DataLabel.Border should be stale")
                 .code,
             OmErrorCode::InvalidState
         );
