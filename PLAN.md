@@ -4971,6 +4971,8 @@
   - 범위: writable workbook의 `ChartObject`/`ChartObjects`/`ShapeRange`/embedded `Chart` container setter와 read-only setter rejection 경로가 기존 `ChartArea`, `PlotArea`, `SeriesCollection`, `Series`, `Series.Format` handles를 stale 처리하지 않고 유지하는지 회귀 테스트로 고정해 metadata/placement/geometry/visibility/protection setter가 source chart child runtime object를 잘못 무효화하지 않도록 차단
   - `Step 7.163 DONE` excel-runtime ShapeRange Flip source child handle regression
   - 범위: writable workbook의 단일 `ShapeRange.Flip(msoFlipHorizontal)`과 복수 chart selection `ShapeRange.Flip(msoFlipVertical)`을 연속 수행해도 기존 `ChartArea`, `PlotArea`, `SeriesCollection`, `Series`, `Series.Format` handles를 stale 처리하지 않고 유지하는지 회귀 테스트로 고정해 drawing transform 변경이 source chart child runtime object를 잘못 무효화하지 않도록 차단
+  - `Step 7.164 DONE` excel-runtime read-only chart activation and selection child handle regression
+  - 범위: read-only workbook에서 `ChartObject.Activate`/`Select`, `ChartObjects.Select`, `ShapeRange.Select`, embedded `Chart.Activate`/`Select`/`Deselect`를 연속 수행해도 기존 `ChartArea`, `PlotArea`, `SeriesCollection`, `Series`, `Series.Format` handles와 workbook saved state를 유지하는지 회귀 테스트로 고정해 non-mutating selection state 변경이 chart child runtime object나 workbook dirty state를 잘못 변경하지 않도록 차단
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.
