@@ -141378,6 +141378,327 @@ mod tests {
     }
 
     #[test]
+    fn chart_container_setters_preserve_source_child_handles() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let shape_range = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "ShapeRange", &[])
+                .expect("ChartObject.ShapeRange"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let chart_area = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartArea", &[])
+                .expect("Chart.ChartArea before container setters"),
+        );
+        let plot_area = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "PlotArea", &[])
+                .expect("Chart.PlotArea before container setters"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection before container setters"),
+        );
+        let series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("SeriesCollection.Item(1) before container setters"),
+        );
+        let series_format = expect_object_handle(
+            runtime
+                .dispatch_get(series, "Format", &[])
+                .expect("Series.Format before container setters"),
+        );
+
+        for (handle, owner, member, value) in [
+            (
+                chart_object,
+                "ChartObject",
+                "Placement",
+                OmValue::Number(f64::from(super::XL_MOVE)),
+            ),
+            (chart_object, "ChartObject", "Left", OmValue::Number(8.0)),
+            (chart_object, "ChartObject", "Top", OmValue::Number(9.0)),
+            (
+                chart_object,
+                "ChartObject",
+                "Width",
+                OmValue::Number(120.0),
+            ),
+            (
+                chart_object,
+                "ChartObject",
+                "Height",
+                OmValue::Number(70.0),
+            ),
+            (
+                chart_object,
+                "ChartObject",
+                "Visible",
+                OmValue::Bool(true),
+            ),
+            (
+                chart_object,
+                "ChartObject",
+                "OnAction",
+                OmValue::Text("ChartMacro".to_string()),
+            ),
+            (
+                chart_object,
+                "ChartObject",
+                "RoundedCorners",
+                OmValue::Bool(true),
+            ),
+            (
+                chart_object,
+                "ChartObject",
+                "PrintObject",
+                OmValue::Bool(true),
+            ),
+            (
+                chart_object,
+                "ChartObject",
+                "Locked",
+                OmValue::Bool(false),
+            ),
+            (
+                chart_object,
+                "ChartObject",
+                "ProtectChartObject",
+                OmValue::Bool(true),
+            ),
+            (
+                chart_objects,
+                "ChartObjects",
+                "Placement",
+                OmValue::Number(f64::from(super::XL_FREE_FLOATING)),
+            ),
+            (chart_objects, "ChartObjects", "Left", OmValue::Number(10.0)),
+            (chart_objects, "ChartObjects", "Top", OmValue::Number(11.0)),
+            (
+                chart_objects,
+                "ChartObjects",
+                "Width",
+                OmValue::Number(130.0),
+            ),
+            (
+                chart_objects,
+                "ChartObjects",
+                "Height",
+                OmValue::Number(80.0),
+            ),
+            (
+                chart_objects,
+                "ChartObjects",
+                "Visible",
+                OmValue::Bool(false),
+            ),
+            (
+                chart_objects,
+                "ChartObjects",
+                "PrintObject",
+                OmValue::Bool(false),
+            ),
+            (
+                chart_objects,
+                "ChartObjects",
+                "Locked",
+                OmValue::Bool(true),
+            ),
+            (
+                chart_objects,
+                "ChartObjects",
+                "ProtectChartObject",
+                OmValue::Bool(false),
+            ),
+            (
+                chart_objects,
+                "ChartObjects",
+                "RoundedCorners",
+                OmValue::Bool(false),
+            ),
+            (
+                shape_range,
+                "ShapeRange",
+                "AlternativeText",
+                OmValue::Text("Updated chart description".to_string()),
+            ),
+            (
+                shape_range,
+                "ShapeRange",
+                "Title",
+                OmValue::Text("Updated chart title".to_string()),
+            ),
+            (
+                shape_range,
+                "ShapeRange",
+                "OnAction",
+                OmValue::Text("ShapeMacro".to_string()),
+            ),
+            (
+                shape_range,
+                "ShapeRange",
+                "LockAspectRatio",
+                OmValue::Number(f64::from(super::MSO_TRUE)),
+            ),
+            (
+                shape_range,
+                "ShapeRange",
+                "Rotation",
+                OmValue::Number(12.5),
+            ),
+            (shape_range, "ShapeRange", "Left", OmValue::Number(12.0)),
+            (shape_range, "ShapeRange", "Top", OmValue::Number(13.0)),
+            (
+                shape_range,
+                "ShapeRange",
+                "Width",
+                OmValue::Number(140.0),
+            ),
+            (
+                shape_range,
+                "ShapeRange",
+                "Height",
+                OmValue::Number(90.0),
+            ),
+            (
+                shape_range,
+                "ShapeRange",
+                "Visible",
+                OmValue::Bool(true),
+            ),
+            (
+                shape_range,
+                "ShapeRange",
+                "Placement",
+                OmValue::Number(f64::from(super::XL_MOVE_AND_SIZE)),
+            ),
+            (
+                shape_range,
+                "ShapeRange",
+                "PrintObject",
+                OmValue::Bool(true),
+            ),
+            (
+                shape_range,
+                "ShapeRange",
+                "Locked",
+                OmValue::Bool(true),
+            ),
+            (
+                shape_range,
+                "ShapeRange",
+                "ProtectChartObject",
+                OmValue::Bool(true),
+            ),
+            (
+                shape_range,
+                "ShapeRange",
+                "RoundedCorners",
+                OmValue::Bool(true),
+            ),
+            (
+                chart,
+                "Chart",
+                "Name",
+                OmValue::Text("Renamed Revenue Chart".to_string()),
+            ),
+            (chart, "Chart", "Visible", OmValue::Bool(true)),
+        ] {
+            runtime
+                .dispatch_set(handle, member, value, &[])
+                .unwrap_or_else(|error| panic!("{owner}.{member}: {error:?}"));
+        }
+
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_objects, "Count", &[])
+                    .expect("ChartObjects.Count after container setters")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(chart, "Name", &[])
+                    .expect("Chart.Name after container setters")
+            ),
+            "Renamed Revenue Chart"
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart_area, "Select", &[])
+                .expect("ChartArea remains live after container setters"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(plot_area, "Select", &[])
+                .expect("PlotArea remains live after container setters"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(series_collection, "Count", &[])
+                    .expect("SeriesCollection remains live after container setters")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(series, "PlotOrder", &[])
+                    .expect("Series remains live after container setters")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(series_format, "Creator", &[])
+                    .expect("Series.Format remains live after container setters")
+            ),
+            f64::from(super::XL_CREATOR_CODE)
+        );
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved after container setters")
+        ));
+    }
+
+    #[test]
     fn chart_cut_methods_reject_read_only_workbook() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
@@ -141448,6 +141769,36 @@ mod tests {
             runtime
                 .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
                 .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let chart_area = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartArea", &[])
+                .expect("Chart.ChartArea before rejected setters"),
+        );
+        let plot_area = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "PlotArea", &[])
+                .expect("Chart.PlotArea before rejected setters"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection before rejected setters"),
+        );
+        let series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("SeriesCollection.Item(1) before rejected setters"),
+        );
+        let series_format = expect_object_handle(
+            runtime
+                .dispatch_get(series, "Format", &[])
+                .expect("Series.Format before rejected setters"),
         );
 
         let original_left = runtime
@@ -141615,6 +141966,42 @@ mod tests {
                     .expect("ChartObjects.Count after rejected setters")
             ),
             1.0
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart_area, "Select", &[])
+                .expect("ChartArea remains live after rejected setters"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(plot_area, "Select", &[])
+                .expect("PlotArea remains live after rejected setters"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(series_collection, "Count", &[])
+                    .expect("SeriesCollection remains live after rejected setters")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(series, "PlotOrder", &[])
+                    .expect("Series remains live after rejected setters")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(series_format, "Creator", &[])
+                    .expect("Series.Format remains live after rejected setters")
+            ),
+            f64::from(super::XL_CREATOR_CODE)
         );
     }
 
