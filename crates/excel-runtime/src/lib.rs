@@ -119603,6 +119603,26 @@ mod tests {
                 &[],
             )
             .expect("set embedded chart type before Chart.Move");
+        let chart_area = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartArea", &[])
+                .expect("embedded Chart.ChartArea before Chart.Move"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("embedded Chart.SeriesCollection before Chart.Move"),
+        );
+        let series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("embedded SeriesCollection.Item(1) before Chart.Move"),
+        );
+        let series_format = expect_object_handle(
+            runtime
+                .dispatch_get(series, "Format", &[])
+                .expect("embedded Series.Format before Chart.Move"),
+        );
 
         assert_eq!(
             runtime
@@ -119686,6 +119706,34 @@ mod tests {
             runtime
                 .dispatch_get(chart, "ChartType", &[])
                 .expect_err("moved embedded Chart handle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart_area, "Select", &[])
+                .expect_err("moved embedded ChartArea handle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(series_collection, "Count", &[])
+                .expect_err("moved embedded SeriesCollection handle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(series, "PlotOrder", &[])
+                .expect_err("moved embedded Series handle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(series_format, "Creator", &[])
+                .expect_err("moved embedded Series.Format handle should be stale")
                 .code,
             OmErrorCode::InvalidState
         );
