@@ -2,11 +2,11 @@ use excel_model::{
     AxisModel, ChartAxisCrosses, ChartAxisDisplayUnit, ChartAxisGroup, ChartAxisKind,
     ChartAxisScaleType, ChartAxisTimeUnit, ChartBarShape, ChartBuiltInDisplayUnit,
     ChartDataLabelPosition, ChartDataLabelsModel, ChartDataTableModel, ChartDisplayBlanksAs,
-    ChartLayoutMode, ChartLegendPosition, ChartMarkerStyle, ChartModel, ChartObjectModel,
-    ChartProtectionModel, ChartSheetBinding, ChartSizeRepresents, ChartSourceExpr, ChartSplitType,
-    ChartText, ChartTickLabelPosition, ChartTickMark, ChartType, ChartView3DModel,
-    DefinedNameTable, DrawingModel, DrawingObjectModel, LegendModel, SeriesModel, WorkbookState,
-    WorksheetData, resolve_chart_source_reference_with_names,
+    ChartLayoutMode, ChartLayoutTarget, ChartLegendPosition, ChartManualLayout, ChartMarkerStyle,
+    ChartModel, ChartObjectModel, ChartProtectionModel, ChartSheetBinding, ChartSizeRepresents,
+    ChartSourceExpr, ChartSplitType, ChartText, ChartTickLabelPosition, ChartTickMark, ChartType,
+    ChartView3DModel, DefinedNameTable, DrawingModel, DrawingObjectModel, LegendModel, SeriesModel,
+    WorkbookState, WorksheetData, resolve_chart_source_reference_with_names,
 };
 use excel_xlsx::{
     ChartSupportRelationshipBinding, LoadedXlsxWorkbook, SheetDrawingSupportParts,
@@ -7028,8 +7028,116 @@ impl ExcelRuntime {
                     ))),
                 }
             }
-            RuntimeObjectKind::PlotArea { .. }
-            | RuntimeObjectKind::ChartFormat { .. }
+            RuntimeObjectKind::PlotArea {
+                workbook, chart_id, ..
+            } => {
+                if !args.is_empty() {
+                    return Err(OmError::invalid_argument(format!(
+                        "PlotArea.{member} does not accept index arguments"
+                    )));
+                }
+                match member {
+                    "Left" | "Top" | "Width" | "Height" | "InsideLeft" | "InsideTop"
+                    | "InsideWidth" | "InsideHeight" => {
+                        let OmValue::Number(number) = value else {
+                            return Err(OmError::type_mismatch(format!(
+                                "PlotArea.{member} expects a numeric value"
+                            )));
+                        };
+                        if !number.is_finite() {
+                            return Err(OmError::invalid_argument(format!(
+                                "PlotArea.{member} expects a finite value"
+                            )));
+                        }
+                        let (_, chart_object_id, _) = self
+                            .embedded_chart_object_for_chart(workbook, chart_id)?
+                            .ok_or_else(|| {
+                                OmError::unsupported(
+                                    "PlotArea geometry is only writable for embedded charts",
+                                )
+                            })?;
+                        let chart_object =
+                            self.chart_object_model(workbook, chart_object_id)?;
+                        let dimension_member = if matches!(
+                            member,
+                            "Left" | "Width" | "InsideLeft" | "InsideWidth"
+                        ) {
+                            "Width"
+                        } else {
+                            "Height"
+                        };
+                        let dimension =
+                            Self::chart_object_geometry_value(chart_object, dimension_member)?;
+                        if dimension <= 0.0 {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "PlotArea geometry requires a positive chart dimension",
+                            ));
+                        }
+                        if number < 0.0 || number > dimension {
+                            return Err(OmError::invalid_argument(format!(
+                                "PlotArea.{member} must be between 0 and {dimension} points"
+                            )));
+                        }
+                        let fraction = number / dimension;
+                        let target = if member.starts_with("Inside") {
+                            ChartLayoutTarget::Inner
+                        } else {
+                            ChartLayoutTarget::Outer
+                        };
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let chart = runtime
+                            .loaded
+                            .state
+                            .charts
+                            .get_mut(&chart_id)
+                            .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart not found"))?;
+                        let previous = chart.plot_area_layout;
+                        let layout = chart
+                            .plot_area_layout
+                            .get_or_insert_with(ChartManualLayout::default);
+                        layout.target = target;
+                        match member {
+                            "Left" | "InsideLeft" => {
+                                layout.x_mode = ChartLayoutMode::Edge;
+                                layout.x = Some(fraction);
+                            }
+                            "Top" | "InsideTop" => {
+                                layout.y_mode = ChartLayoutMode::Edge;
+                                layout.y = Some(fraction);
+                            }
+                            "Width" | "InsideWidth" => {
+                                layout.width_mode = ChartLayoutMode::Factor;
+                                layout.width = Some(fraction);
+                            }
+                            "Height" | "InsideHeight" => {
+                                layout.height_mode = ChartLayoutMode::Factor;
+                                layout.height = Some(fraction);
+                            }
+                            _ => unreachable!("PlotArea geometry member was matched"),
+                        }
+                        if chart.plot_area_layout != previous {
+                            chart.plot_area_layout_dirty = true;
+                            chart.dirty = true;
+                            runtime.dirty = true;
+                            self.find_state = None;
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
+                        }
+                        Ok(())
+                    }
+                    _ => Err(OmError::unsupported(format!(
+                        "PlotArea.{member} is not writable"
+                    ))),
+                }
+            }
+            RuntimeObjectKind::ChartFormat { .. }
             | RuntimeObjectKind::Adjustments { .. }
             | RuntimeObjectKind::ChartFormatChild { .. }
             | RuntimeObjectKind::PictureCrop { .. }
@@ -18712,6 +18820,17 @@ impl ExcelRuntime {
                         | "RefersToR1C1"
                         | "RefersToR1C1Local"
                 )
+                    | (
+                        "PlotArea",
+                        "Left"
+                            | "Top"
+                            | "Width"
+                            | "Height"
+                            | "InsideLeft"
+                            | "InsideTop"
+                            | "InsideWidth"
+                            | "InsideHeight"
+                    )
             )
         {
             return Ok(());
@@ -22615,6 +22734,7 @@ impl ExcelRuntime {
                             data_table: None,
                             data_table_dirty: false,
                             plot_area_layout: None,
+                            plot_area_layout_dirty: false,
                             show_data_labels_over_maximum: None,
                             display_blanks_as: None,
                             plot_visible_only: None,
@@ -30635,6 +30755,7 @@ impl ExcelRuntime {
                         data_table: None,
                         data_table_dirty: false,
                         plot_area_layout: None,
+                        plot_area_layout_dirty: false,
                         show_data_labels_over_maximum: None,
                         display_blanks_as: None,
                         plot_visible_only: None,
@@ -41557,6 +41678,48 @@ fn chart_data_table_xml_string(data_table: &ChartDataTableModel) -> String {
     xml
 }
 
+fn chart_manual_layout_xml_string(layout: &ChartManualLayout) -> String {
+    let target = match layout.target {
+        ChartLayoutTarget::Inner => "inner",
+        ChartLayoutTarget::Outer => "outer",
+    };
+    let x_mode = match layout.x_mode {
+        ChartLayoutMode::Edge => "edge",
+        ChartLayoutMode::Factor => "factor",
+    };
+    let y_mode = match layout.y_mode {
+        ChartLayoutMode::Edge => "edge",
+        ChartLayoutMode::Factor => "factor",
+    };
+    let width_mode = match layout.width_mode {
+        ChartLayoutMode::Edge => "edge",
+        ChartLayoutMode::Factor => "factor",
+    };
+    let height_mode = match layout.height_mode {
+        ChartLayoutMode::Edge => "edge",
+        ChartLayoutMode::Factor => "factor",
+    };
+    let x = layout
+        .x
+        .map(|value| format!(r#"<c:x val="{}"/>"#, chart_number_xml_value(value)))
+        .unwrap_or_default();
+    let y = layout
+        .y
+        .map(|value| format!(r#"<c:y val="{}"/>"#, chart_number_xml_value(value)))
+        .unwrap_or_default();
+    let width = layout
+        .width
+        .map(|value| format!(r#"<c:w val="{}"/>"#, chart_number_xml_value(value)))
+        .unwrap_or_default();
+    let height = layout
+        .height
+        .map(|value| format!(r#"<c:h val="{}"/>"#, chart_number_xml_value(value)))
+        .unwrap_or_default();
+    format!(
+        r#"<c:manualLayout><c:layoutTarget val="{target}"/><c:xMode val="{x_mode}"/><c:yMode val="{y_mode}"/><c:wMode val="{width_mode}"/><c:hMode val="{height_mode}"/>{x}{y}{width}{height}</c:manualLayout>"#
+    )
+}
+
 fn write_chart_data_table_element<W: Write>(
     writer: &mut Writer<W>,
     data_table: &ChartDataTableModel,
@@ -41773,6 +41936,9 @@ fn patch_loaded_chart_model_xml(
         .as_ref()
         .filter(|data_labels| data_labels.dirty);
     let expected_data_table = chart.data_table_dirty.then_some(chart.data_table.as_ref());
+    let expected_plot_area_layout = chart
+        .plot_area_layout_dirty
+        .then_some(chart.plot_area_layout.as_ref());
     let expected_dirty_series_data_label_sets = chart
         .series
         .iter()
@@ -41893,6 +42059,11 @@ fn patch_loaded_chart_model_xml(
     let mut data_table_written = false;
     let mut data_table_inserted = false;
     let mut data_table_removed = false;
+    let mut plot_area_layout_container_seen = false;
+    let mut plot_area_manual_layout_seen = false;
+    let mut plot_area_manual_layout_written = false;
+    let mut plot_area_manual_layout_inserted = false;
+    let mut plot_area_manual_layout_removed = false;
     let mut current_text_target = None::<(ChartTextXmlTarget, bool)>;
     let mut title_stack = Vec::<(usize, ChartTextXmlTarget)>::new();
     let mut legend_seen = false;
@@ -42808,7 +42979,45 @@ fn patch_loaded_chart_model_xml(
             Ok(Event::Start(element)) => {
                 let local_name = xml_local_name(element.name().as_ref()).to_vec();
                 let parent_name = element_stack.last().map(Vec::as_slice);
+                let grandparent_name = element_stack
+                    .len()
+                    .checked_sub(2)
+                    .and_then(|index| element_stack.get(index))
+                    .map(Vec::as_slice);
                 let depth = element_stack.len() + 1;
+                if parent_name == Some(b"plotArea".as_slice())
+                    && local_name.as_slice() != b"layout"
+                    && !plot_area_layout_container_seen
+                    && let Some(Some(layout)) = expected_plot_area_layout
+                {
+                    writer
+                        .get_mut()
+                        .write_all(
+                            format!(
+                                "<c:layout>{}</c:layout>",
+                                chart_manual_layout_xml_string(layout)
+                            )
+                            .as_bytes(),
+                        )
+                        .map_err(runtime_xml_error)?;
+                    plot_area_layout_container_seen = true;
+                    plot_area_manual_layout_inserted = true;
+                    plot_area_manual_layout_written = true;
+                }
+                if parent_name == Some(b"layout".as_slice())
+                    && grandparent_name == Some(b"plotArea".as_slice())
+                    && local_name.as_slice() != b"manualLayout"
+                    && !plot_area_manual_layout_seen
+                    && !plot_area_manual_layout_inserted
+                    && let Some(Some(layout)) = expected_plot_area_layout
+                {
+                    writer
+                        .get_mut()
+                        .write_all(chart_manual_layout_xml_string(layout).as_bytes())
+                        .map_err(runtime_xml_error)?;
+                    plot_area_manual_layout_inserted = true;
+                    plot_area_manual_layout_written = true;
+                }
                 if let Some(next_chart_type) = chart_type_from_group_name(local_name.as_slice()) {
                     if chart_type.is_some() {
                         return Ok(None);
@@ -43099,6 +43308,36 @@ fn patch_loaded_chart_model_xml(
                     && let Some(seen) = axis_scaling_seen.get_mut(axis_index)
                 {
                     *seen = true;
+                }
+                if local_name.as_slice() == b"layout"
+                    && parent_name == Some(b"plotArea".as_slice())
+                {
+                    plot_area_layout_container_seen = true;
+                }
+                if local_name.as_slice() == b"manualLayout"
+                    && parent_name == Some(b"layout".as_slice())
+                    && grandparent_name == Some(b"plotArea".as_slice())
+                {
+                    plot_area_manual_layout_seen = true;
+                    match expected_plot_area_layout {
+                        Some(Some(layout)) => {
+                            writer
+                                .get_mut()
+                                .write_all(chart_manual_layout_xml_string(layout).as_bytes())
+                                .map_err(runtime_xml_error)?;
+                            plot_area_manual_layout_written = true;
+                            skip_depth = 1;
+                            buffer.clear();
+                            continue;
+                        }
+                        Some(None) => {
+                            plot_area_manual_layout_removed = true;
+                            skip_depth = 1;
+                            buffer.clear();
+                            continue;
+                        }
+                        None => {}
+                    }
                 }
                 if local_name.as_slice() == b"title" && parent_name == Some(b"chart".as_slice()) {
                     chart_title_seen = true;
@@ -44390,6 +44629,88 @@ fn patch_loaded_chart_model_xml(
             Ok(Event::Empty(element)) => {
                 let local_name = xml_local_name(element.name().as_ref()).to_vec();
                 let parent_name = element_stack.last().map(Vec::as_slice);
+                let grandparent_name = element_stack
+                    .len()
+                    .checked_sub(2)
+                    .and_then(|index| element_stack.get(index))
+                    .map(Vec::as_slice);
+                if parent_name == Some(b"plotArea".as_slice())
+                    && local_name.as_slice() != b"layout"
+                    && !plot_area_layout_container_seen
+                    && let Some(Some(layout)) = expected_plot_area_layout
+                {
+                    writer
+                        .get_mut()
+                        .write_all(
+                            format!(
+                                "<c:layout>{}</c:layout>",
+                                chart_manual_layout_xml_string(layout)
+                            )
+                            .as_bytes(),
+                        )
+                        .map_err(runtime_xml_error)?;
+                    plot_area_layout_container_seen = true;
+                    plot_area_manual_layout_inserted = true;
+                    plot_area_manual_layout_written = true;
+                }
+                if parent_name == Some(b"layout".as_slice())
+                    && grandparent_name == Some(b"plotArea".as_slice())
+                    && local_name.as_slice() != b"manualLayout"
+                    && !plot_area_manual_layout_seen
+                    && !plot_area_manual_layout_inserted
+                    && let Some(Some(layout)) = expected_plot_area_layout
+                {
+                    writer
+                        .get_mut()
+                        .write_all(chart_manual_layout_xml_string(layout).as_bytes())
+                        .map_err(runtime_xml_error)?;
+                    plot_area_manual_layout_inserted = true;
+                    plot_area_manual_layout_written = true;
+                }
+                if local_name.as_slice() == b"layout"
+                    && parent_name == Some(b"plotArea".as_slice())
+                {
+                    plot_area_layout_container_seen = true;
+                    if let Some(Some(layout)) = expected_plot_area_layout {
+                        writer
+                            .get_mut()
+                            .write_all(
+                                format!(
+                                    "<c:layout>{}</c:layout>",
+                                    chart_manual_layout_xml_string(layout)
+                                )
+                                .as_bytes(),
+                            )
+                            .map_err(runtime_xml_error)?;
+                        plot_area_manual_layout_inserted = true;
+                        plot_area_manual_layout_written = true;
+                        buffer.clear();
+                        continue;
+                    }
+                }
+                if local_name.as_slice() == b"manualLayout"
+                    && parent_name == Some(b"layout".as_slice())
+                    && grandparent_name == Some(b"plotArea".as_slice())
+                {
+                    plot_area_manual_layout_seen = true;
+                    match expected_plot_area_layout {
+                        Some(Some(layout)) => {
+                            writer
+                                .get_mut()
+                                .write_all(chart_manual_layout_xml_string(layout).as_bytes())
+                                .map_err(runtime_xml_error)?;
+                            plot_area_manual_layout_written = true;
+                            buffer.clear();
+                            continue;
+                        }
+                        Some(None) => {
+                            plot_area_manual_layout_removed = true;
+                            buffer.clear();
+                            continue;
+                        }
+                        None => {}
+                    }
+                }
                 if local_name.as_slice() == b"idx" && parent_name == Some(b"dPt".as_slice()) {
                     current_point_index = element_val_attribute(&element, reader.decoder())?
                         .and_then(|value| value.parse::<u32>().ok());
@@ -45896,6 +46217,11 @@ fn patch_loaded_chart_model_xml(
             }
             Ok(Event::End(element)) => {
                 let local_name = xml_local_name(element.name().as_ref()).to_vec();
+                let parent_name = element_stack
+                    .len()
+                    .checked_sub(2)
+                    .and_then(|index| element_stack.get(index))
+                    .map(Vec::as_slice);
                 if local_name.as_slice() == b"f"
                     && let Some((slot, written)) = current_formula.take()
                     && !written
@@ -47095,6 +47421,39 @@ fn patch_loaded_chart_model_xml(
                     legend_overlay_written = true;
                 }
 
+                if local_name.as_slice() == b"layout"
+                    && parent_name == Some(b"plotArea".as_slice())
+                    && !plot_area_manual_layout_seen
+                    && !plot_area_manual_layout_inserted
+                    && let Some(Some(layout)) = expected_plot_area_layout
+                {
+                    writer
+                        .get_mut()
+                        .write_all(chart_manual_layout_xml_string(layout).as_bytes())
+                        .map_err(runtime_xml_error)?;
+                    plot_area_manual_layout_inserted = true;
+                    plot_area_manual_layout_written = true;
+                }
+
+                if local_name.as_slice() == b"plotArea"
+                    && !plot_area_layout_container_seen
+                    && let Some(Some(layout)) = expected_plot_area_layout
+                {
+                    writer
+                        .get_mut()
+                        .write_all(
+                            format!(
+                                "<c:layout>{}</c:layout>",
+                                chart_manual_layout_xml_string(layout)
+                            )
+                            .as_bytes(),
+                        )
+                        .map_err(runtime_xml_error)?;
+                    plot_area_layout_container_seen = true;
+                    plot_area_manual_layout_inserted = true;
+                    plot_area_manual_layout_written = true;
+                }
+
                 if local_name.as_slice() == b"plotArea"
                     && !data_table_seen
                     && let Some(Some(data_table)) = expected_data_table
@@ -47490,6 +47849,13 @@ fn patch_loaded_chart_model_xml(
         Some(None) => true,
         None => true,
     };
+    let plot_area_layout_matches = match expected_plot_area_layout {
+        Some(Some(_)) if plot_area_manual_layout_seen => plot_area_manual_layout_written,
+        Some(Some(_)) => plot_area_manual_layout_inserted,
+        Some(None) if plot_area_manual_layout_seen => plot_area_manual_layout_removed,
+        Some(None) => true,
+        None => true,
+    };
     let vary_colors_matches = match (expected_vary_colors, vary_colors_seen) {
         (Some(_), true) => vary_colors_written,
         (Some(_), false) => vary_colors_inserted,
@@ -47879,6 +48245,7 @@ fn patch_loaded_chart_model_xml(
         && chart_style_matches
         && chart_protection_matches
         && data_table_matches
+        && plot_area_layout_matches
         && vary_colors_matches
         && bar_direction_matches
         && chart_grouping_matches
@@ -48468,47 +48835,8 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
     };
     let plot_area_layout_xml = chart
         .plot_area_layout
-        .map(|layout| {
-            let target = match layout.target {
-                excel_model::ChartLayoutTarget::Inner => "inner",
-                excel_model::ChartLayoutTarget::Outer => "outer",
-            };
-            let x_mode = match layout.x_mode {
-                ChartLayoutMode::Edge => "edge",
-                ChartLayoutMode::Factor => "factor",
-            };
-            let y_mode = match layout.y_mode {
-                ChartLayoutMode::Edge => "edge",
-                ChartLayoutMode::Factor => "factor",
-            };
-            let width_mode = match layout.width_mode {
-                ChartLayoutMode::Edge => "edge",
-                ChartLayoutMode::Factor => "factor",
-            };
-            let height_mode = match layout.height_mode {
-                ChartLayoutMode::Edge => "edge",
-                ChartLayoutMode::Factor => "factor",
-            };
-            let x = layout
-                .x
-                .map(|value| format!(r#"<c:x val="{}"/>"#, chart_number_xml_value(value)))
-                .unwrap_or_default();
-            let y = layout
-                .y
-                .map(|value| format!(r#"<c:y val="{}"/>"#, chart_number_xml_value(value)))
-                .unwrap_or_default();
-            let width = layout
-                .width
-                .map(|value| format!(r#"<c:w val="{}"/>"#, chart_number_xml_value(value)))
-                .unwrap_or_default();
-            let height = layout
-                .height
-                .map(|value| format!(r#"<c:h val="{}"/>"#, chart_number_xml_value(value)))
-                .unwrap_or_default();
-            format!(
-                r#"<c:layout><c:manualLayout><c:layoutTarget val="{target}"/><c:xMode val="{x_mode}"/><c:yMode val="{y_mode}"/><c:wMode val="{width_mode}"/><c:hMode val="{height_mode}"/>{x}{y}{width}{height}</c:manualLayout></c:layout>"#
-            )
-        })
+        .as_ref()
+        .map(|layout| format!("<c:layout>{}</c:layout>", chart_manual_layout_xml_string(layout)))
         .unwrap_or_default();
     Ok(format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -139207,6 +139535,26 @@ mod tests {
                 .dispatch_get(chart, "PlotArea", &[])
                 .expect("Chart.PlotArea"),
         );
+        let chart_area = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartArea", &[])
+                .expect("Chart.ChartArea before PlotArea setters"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection before PlotArea setters"),
+        );
+        let series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("SeriesCollection.Item(1) before PlotArea setters"),
+        );
+        let series_format = expect_object_handle(
+            runtime
+                .dispatch_get(series, "Format", &[])
+                .expect("Series.Format before PlotArea setters"),
+        );
 
         assert_eq!(
             expect_number(
@@ -139245,9 +139593,123 @@ mod tests {
             );
         }
 
+        let search_range = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:B3".to_string())])
+                .expect("Worksheet.Range(A1:B3) before PlotArea setters"),
+        );
         runtime
-            .dispatch_set(chart, "HasLegend", OmValue::Bool(false), &[])
-            .expect("Chart.HasLegend = False");
+            .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])
+            .expect("Range.Find before PlotArea setters");
+        runtime
+            .dispatch_invoke(search_range, "Copy", &[])
+            .expect("Range.Copy before PlotArea setters");
+        for (member, value) in [
+            ("Left", 15.0),
+            ("Top", 12.5),
+            ("Width", 60.0),
+            ("Height", 25.0),
+            ("InsideLeft", 20.0),
+            ("InsideTop", 5.0),
+            ("InsideWidth", 50.0),
+            ("InsideHeight", 30.0),
+        ] {
+            runtime
+                .dispatch_set(plot_area, member, OmValue::Number(value), &[])
+                .unwrap_or_else(|error| panic!("PlotArea.{member} setter: {error:?}"));
+        }
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                .expect("Application.CutCopyMode after PlotArea setters")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_invoke(search_range, "FindNext", &[])
+                .expect_err("Range.FindNext should require a new Find after PlotArea setters")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        for (member, expected) in [
+            ("Left", 20.0),
+            ("Top", 5.0),
+            ("Width", 50.0),
+            ("Height", 30.0),
+            ("InsideLeft", 20.0),
+            ("InsideTop", 5.0),
+            ("InsideWidth", 50.0),
+            ("InsideHeight", 30.0),
+        ] {
+            let actual = expect_number(
+                runtime
+                    .dispatch_get(plot_area, member, &[])
+                    .unwrap_or_else(|error| panic!("PlotArea.{member} after setters: {error:?}")),
+            );
+            assert!(
+                (actual - expected).abs() < 1e-9,
+                "PlotArea.{member}: expected {expected}, got {actual}"
+            );
+        }
+        assert_eq!(
+            runtime
+                .dispatch_set(
+                    plot_area,
+                    "Left",
+                    OmValue::Text("20".to_string()),
+                    &[],
+                )
+                .expect_err("PlotArea.Left rejects text")
+                .code,
+            OmErrorCode::TypeMismatch
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(plot_area, "Top", OmValue::Number(-1.0), &[])
+                .expect_err("PlotArea.Top rejects negative points")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(plot_area, "Width", OmValue::Number(101.0), &[])
+                .expect_err("PlotArea.Width rejects values beyond chart width")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_set(
+                    plot_area,
+                    "Height",
+                    OmValue::Number(20.0),
+                    &[OmValue::Missing],
+                )
+                .expect_err("PlotArea.Height rejects index arguments")
+                .code,
+            OmErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart_area, "Select", &[])
+                .expect("ChartArea remains live after PlotArea setters"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(series_collection, "Count", &[])
+                    .expect("SeriesCollection remains live after PlotArea setters")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(series_format, "Creator", &[])
+                    .expect("Series.Format remains live after PlotArea setters")
+            ),
+            f64::from(super::XL_CREATOR_CODE)
+        );
         let saved = runtime
             .save_workbook(
                 workbook,
@@ -139268,7 +139730,322 @@ mod tests {
         )
         .expect("saved chart xml utf8");
         assert!(saved_chart_xml.contains(
-            r#"<c:manualLayout><c:layoutTarget val="inner"/><c:xMode val="edge"/><c:yMode val="edge"/><c:wMode val="edge"/><c:hMode val="edge"/><c:x val="0.1"/><c:y val="0.2"/><c:w val="0.8"/><c:h val="0.9"/></c:manualLayout>"#
+            r#"<c:manualLayout><c:layoutTarget val="inner"/><c:xMode val="edge"/><c:yMode val="edge"/><c:wMode val="factor"/><c:hMode val="factor"/><c:x val="0.2"/><c:y val="0.1"/><c:w val="0.5"/><c:h val="0.6"/></c:manualLayout>"#
+        ));
+        assert!(saved_chart_xml.contains(
+            r#"<c:extLst><c:ext uri="urn:plot-layout"><test:keep xmlns:test="urn:test" value="1"/></c:ext></c:extLst>"#
+        ));
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: true,
+            })
+            .expect("reopen workbook with updated plot-area layout");
+        let reopened_worksheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(
+                    reopened_workbook.0,
+                    "Worksheets",
+                    &[OmValue::Number(1.0)],
+                )
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(
+                    reopened_chart_objects,
+                    "Item",
+                    &[OmValue::Number(1.0)],
+                )
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        let reopened_plot_area = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "PlotArea", &[])
+                .expect("reopened Chart.PlotArea"),
+        );
+        for (member, expected) in [
+            ("InsideLeft", 20.0),
+            ("InsideTop", 5.0),
+            ("InsideWidth", 50.0),
+            ("InsideHeight", 30.0),
+        ] {
+            let actual = expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_plot_area, member, &[])
+                    .unwrap_or_else(|error| {
+                        panic!("reopened PlotArea.{member}: {error:?}")
+                    }),
+            );
+            assert!((actual - expected).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn plot_area_geometry_setters_create_manual_layout() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook without chart manual layout");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let plot_area = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "PlotArea", &[])
+                .expect("Chart.PlotArea"),
+        );
+
+        for (member, value) in [
+            ("Left", 10.0),
+            ("Top", 5.0),
+            ("Width", 50.0),
+            ("Height", 25.0),
+        ] {
+            runtime
+                .dispatch_set(plot_area, member, OmValue::Number(value), &[])
+                .unwrap_or_else(|error| panic!("PlotArea.{member} setter: {error:?}"));
+        }
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook with created chart manual layout");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = std::str::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved chart xml utf8");
+        let layout_position = saved_chart_xml
+            .find("<c:layout>")
+            .expect("created plot-area layout");
+        let chart_group_position = saved_chart_xml
+            .find("<c:barChart>")
+            .expect("existing chart group");
+        assert!(layout_position < chart_group_position);
+        assert!(saved_chart_xml.contains(
+            r#"<c:manualLayout><c:layoutTarget val="outer"/><c:xMode val="edge"/><c:yMode val="edge"/><c:wMode val="factor"/><c:hMode val="factor"/><c:x val="0.1"/><c:y val="0.1"/><c:w val="0.5"/><c:h val="0.5"/></c:manualLayout>"#
+        ));
+    }
+
+    #[test]
+    fn plot_area_geometry_setters_insert_before_existing_layout_extensions() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_layout_extension_only_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with layout extension only");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let plot_area = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "PlotArea", &[])
+                .expect("Chart.PlotArea"),
+        );
+
+        runtime
+            .dispatch_set(plot_area, "InsideWidth", OmValue::Number(50.0), &[])
+            .expect("PlotArea.InsideWidth = 50");
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook with inserted manual layout");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = std::str::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved chart xml utf8");
+        let manual_layout_position = saved_chart_xml
+            .find("<c:manualLayout>")
+            .expect("inserted manual layout");
+        let extension_position = saved_chart_xml
+            .find("<c:extLst>")
+            .expect("preserved layout extension");
+        assert!(manual_layout_position < extension_position);
+        assert_eq!(saved_chart_xml.matches("<c:manualLayout>").count(), 1);
+        assert!(saved_chart_xml.contains(
+            r#"<c:manualLayout><c:layoutTarget val="inner"/><c:xMode val="factor"/><c:yMode val="factor"/><c:wMode val="factor"/><c:hMode val="factor"/><c:w val="0.5"/></c:manualLayout>"#
+        ));
+        assert!(saved_chart_xml.contains(
+            r#"<test:keep xmlns:test="urn:test" value="1"/>"#
+        ));
+    }
+
+    #[test]
+    fn plot_area_geometry_setters_reject_read_only_workbook() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_manual_layout_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: true,
+            })
+            .expect("open read-only workbook with chart manual layout");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let plot_area = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "PlotArea", &[])
+                .expect("Chart.PlotArea"),
+        );
+        let chart_area = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartArea", &[])
+                .expect("Chart.ChartArea before rejected PlotArea setters"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection before rejected PlotArea setters"),
+        );
+
+        for (member, value) in [
+            ("Left", 15.0),
+            ("Top", 12.5),
+            ("Width", 60.0),
+            ("Height", 25.0),
+            ("InsideLeft", 20.0),
+            ("InsideTop", 5.0),
+            ("InsideWidth", 50.0),
+            ("InsideHeight", 30.0),
+        ] {
+            assert_eq!(
+                runtime
+                    .dispatch_set(plot_area, member, OmValue::Number(value), &[])
+                    .expect_err(&format!("read-only PlotArea.{member} setter"))
+                    .code,
+                OmErrorCode::InvalidState
+            );
+        }
+        for (member, expected) in [
+            ("InsideLeft", 10.0),
+            ("InsideTop", 10.0),
+            ("InsideWidth", 70.0),
+            ("InsideHeight", 35.0),
+        ] {
+            let actual = expect_number(
+                runtime
+                    .dispatch_get(plot_area, member, &[])
+                    .unwrap_or_else(|error| {
+                        panic!("PlotArea.{member} after rejected setter: {error:?}")
+                    }),
+            );
+            assert!((actual - expected).abs() < 1e-9);
+        }
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart_area, "Select", &[])
+                .expect("ChartArea remains live after rejected PlotArea setters"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(series_collection, "Count", &[])
+                    .expect("SeriesCollection remains live after rejected PlotArea setters")
+            ),
+            1.0
+        );
+        assert!(expect_bool(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved after rejected PlotArea setters")
         ));
     }
 
@@ -181272,7 +182049,28 @@ mod tests {
         .expect("chart xml utf8")
         .replace(
             "<c:plotArea>",
-            r#"<c:plotArea><c:layout><c:manualLayout><c:layoutTarget val="inner"/><c:xMode val="edge"/><c:yMode val="edge"/><c:wMode val="edge"/><c:hMode val="edge"/><c:x val="0.1"/><c:y val="0.2"/><c:w val="0.8"/><c:h val="0.9"/></c:manualLayout></c:layout>"#,
+            r#"<c:plotArea><c:layout><c:manualLayout><c:layoutTarget val="inner"/><c:xMode val="edge"/><c:yMode val="edge"/><c:wMode val="edge"/><c:hMode val="edge"/><c:x val="0.1"/><c:y val="0.2"/><c:w val="0.8"/><c:h val="0.9"/></c:manualLayout><c:extLst><c:ext uri="urn:plot-layout"><test:keep xmlns:test="urn:test" value="1"/></c:ext></c:extLst></c:layout>"#,
+        );
+        package
+            .replace_part_bytes("xl/charts/chart1.xml", chart_xml.into_bytes())
+            .expect("replace chart xml");
+        package.to_bytes().expect("package bytes")
+    }
+
+    fn synthetic_workbook_with_embedded_chart_layout_extension_only_bytes() -> Vec<u8> {
+        let mut package = OpcPackage::from_bytes(&synthetic_workbook_with_embedded_chart_bytes())
+            .expect("embedded chart package");
+        let chart_xml = String::from_utf8(
+            package
+                .part("xl/charts/chart1.xml")
+                .expect("chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("chart xml utf8")
+        .replace(
+            "<c:plotArea>",
+            r#"<c:plotArea><c:layout><c:extLst><c:ext uri="urn:plot-layout"><test:keep xmlns:test="urn:test" value="1"/></c:ext></c:extLst></c:layout>"#,
         );
         package
             .replace_part_bytes("xl/charts/chart1.xml", chart_xml.into_bytes())

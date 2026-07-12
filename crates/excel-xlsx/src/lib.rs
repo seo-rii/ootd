@@ -4279,6 +4279,7 @@ fn build_chart_model_overlay(
                         .map(chart_data_table_model_from_summary),
                     data_table_dirty: false,
                     plot_area_layout: summary.and_then(|summary| summary.plot_area_layout),
+                    plot_area_layout_dirty: false,
                     show_data_labels_over_maximum: summary
                         .and_then(|summary| summary.show_data_labels_over_maximum),
                     display_blanks_as: summary.and_then(|summary| summary.display_blanks_as),

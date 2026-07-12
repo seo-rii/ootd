@@ -44,6 +44,7 @@ pub struct ChartModel {
     pub data_table: Option<ChartDataTableModel>,
     pub data_table_dirty: bool,
     pub plot_area_layout: Option<ChartManualLayout>,
+    pub plot_area_layout_dirty: bool,
     pub show_data_labels_over_maximum: Option<bool>,
     pub display_blanks_as: Option<ChartDisplayBlanksAs>,
     pub plot_visible_only: Option<bool>,
