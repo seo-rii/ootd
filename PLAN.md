@@ -4941,6 +4941,8 @@
   - 범위: `Charts.Move` without targets가 source workbook에서 이동되는 모든 chart sheet의 `Chart`, `ChartArea`, `SeriesCollection` handles를 stale 처리하는지 회귀 테스트로 고정해 새 workbook 이동 경로가 일부 source chart child runtime object만 무효화하고 나머지를 남기지 않도록 차단
   - `Step 7.148 DONE` excel-runtime read-only charts copy source handle regression
   - 범위: read-only source workbook에서 `Charts.Copy` without targets를 수행해도 source workbook의 `Chart`, `ChartArea`, `SeriesCollection` handles가 stale 처리되지 않고 계속 동작하는지 회귀 테스트로 고정해 read-only copy 경로가 source chart child runtime object를 이동/삭제처럼 잘못 무효화하지 않도록 차단
+  - `Step 7.149 DONE` excel-runtime read-only charts mutator child handle regression
+  - 범위: read-only workbook에서 `Charts.Add`/`Charts.Delete`/`Charts.Move`/`Charts.Visible` 변경이 거부된 뒤 기존 `Chart`, `ChartArea`, `SeriesCollection` handles가 stale 처리되지 않고 계속 동작하는지 회귀 테스트로 고정해 rejected mutator 경로가 chart child runtime object를 부분적으로 무효화하지 않도록 차단
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.
