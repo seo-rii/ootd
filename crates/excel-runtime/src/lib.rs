@@ -145346,6 +145346,36 @@ mod tests {
                 .dispatch_get(worksheet, "ChartObjects", &[])
                 .expect("Worksheet.ChartObjects"),
         );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1) before ChartObjects.Duplicate"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("source ChartObject.Chart before ChartObjects.Duplicate"),
+        );
+        let chart_area = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartArea", &[])
+                .expect("source Chart.ChartArea before ChartObjects.Duplicate"),
+        );
+        let plot_area = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "PlotArea", &[])
+                .expect("source Chart.PlotArea before ChartObjects.Duplicate"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("source Chart.SeriesCollection before ChartObjects.Duplicate"),
+        );
+        let series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("source SeriesCollection.Item(1) before ChartObjects.Duplicate"),
+        );
         assert_eq!(
             runtime
                 .dispatch_invoke(chart_objects, "Duplicate", &[OmValue::Missing])
@@ -145405,6 +145435,34 @@ mod tests {
                     .expect("collection duplicate ChartObject.Name")
             ),
             "Chart 2"
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart_area, "Select", &[])
+                .expect("source ChartArea remains live after ChartObjects.Duplicate"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(plot_area, "Select", &[])
+                .expect("source PlotArea remains live after ChartObjects.Duplicate"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(series_collection, "Count", &[])
+                    .expect("source SeriesCollection remains live after ChartObjects.Duplicate")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(series, "PlotOrder", &[])
+                    .expect("source Series remains live after ChartObjects.Duplicate")
+            ),
+            1.0
         );
     }
 
