@@ -120099,6 +120099,30 @@ mod tests {
             ),
             f64::from(super::XL_COPY)
         );
+        let chart_sheet_chart_area = expect_object_handle(
+            runtime
+                .dispatch_get(automatic_chart_sheet, "ChartArea", &[])
+                .expect("chart sheet Chart.ChartArea before xlLocationAsObject"),
+        );
+        let chart_sheet_series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(automatic_chart_sheet, "SeriesCollection", &[])
+                .expect("chart sheet Chart.SeriesCollection before xlLocationAsObject"),
+        );
+        let chart_sheet_series = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    chart_sheet_series_collection,
+                    "Item",
+                    &[OmValue::Number(1.0)],
+                )
+                .expect("chart sheet SeriesCollection.Item(1) before xlLocationAsObject"),
+        );
+        let chart_sheet_series_format = expect_object_handle(
+            runtime
+                .dispatch_get(chart_sheet_series, "Format", &[])
+                .expect("chart sheet Series.Format before xlLocationAsObject"),
+        );
         let embedded_again_chart = expect_object_handle(
             runtime
                 .dispatch_invoke(
@@ -120198,6 +120222,49 @@ mod tests {
                     .expect("ActiveChart.Name after xlLocationAsObject")
             ),
             "Renamed Location Chart"
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(automatic_chart_sheet, "ChartType", &[])
+                .expect_err("old chart sheet Chart handle should be stale after xlLocationAsObject")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart_sheet_chart_area, "Select", &[])
+                .expect_err(
+                    "old chart sheet ChartArea handle should be stale after xlLocationAsObject"
+                )
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_sheet_series_collection, "Count", &[])
+                .expect_err(
+                    "old chart sheet SeriesCollection handle should be stale after xlLocationAsObject",
+                )
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_sheet_series, "PlotOrder", &[])
+                .expect_err(
+                    "old chart sheet Series handle should be stale after xlLocationAsObject"
+                )
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_sheet_series_format, "Creator", &[])
+                .expect_err(
+                    "old chart sheet Series.Format handle should be stale after xlLocationAsObject",
+                )
+                .code,
+            OmErrorCode::InvalidState
         );
         let automatic_embedded_chart = expect_object_handle(
             runtime
