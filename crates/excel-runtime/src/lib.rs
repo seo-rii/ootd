@@ -118931,6 +118931,16 @@ mod tests {
                 &[],
             )
             .expect("set chart sheet ChartType before Chart.Copy");
+        let chart_area = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartArea", &[])
+                .expect("chart sheet Chart.ChartArea before Chart.Copy"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("chart sheet Chart.SeriesCollection before Chart.Copy"),
+        );
         runtime
             .dispatch_invoke(
                 chart,
@@ -118950,6 +118960,20 @@ mod tests {
                     .expect("copied chart sheet ChartType")
             ),
             f64::from(super::XL_LINE)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart_area, "Select", &[])
+                .expect("source chart sheet ChartArea remains live after Chart.Copy"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(series_collection, "Count", &[])
+                    .expect("source chart sheet SeriesCollection remains live after Chart.Copy")
+            ),
+            0.0
         );
         runtime
             .dispatch_invoke(
@@ -118975,6 +118999,20 @@ mod tests {
                     .expect("moved chart sheet name")
             ),
             "Chart1"
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart_area, "Select", &[])
+                .expect("chart sheet ChartArea remains live after Chart.Move"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(series_collection, "Count", &[])
+                    .expect("chart sheet SeriesCollection remains live after Chart.Move")
+            ),
+            0.0
         );
 
         runtime
