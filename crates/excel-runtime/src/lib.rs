@@ -140919,6 +140919,139 @@ mod tests {
     }
 
     #[test]
+    fn chart_object_cut_methods_preserve_source_child_handles() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let shape_range = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "ShapeRange", &[])
+                .expect("ChartObject.ShapeRange"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let chart_area = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartArea", &[])
+                .expect("Chart.ChartArea before cut methods"),
+        );
+        let plot_area = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "PlotArea", &[])
+                .expect("Chart.PlotArea before cut methods"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection before cut methods"),
+        );
+        let series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("SeriesCollection.Item(1) before cut methods"),
+        );
+
+        for (handle, owner) in [
+            (chart_object, "ChartObject"),
+            (chart_objects, "ChartObjects"),
+            (shape_range, "ShapeRange"),
+        ] {
+            runtime
+                .dispatch_set(
+                    runtime.root_application(),
+                    "CutCopyMode",
+                    OmValue::Bool(false),
+                    &[],
+                )
+                .unwrap_or_else(|error| {
+                    panic!("reset Application.CutCopyMode before {owner}.Cut: {error:?}")
+                });
+            assert_eq!(
+                runtime
+                    .dispatch_invoke(handle, "Cut", &[])
+                    .unwrap_or_else(|error| panic!("{owner}.Cut: {error:?}")),
+                OmValue::Empty
+            );
+            assert_eq!(
+                expect_number(
+                    runtime
+                        .dispatch_get(runtime.root_application(), "CutCopyMode", &[])
+                        .unwrap_or_else(|error| {
+                            panic!("Application.CutCopyMode after {owner}.Cut: {error:?}")
+                        })
+                ),
+                f64::from(super::XL_CUT),
+                "{owner}.Cut should set headless cut mode"
+            );
+            assert!(
+                runtime.clipboard.is_none(),
+                "{owner}.Cut should not populate a Range clipboard payload"
+            );
+        }
+
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_objects, "Count", &[])
+                    .expect("ChartObjects.Count after cut methods")
+            ),
+            1.0
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart_area, "Select", &[])
+                .expect("ChartArea remains live after cut methods"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(plot_area, "Select", &[])
+                .expect("PlotArea remains live after cut methods"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(series_collection, "Count", &[])
+                    .expect("SeriesCollection remains live after cut methods")
+            ),
+            1.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(series, "PlotOrder", &[])
+                    .expect("Series remains live after cut methods")
+            ),
+            1.0
+        );
+    }
+
+    #[test]
     fn chart_copypicture_methods_preserve_source_child_handles() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
