@@ -4338,6 +4338,7 @@ fn build_chart_model_overlay(
                         })
                         .collect(),
                     raw_part_uri: Some(chart_part_uri.clone()),
+                    content_dirty: false,
                     dirty: false,
                 },
             );

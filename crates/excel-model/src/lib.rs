@@ -668,6 +668,7 @@ mod tests {
                 protection: None,
                 protection_dirty: false,
                 raw_part_uri: Some("xl/charts/chart1.xml".to_string()),
+                content_dirty: false,
                 dirty: false,
             },
         );
@@ -1343,6 +1344,7 @@ mod tests {
                 protection: None,
                 protection_dirty: false,
                 raw_part_uri: Some("xl/charts/chart1.xml".to_string()),
+                content_dirty: false,
                 dirty: false,
             },
         );

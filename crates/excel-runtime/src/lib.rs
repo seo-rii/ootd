@@ -4397,6 +4397,7 @@ impl ExcelRuntime {
                                     )?;
                                 }
                                 if chart_changed {
+                                    chart.content_dirty = true;
                                     chart.dirty = true;
                                 }
                             }
@@ -4956,6 +4957,7 @@ impl ExcelRuntime {
                                     );
                                 }
                                 if chart_changed {
+                                    chart.content_dirty = true;
                                     chart.dirty = true;
                                 }
                             }
@@ -5498,6 +5500,7 @@ impl ExcelRuntime {
                         let changed = chart.rounded_corners != Some(rounded_corners);
                         if changed {
                             chart.rounded_corners = Some(rounded_corners);
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                         }
@@ -5956,6 +5959,7 @@ impl ExcelRuntime {
                         })?;
                         if series.axis_group != axis_group {
                             series.axis_group = axis_group;
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                             self.find_state = None;
@@ -6004,6 +6008,7 @@ impl ExcelRuntime {
                             changed = true;
                         }
                         if changed {
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                             self.find_state = None;
@@ -6049,6 +6054,7 @@ impl ExcelRuntime {
                                 "HasLeaderLines",
                             );
                             data_labels.dirty = true;
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                             self.find_state = None;
@@ -6084,6 +6090,7 @@ impl ExcelRuntime {
                         })?;
                         if series.bar_shape != Some(bar_shape) {
                             series.bar_shape = Some(bar_shape);
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                             self.find_state = None;
@@ -6124,6 +6131,7 @@ impl ExcelRuntime {
                         })?;
                         if series.smooth != Some(smooth) {
                             series.smooth = Some(smooth);
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                             self.find_state = None;
@@ -6163,6 +6171,7 @@ impl ExcelRuntime {
                         })?;
                         if series.marker_style != Some(marker_style) {
                             series.marker_style = Some(marker_style);
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                             self.find_state = None;
@@ -6212,6 +6221,7 @@ impl ExcelRuntime {
                         })?;
                         if series.marker_size != Some(marker_size) {
                             series.marker_size = Some(marker_size);
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                             self.find_state = None;
@@ -6247,6 +6257,7 @@ impl ExcelRuntime {
                         })?;
                         if series.invert_if_negative != Some(invert_if_negative) {
                             series.invert_if_negative = Some(invert_if_negative);
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                             self.find_state = None;
@@ -6425,6 +6436,7 @@ impl ExcelRuntime {
                             "BubbleSizes" => series.bubble_size = source,
                             _ => unreachable!("handled series member"),
                         }
+                        chart.content_dirty = true;
                         chart.dirty = true;
                         runtime.dirty = true;
                         self.find_state = None;
@@ -6609,6 +6621,7 @@ impl ExcelRuntime {
                         series.x_values = x_values_source;
                         series.values = values_source;
                         series.bubble_size = bubble_size_source;
+                        chart.content_dirty = true;
                         chart.dirty = true;
                         runtime.dirty = true;
                         self.find_state = None;
@@ -6660,6 +6673,7 @@ impl ExcelRuntime {
                             return Err(OmError::new(OmErrorCode::NotFound, "series not found"));
                         }
                         if update_series_plot_order(&mut chart.series, series_index, plot_order) {
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                             self.find_state = None;
@@ -7033,6 +7047,7 @@ impl ExcelRuntime {
                             )?;
                             if chart.rounded_corners != Some(rounded_corners) {
                                 chart.rounded_corners = Some(rounded_corners);
+                                chart.content_dirty = true;
                                 chart.dirty = true;
                                 workbook_dirty = true;
                             }
@@ -7083,6 +7098,7 @@ impl ExcelRuntime {
                                 })?;
                         if chart.rounded_corners != Some(rounded_corners) {
                             chart.rounded_corners = Some(rounded_corners);
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                             self.find_state = None;
@@ -7192,6 +7208,7 @@ impl ExcelRuntime {
                         }
                         if chart.plot_area_layout != previous {
                             chart.plot_area_layout_dirty = true;
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                             self.find_state = None;
@@ -7273,6 +7290,7 @@ impl ExcelRuntime {
                         if point.explosion != Some(numeric_value) {
                             point.explosion = Some(numeric_value);
                             point.dirty = true;
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                             self.find_state = None;
@@ -7317,6 +7335,7 @@ impl ExcelRuntime {
                         })?;
                         if series.point_data_labels.get(&point_index) != Some(&replacement) {
                             series.point_data_labels.insert(point_index, replacement);
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                             self.find_state = None;
@@ -7378,6 +7397,7 @@ impl ExcelRuntime {
                             .or_insert(inherited);
                         if set_chart_data_labels_type(data_labels, label_type)? {
                             data_labels.dirty = true;
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                             self.find_state = None;
@@ -7437,6 +7457,7 @@ impl ExcelRuntime {
                             *target = Some(enabled);
                             chart_data_labels_refresh_type_after_flag_change(data_labels, member);
                             data_labels.dirty = true;
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                             self.find_state = None;
@@ -7492,6 +7513,7 @@ impl ExcelRuntime {
                             data_labels.number_format = Some(format_code);
                             data_labels.number_format_linked = Some(false);
                             data_labels.dirty = true;
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                             self.find_state = None;
@@ -7552,6 +7574,7 @@ impl ExcelRuntime {
                             data_labels.number_format_linked = Some(linked);
                             data_labels.number_format = next_format;
                             data_labels.dirty = true;
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                             self.find_state = None;
@@ -7609,6 +7632,7 @@ impl ExcelRuntime {
                         if data_labels.position != Some(position) {
                             data_labels.position = Some(position);
                             data_labels.dirty = true;
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                             self.find_state = None;
@@ -7656,6 +7680,7 @@ impl ExcelRuntime {
                         if data_labels.separator.as_deref() != Some(separator.as_str()) {
                             data_labels.separator = Some(separator);
                             data_labels.dirty = true;
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                             self.find_state = None;
@@ -7754,6 +7779,7 @@ impl ExcelRuntime {
                             }
                         }
                         if changed {
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                             self.find_state = None;
@@ -7806,6 +7832,7 @@ impl ExcelRuntime {
                         };
                         if axis.tick_label_position != Some(tick_label_position) {
                             axis.tick_label_position = Some(tick_label_position);
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                             self.find_state = None;
@@ -7839,6 +7866,7 @@ impl ExcelRuntime {
                         chart_group_axis_group(chart, group_index)?;
                         if chart.vary_by_categories != Some(vary_by_categories) {
                             chart.vary_by_categories = Some(vary_by_categories);
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                             self.find_state = None;
@@ -7884,6 +7912,7 @@ impl ExcelRuntime {
                             };
                             if *target != Some(enabled) {
                                 *target = Some(enabled);
+                                chart.content_dirty = true;
                                 chart.dirty = true;
                                 runtime.dirty = true;
                                 changed = true;
@@ -7935,6 +7964,7 @@ impl ExcelRuntime {
                         };
                         if *target != Some(enabled) {
                             *target = Some(enabled);
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                             self.find_state = None;
@@ -8052,6 +8082,7 @@ impl ExcelRuntime {
                             _ => unreachable!(),
                         };
                         if changed {
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                             self.find_state = None;
@@ -8090,6 +8121,7 @@ impl ExcelRuntime {
                         chart_group_axis_group(chart, group_index)?;
                         if chart.size_represents != Some(size_represents) {
                             chart.size_represents = Some(size_represents);
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                             self.find_state = None;
@@ -8130,6 +8162,7 @@ impl ExcelRuntime {
                         chart_group_axis_group(chart, group_index)?;
                         if chart.split_type != Some(split_type) {
                             chart.split_type = Some(split_type);
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                             self.find_state = None;
@@ -8169,6 +8202,7 @@ impl ExcelRuntime {
                         chart_group_axis_group(chart, group_index)?;
                         if chart.split_value != Some(split_value) {
                             chart.split_value = Some(split_value);
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                             self.find_state = None;
@@ -8532,6 +8566,7 @@ impl ExcelRuntime {
                                     chart.axes.clear();
                                     stale_axis_handles = true;
                                 }
+                                chart.content_dirty = true;
                                 chart.dirty = true;
                                 runtime.dirty = true;
                                 self.find_state = None;
@@ -8578,6 +8613,7 @@ impl ExcelRuntime {
                             )?;
                             if chart.style != Some(chart_style) {
                                 chart.style = Some(chart_style);
+                                chart.content_dirty = true;
                                 chart.dirty = true;
                                 runtime.dirty = true;
                                 self.find_state = None;
@@ -8705,6 +8741,7 @@ impl ExcelRuntime {
                         };
                         if changed {
                             chart.view_3d_dirty = true;
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                             self.find_state = None;
@@ -8740,6 +8777,7 @@ impl ExcelRuntime {
                         let value = value as u16;
                         if chart.gap_depth != Some(value) {
                             chart.gap_depth = Some(value);
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                             self.find_state = None;
@@ -8774,6 +8812,7 @@ impl ExcelRuntime {
                         if chart.bar_shape != Some(bar_shape) || chart.chart_type != chart_type {
                             chart.bar_shape = Some(bar_shape);
                             chart.chart_type = chart_type;
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                             self.find_state = None;
@@ -8809,6 +8848,7 @@ impl ExcelRuntime {
                         if view_3d.right_angle_axes != Some(right_angle_axes) {
                             view_3d.right_angle_axes = Some(right_angle_axes);
                             chart.view_3d_dirty = true;
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                             self.find_state = None;
@@ -8847,6 +8887,7 @@ impl ExcelRuntime {
                             )?;
                             if chart.display_blanks_as != Some(display_blanks_as) {
                                 chart.display_blanks_as = Some(display_blanks_as);
+                                chart.content_dirty = true;
                                 chart.dirty = true;
                                 runtime.dirty = true;
                                 self.find_state = None;
@@ -8875,6 +8916,7 @@ impl ExcelRuntime {
                             )?;
                             if chart.plot_visible_only != Some(plot_visible_only) {
                                 chart.plot_visible_only = Some(plot_visible_only);
+                                chart.content_dirty = true;
                                 chart.dirty = true;
                                 runtime.dirty = true;
                                 self.find_state = None;
@@ -8903,6 +8945,7 @@ impl ExcelRuntime {
                             )?;
                             if chart.show_data_labels_over_maximum != Some(show_data_labels) {
                                 chart.show_data_labels_over_maximum = Some(show_data_labels);
+                                chart.content_dirty = true;
                                 chart.dirty = true;
                                 runtime.dirty = true;
                                 self.find_state = None;
@@ -8947,6 +8990,7 @@ impl ExcelRuntime {
                                 false
                             };
                             if changed {
+                                chart.content_dirty = true;
                                 chart.dirty = true;
                                 runtime.dirty = true;
                                 self.find_state = None;
@@ -8993,6 +9037,7 @@ impl ExcelRuntime {
                             };
                             if changed {
                                 chart.data_table_dirty = true;
+                                chart.content_dirty = true;
                                 chart.dirty = true;
                                 runtime.dirty = true;
                                 self.find_state = None;
@@ -9051,6 +9096,7 @@ impl ExcelRuntime {
                                 false
                             };
                             if changed {
+                                chart.content_dirty = true;
                                 chart.dirty = true;
                                 runtime.dirty = true;
                                 self.find_state = None;
@@ -9105,6 +9151,7 @@ impl ExcelRuntime {
                         })?;
                         if title.text != text {
                             title.text = text;
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                             self.find_state = None;
@@ -9180,6 +9227,7 @@ impl ExcelRuntime {
                             })?;
                         if legend.position != Some(position) {
                             legend.position = Some(position);
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                             self.find_state = None;
@@ -9219,6 +9267,7 @@ impl ExcelRuntime {
                             })?;
                         if legend.include_in_layout != Some(include_in_layout) {
                             legend.include_in_layout = Some(include_in_layout);
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                             self.find_state = None;
@@ -9292,6 +9341,7 @@ impl ExcelRuntime {
                     *target = Some(flag);
                     data_table.dirty = true;
                     chart.data_table_dirty = true;
+                    chart.content_dirty = true;
                     chart.dirty = true;
                     runtime.dirty = true;
                     self.find_state = None;
@@ -9341,6 +9391,7 @@ impl ExcelRuntime {
                         let data_labels = series.data_labels.get_or_insert(inherited);
                         if set_chart_data_labels_type(data_labels, label_type)? {
                             data_labels.dirty = true;
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                             self.find_state = None;
@@ -9394,6 +9445,7 @@ impl ExcelRuntime {
                             *target = Some(enabled);
                             chart_data_labels_refresh_type_after_flag_change(data_labels, member);
                             data_labels.dirty = true;
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                             self.find_state = None;
@@ -9443,6 +9495,7 @@ impl ExcelRuntime {
                             data_labels.number_format = Some(format_code);
                             data_labels.number_format_linked = Some(false);
                             data_labels.dirty = true;
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                             self.find_state = None;
@@ -9497,6 +9550,7 @@ impl ExcelRuntime {
                             data_labels.number_format_linked = Some(linked);
                             data_labels.number_format = next_format;
                             data_labels.dirty = true;
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                             self.find_state = None;
@@ -9548,6 +9602,7 @@ impl ExcelRuntime {
                         if data_labels.position != Some(position) {
                             data_labels.position = Some(position);
                             data_labels.dirty = true;
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                             self.find_state = None;
@@ -9589,6 +9644,7 @@ impl ExcelRuntime {
                         if data_labels.separator.as_deref() != Some(separator.as_str()) {
                             data_labels.separator = Some(separator);
                             data_labels.dirty = true;
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                             self.find_state = None;
@@ -9652,6 +9708,7 @@ impl ExcelRuntime {
                                 false
                             };
                             if changed {
+                                chart.content_dirty = true;
                                 chart.dirty = true;
                                 runtime.dirty = true;
                                 self.find_state = None;
@@ -9694,6 +9751,7 @@ impl ExcelRuntime {
                             let changed = *target != Some(has_gridlines);
                             if changed {
                                 *target = Some(has_gridlines);
+                                chart.content_dirty = true;
                                 chart.dirty = true;
                                 runtime.dirty = true;
                                 self.find_state = None;
@@ -9756,6 +9814,7 @@ impl ExcelRuntime {
                             value_axis.axis_between_categories != Some(axis_between_categories);
                         if changed {
                             value_axis.axis_between_categories = Some(axis_between_categories);
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                             self.find_state = None;
@@ -9835,6 +9894,7 @@ impl ExcelRuntime {
                             changed = true;
                         }
                         if changed {
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                             self.find_state = None;
@@ -9908,6 +9968,7 @@ impl ExcelRuntime {
                                 axis.display_unit = next_display_unit;
                                 axis.has_display_unit_label = next_label;
                                 axis.display_unit_label = next_display_unit_label;
+                                chart.content_dirty = true;
                                 chart.dirty = true;
                                 runtime.dirty = true;
                                 self.find_state = None;
@@ -9966,6 +10027,7 @@ impl ExcelRuntime {
                         if changed {
                             axis.display_unit = next_display_unit;
                             axis.has_display_unit_label = next_label;
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                             self.find_state = None;
@@ -10017,6 +10079,7 @@ impl ExcelRuntime {
                             if changed {
                                 axis.has_display_unit_label = Some(has_label);
                                 axis.display_unit_label = next_display_unit_label;
+                                chart.content_dirty = true;
                                 chart.dirty = true;
                                 runtime.dirty = true;
                                 self.find_state = None;
@@ -10078,6 +10141,7 @@ impl ExcelRuntime {
                         let changed = *target != Some(time_unit);
                         if changed {
                             *target = Some(time_unit);
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                             self.find_state = None;
@@ -10125,6 +10189,7 @@ impl ExcelRuntime {
                         let changed = axis.base_unit != next;
                         if changed {
                             axis.base_unit = next;
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                             self.find_state = None;
@@ -10162,6 +10227,7 @@ impl ExcelRuntime {
                         let changed = axis.reverse_plot_order != Some(reverse_plot_order);
                         if changed {
                             axis.reverse_plot_order = Some(reverse_plot_order);
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                             self.find_state = None;
@@ -10211,6 +10277,7 @@ impl ExcelRuntime {
                         if changed {
                             axis.scale_type = Some(scale_type);
                             axis.log_base = next_log_base;
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                             self.find_state = None;
@@ -10260,6 +10327,7 @@ impl ExcelRuntime {
                         if changed {
                             axis.scale_type = Some(ChartAxisScaleType::Logarithmic);
                             axis.log_base = Some(number);
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                             self.find_state = None;
@@ -10315,6 +10383,7 @@ impl ExcelRuntime {
                         if changed {
                             axis.crosses = Some(crosses);
                             axis.crosses_at = next_crosses_at;
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                             self.find_state = None;
@@ -10359,6 +10428,7 @@ impl ExcelRuntime {
                         if changed {
                             axis.crosses = Some(ChartAxisCrosses::Custom);
                             axis.crosses_at = Some(number);
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                             self.find_state = None;
@@ -10419,6 +10489,7 @@ impl ExcelRuntime {
                             }
                         };
                         if changed {
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                             self.find_state = None;
@@ -10490,6 +10561,7 @@ impl ExcelRuntime {
                             _ => unreachable!("matched axis tick property"),
                         };
                         if changed {
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                             self.find_state = None;
@@ -10538,6 +10610,7 @@ impl ExcelRuntime {
                         let changed = *target != Some(spacing);
                         if changed {
                             *target = Some(spacing);
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                             self.find_state = None;
@@ -10585,6 +10658,7 @@ impl ExcelRuntime {
                         let changed = axis.tick_label_spacing != next;
                         if changed {
                             axis.tick_label_spacing = next;
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                             self.find_state = None;
@@ -10644,6 +10718,7 @@ impl ExcelRuntime {
                             }
                         };
                         if changed {
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                             self.find_state = None;
@@ -10706,6 +10781,7 @@ impl ExcelRuntime {
                         if changed {
                             axis.tick_label_number_format = Some(format_code);
                             axis.tick_label_number_format_linked = Some(false);
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                             self.find_state = None;
@@ -10754,6 +10830,7 @@ impl ExcelRuntime {
                         if changed {
                             axis.tick_label_number_format_linked = Some(linked);
                             axis.tick_label_number_format = next_format;
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                             self.find_state = None;
@@ -10810,6 +10887,7 @@ impl ExcelRuntime {
                         })?;
                         if title.text != text {
                             title.text = text;
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                             self.find_state = None;
@@ -10873,6 +10951,7 @@ impl ExcelRuntime {
                         let next_label = Some(ChartText { text });
                         if axis.display_unit_label != next_label {
                             axis.display_unit_label = next_label;
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                             self.find_state = None;
@@ -14892,6 +14971,7 @@ impl ExcelRuntime {
                         moved_chart.id = target_chart_id;
                         moved_chart.workbook_id = runtime.loaded.state.model.id;
                         moved_chart.raw_part_uri = target_chart_raw_part_uri;
+                        moved_chart.content_dirty = true;
                         moved_chart.dirty = true;
                         runtime
                             .loaded
@@ -15025,6 +15105,7 @@ impl ExcelRuntime {
                     if chart.protection != Some(next) {
                         chart.protection = Some(next);
                         chart.protection_dirty = true;
+                        chart.content_dirty = true;
                         chart.dirty = true;
                         runtime.dirty = true;
                         self.find_state = None;
@@ -15056,6 +15137,7 @@ impl ExcelRuntime {
                     if chart.protection.is_some() {
                         chart.protection = None;
                         chart.protection_dirty = true;
+                        chart.content_dirty = true;
                         chart.dirty = true;
                         runtime.dirty = true;
                         self.find_state = None;
@@ -15114,6 +15196,7 @@ impl ExcelRuntime {
                         .charts
                         .get_mut(&chart_id)
                         .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart not found"))?;
+                    chart.content_dirty = true;
                     chart.dirty = true;
                     runtime.dirty = true;
                     self.find_state = None;
@@ -15213,6 +15296,7 @@ impl ExcelRuntime {
                         }
                     }
                     if changed {
+                        chart.content_dirty = true;
                         chart.dirty = true;
                         runtime.dirty = true;
                         self.find_state = None;
@@ -15251,6 +15335,7 @@ impl ExcelRuntime {
                                 .ok_or_else(|| {
                                     OmError::new(OmErrorCode::NotFound, "chart not found")
                                 })?;
+                        chart.content_dirty = true;
                         chart.dirty = true;
                         runtime.dirty = true;
                         self.find_state = None;
@@ -15393,6 +15478,7 @@ impl ExcelRuntime {
                                             OmError::new(OmErrorCode::NotFound, "chart not found")
                                         })?;
                                     chart_model.series = new_series;
+                                    chart_model.content_dirty = true;
                                     chart_model.dirty = true;
                                     runtime.dirty = true;
                                 }
@@ -15549,6 +15635,7 @@ impl ExcelRuntime {
                         .charts
                         .get_mut(&chart_id)
                         .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart not found"))?;
+                    chart.content_dirty = true;
                     chart.dirty = true;
                     runtime.dirty = true;
                     self.find_state = None;
@@ -15644,6 +15731,7 @@ impl ExcelRuntime {
                         .charts
                         .get_mut(&chart_id)
                         .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart not found"))?;
+                    chart.content_dirty = true;
                     chart.dirty = true;
                     runtime.dirty = true;
                     self.find_state = None;
@@ -15787,6 +15875,7 @@ impl ExcelRuntime {
                                 is_filtered: false,
                                 filter_dirty: false,
                             });
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                         }
@@ -15941,6 +16030,7 @@ impl ExcelRuntime {
                                     OmError::new(OmErrorCode::NotFound, "chart not found")
                                 })?;
                         chart.data_labels = Some(data_labels);
+                        chart.content_dirty = true;
                         chart.dirty = true;
                         runtime.dirty = true;
                         self.find_state = None;
@@ -16485,6 +16575,7 @@ impl ExcelRuntime {
                             MSO_ELEMENT_CHART_TITLE_NONE => {
                                 if chart.title.take().is_some() {
                                     stale_titles = true;
+                                    chart.content_dirty = true;
                                     chart.dirty = true;
                                     runtime.dirty = true;
                                     changed = true;
@@ -16496,6 +16587,7 @@ impl ExcelRuntime {
                                     chart.title = Some(ChartText {
                                         text: String::new(),
                                     });
+                                    chart.content_dirty = true;
                                     chart.dirty = true;
                                     runtime.dirty = true;
                                     changed = true;
@@ -16504,6 +16596,7 @@ impl ExcelRuntime {
                             MSO_ELEMENT_LEGEND_NONE => {
                                 if chart.legend.take().is_some() {
                                     stale_legends = true;
+                                    chart.content_dirty = true;
                                     chart.dirty = true;
                                     runtime.dirty = true;
                                     changed = true;
@@ -16520,6 +16613,7 @@ impl ExcelRuntime {
                                             legend.visible = true;
                                             legend.position = Some(ChartLegendPosition::Right);
                                             legend.include_in_layout = Some(include_in_layout);
+                                            chart.content_dirty = true;
                                             chart.dirty = true;
                                             runtime.dirty = true;
                                             changed = true;
@@ -16531,6 +16625,7 @@ impl ExcelRuntime {
                                             position: Some(ChartLegendPosition::Right),
                                             include_in_layout: Some(include_in_layout),
                                         });
+                                        chart.content_dirty = true;
                                         chart.dirty = true;
                                         runtime.dirty = true;
                                         changed = true;
@@ -16546,6 +16641,7 @@ impl ExcelRuntime {
                                         legend.visible = true;
                                         legend.position = Some(ChartLegendPosition::Top);
                                         legend.include_in_layout = Some(true);
+                                        chart.content_dirty = true;
                                         chart.dirty = true;
                                         runtime.dirty = true;
                                         changed = true;
@@ -16557,6 +16653,7 @@ impl ExcelRuntime {
                                         position: Some(ChartLegendPosition::Top),
                                         include_in_layout: Some(true),
                                     });
+                                    chart.content_dirty = true;
                                     chart.dirty = true;
                                     runtime.dirty = true;
                                     changed = true;
@@ -16573,6 +16670,7 @@ impl ExcelRuntime {
                                             legend.visible = true;
                                             legend.position = Some(ChartLegendPosition::Left);
                                             legend.include_in_layout = Some(include_in_layout);
+                                            chart.content_dirty = true;
                                             chart.dirty = true;
                                             runtime.dirty = true;
                                             changed = true;
@@ -16584,6 +16682,7 @@ impl ExcelRuntime {
                                             position: Some(ChartLegendPosition::Left),
                                             include_in_layout: Some(include_in_layout),
                                         });
+                                        chart.content_dirty = true;
                                         chart.dirty = true;
                                         runtime.dirty = true;
                                         changed = true;
@@ -16599,6 +16698,7 @@ impl ExcelRuntime {
                                         legend.visible = true;
                                         legend.position = Some(ChartLegendPosition::Bottom);
                                         legend.include_in_layout = Some(true);
+                                        chart.content_dirty = true;
                                         chart.dirty = true;
                                         runtime.dirty = true;
                                         changed = true;
@@ -16610,6 +16710,7 @@ impl ExcelRuntime {
                                         position: Some(ChartLegendPosition::Bottom),
                                         include_in_layout: Some(true),
                                     });
+                                    chart.content_dirty = true;
                                     chart.dirty = true;
                                     runtime.dirty = true;
                                     changed = true;
@@ -16756,6 +16857,7 @@ impl ExcelRuntime {
                                     OmError::new(OmErrorCode::NotFound, "chart not found")
                                 })?;
                         chart.series = new_series;
+                        chart.content_dirty = true;
                         chart.dirty = true;
                         runtime.dirty = true;
                     }
@@ -17009,6 +17111,7 @@ impl ExcelRuntime {
                                 moved_chart.id = temporary_chart_id;
                                 moved_chart.workbook_id = runtime.loaded.state.model.id;
                                 moved_chart.raw_part_uri = None;
+                                moved_chart.content_dirty = true;
                                 moved_chart.dirty = true;
                                 runtime
                                     .loaded
@@ -17214,6 +17317,7 @@ impl ExcelRuntime {
                         changed = true;
                     }
                     if changed {
+                        chart.content_dirty = true;
                         chart.dirty = true;
                         runtime.dirty = true;
                         self.find_state = None;
@@ -17274,6 +17378,7 @@ impl ExcelRuntime {
                     series.invert_if_negative = None;
                     series.points.clear();
                     if changed {
+                        chart.content_dirty = true;
                         chart.dirty = true;
                         runtime.dirty = true;
                         self.find_state = None;
@@ -17322,6 +17427,7 @@ impl ExcelRuntime {
                         .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "series not found"))?;
                     if series.marker_style != Some(ChartMarkerStyle::Picture) {
                         series.marker_style = Some(ChartMarkerStyle::Picture);
+                        chart.content_dirty = true;
                         chart.dirty = true;
                         runtime.dirty = true;
                         self.find_state = None;
@@ -17374,6 +17480,7 @@ impl ExcelRuntime {
                         for (index, series) in chart.series.iter_mut().enumerate() {
                             series.order = u32::try_from(index).ok();
                         }
+                        chart.content_dirty = true;
                         chart.dirty = true;
                         runtime.dirty = true;
                     }
@@ -17432,6 +17539,7 @@ impl ExcelRuntime {
                     })?;
                     if series.point_data_labels.get(&point_index) != Some(&data_labels) {
                         series.point_data_labels.insert(point_index, data_labels);
+                        chart.content_dirty = true;
                         chart.dirty = true;
                         runtime.dirty = true;
                         self.find_state = None;
@@ -17497,6 +17605,7 @@ impl ExcelRuntime {
                     {
                         point.explosion = Some(0);
                         point.dirty = true;
+                        chart.content_dirty = true;
                         chart.dirty = true;
                         runtime.dirty = true;
                         self.find_state = None;
@@ -17549,6 +17658,7 @@ impl ExcelRuntime {
                                 })?;
                         if chart.rounded_corners.is_some() {
                             chart.rounded_corners = None;
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                             self.find_state = None;
@@ -17575,6 +17685,7 @@ impl ExcelRuntime {
                                 || OmError::new(OmErrorCode::NotFound, "chart not found"),
                             )?;
                             chart.series.clear();
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                         }
@@ -17637,6 +17748,7 @@ impl ExcelRuntime {
                                 || OmError::new(OmErrorCode::NotFound, "chart not found"),
                             )?;
                             chart.series.clear();
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                         }
@@ -17725,6 +17837,7 @@ impl ExcelRuntime {
                                 return Err(OmError::new(OmErrorCode::NotFound, "axis not found"));
                             }
                             chart.axes.remove(axis_index);
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                         }
@@ -17787,6 +17900,7 @@ impl ExcelRuntime {
                                     "chart title not found",
                                 ));
                             }
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                         }
@@ -17868,6 +17982,7 @@ impl ExcelRuntime {
                                 ));
                             }
                             chart.legend = None;
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                         }
@@ -17974,6 +18089,7 @@ impl ExcelRuntime {
                                 ));
                             }
                             chart.data_table_dirty = true;
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                         }
@@ -18080,6 +18196,7 @@ impl ExcelRuntime {
                         changed = true;
                     }
                     if changed {
+                        chart.content_dirty = true;
                         chart.dirty = true;
                         runtime.dirty = true;
                         self.find_state = None;
@@ -18174,6 +18291,7 @@ impl ExcelRuntime {
                         }
                     }
                     if changed {
+                        chart.content_dirty = true;
                         chart.dirty = true;
                         runtime.dirty = true;
                         self.find_state = None;
@@ -18230,6 +18348,7 @@ impl ExcelRuntime {
                     if index == 0 {
                         if !series.point_data_labels.is_empty() {
                             series.point_data_labels.clear();
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                             self.find_state = None;
@@ -18260,6 +18379,7 @@ impl ExcelRuntime {
                             }
                         }
                         if changed {
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                             self.find_state = None;
@@ -18345,6 +18465,7 @@ impl ExcelRuntime {
                                     "leader lines not found",
                                 ));
                             }
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                         }
@@ -18400,6 +18521,7 @@ impl ExcelRuntime {
                     let replacement = chart_data_labels_disabled_model();
                     if series.point_data_labels.get(&point_index) != Some(&replacement) {
                         series.point_data_labels.insert(point_index, replacement);
+                        chart.content_dirty = true;
                         chart.dirty = true;
                         runtime.dirty = true;
                         self.find_state = None;
@@ -18490,6 +18612,7 @@ impl ExcelRuntime {
                             false
                         };
                     if changed {
+                        chart.content_dirty = true;
                         chart.dirty = true;
                         runtime.dirty = true;
                         self.find_state = None;
@@ -18564,6 +18687,7 @@ impl ExcelRuntime {
                                 ));
                             }
                             *target = Some(false);
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                         }
@@ -18634,6 +18758,7 @@ impl ExcelRuntime {
                                     "axis title not found",
                                 ));
                             }
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                         }
@@ -18709,6 +18834,7 @@ impl ExcelRuntime {
                             }
                             axis.has_display_unit_label = Some(false);
                             axis.display_unit_label = None;
+                            chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
                         }
@@ -18770,6 +18896,7 @@ impl ExcelRuntime {
                         .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "axis not found"))?;
                     if axis.tick_label_position != Some(ChartTickLabelPosition::None) {
                         axis.tick_label_position = Some(ChartTickLabelPosition::None);
+                        chart.content_dirty = true;
                         chart.dirty = true;
                         runtime.dirty = true;
                         self.find_state = None;
@@ -22820,6 +22947,7 @@ impl ExcelRuntime {
                             protection: None,
                             protection_dirty: false,
                             raw_part_uri: None,
+                            content_dirty: false,
                             dirty: true,
                         },
                     );
@@ -26222,6 +26350,7 @@ impl ExcelRuntime {
                         ));
                     }
                     *target = Some(false);
+                    chart.content_dirty = true;
                     chart.dirty = true;
                     runtime.dirty = true;
                 }
@@ -26270,6 +26399,7 @@ impl ExcelRuntime {
                         format!("{surface} not found"),
                     ));
                 }
+                chart.content_dirty = true;
                 chart.dirty = true;
                 runtime.dirty = true;
                 self.find_state = None;
@@ -27504,6 +27634,7 @@ impl ExcelRuntime {
                     {
                         update_series_plot_order(&mut chart.series, series_index, plot_order);
                     }
+                    chart.content_dirty = true;
                     chart.dirty = true;
                     runtime.dirty = true;
                     series_index
@@ -27644,6 +27775,7 @@ impl ExcelRuntime {
                     }
                     let first_new_series_index = chart.series.len();
                     chart.series.append(&mut new_series);
+                    chart.content_dirty = true;
                     chart.dirty = true;
                     runtime.dirty = true;
                     first_new_series_index
@@ -30875,6 +31007,7 @@ impl ExcelRuntime {
                         protection: None,
                         protection_dirty: false,
                         raw_part_uri: Some(chart_part_uri.clone()),
+                        content_dirty: false,
                         dirty: false,
                     };
                     let drawing = DrawingModel {
@@ -31530,6 +31663,7 @@ impl ExcelRuntime {
                     copied_chart.id = chart_binding.chart_id;
                     copied_chart.workbook_id = runtime.loaded.state.model.id;
                     copied_chart.raw_part_uri = target_chart_raw_part_uri;
+                    copied_chart.content_dirty = true;
                     copied_chart.dirty = true;
                     runtime
                         .loaded
@@ -32362,6 +32496,7 @@ impl ExcelRuntime {
                                 copied_chart.id = chart_id;
                                 copied_chart.workbook_id = workbook_id;
                                 copied_chart.raw_part_uri = None;
+                                copied_chart.content_dirty = true;
                                 copied_chart.dirty = true;
                                 runtime.loaded.state.charts.insert(chart_id, copied_chart);
                                 if let Some(support_sources) = source_chart_support_part_sources
@@ -34915,6 +35050,7 @@ impl ExcelRuntime {
         duplicated_chart.id = new_chart_id;
         duplicated_chart.workbook_id = workbook_id;
         duplicated_chart.raw_part_uri = None;
+        duplicated_chart.content_dirty = true;
         duplicated_chart.dirty = true;
         runtime
             .loaded
@@ -35331,6 +35467,7 @@ impl ExcelRuntime {
             }
         }
         if changed {
+            chart.content_dirty = true;
             chart.dirty = true;
             runtime.dirty = true;
             self.find_state = None;
@@ -35450,6 +35587,7 @@ impl ExcelRuntime {
                 false
             };
             if changed {
+                chart.content_dirty = true;
                 chart.dirty = true;
                 runtime.dirty = true;
             }
@@ -37814,7 +37952,11 @@ impl ExcelRuntime {
         }
         runtime.loaded.state.defined_names.mark_clean();
         for chart in runtime.loaded.state.charts.values_mut() {
+            chart.content_dirty = false;
             chart.dirty = false;
+            for series in &mut chart.series {
+                series.filter_dirty = false;
+            }
         }
         for drawing in runtime.loaded.state.drawings.values_mut() {
             drawing.dirty = false;
@@ -42222,7 +42364,6 @@ struct LoadedChartXmlSeriesSpan {
     start: usize,
     end: usize,
     raw_index: Option<u32>,
-    order: Option<u32>,
     is_filtered: bool,
     wrapper_start: Option<usize>,
     extension_start: Option<usize>,
@@ -42328,7 +42469,7 @@ fn rewrite_chart_series_outer_name(
 fn rewrite_loaded_chart_series_filtering(
     existing_chart_xml: &[u8],
     chart: &ChartModel,
-) -> OmResult<Vec<u8>> {
+) -> OmResult<(Vec<u8>, usize)> {
     let mut reader = Reader::from_reader(Cursor::new(existing_chart_xml));
     reader.config_mut().trim_text(false);
     let mut buffer = Vec::new();
@@ -42434,7 +42575,6 @@ fn rewrite_loaded_chart_series_filtering(
                         start: event_start,
                         end: 0,
                         raw_index: None,
-                        order: None,
                         is_filtered,
                         wrapper_start,
                         extension_start,
@@ -42448,9 +42588,6 @@ fn rewrite_loaded_chart_series_filtering(
                 {
                     if local_name.as_slice() == b"idx" {
                         series_spans[series_index].raw_index =
-                            parse_val(&element, reader.decoder())?;
-                    } else if local_name.as_slice() == b"order" {
-                        series_spans[series_index].order =
                             parse_val(&element, reader.decoder())?;
                     }
                 }
@@ -42474,9 +42611,6 @@ fn rewrite_loaded_chart_series_filtering(
                 {
                     if local_name.as_slice() == b"idx" {
                         series_spans[series_index].raw_index =
-                            parse_val(&element, reader.decoder())?;
-                    } else if local_name.as_slice() == b"order" {
-                        series_spans[series_index].order =
                             parse_val(&element, reader.decoder())?;
                     }
                 }
@@ -42537,52 +42671,41 @@ fn rewrite_loaded_chart_series_filtering(
         buffer.clear();
     }
 
-    if groups.len() != 1 {
+    if groups.is_empty() {
         return Err(OmError::unsupported(
-            "Series.IsFiltered on loaded combo charts is not supported losslessly",
-        ));
-    }
-    if chart
-        .series
-        .iter()
-        .any(|series| series.axis_group == ChartAxisGroup::Secondary)
-    {
-        return Err(OmError::unsupported(
-            "Series.IsFiltered on loaded secondary chart groups is not supported losslessly",
+            "Series.IsFiltered requires at least one loaded chart group",
         ));
     }
 
-    let mut used_loaded_series = vec![false; series_spans.len()];
+    let mut loaded_series_by_raw_index = BTreeMap::<u32, usize>::new();
+    let mut duplicate_raw_indices = BTreeSet::<u32>::new();
+    for (loaded_index, loaded) in series_spans.iter().enumerate() {
+        let Some(raw_index) = loaded.raw_index else {
+            continue;
+        };
+        if loaded_series_by_raw_index
+            .insert(raw_index, loaded_index)
+            .is_some()
+        {
+            duplicate_raw_indices.insert(raw_index);
+        }
+    }
     let mut model_to_loaded = vec![None; chart.series.len()];
     for (model_index, series) in chart.series.iter().enumerate() {
-        let matched = series_spans.iter().enumerate().find_map(|(loaded_index, loaded)| {
-            (!used_loaded_series[loaded_index]
-                && series
-                    .raw_index
-                    .zip(loaded.raw_index)
-                    .is_some_and(|(model, loaded)| model == loaded))
-            .then_some(loaded_index)
-        });
-        let matched = matched.or_else(|| {
-            series_spans.iter().enumerate().find_map(|(loaded_index, loaded)| {
-                (!used_loaded_series[loaded_index]
-                    && series
-                        .order
-                        .zip(loaded.order)
-                        .is_some_and(|(model, loaded)| model == loaded))
-                .then_some(loaded_index)
-            })
-        });
-        let matched = matched.or_else(|| {
-            (series_spans.len() == chart.series.len()
-                && model_index < series_spans.len()
-                && !used_loaded_series[model_index])
-                .then_some(model_index)
-        });
-        if let Some(loaded_index) = matched {
-            used_loaded_series[loaded_index] = true;
-            model_to_loaded[model_index] = Some(loaded_index);
+        if !series.filter_dirty {
+            continue;
         }
+        let raw_index = series.raw_index.ok_or_else(|| {
+            OmError::unsupported(
+                "Series.IsFiltered requires a stable loaded c:idx identity",
+            )
+        })?;
+        if duplicate_raw_indices.contains(&raw_index) {
+            return Err(OmError::unsupported(format!(
+                "Series.IsFiltered cannot losslessly match duplicate c:idx {raw_index}"
+            )));
+        }
+        model_to_loaded[model_index] = loaded_series_by_raw_index.get(&raw_index).copied();
     }
 
     #[derive(Debug)]
@@ -42592,23 +42715,18 @@ fn rewrite_loaded_chart_series_filtering(
         replacement: Vec<u8>,
     }
 
-    let group = &groups[0];
-    let expected_group_name = chart_group_xml_name(&chart.chart_type).ok_or_else(|| {
-        OmError::unsupported("Series.IsFiltered requires a supported chart type")
-    })?;
-    if group.local_name.as_slice() != expected_group_name.as_bytes() {
-        return Err(OmError::unsupported(
-            "Series.IsFiltered cannot rewrite a loaded chart group of another type losslessly",
-        ));
+    #[derive(Debug, Default)]
+    struct GroupFilterEdits {
+        direct_additions: Vec<Vec<u8>>,
+        filtered_additions: Vec<Vec<u8>>,
+        removed_extension_starts: BTreeSet<usize>,
     }
-    let wrapper_name = chart_filtered_series_wrapper_name(&chart.chart_type).ok_or_else(|| {
-        OmError::unsupported("Series.IsFiltered requires a supported chart type")
-    })?;
+
     let mut edits = Vec::<ByteEdit>::new();
-    let mut direct_additions = Vec::<Vec<u8>>::new();
-    let mut filtered_additions = Vec::<Vec<u8>>::new();
+    let mut group_edits = (0..groups.len())
+        .map(|_| GroupFilterEdits::default())
+        .collect::<Vec<_>>();
     let mut removal_starts = BTreeSet::<usize>::new();
-    let mut removed_extension_starts = BTreeSet::<usize>::new();
 
     for (model_index, series) in chart.series.iter().enumerate() {
         if !series.filter_dirty {
@@ -42620,11 +42738,6 @@ fn rewrite_loaded_chart_series_filtering(
             )
         })?;
         let loaded = &series_spans[loaded_index];
-        if loaded.group_index != 0 {
-            return Err(OmError::unsupported(
-                "Series.IsFiltered cannot move a series across loaded chart groups",
-            ));
-        }
         if loaded.is_filtered == series.is_filtered {
             continue;
         }
@@ -42636,7 +42749,9 @@ fn rewrite_loaded_chart_series_filtering(
                 end: loaded.end,
                 replacement: Vec::new(),
             });
-            filtered_additions.push(rewrite_chart_series_outer_name(
+            group_edits[loaded.group_index]
+                .filtered_additions
+                .push(rewrite_chart_series_outer_name(
                 original_series,
                 "c15:ser",
             )?);
@@ -42668,76 +42783,98 @@ fn rewrite_loaded_chart_series_filtering(
                 });
             }
             if loaded.extension_start == Some(removal_start) {
-                removed_extension_starts.insert(removal_start);
+                group_edits[loaded.group_index]
+                    .removed_extension_starts
+                    .insert(removal_start);
             }
-            direct_additions.push(rewrite_chart_series_outer_name(
-                original_series,
-                "c:ser",
-            )?);
+            group_edits[loaded.group_index]
+                .direct_additions
+                .push(rewrite_chart_series_outer_name(original_series, "c:ser")?);
         }
     }
 
-    if !direct_additions.is_empty() {
-        let insertion_position = group
-            .last_direct_series_end
-            .or(group.first_after_series_start)
-            .unwrap_or(group.end_tag_start);
-        edits.push(ByteEdit {
-            start: insertion_position,
-            end: insertion_position,
-            replacement: direct_additions.concat(),
-        });
-    }
-
-    if !filtered_additions.is_empty() {
-        let mut extension_xml = Vec::new();
-        for series_xml in filtered_additions {
-            extension_xml.extend_from_slice(
-                format!(
-                    r#"<c:ext xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" uri="{{02D57815-91ED-43cb-92C2-25804820EDAC}}"><c15:{wrapper_name} xmlns:c15="http://schemas.microsoft.com/office/drawing/2012/chart">"#
-                )
-                .as_bytes(),
-            );
-            extension_xml.extend_from_slice(&series_xml);
-            extension_xml.extend_from_slice(format!("</c15:{wrapper_name}></c:ext>").as_bytes());
+    for (group_index, group) in groups.iter().enumerate() {
+        let group_edit = &group_edits[group_index];
+        if !group_edit.direct_additions.is_empty() {
+            let insertion_position = group
+                .last_direct_series_end
+                .or(group.first_after_series_start)
+                .unwrap_or(group.end_tag_start);
+            edits.push(ByteEdit {
+                start: insertion_position,
+                end: insertion_position,
+                replacement: group_edit.direct_additions.concat(),
+            });
         }
-        if let Some(ext_lst_start) = group.direct_ext_lst_start {
+
+        if !group_edit.filtered_additions.is_empty() {
+            let group_chart_type = chart_type_from_group_name(group.local_name.as_slice())
+                .ok_or_else(|| {
+                    OmError::unsupported(
+                        "Series.IsFiltered requires a recognized loaded chart group",
+                    )
+                })?;
+            let wrapper_name = chart_filtered_series_wrapper_name(&group_chart_type).ok_or_else(
+                || {
+                    OmError::unsupported(format!(
+                        "Series.IsFiltered is unavailable for loaded {} groups",
+                        String::from_utf8_lossy(group.local_name.as_slice())
+                    ))
+                },
+            )?;
+            let mut extension_xml = Vec::new();
+            for series_xml in &group_edit.filtered_additions {
+                extension_xml.extend_from_slice(
+                    format!(
+                        r#"<c:ext xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" uri="{{02D57815-91ED-43cb-92C2-25804820EDAC}}"><c15:{wrapper_name} xmlns:c15="http://schemas.microsoft.com/office/drawing/2012/chart">"#
+                    )
+                    .as_bytes(),
+                );
+                extension_xml.extend_from_slice(series_xml);
+                extension_xml
+                    .extend_from_slice(format!("</c15:{wrapper_name}></c:ext>").as_bytes());
+            }
+            if let Some(ext_lst_start) = group.direct_ext_lst_start {
+                let ext_lst = element_spans.get(&ext_lst_start).ok_or_else(|| {
+                    OmError::new(
+                        OmErrorCode::Parse,
+                        "chart-group extension list span is missing",
+                    )
+                })?;
+                edits.push(ByteEdit {
+                    start: ext_lst.end_tag_start,
+                    end: ext_lst.end_tag_start,
+                    replacement: extension_xml,
+                });
+            } else {
+                let mut ext_lst_xml = br#"<c:extLst xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart">"#.to_vec();
+                ext_lst_xml.extend_from_slice(&extension_xml);
+                ext_lst_xml.extend_from_slice(b"</c:extLst>");
+                edits.push(ByteEdit {
+                    start: group.end_tag_start,
+                    end: group.end_tag_start,
+                    replacement: ext_lst_xml,
+                });
+            }
+        } else if let Some(ext_lst_start) = group.direct_ext_lst_start {
             let ext_lst = element_spans.get(&ext_lst_start).ok_or_else(|| {
                 OmError::new(OmErrorCode::Parse, "chart-group extension list span is missing")
             })?;
-            edits.push(ByteEdit {
-                start: ext_lst.end_tag_start,
-                end: ext_lst.end_tag_start,
-                replacement: extension_xml,
-            });
-        } else {
-            let mut ext_lst_xml = br#"<c:extLst xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart">"#.to_vec();
-            ext_lst_xml.extend_from_slice(&extension_xml);
-            ext_lst_xml.extend_from_slice(b"</c:extLst>");
-            edits.push(ByteEdit {
-                start: group.end_tag_start,
-                end: group.end_tag_start,
-                replacement: ext_lst_xml,
-            });
-        }
-    } else if let Some(ext_lst_start) = group.direct_ext_lst_start {
-        let ext_lst = element_spans.get(&ext_lst_start).ok_or_else(|| {
-            OmError::new(OmErrorCode::Parse, "chart-group extension list span is missing")
-        })?;
-        if ext_lst.child_element_count > 0
-            && ext_lst.child_element_count == removed_extension_starts.len()
-            && ext_lst.parent_start.is_some()
-            && removal_starts.insert(ext_lst.start)
-        {
-            edits.retain(|edit| {
-                !removed_extension_starts.contains(&edit.start)
-                    && !(edit.start > ext_lst.start && edit.end < ext_lst.end)
-            });
-            edits.push(ByteEdit {
-                start: ext_lst.start,
-                end: ext_lst.end,
-                replacement: Vec::new(),
-            });
+            if ext_lst.child_element_count > 0
+                && ext_lst.child_element_count == group_edit.removed_extension_starts.len()
+                && ext_lst.parent_start.is_some()
+                && removal_starts.insert(ext_lst.start)
+            {
+                edits.retain(|edit| {
+                    !group_edit.removed_extension_starts.contains(&edit.start)
+                        && !(edit.start > ext_lst.start && edit.end < ext_lst.end)
+                });
+                edits.push(ByteEdit {
+                    start: ext_lst.start,
+                    end: ext_lst.end,
+                    replacement: Vec::new(),
+                });
+            }
         }
     }
 
@@ -42746,17 +42883,17 @@ fn rewrite_loaded_chart_series_filtering(
     let mut cursor = 0usize;
     for edit in edits {
         if edit.start < cursor {
-            if edit.start == edit.end {
-                rewritten.extend_from_slice(&edit.replacement);
-            }
-            continue;
+            return Err(OmError::new(
+                OmErrorCode::InvalidState,
+                "filtered-series structural edits overlap",
+            ));
         }
         rewritten.extend_from_slice(&existing_chart_xml[cursor..edit.start]);
         rewritten.extend_from_slice(&edit.replacement);
         cursor = edit.end;
     }
     rewritten.extend_from_slice(&existing_chart_xml[cursor..]);
-    Ok(rewritten)
+    Ok((rewritten, groups.len()))
 }
 
 fn patch_loaded_chart_model_xml(
@@ -42765,7 +42902,22 @@ fn patch_loaded_chart_model_xml(
 ) -> OmResult<Option<Vec<u8>>> {
     let rewritten_chart_xml;
     let existing_chart_xml = if chart.series.iter().any(|series| series.filter_dirty) {
-        rewritten_chart_xml = rewrite_loaded_chart_series_filtering(existing_chart_xml, chart)?;
+        let (rewritten, chart_group_count) =
+            rewrite_loaded_chart_series_filtering(existing_chart_xml, chart)?;
+        if chart_group_count > 1
+            || chart
+                .series
+                .iter()
+                .any(|series| series.axis_group == ChartAxisGroup::Secondary)
+        {
+            if chart.content_dirty {
+                return Err(OmError::unsupported(
+                    "saving filtered series together with other loaded multi-group chart edits is not supported losslessly",
+                ));
+            }
+            return Ok(Some(rewritten));
+        }
+        rewritten_chart_xml = rewritten;
         rewritten_chart_xml.as_slice()
     } else {
         existing_chart_xml
@@ -129250,6 +129402,260 @@ mod tests {
     }
 
     #[test]
+    fn filtered_series_moves_losslessly_across_combo_chart_groups() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_filtered_combo_chart_series_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with filtered combo chart series");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let visible_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection"),
+        );
+        let full_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "FullSeriesCollection", &[])
+                .expect("Chart.FullSeriesCollection"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(visible_collection, "Count", &[])
+                .expect("combo SeriesCollection.Count"),
+            OmValue::Number(2.0)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(full_collection, "Count", &[])
+                .expect("combo FullSeriesCollection.Count"),
+            OmValue::Number(4.0)
+        );
+        let filtered_bar = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    full_collection,
+                    "Item",
+                    &[OmValue::Text("Bar Filtered".to_string())],
+                )
+                .expect("FullSeriesCollection.Item Bar Filtered"),
+        );
+        let visible_line = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    full_collection,
+                    "Item",
+                    &[OmValue::Text("Line Visible".to_string())],
+                )
+                .expect("FullSeriesCollection.Item Line Visible"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(filtered_bar, "AxisGroup", &[])
+                .expect("Bar Filtered AxisGroup"),
+            OmValue::Number(f64::from(super::XL_PRIMARY))
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(visible_line, "AxisGroup", &[])
+                .expect("Line Visible AxisGroup"),
+            OmValue::Number(f64::from(super::XL_SECONDARY))
+        );
+
+        runtime
+            .dispatch_set(filtered_bar, "IsFiltered", OmValue::Bool(false), &[])
+            .expect("unfilter bar series");
+        runtime
+            .dispatch_set(visible_line, "IsFiltered", OmValue::Bool(true), &[])
+            .expect("filter line series");
+        assert_eq!(
+            runtime
+                .dispatch_get(visible_collection, "Count", &[])
+                .expect("combo SeriesCollection.Count after moves"),
+            OmValue::Number(2.0)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(full_collection, "Count", &[])
+                .expect("combo FullSeriesCollection.Count after moves"),
+            OmValue::Number(4.0)
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save filtered combo chart series");
+        let package = OpcPackage::from_bytes(&saved).expect("filtered combo package");
+        let chart_xml = std::str::from_utf8(
+            &package
+                .part("xl/charts/chart1.xml")
+                .expect("filtered combo chart part")
+                .bytes,
+        )
+        .expect("filtered combo chart XML");
+        let bar_end = chart_xml.find("</c:barChart>").expect("bar chart group end");
+        let line_start = chart_xml.find("<c:lineChart>").expect("line chart group start");
+        let line_end = chart_xml.find("</c:lineChart>").expect("line chart group end");
+        let bar_xml = &chart_xml[..bar_end];
+        let line_xml = &chart_xml[line_start..line_end];
+        assert!(!bar_xml.contains("filteredBarSeries"));
+        assert!(bar_xml.contains(r#"<c:idx val="10"/>"#));
+        assert!(bar_xml.contains(r#"<c:idx val="20"/>"#));
+        assert!(bar_xml.contains(r#"<c:ext uri="urn:combo-bar-sibling""#));
+        assert!(bar_xml.contains(r#"<a:ln w="12700"/>"#));
+        assert_eq!(line_xml.matches("<c15:filteredLineSeries").count(), 2);
+        assert!(line_xml.contains(r#"<c:idx val="30"/>"#));
+        assert!(line_xml.contains(r#"<c:idx val="40"/>"#));
+        assert!(line_xml.contains(r#"<c:ext uri="urn:combo-line-sibling""#));
+        assert!(line_xml.contains(r#"<a:ln w="25400"/>"#));
+        assert!(chart_xml.contains(r#"<test:opaque group="bar" keep="true"/>"#));
+        assert!(chart_xml.contains(r#"<test:opaque group="line" keep="true"/>"#));
+
+        let mut reopened = ExcelRuntime::new();
+        let reopened_workbook = reopened
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen filtered combo chart series");
+        let reopened_worksheet = expect_object_handle(
+            reopened
+                .dispatch_get(
+                    reopened_workbook.0,
+                    "Worksheets",
+                    &[OmValue::Number(1.0)],
+                )
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened
+                .dispatch_invoke(
+                    reopened_chart_objects,
+                    "Item",
+                    &[OmValue::Number(1.0)],
+                )
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        let reopened_visible = expect_object_handle(
+            reopened
+                .dispatch_get(reopened_chart, "SeriesCollection", &[])
+                .expect("reopened SeriesCollection"),
+        );
+        let reopened_full = expect_object_handle(
+            reopened
+                .dispatch_get(reopened_chart, "FullSeriesCollection", &[])
+                .expect("reopened FullSeriesCollection"),
+        );
+        assert_eq!(
+            reopened
+                .dispatch_get(reopened_visible, "Count", &[])
+                .expect("reopened combo SeriesCollection.Count"),
+            OmValue::Number(2.0)
+        );
+        assert_eq!(
+            reopened
+                .dispatch_get(reopened_full, "Count", &[])
+                .expect("reopened combo FullSeriesCollection.Count"),
+            OmValue::Number(4.0)
+        );
+        let reopened_bar = expect_object_handle(
+            reopened
+                .dispatch_invoke(
+                    reopened_full,
+                    "Item",
+                    &[OmValue::Text("Bar Filtered".to_string())],
+                )
+                .expect("reopened FullSeriesCollection.Item Bar Filtered"),
+        );
+        let reopened_line = expect_object_handle(
+            reopened
+                .dispatch_invoke(
+                    reopened_full,
+                    "Item",
+                    &[OmValue::Text("Line Visible".to_string())],
+                )
+                .expect("reopened FullSeriesCollection.Item Line Visible"),
+        );
+        assert_eq!(
+            reopened
+                .dispatch_get(reopened_bar, "IsFiltered", &[])
+                .expect("reopened Bar Filtered IsFiltered"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            reopened
+                .dispatch_get(reopened_line, "IsFiltered", &[])
+                .expect("reopened Line Visible IsFiltered"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            reopened
+                .dispatch_get(reopened_line, "AxisGroup", &[])
+                .expect("reopened Line Visible AxisGroup"),
+            OmValue::Number(f64::from(super::XL_SECONDARY))
+        );
+        reopened
+            .dispatch_set(reopened_bar, "IsFiltered", OmValue::Bool(true), &[])
+            .expect("refilter reopened bar series");
+        reopened
+            .dispatch_set(reopened_chart, "HasLegend", OmValue::Bool(true), &[])
+            .expect("set combo chart legend after filtering");
+        let mixed_edit_error = reopened
+            .save_workbook(
+                reopened_workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect_err("mixed combo filter and content edits should be rejected losslessly");
+        assert_eq!(mixed_edit_error.code, OmErrorCode::Unsupported);
+        assert!(mixed_edit_error.message.contains("other loaded multi-group chart edits"));
+    }
+
+    #[test]
     fn newly_created_filtered_series_serializes_with_c15_series() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
@@ -184061,6 +184467,44 @@ mod tests {
             )
             .expect("replace filtered chart XML");
         package.to_bytes().expect("filtered chart package bytes")
+    }
+
+    fn synthetic_workbook_with_filtered_combo_chart_series_bytes() -> Vec<u8> {
+        let mut package = OpcPackage::from_bytes(&synthetic_workbook_with_embedded_chart_bytes())
+            .expect("embedded chart package");
+        package
+            .replace_part_bytes(
+                "xl/charts/chart1.xml",
+                br#"<?xml version="1.0" encoding="UTF-8"?>
+<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:c15="http://schemas.microsoft.com/office/drawing/2012/chart" xmlns:test="urn:filtered-combo-test">
+  <c:chart><c:plotArea>
+    <c:barChart><c:barDir val="col"/><c:grouping val="clustered"/>
+      <c:ser><c:idx val="10"/><c:order val="0"/><c:tx><c:v>Bar Visible</c:v></c:tx><c:val><c:numRef><c:f>Sheet1!$A$1</c:f></c:numRef></c:val></c:ser>
+      <c:axId val="10"/><c:axId val="20"/>
+      <c:extLst>
+        <c:ext uri="{02D57815-91ED-43cb-92C2-25804820EDAC}"><c15:filteredBarSeries><c15:ser><c:idx val="20"/><c:order val="1"/><c:tx><c:v>Bar Filtered</c:v></c:tx><c:spPr><a:ln w="12700"/></c:spPr><c:val><c:numRef><c:f>Sheet1!$B$1</c:f></c:numRef></c:val></c15:ser></c15:filteredBarSeries></c:ext>
+        <c:ext uri="urn:combo-bar-sibling"><test:opaque group="bar" keep="true"/></c:ext>
+      </c:extLst>
+    </c:barChart>
+    <c:lineChart>
+      <c:ser><c:idx val="30"/><c:order val="2"/><c:tx><c:v>Line Visible</c:v></c:tx><c:spPr><a:ln w="25400"/></c:spPr><c:val><c:numRef><c:f>Sheet1!$C$1</c:f></c:numRef></c:val></c:ser>
+      <c:axId val="10"/><c:axId val="50"/>
+      <c:extLst>
+        <c:ext uri="{02D57815-91ED-43cb-92C2-25804820EDAC}"><c15:filteredLineSeries><c15:ser><c:idx val="40"/><c:order val="3"/><c:tx><c:v>Line Filtered</c:v></c:tx><c:val><c:numRef><c:f>Sheet1!$A$1</c:f></c:numRef></c:val></c15:ser></c15:filteredLineSeries></c:ext>
+        <c:ext uri="urn:combo-line-sibling"><test:opaque group="line" keep="true"/></c:ext>
+      </c:extLst>
+    </c:lineChart>
+    <c:catAx><c:axId val="10"/></c:catAx>
+    <c:valAx><c:axId val="20"/></c:valAx>
+    <c:valAx><c:axId val="50"/></c:valAx>
+  </c:plotArea></c:chart>
+</c:chartSpace>"#
+                    .to_vec(),
+            )
+            .expect("replace filtered combo chart XML");
+        package
+            .to_bytes()
+            .expect("filtered combo chart package bytes")
     }
 
     fn synthetic_workbook_with_embedded_chart_bytes() -> Vec<u8> {
