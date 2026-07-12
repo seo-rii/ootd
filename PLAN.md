@@ -4893,6 +4893,8 @@
   - 범위: loaded non-pie chart의 unsupported point-level `Explosion`을 `Point.ClearFormats` 같은 point formatting 경로가 dirty로 만든 경우에도 chart XML patcher가 `<c:explosion>`을 새로 삽입하지 않도록 보강해 patch-save insertion 경계에서 stale point explosion이 되살아나지 않도록 차단
   - `Step 7.124 DONE` excel-runtime chart type stock line flag clearing
   - 범위: stock chart type이 기본으로 켜는 `hiLowLines`/`upDownBars`가 bar 등 line/stock line flag를 지원하지 않는 chart group으로 `Chart.ChartType` 변경될 때 model/getter/saved XML 경계에서 제거되도록 보강해 stock 전용 line flags가 non-stock chart XML에 남지 않도록 차단
+  - `Step 7.125 DONE` excel-runtime chart type standard pie line flag clearing
+  - 범위: `Chart.ChartType`을 표준 pie/doughnut 계열로 변경할 때 `serLines`/`dropLines` chart-group flags를 model/getter/saved XML 경계에서 제거하도록 보강해 bar/line 계열에서 켜진 line flags가 pie/doughnut chart XML에 남지 않도록 차단
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.

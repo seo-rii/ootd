@@ -8317,6 +8317,10 @@ impl ExcelRuntime {
                                 if !chart_type_supports_up_down_bars(&chart.chart_type) {
                                     chart.has_up_down_bars = Some(false);
                                 }
+                                if chart_type_clears_standard_line_flags(&chart.chart_type) {
+                                    chart.has_series_lines = Some(false);
+                                    chart.has_drop_lines = Some(false);
+                                }
                                 for series in &mut chart.series {
                                     if !chart_type_supports_explosion(&chart.chart_type) {
                                         series.points.clear();
@@ -40436,6 +40440,18 @@ fn chart_type_supports_up_down_bars(chart_type: &ChartType) -> bool {
     matches!(
         chart_group_xml_name(chart_type),
         Some("lineChart" | "stockChart")
+    )
+}
+
+fn chart_type_clears_standard_line_flags(chart_type: &ChartType) -> bool {
+    matches!(
+        chart_type,
+        ChartType::Doughnut
+            | ChartType::DoughnutExploded
+            | ChartType::Pie
+            | ChartType::Pie3D
+            | ChartType::PieExploded
+            | ChartType::Pie3DExploded
     )
 }
 
@@ -152957,6 +152973,107 @@ mod tests {
         assert!(saved_chart_xml.contains("<c:barChart>"));
         assert!(!saved_chart_xml.contains("<c:hiLowLines"));
         assert!(!saved_chart_xml.contains("<c:upDownBars"));
+    }
+
+    #[test]
+    fn chart_type_setter_clears_line_flags_for_standard_pie_groups() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with embedded chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let chart_group = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartGroups", &[OmValue::Number(1.0)])
+                .expect("Chart.ChartGroups(1)"),
+        );
+
+        runtime
+            .dispatch_set(chart_group, "HasSeriesLines", OmValue::Bool(true), &[])
+            .expect("set ChartGroup.HasSeriesLines");
+        runtime
+            .dispatch_set(chart_group, "HasDropLines", OmValue::Bool(true), &[])
+            .expect("set ChartGroup.HasDropLines");
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_group, "HasSeriesLines", &[])
+                .expect("ChartGroup.HasSeriesLines before pie conversion"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_group, "HasDropLines", &[])
+                .expect("ChartGroup.HasDropLines before pie conversion"),
+            OmValue::Bool(true)
+        );
+
+        runtime
+            .dispatch_set(
+                chart,
+                "ChartType",
+                OmValue::Number(f64::from(super::XL_PIE)),
+                &[],
+            )
+            .expect("set Chart.ChartType to pie");
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_group, "HasSeriesLines", &[])
+                .expect("ChartGroup.HasSeriesLines after pie conversion"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(chart_group, "HasDropLines", &[])
+                .expect("ChartGroup.HasDropLines after pie conversion"),
+            OmValue::Bool(false)
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after pie line flag cleanup");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_chart_xml = std::str::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved chart xml utf8");
+        assert!(saved_chart_xml.contains("<c:pieChart>"));
+        assert!(!saved_chart_xml.contains("<c:serLines"));
+        assert!(!saved_chart_xml.contains("<c:dropLines"));
     }
 
     #[test]
