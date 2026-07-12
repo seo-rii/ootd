@@ -119071,6 +119071,38 @@ mod tests {
             ),
             f64::from(super::XL_LINE)
         );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(charts, "Count", &[])
+                    .expect("source Charts.Count after chart sheet Chart.Copy without targets")
+            ),
+            2.0
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart, "ChartType", &[])
+                    .expect("source chart sheet Chart remains live after Chart.Copy without targets")
+            ),
+            f64::from(super::XL_LINE)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart_area, "Select", &[])
+                .expect("source chart sheet ChartArea remains live after Chart.Copy without targets"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(series_collection, "Count", &[])
+                    .expect(
+                        "source chart sheet SeriesCollection remains live after Chart.Copy without targets",
+                    )
+            ),
+            0.0
+        );
         let saved = runtime
             .save_workbook(
                 super::WorkbookHandle(copied_workbook),
