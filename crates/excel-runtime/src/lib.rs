@@ -164314,6 +164314,31 @@ mod tests {
                 .dispatch_get(chart_object, "Chart", &[])
                 .expect("ChartObject.Chart"),
         );
+        let chart_area = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartArea", &[])
+                .expect("Chart.ChartArea before ChartObject.Delete"),
+        );
+        let plot_area = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "PlotArea", &[])
+                .expect("Chart.PlotArea before ChartObject.Delete"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection before ChartObject.Delete"),
+        );
+        let series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "Item", &[OmValue::Number(1.0)])
+                .expect("SeriesCollection.Item(1) before ChartObject.Delete"),
+        );
+        let series_format = expect_object_handle(
+            runtime
+                .dispatch_get(series, "Format", &[])
+                .expect("Series.Format before ChartObject.Delete"),
+        );
         runtime
             .dispatch_invoke(chart_object, "Activate", &[])
             .expect("ChartObject.Activate");
@@ -164349,6 +164374,41 @@ mod tests {
             runtime
                 .dispatch_get(chart, "ChartType", &[])
                 .expect_err("deleted persisted Chart handle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(chart_area, "Select", &[])
+                .expect_err("deleted persisted ChartArea handle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(plot_area, "Select", &[])
+                .expect_err("deleted persisted PlotArea handle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(series_collection, "Count", &[])
+                .expect_err("deleted persisted SeriesCollection handle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(series, "PlotOrder", &[])
+                .expect_err("deleted persisted Series handle should be stale")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(series_format, "Creator", &[])
+                .expect_err("deleted persisted Series.Format handle should be stale")
                 .code,
             OmErrorCode::InvalidState
         );
