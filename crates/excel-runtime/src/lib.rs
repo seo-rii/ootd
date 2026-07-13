@@ -43755,21 +43755,7 @@ fn patch_loaded_chart_model_xml(
 ) -> OmResult<Option<Vec<u8>>> {
     let rewritten_chart_xml;
     let existing_chart_xml = if chart.series.iter().any(|series| series.filter_dirty) {
-        let (rewritten, chart_group_count) =
-            rewrite_loaded_chart_series_filtering(existing_chart_xml, chart)?;
-        if chart_group_count > 1
-            || chart
-                .series
-                .iter()
-                .any(|series| series.axis_group == ChartAxisGroup::Secondary)
-        {
-            if chart.content_dirty {
-                return Err(OmError::unsupported(
-                    "saving filtered series together with other loaded multi-group chart edits is not supported losslessly",
-                ));
-            }
-            return Ok(Some(rewritten));
-        }
+        let (rewritten, _) = rewrite_loaded_chart_series_filtering(existing_chart_xml, chart)?;
         rewritten_chart_xml = rewritten;
         rewritten_chart_xml.as_slice()
     } else {
@@ -131143,9 +131129,35 @@ mod tests {
             .dispatch_set(reopened_bar, "IsFiltered", OmValue::Bool(true), &[])
             .expect("refilter reopened bar series");
         reopened
+            .dispatch_set(
+                reopened_bar,
+                "Values",
+                OmValue::Text("=Sheet1!$A$1".to_string()),
+                &[],
+            )
+            .expect("set refiltered bar Series.Values");
+        reopened
             .dispatch_set(reopened_chart, "HasLegend", OmValue::Bool(true), &[])
             .expect("set combo chart legend after filtering");
-        let mixed_edit_error = reopened
+        let reopened_groups = expect_object_handle(
+            reopened
+                .dispatch_get(reopened_chart, "ChartGroups", &[])
+                .expect("reopened Chart.ChartGroups"),
+        );
+        let reopened_bar_group = expect_object_handle(
+            reopened
+                .dispatch_invoke(reopened_groups, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartGroups.Item(1)"),
+        );
+        reopened
+            .dispatch_set(
+                reopened_bar_group,
+                "GapWidth",
+                OmValue::Number(180.0),
+                &[],
+            )
+            .expect("set bar group gap width after filtering");
+        let mixed_saved = reopened
             .save_workbook(
                 reopened_workbook,
                 SaveWorkbookSpec {
@@ -131154,9 +131166,95 @@ mod tests {
                     lossless: true,
                 },
             )
-            .expect_err("mixed combo filter and content edits should be rejected losslessly");
-        assert_eq!(mixed_edit_error.code, OmErrorCode::Unsupported);
-        assert!(mixed_edit_error.message.contains("other loaded multi-group chart edits"));
+            .expect("save mixed combo filter and content edits losslessly");
+        let mixed_package =
+            OpcPackage::from_bytes(&mixed_saved).expect("mixed combo edit package");
+        let mixed_chart_xml = std::str::from_utf8(
+            &mixed_package
+                .part("xl/charts/chart1.xml")
+                .expect("mixed combo chart part")
+                .bytes,
+        )
+        .expect("mixed combo chart XML");
+        let mixed_bar_end = mixed_chart_xml
+            .find("</c:barChart>")
+            .expect("mixed bar chart group end");
+        let mixed_line_start = mixed_chart_xml
+            .find("<c:lineChart>")
+            .expect("mixed line chart group start");
+        let mixed_line_end = mixed_chart_xml
+            .find("</c:lineChart>")
+            .expect("mixed line chart group end");
+        let mixed_bar_xml = &mixed_chart_xml[..mixed_bar_end];
+        let mixed_line_xml = &mixed_chart_xml[mixed_line_start..mixed_line_end];
+        assert_eq!(mixed_bar_xml.matches("<c15:filteredBarSeries").count(), 1);
+        assert!(mixed_bar_xml.contains(r#"<c:idx val="20"/>"#));
+        assert!(mixed_bar_xml.contains("<c:f>Sheet1!$A$1</c:f>"));
+        assert!(mixed_bar_xml.contains(r#"<c:gapWidth val="180"/>"#));
+        assert_eq!(mixed_line_xml.matches("<c15:filteredLineSeries").count(), 2);
+        assert!(mixed_chart_xml.contains("<c:legend>"));
+        assert!(mixed_chart_xml.contains(r#"<test:opaque group="bar" keep="true"/>"#));
+        assert!(mixed_chart_xml.contains(r#"<test:opaque group="line" keep="true"/>"#));
+
+        let mut mixed_reopened = ExcelRuntime::new();
+        let mixed_workbook = mixed_reopened
+            .open_workbook(OpenWorkbookSpec {
+                bytes: mixed_saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen mixed combo edits");
+        let mixed_worksheet = expect_object_handle(
+            mixed_reopened
+                .dispatch_get(
+                    mixed_workbook.0,
+                    "Worksheets",
+                    &[OmValue::Number(1.0)],
+                )
+                .expect("mixed reopened Workbook.Worksheets(1)"),
+        );
+        let mixed_chart_objects = expect_object_handle(
+            mixed_reopened
+                .dispatch_get(mixed_worksheet, "ChartObjects", &[])
+                .expect("mixed reopened Worksheet.ChartObjects"),
+        );
+        let mixed_chart_object = expect_object_handle(
+            mixed_reopened
+                .dispatch_invoke(
+                    mixed_chart_objects,
+                    "Item",
+                    &[OmValue::Number(1.0)],
+                )
+                .expect("mixed reopened ChartObjects.Item(1)"),
+        );
+        let mixed_chart = expect_object_handle(
+            mixed_reopened
+                .dispatch_get(mixed_chart_object, "Chart", &[])
+                .expect("mixed reopened ChartObject.Chart"),
+        );
+        assert_eq!(
+            mixed_reopened
+                .dispatch_get(mixed_chart, "HasLegend", &[])
+                .expect("mixed reopened Chart.HasLegend"),
+            OmValue::Bool(true)
+        );
+        let mixed_groups = expect_object_handle(
+            mixed_reopened
+                .dispatch_get(mixed_chart, "ChartGroups", &[])
+                .expect("mixed reopened Chart.ChartGroups"),
+        );
+        let mixed_bar_group = expect_object_handle(
+            mixed_reopened
+                .dispatch_invoke(mixed_groups, "Item", &[OmValue::Number(1.0)])
+                .expect("mixed reopened ChartGroups.Item(1)"),
+        );
+        assert_eq!(
+            mixed_reopened
+                .dispatch_get(mixed_bar_group, "GapWidth", &[])
+                .expect("mixed reopened bar GapWidth"),
+            OmValue::Number(180.0)
+        );
     }
 
     #[test]
