@@ -61,6 +61,7 @@ pub struct ChartModel {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ChartGroupModel {
+    pub loaded_index: Option<usize>,
     pub raw_name: String,
     pub chart_type: ChartType,
     pub axis_group: ChartAxisGroup,

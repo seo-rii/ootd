@@ -4380,7 +4380,9 @@ fn build_chart_model_overlay(
                     groups: summary
                         .into_iter()
                         .flat_map(|summary| summary.groups.iter())
-                        .map(|group| ChartGroupModel {
+                        .enumerate()
+                        .map(|(loaded_index, group)| ChartGroupModel {
+                            loaded_index: Some(loaded_index),
                             raw_name: group.raw_name.clone(),
                             chart_type: chart_type_from_group_summary(group),
                             axis_group: group.axis_group,
