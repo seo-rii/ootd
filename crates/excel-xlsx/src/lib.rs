@@ -23,7 +23,8 @@ use office_common::{
 use office_opc::OpcPackage;
 use quick_xml::escape::partial_escape;
 use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
-use quick_xml::{Reader, Writer};
+use quick_xml::name::ResolveResult;
+use quick_xml::{NsReader, Reader, Writer};
 
 const CALC_CHAIN_PART_NAME: &str = "xl/calcChain.xml";
 const CALC_CHAIN_RELATIONSHIP_TYPE: &str =
@@ -21437,6 +21438,8 @@ fn parse_drawing_part_summary(
 }
 
 fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
+    const CHART_XML_NAMESPACE: &[u8] =
+        b"http://schemas.openxmlformats.org/drawingml/2006/chart";
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum ChartSeriesFormulaSlot {
         Name,
@@ -21450,9 +21453,10 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
         Series,
     }
 
-    let mut reader = Reader::from_reader(Cursor::new(chart_xml));
+    let mut reader = NsReader::from_reader(Cursor::new(chart_xml));
     reader.config_mut().trim_text(false);
     let mut buffer = Vec::new();
+    let mut element_chart_namespace_path = Vec::<bool>::new();
     let mut root_name = None;
     let mut chart_type_names = Vec::new();
     let mut chart_group_count = 0usize;
@@ -21521,7 +21525,6 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
     let mut active_series = None::<ChartSeriesSummary>;
     let mut active_axis_index = None::<usize>;
     let mut active_axis_depth = 0usize;
-    let mut active_axis_prefix = None::<Vec<u8>>;
     let mut axis_title_text_depth = 0usize;
     let mut display_unit_label_text_depth = 0usize;
     let mut data_labels_target = None::<ChartDataLabelsTarget>;
@@ -21876,10 +21879,15 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
         b"strLit" => Some(ChartCacheKindSummary::String),
         _ => None,
     };
+    let is_chart_namespace = |namespace: ResolveResult<'_>| match namespace {
+        ResolveResult::Bound(namespace) => namespace.as_ref() == CHART_XML_NAMESPACE,
+        ResolveResult::Unbound | ResolveResult::Unknown(_) => false,
+    };
 
     loop {
-        match reader.read_event_into(&mut buffer) {
-            Ok(Event::Start(element)) => {
+        match reader.read_resolved_event_into(&mut buffer) {
+            Ok((namespace, Event::Start(element))) => {
+                let element_is_chart_namespace = is_chart_namespace(namespace);
                 let element_name = element.name();
                 let local_name = xml_local_name(element_name.as_ref());
                 let local_name_text = String::from_utf8_lossy(local_name).into_owned();
@@ -22553,13 +22561,17 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 {
                     rounded_corners = parse_bool_val_attr(&element, &reader)?.or(Some(true));
                 }
-                if let Some(kind) = match local_name {
-                    b"catAx" => Some(ChartAxisKind::Category),
-                    b"valAx" => Some(ChartAxisKind::Value),
-                    b"dateAx" => Some(ChartAxisKind::Date),
-                    b"serAx" => Some(ChartAxisKind::Series),
-                    _ => None,
-                } {
+                if element_is_chart_namespace
+                    && element_path.last().is_some_and(|name| name == "plotArea")
+                    && element_chart_namespace_path.last() == Some(&true)
+                    && let Some(kind) = match local_name {
+                        b"catAx" => Some(ChartAxisKind::Category),
+                        b"valAx" => Some(ChartAxisKind::Value),
+                        b"dateAx" => Some(ChartAxisKind::Date),
+                        b"serAx" => Some(ChartAxisKind::Series),
+                        _ => None,
+                    }
+                {
                     axes.push(ChartAxisSummary {
                         raw_id: None,
                         cross_axis_raw_id: None,
@@ -22596,17 +22608,15 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     });
                     active_axis_index = Some(axes.len() - 1);
                     active_axis_depth = 1;
-                    let qualified_name = element.name();
-                    let qualified_name = qualified_name.as_ref();
-                    let prefix_end = qualified_name
-                        .iter()
-                        .position(|byte| *byte == b':')
-                        .unwrap_or(0);
-                    active_axis_prefix = Some(qualified_name[..prefix_end].to_vec());
                 } else if active_axis_index.is_some() {
                     active_axis_depth += 1;
                 }
                 if local_name == b"axId"
+                    && element_is_chart_namespace
+                    && element_path.last().is_some_and(|name| {
+                        matches!(name.as_str(), "catAx" | "valAx" | "dateAx" | "serAx")
+                    })
+                    && element_chart_namespace_path.last() == Some(&true)
                     && let Some(axis_index) = active_axis_index
                     && let Some(axis_id) = parse_string_val_attr(&element, &reader)?
                     && axes[axis_index].raw_id.is_none()
@@ -22614,34 +22624,34 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     axes[axis_index].raw_id = Some(axis_id);
                 }
                 if local_name == b"crossAx"
+                    && element_is_chart_namespace
+                    && element_path.last().is_some_and(|name| {
+                        matches!(name.as_str(), "catAx" | "valAx" | "dateAx" | "serAx")
+                    })
+                    && element_chart_namespace_path.last() == Some(&true)
                     && let Some(axis_index) = active_axis_index
                     && let Some(axis_id) = parse_string_val_attr(&element, &reader)?
                 {
                     axes[axis_index].cross_axis_raw_id = Some(axis_id);
                 }
                 if local_name == b"delete"
+                    && element_is_chart_namespace
                     && let Some(axis_index) = active_axis_index
                     && element_path.last().is_some_and(|name| {
                         matches!(name.as_str(), "catAx" | "valAx" | "dateAx" | "serAx")
                     })
-                    && {
-                        let qualified_name = element.name();
-                        let qualified_name = qualified_name.as_ref();
-                        let prefix_end = qualified_name
-                            .iter()
-                            .position(|byte| *byte == b':')
-                            .unwrap_or(0);
-                        active_axis_prefix.as_deref() == Some(&qualified_name[..prefix_end])
-                    }
+                    && element_chart_namespace_path.last() == Some(&true)
                 {
                     axes[axis_index].deleted =
                         Some(parse_bool_val_attr(&element, &reader)?.unwrap_or(true));
                 }
                 if local_name == b"axId"
+                    && element_is_chart_namespace
                     && active_axis_index.is_none()
                     && element_path
                         .last()
                         .is_some_and(|name| name.ends_with("Chart") && name != "chart")
+                    && element_chart_namespace_path.last() == Some(&true)
                     && let Some(axis_id) = parse_string_val_attr(&element, &reader)?
                 {
                     active_chart_group_axis_ids.push(axis_id);
@@ -22937,8 +22947,10 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     display_unit_label_text_depth += 1;
                 }
                 element_path.push(local_name_text);
+                element_chart_namespace_path.push(element_is_chart_namespace);
             }
-            Ok(Event::Empty(element)) => {
+            Ok((namespace, Event::Empty(element))) => {
+                let element_is_chart_namespace = is_chart_namespace(namespace);
                 let element_name = element.name();
                 let local_name = xml_local_name(element_name.as_ref());
                 if root_name.is_none() {
@@ -23755,6 +23767,11 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     rounded_corners = parse_bool_val_attr(&element, &reader)?.or(Some(true));
                 }
                 if local_name == b"axId"
+                    && element_is_chart_namespace
+                    && element_path.last().is_some_and(|name| {
+                        matches!(name.as_str(), "catAx" | "valAx" | "dateAx" | "serAx")
+                    })
+                    && element_chart_namespace_path.last() == Some(&true)
                     && let Some(axis_index) = active_axis_index
                     && let Some(axis_id) = parse_string_val_attr(&element, &reader)?
                     && axes[axis_index].raw_id.is_none()
@@ -23762,34 +23779,34 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     axes[axis_index].raw_id = Some(axis_id);
                 }
                 if local_name == b"crossAx"
+                    && element_is_chart_namespace
+                    && element_path.last().is_some_and(|name| {
+                        matches!(name.as_str(), "catAx" | "valAx" | "dateAx" | "serAx")
+                    })
+                    && element_chart_namespace_path.last() == Some(&true)
                     && let Some(axis_index) = active_axis_index
                     && let Some(axis_id) = parse_string_val_attr(&element, &reader)?
                 {
                     axes[axis_index].cross_axis_raw_id = Some(axis_id);
                 }
                 if local_name == b"delete"
+                    && element_is_chart_namespace
                     && let Some(axis_index) = active_axis_index
                     && element_path.last().is_some_and(|name| {
                         matches!(name.as_str(), "catAx" | "valAx" | "dateAx" | "serAx")
                     })
-                    && {
-                        let qualified_name = element.name();
-                        let qualified_name = qualified_name.as_ref();
-                        let prefix_end = qualified_name
-                            .iter()
-                            .position(|byte| *byte == b':')
-                            .unwrap_or(0);
-                        active_axis_prefix.as_deref() == Some(&qualified_name[..prefix_end])
-                    }
+                    && element_chart_namespace_path.last() == Some(&true)
                 {
                     axes[axis_index].deleted =
                         Some(parse_bool_val_attr(&element, &reader)?.unwrap_or(true));
                 }
                 if local_name == b"axId"
+                    && element_is_chart_namespace
                     && active_axis_index.is_none()
                     && element_path
                         .last()
                         .is_some_and(|name| name.ends_with("Chart") && name != "chart")
+                    && element_chart_namespace_path.last() == Some(&true)
                     && let Some(axis_id) = parse_string_val_attr(&element, &reader)?
                 {
                     active_chart_group_axis_ids.push(axis_id);
@@ -23858,7 +23875,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     });
                 }
             }
-            Ok(Event::Text(text)) => {
+            Ok((_, Event::Text(text))) => {
                 let text_value = text.xml_content().map_err(xml_error)?;
                 if let Some(value) = &mut formula_text {
                     value.push_str(&text_value);
@@ -23890,7 +23907,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     separator.push_str(&text_value);
                 }
             }
-            Ok(Event::CData(text)) => {
+            Ok((_, Event::CData(text))) => {
                 let text_value = text.xml_content().map_err(xml_error)?;
                 if let Some(value) = &mut formula_text {
                     value.push_str(&text_value);
@@ -23922,7 +23939,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     separator.push_str(&text_value);
                 }
             }
-            Ok(Event::GeneralRef(reference)) => {
+            Ok((_, Event::GeneralRef(reference))) => {
                 let reference = reference.decode().map_err(xml_error)?;
                 let text_value = if let Some(number) = reference.strip_prefix("#x") {
                     let codepoint = u32::from_str_radix(number, 16).map_err(xml_error)?;
@@ -23994,7 +24011,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     separator.push_str(&text_value);
                 }
             }
-            Ok(Event::End(element)) if full_reference_depth > 0 => {
+            Ok((_, Event::End(element))) if full_reference_depth > 0 => {
                 let element_name = element.name();
                 let local_name = xml_local_name(element_name.as_ref());
                 if local_name == b"sqref" && full_reference_depth == 1 {
@@ -24022,8 +24039,9 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 }
                 full_reference_depth -= 1;
                 element_path.pop();
+                element_chart_namespace_path.pop();
             }
-            Ok(Event::End(element)) if formula_depth > 0 => {
+            Ok((_, Event::End(element))) if formula_depth > 0 => {
                 let element_name = element.name();
                 let local_name = xml_local_name(element_name.as_ref());
                 if local_name == b"f" && formula_depth == 1 {
@@ -24077,8 +24095,9 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     active_axis_depth -= 1;
                 }
                 element_path.pop();
+                element_chart_namespace_path.pop();
             }
-            Ok(Event::End(element)) => {
+            Ok((_, Event::End(element))) => {
                 let element_name = element.name();
                 let local_name = xml_local_name(element_name.as_ref());
                 if active_literal_value_depth > 0 {
@@ -24273,15 +24292,15 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         }
                         active_axis_index = None;
                         active_axis_depth = 0;
-                        active_axis_prefix = None;
                     } else {
                         active_axis_depth -= 1;
                     }
                 }
                 element_path.pop();
+                element_chart_namespace_path.pop();
             }
-            Ok(Event::Eof) => break,
-            Ok(_) => {}
+            Ok((_, Event::Eof)) => break,
+            Ok((_, _)) => {}
             Err(error) => return Err(xml_error(error)),
         }
         buffer.clear();
@@ -37865,7 +37884,7 @@ mod tests {
     #[test]
     fn parse_chart_part_summary_maps_series_to_secondary_axis_group() {
         let chart_xml = br#"<?xml version="1.0" encoding="UTF-8"?>
-<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:test="urn:axis-delete-collision">
+<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:chart="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:test="urn:axis-delete-collision">
   <c:chart>
     <c:plotArea>
       <c:barChart>
@@ -37881,8 +37900,8 @@ mod tests {
         <c:dropLines/>
         <c:axId val="10"/><c:axId val="50"/>
       </c:lineChart>
-      <c:catAx><c:axId val="10"/></c:catAx>
-      <c:valAx><c:axId val="20"/><test:delete val="1"/></c:valAx>
+      <c:catAx><chart:axId test:val="999" val="10"></chart:axId><c:delete test:val="1" val="0"/></c:catAx>
+      <c:valAx><test:axId val="97"/><c:axId xmlns:c="urn:not-chart" val="98"/><c:axId val="20"/><test:nested><test:valAx><c:axId val="777"/><c:delete val="1"/></test:valAx></test:nested><test:delete val="1"/></c:valAx>
       <c:valAx><c:axId val="50"/></c:valAx>
     </c:plotArea>
   </c:chart>
@@ -37893,7 +37912,11 @@ mod tests {
         assert_eq!(summary.axes[0].axis_group, ChartAxisGroup::Primary);
         assert_eq!(summary.axes[1].axis_group, ChartAxisGroup::Primary);
         assert_eq!(summary.axes[2].axis_group, ChartAxisGroup::Secondary);
-        assert!(summary.axes.iter().all(|axis| axis.deleted.is_none()));
+        assert_eq!(summary.axes[0].raw_id.as_deref(), Some("10"));
+        assert_eq!(summary.axes[1].raw_id.as_deref(), Some("20"));
+        assert_eq!(summary.axes[2].raw_id.as_deref(), Some("50"));
+        assert_eq!(summary.axes[0].deleted, Some(false));
+        assert!(summary.axes[1..].iter().all(|axis| axis.deleted.is_none()));
         assert_eq!(summary.series.len(), 2);
         assert_eq!(summary.series[0].axis_ids, vec!["10", "20"]);
         assert_eq!(summary.series[0].axis_group, ChartAxisGroup::Primary);
