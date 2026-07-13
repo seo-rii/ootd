@@ -4993,6 +4993,8 @@
   - 범위: loaded heterogeneous combo chart에서 stable `c:idx` 기반 filtered-series extension 이동을 먼저 적용한 뒤 group-local property와 일반 chart/series content patch를 같은 원본 XML에 연속 적용하도록 저장 파이프라인을 통합하고, bar series refilter와 `Values` 변경, bar group `GapWidth`, chart legend 변경을 한 save에서 수행해 sibling filtered line wrappers, opaque group extension, series formatting을 보존하고 save/reopen하는 회귀를 구현
   - `Step 7.174 DONE` loaded combo stable series topology patching
   - 범위: loaded multi-group chart의 series raw `c:idx`를 정확히 하나의 `ChartGroupModel`에 귀속시키는 partition invariant를 도입하고, `Chart.SeriesCollection.NewSeries`, 선택한 `ChartGroup.SeriesCollection.Add`, direct/filtered `Series.Delete`, 동일 chart type의 기존 primary/secondary group 간 `Series.AxisGroup` 이동을 원본 group shell/axis graph는 고정한 채 구조 patch로 처리하며, 새 filtered series wrapper 생성, 마지막 series 삭제 후 빈 group shell, 원본 series subtree/formatting/opaque extension 보존과 save/reopen을 검증하고 cross-family 및 loaded group-axis topology 변경은 mutation 전에 원자적으로 거절
+  - `Step 7.175 DONE` loaded volume-stock atomic source replacement
+  - 범위: loaded `xlStockVHLC`/`xlStockVOHLC`의 `Chart.SetSourceData`를 4/5-series cardinality로 mutation 전에 검증하고 기존 plot-order별 raw `c:idx`를 새 series에 재사용한 뒤 volume primary/stock secondary group membership을 재구성해 group shell/axis graph/group-local property를 보존하며 source와 group property를 한 save에서 patch하고 재로드하는 회귀를 구현하고, invalid source cardinality와 개별 NewSeries/Delete/PlotOrder role 변경은 workbook dirty state 없이 원자적으로 거절
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.
