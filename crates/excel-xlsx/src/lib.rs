@@ -1263,7 +1263,7 @@ impl XlsxCodec {
                 }
                 let drawing_support_parts =
                     collect_sheet_drawing_support_parts(part_uri, &package)?;
-                if !drawing_support_parts.is_empty() {
+                if worksheet.kind == SheetKind::ChartSheet || !drawing_support_parts.is_empty() {
                     sheet_drawing_support_parts.insert(worksheet.id, drawing_support_parts);
                 }
             }
@@ -28663,7 +28663,7 @@ mod tests {
     }
 
     #[test]
-    fn load_classifies_chartsheet_relationship_as_chart_sheet_kind() {
+    fn load_inventories_drawingless_chartsheet_host_and_clean_save_validates_it() {
         let codec = XlsxCodec;
         let mut package = OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("package");
         let workbook_rels_xml = std::str::from_utf8(
@@ -28681,12 +28681,13 @@ mod tests {
         package
             .replace_part_bytes(WORKBOOK_RELS_PART_NAME, workbook_rels_xml.into_bytes())
             .expect("replace workbook rels");
+        let chartsheet_xml = br#"<?xml version="1.0" encoding="UTF-8"?><chartsheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"/>"#.to_vec();
         package
             .add_part(OpcPart {
                 name: "xl/chartsheets/sheet1.xml".to_string(),
                 content_type: None,
                 compression: CompressionMethod::Stored,
-                bytes: br#"<?xml version="1.0" encoding="UTF-8"?><chartsheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"/>"#.to_vec(),
+                bytes: chartsheet_xml.clone(),
             })
             .expect("add chartsheet part");
         let bytes = package.to_bytes().expect("package bytes");
@@ -28717,6 +28718,66 @@ mod tests {
                 .expect("chartsheet data placeholder")
                 .source_xml
                 .is_empty()
+        );
+        let sheet_id = loaded.state.worksheets[0].id;
+        let drawing_support = loaded
+            .sheet_drawing_support_parts
+            .get(&sheet_id)
+            .expect("drawingless chartsheet host inventory");
+        assert_eq!(
+            drawing_support.sheet_part_uri.as_deref(),
+            Some("xl/chartsheets/sheet1.xml")
+        );
+        assert_eq!(
+            drawing_support.sheet_part_source_bytes.as_deref(),
+            Some(chartsheet_xml.as_slice())
+        );
+        assert!(drawing_support.is_empty());
+
+        let saved = codec
+            .save(&loaded, office_common::SaveOptions::default())
+            .expect("save drawingless chartsheet");
+        let saved_package = OpcPackage::from_bytes(saved.as_slice()).expect("saved package");
+        assert_eq!(
+            saved_package
+                .part("xl/chartsheets/sheet1.xml")
+                .expect("saved chartsheet host")
+                .bytes,
+            chartsheet_xml
+        );
+
+        let mut host_missing = loaded.clone();
+        assert!(
+            host_missing
+                .package
+                .remove_part("xl/chartsheets/sheet1.xml")
+        );
+        let error = codec
+            .save(&host_missing, office_common::SaveOptions::default())
+            .expect_err("save should reject missing drawingless chartsheet host");
+        assert!(
+            error
+                .to_string()
+                .contains("explicit drawing host sheet part is missing: xl/chartsheets/sheet1.xml"),
+            "{error}"
+        );
+
+        let mut host_changed = loaded.clone();
+        host_changed
+            .package
+            .replace_part_bytes(
+                "xl/chartsheets/sheet1.xml",
+                br#"<?xml version="1.0" encoding="UTF-8"?><chartsheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetPr/></chartsheet>"#.to_vec(),
+            )
+            .expect("replace drawingless chartsheet host");
+        let error = codec
+            .save(&host_changed, office_common::SaveOptions::default())
+            .expect_err("save should reject changed drawingless chartsheet host");
+        assert!(
+            error.to_string().contains(
+                "explicit drawing host sheet part bytes changed: xl/chartsheets/sheet1.xml"
+            ),
+            "{error}"
         );
     }
 
