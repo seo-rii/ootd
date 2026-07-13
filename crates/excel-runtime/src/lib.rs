@@ -2,11 +2,12 @@ use excel_model::{
     AxisModel, ChartAxisCrosses, ChartAxisDisplayUnit, ChartAxisGroup, ChartAxisKind,
     ChartAxisScaleType, ChartAxisTimeUnit, ChartBarShape, ChartBuiltInDisplayUnit,
     ChartDataLabelPosition, ChartDataLabelsModel, ChartDataTableModel, ChartDisplayBlanksAs,
-    ChartLayoutMode, ChartLayoutTarget, ChartLegendPosition, ChartManualLayout, ChartMarkerStyle,
-    ChartModel, ChartObjectModel, ChartProtectionModel, ChartSheetBinding, ChartSizeRepresents,
-    ChartSourceExpr, ChartSplitType, ChartText, ChartTickLabelPosition, ChartTickMark, ChartType,
-    ChartView3DModel, DefinedNameTable, DrawingModel, DrawingObjectModel, LegendModel, SeriesModel,
-    WorkbookState, WorksheetData, resolve_chart_source_reference_with_names,
+    ChartGroupModel, ChartLayoutMode, ChartLayoutTarget, ChartLegendPosition, ChartManualLayout,
+    ChartMarkerStyle, ChartModel, ChartObjectModel, ChartProtectionModel, ChartSheetBinding,
+    ChartSizeRepresents, ChartSourceExpr, ChartSplitType, ChartText, ChartTickLabelPosition,
+    ChartTickMark, ChartType, ChartView3DModel, DefinedNameTable, DrawingModel, DrawingObjectModel,
+    LegendModel, SeriesModel, WorkbookState, WorksheetData,
+    resolve_chart_source_reference_with_names,
 };
 use excel_xlsx::{
     ChartSupportRelationshipBinding, LoadedXlsxWorkbook, SheetDrawingSupportParts,
@@ -796,6 +797,36 @@ enum ChartGroupLineKind {
     DownBars,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChartGroupShortcutKind {
+    Area,
+    Bar,
+    Column,
+    Doughnut,
+    Line,
+    Pie,
+    Radar,
+    Surface,
+    Scatter,
+}
+
+impl ChartGroupShortcutKind {
+    fn from_member(member: &str) -> Option<Self> {
+        match member {
+            "AreaGroups" => Some(Self::Area),
+            "BarGroups" => Some(Self::Bar),
+            "ColumnGroups" => Some(Self::Column),
+            "DoughnutGroups" => Some(Self::Doughnut),
+            "LineGroups" => Some(Self::Line),
+            "PieGroups" => Some(Self::Pie),
+            "RadarGroups" => Some(Self::Radar),
+            "SurfaceGroups" => Some(Self::Surface),
+            "XYGroups" => Some(Self::Scatter),
+            _ => None,
+        }
+    }
+}
+
 impl ChartGroupLineKind {
     fn from_chart_group_member(member: &str) -> Option<Self> {
         match member {
@@ -1108,6 +1139,7 @@ enum RuntimeObjectKind {
     ChartGroups {
         workbook: WorkbookHandle,
         chart_id: ChartId,
+        shortcut: Option<ChartGroupShortcutKind>,
         chart_object_parent: Option<ChartObjectsParent>,
     },
     ChartGroup {
@@ -1178,6 +1210,7 @@ enum RuntimeObjectKind {
         workbook: WorkbookHandle,
         chart_id: ChartId,
         axis_group_filter: Option<ChartAxisGroup>,
+        group_index_filter: Option<usize>,
         full: bool,
         chart_object_parent: Option<ChartObjectsParent>,
     },
@@ -3420,10 +3453,12 @@ impl ExcelRuntime {
             RuntimeObjectKind::ChartGroups {
                 workbook,
                 chart_id,
+                shortcut,
                 chart_object_parent,
             } => self.dispatch_get_chart_groups(
                 workbook,
                 chart_id,
+                shortcut,
                 chart_object_parent,
                 member,
                 args,
@@ -3564,12 +3599,14 @@ impl ExcelRuntime {
                 workbook,
                 chart_id,
                 axis_group_filter,
+                group_index_filter,
                 full,
                 chart_object_parent,
             } => self.dispatch_get_series_collection(
                 workbook,
                 chart_id,
                 axis_group_filter,
+                group_index_filter,
                 full,
                 chart_object_parent,
                 member,
@@ -7780,6 +7817,13 @@ impl ExcelRuntime {
                                 changed = true;
                             }
                         }
+                        if let Some(group) = chart.groups.get_mut(group_index)
+                            && group.axis_group != axis_group
+                        {
+                            group.axis_group = axis_group;
+                            group.dirty = true;
+                            changed = true;
+                        }
                         if changed {
                             chart.content_dirty = true;
                             chart.dirty = true;
@@ -7866,8 +7910,19 @@ impl ExcelRuntime {
                                     OmError::new(OmErrorCode::NotFound, "chart not found")
                                 })?;
                         chart_group_axis_group(chart, group_index)?;
+                        let mut changed = false;
                         if chart.vary_by_categories != Some(vary_by_categories) {
                             chart.vary_by_categories = Some(vary_by_categories);
+                            changed = true;
+                        }
+                        if let Some(group) = chart.groups.get_mut(group_index)
+                            && group.vary_by_categories != Some(vary_by_categories)
+                        {
+                            group.vary_by_categories = Some(vary_by_categories);
+                            group.dirty = true;
+                            changed = true;
+                        }
+                        if changed {
                             chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
@@ -7904,20 +7959,41 @@ impl ExcelRuntime {
                                 || OmError::new(OmErrorCode::NotFound, "chart not found"),
                             )?;
                             chart_group_axis_group(chart, group_index)?;
-                            let target = match line_kind {
-                                ChartGroupLineKind::SeriesLines => &mut chart.has_series_lines,
-                                ChartGroupLineKind::DropLines => &mut chart.has_drop_lines,
-                                ChartGroupLineKind::HiLoLines => &mut chart.has_hi_lo_lines,
-                                ChartGroupLineKind::UpBars | ChartGroupLineKind::DownBars => {
-                                    &mut chart.has_up_down_bars
+                            {
+                                let target = match line_kind {
+                                    ChartGroupLineKind::SeriesLines => &mut chart.has_series_lines,
+                                    ChartGroupLineKind::DropLines => &mut chart.has_drop_lines,
+                                    ChartGroupLineKind::HiLoLines => &mut chart.has_hi_lo_lines,
+                                    ChartGroupLineKind::UpBars | ChartGroupLineKind::DownBars => {
+                                        &mut chart.has_up_down_bars
+                                    }
+                                };
+                                if *target != Some(enabled) {
+                                    *target = Some(enabled);
+                                    changed = true;
                                 }
-                            };
-                            if *target != Some(enabled) {
-                                *target = Some(enabled);
+                            }
+                            if let Some(group) = chart.groups.get_mut(group_index) {
+                                let target = match line_kind {
+                                    ChartGroupLineKind::SeriesLines => {
+                                        &mut group.has_series_lines
+                                    }
+                                    ChartGroupLineKind::DropLines => &mut group.has_drop_lines,
+                                    ChartGroupLineKind::HiLoLines => &mut group.has_hi_lo_lines,
+                                    ChartGroupLineKind::UpBars | ChartGroupLineKind::DownBars => {
+                                        &mut group.has_up_down_bars
+                                    }
+                                };
+                                if *target != Some(enabled) {
+                                    *target = Some(enabled);
+                                    group.dirty = true;
+                                    changed = true;
+                                }
+                            }
+                            if changed {
                                 chart.content_dirty = true;
                                 chart.dirty = true;
                                 runtime.dirty = true;
-                                changed = true;
                                 removed_lines = !enabled;
                             }
                         }
@@ -7959,13 +8035,31 @@ impl ExcelRuntime {
                                     OmError::new(OmErrorCode::NotFound, "chart not found")
                                 })?;
                         chart_group_axis_group(chart, group_index)?;
-                        let target = match member {
-                            "ShowNegativeBubbles" => &mut chart.show_negative_bubbles,
-                            "Has3DShading" => &mut chart.has_3d_shading,
-                            _ => unreachable!(),
-                        };
-                        if *target != Some(enabled) {
-                            *target = Some(enabled);
+                        let mut changed = false;
+                        {
+                            let target = match member {
+                                "ShowNegativeBubbles" => &mut chart.show_negative_bubbles,
+                                "Has3DShading" => &mut chart.has_3d_shading,
+                                _ => unreachable!(),
+                            };
+                            if *target != Some(enabled) {
+                                *target = Some(enabled);
+                                changed = true;
+                            }
+                        }
+                        if let Some(group) = chart.groups.get_mut(group_index) {
+                            let target = match member {
+                                "ShowNegativeBubbles" => &mut group.show_negative_bubbles,
+                                "Has3DShading" => &mut group.has_3d_shading,
+                                _ => unreachable!(),
+                            };
+                            if *target != Some(enabled) {
+                                *target = Some(enabled);
+                                group.dirty = true;
+                                changed = true;
+                            }
+                        }
+                        if changed {
                             chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
@@ -8010,8 +8104,9 @@ impl ExcelRuntime {
                                     OmError::new(OmErrorCode::NotFound, "chart not found")
                                 })?;
                         chart_group_axis_group(chart, group_index)?;
+                        let group_chart_type = chart_group_chart_type(chart, group_index)?;
                         if member == "Explosion"
-                            && !chart_type_supports_explosion(&chart.chart_type)
+                            && !chart_type_supports_explosion(&group_chart_type)
                         {
                             return Err(OmError::unsupported(
                                 "ChartGroup.Explosion is only supported for pie, 3D pie, and doughnut chart groups",
@@ -8083,6 +8178,79 @@ impl ExcelRuntime {
                             }
                             _ => unreachable!(),
                         };
+                        let group_changed = chart.groups.get_mut(group_index).is_some_and(|group| {
+                            let changed = match member {
+                                "GapWidth" => {
+                                    let value = numeric_value as u16;
+                                    if group.gap_width == Some(value) {
+                                        false
+                                    } else {
+                                        group.gap_width = Some(value);
+                                        true
+                                    }
+                                }
+                                "Overlap" => {
+                                    let value = numeric_value as i16;
+                                    if group.overlap == Some(value) {
+                                        false
+                                    } else {
+                                        group.overlap = Some(value);
+                                        true
+                                    }
+                                }
+                                "FirstSliceAngle" => {
+                                    let value = numeric_value as u16;
+                                    if group.first_slice_angle == Some(value) {
+                                        false
+                                    } else {
+                                        group.first_slice_angle = Some(value);
+                                        true
+                                    }
+                                }
+                                "Explosion" => {
+                                    let value = numeric_value as u16;
+                                    if group.explosion == Some(value) {
+                                        false
+                                    } else {
+                                        group.explosion = Some(value);
+                                        true
+                                    }
+                                }
+                                "BubbleScale" => {
+                                    let value = numeric_value as u16;
+                                    if group.bubble_scale == Some(value) {
+                                        false
+                                    } else {
+                                        group.bubble_scale = Some(value);
+                                        true
+                                    }
+                                }
+                                "DoughnutHoleSize" => {
+                                    let value = numeric_value as u16;
+                                    if group.doughnut_hole_size == Some(value) {
+                                        false
+                                    } else {
+                                        group.doughnut_hole_size = Some(value);
+                                        true
+                                    }
+                                }
+                                "SecondPlotSize" => {
+                                    let value = numeric_value as u16;
+                                    if group.second_plot_size == Some(value) {
+                                        false
+                                    } else {
+                                        group.second_plot_size = Some(value);
+                                        true
+                                    }
+                                }
+                                _ => unreachable!(),
+                            };
+                            if changed {
+                                group.dirty = true;
+                            }
+                            changed
+                        });
+                        let changed = changed || group_changed;
                         if changed {
                             chart.content_dirty = true;
                             chart.dirty = true;
@@ -8121,8 +8289,19 @@ impl ExcelRuntime {
                                     OmError::new(OmErrorCode::NotFound, "chart not found")
                                 })?;
                         chart_group_axis_group(chart, group_index)?;
+                        let mut changed = false;
                         if chart.size_represents != Some(size_represents) {
                             chart.size_represents = Some(size_represents);
+                            changed = true;
+                        }
+                        if let Some(group) = chart.groups.get_mut(group_index)
+                            && group.size_represents != Some(size_represents)
+                        {
+                            group.size_represents = Some(size_represents);
+                            group.dirty = true;
+                            changed = true;
+                        }
+                        if changed {
                             chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
@@ -8162,8 +8341,19 @@ impl ExcelRuntime {
                                     OmError::new(OmErrorCode::NotFound, "chart not found")
                                 })?;
                         chart_group_axis_group(chart, group_index)?;
+                        let mut changed = false;
                         if chart.split_type != Some(split_type) {
                             chart.split_type = Some(split_type);
+                            changed = true;
+                        }
+                        if let Some(group) = chart.groups.get_mut(group_index)
+                            && group.split_type != Some(split_type)
+                        {
+                            group.split_type = Some(split_type);
+                            group.dirty = true;
+                            changed = true;
+                        }
+                        if changed {
                             chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
@@ -8202,8 +8392,19 @@ impl ExcelRuntime {
                                     OmError::new(OmErrorCode::NotFound, "chart not found")
                                 })?;
                         chart_group_axis_group(chart, group_index)?;
+                        let mut changed = false;
                         if chart.split_value != Some(split_value) {
                             chart.split_value = Some(split_value);
+                            changed = true;
+                        }
+                        if let Some(group) = chart.groups.get_mut(group_index)
+                            && group.split_value != Some(split_value)
+                        {
+                            group.split_value = Some(split_value);
+                            group.dirty = true;
+                            changed = true;
+                        }
+                        if changed {
                             chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
@@ -8495,6 +8696,7 @@ impl ExcelRuntime {
                                 let was_volume_stock =
                                     chart_type_is_volume_stock(&chart.chart_type);
                                 chart.chart_type = chart_type;
+                                chart.groups.clear();
                                 chart.bar_shape = chart_bar_shape;
                                 if !chart_type_uses_bubble_size(&chart.chart_type) {
                                     for series in &mut chart.series {
@@ -8825,6 +9027,7 @@ impl ExcelRuntime {
                         if chart.bar_shape != Some(bar_shape) || chart.chart_type != chart_type {
                             chart.bar_shape = Some(bar_shape);
                             chart.chart_type = chart_type;
+                            chart.groups.clear();
                             chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
@@ -17227,10 +17430,12 @@ impl ExcelRuntime {
             RuntimeObjectKind::ChartGroups {
                 workbook,
                 chart_id,
+                shortcut,
                 chart_object_parent,
             } => self.dispatch_invoke_chart_groups(
                 workbook,
                 chart_id,
+                shortcut,
                 chart_object_parent,
                 member,
                 args,
@@ -17285,12 +17490,14 @@ impl ExcelRuntime {
                 workbook,
                 chart_id,
                 axis_group_filter,
+                group_index_filter,
                 full,
                 chart_object_parent,
             } => self.dispatch_invoke_series_collection(
                 workbook,
                 chart_id,
                 axis_group_filter,
+                group_index_filter,
                 full,
                 chart_object_parent,
                 member,
@@ -22932,6 +23139,7 @@ impl ExcelRuntime {
                             title: None,
                             legend: None,
                             axes: default_chart_axes(),
+                            groups: Vec::new(),
                             vary_by_categories: None,
                             gap_width: None,
                             gap_depth: None,
@@ -24614,6 +24822,7 @@ impl ExcelRuntime {
                 let handle = self.register_chart_groups_handle_with_chart_object_parent_origin(
                     workbook,
                     chart_id,
+                    None,
                     chart_object_parent,
                 );
                 if args.is_empty() {
@@ -25782,102 +25991,11 @@ impl ExcelRuntime {
         member: &str,
         args: &[OmValue],
     ) -> OmResult<OmValue> {
+        let shortcut = ChartGroupShortcutKind::from_member(member).ok_or_else(|| {
+            OmError::invalid_argument(format!("{member} is not a chart-group collection"))
+        })?;
         let chart = self.chart_model(workbook, chart_id)?;
-        let matches_chart_type = match member {
-            "AreaGroups" => matches!(
-                chart.chart_type,
-                ChartType::Area
-                    | ChartType::Area3D
-                    | ChartType::AreaStacked
-                    | ChartType::Area3DStacked
-                    | ChartType::AreaStacked100
-                    | ChartType::Area3DStacked100
-            ),
-            "BarGroups" => matches!(
-                chart.chart_type,
-                ChartType::Bar
-                    | ChartType::Bar3DClustered
-                    | ChartType::BarStacked
-                    | ChartType::Bar3DStacked
-                    | ChartType::BarStacked100
-                    | ChartType::Bar3DStacked100
-                    | ChartType::CylinderBarClustered
-                    | ChartType::CylinderBarStacked
-                    | ChartType::CylinderBarStacked100
-                    | ChartType::ConeBarClustered
-                    | ChartType::ConeBarStacked
-                    | ChartType::ConeBarStacked100
-                    | ChartType::PyramidBarClustered
-                    | ChartType::PyramidBarStacked
-                    | ChartType::PyramidBarStacked100
-            ),
-            "ColumnGroups" => matches!(
-                chart.chart_type,
-                ChartType::Column
-                    | ChartType::Column3D
-                    | ChartType::Column3DClustered
-                    | ChartType::ColumnStacked
-                    | ChartType::Column3DStacked
-                    | ChartType::ColumnStacked100
-                    | ChartType::Column3DStacked100
-                    | ChartType::CylinderColumn
-                    | ChartType::CylinderColumnClustered
-                    | ChartType::CylinderColumnStacked
-                    | ChartType::CylinderColumnStacked100
-                    | ChartType::ConeColumn
-                    | ChartType::ConeColumnClustered
-                    | ChartType::ConeColumnStacked
-                    | ChartType::ConeColumnStacked100
-                    | ChartType::PyramidColumn
-                    | ChartType::PyramidColumnClustered
-                    | ChartType::PyramidColumnStacked
-                    | ChartType::PyramidColumnStacked100
-            ),
-            "DoughnutGroups" => matches!(
-                chart.chart_type,
-                ChartType::Doughnut | ChartType::DoughnutExploded
-            ),
-            "LineGroups" => matches!(
-                chart.chart_type,
-                ChartType::Line
-                    | ChartType::Line3D
-                    | ChartType::LineMarkers
-                    | ChartType::LineMarkersStacked
-                    | ChartType::LineMarkersStacked100
-                    | ChartType::LineStacked
-                    | ChartType::LineStacked100
-            ),
-            "PieGroups" => matches!(
-                chart.chart_type,
-                ChartType::Pie
-                    | ChartType::Pie3D
-                    | ChartType::PieExploded
-                    | ChartType::Pie3DExploded
-                    | ChartType::PieOfPie
-                    | ChartType::BarOfPie
-            ),
-            "RadarGroups" => matches!(
-                chart.chart_type,
-                ChartType::Radar | ChartType::RadarMarkers | ChartType::RadarFilled
-            ),
-            "SurfaceGroups" => matches!(
-                chart.chart_type,
-                ChartType::Surface
-                    | ChartType::SurfaceWireframe
-                    | ChartType::SurfaceTopView
-                    | ChartType::SurfaceTopViewWireframe
-            ),
-            "XYGroups" => matches!(
-                chart.chart_type,
-                ChartType::Scatter
-                    | ChartType::ScatterLines
-                    | ChartType::ScatterLinesNoMarkers
-                    | ChartType::ScatterSmooth
-                    | ChartType::ScatterSmoothNoMarkers
-            ),
-            _ => false,
-        };
-        if !matches_chart_type {
+        if chart_group_indices(chart, Some(shortcut)).is_empty() {
             return Err(OmError::new(
                 OmErrorCode::NotFound,
                 format!("{member} is not available for this chart type"),
@@ -25887,6 +26005,7 @@ impl ExcelRuntime {
         let handle = self.register_chart_groups_handle_with_chart_object_parent_origin(
             workbook,
             chart_id,
+            Some(shortcut),
             chart_object_parent,
         );
         if args.is_empty() {
@@ -25900,6 +26019,7 @@ impl ExcelRuntime {
         &mut self,
         workbook: WorkbookHandle,
         chart_id: ChartId,
+        shortcut: Option<ChartGroupShortcutKind>,
         chart_object_parent: Option<ChartObjectsParent>,
         member: &str,
         args: &[OmValue],
@@ -25916,11 +26036,14 @@ impl ExcelRuntime {
                     ));
                 }
                 let chart = self.chart_model(workbook, chart_id)?;
-                Ok(OmValue::Number(chart_group_axis_groups(chart).len() as f64))
+                Ok(OmValue::Number(
+                    chart_group_indices(chart, shortcut).len() as f64
+                ))
             }
             "Item" => self.dispatch_invoke_chart_groups(
                 workbook,
                 chart_id,
+                shortcut,
                 chart_object_parent,
                 member,
                 args,
@@ -25967,6 +26090,7 @@ impl ExcelRuntime {
         &mut self,
         workbook: WorkbookHandle,
         chart_id: ChartId,
+        shortcut: Option<ChartGroupShortcutKind>,
         chart_object_parent: Option<ChartObjectsParent>,
         member: &str,
         args: &[OmValue],
@@ -25989,16 +26113,18 @@ impl ExcelRuntime {
                     ));
                 }
                 let chart = self.chart_model(workbook, chart_id)?;
-                if index > chart_group_axis_groups(chart).len() {
+                let group_indices = chart_group_indices(chart, shortcut);
+                if index > group_indices.len() {
                     return Err(OmError::invalid_argument(
                         "ChartGroups.Item index is out of bounds",
                     ));
                 }
+                let group_index = group_indices[index - 1];
                 Ok(OmValue::Object(
                     self.register_chart_group_handle_with_chart_object_parent_origin(
                         workbook,
                         chart_id,
-                        index - 1,
+                        group_index,
                         chart_object_parent,
                     ),
                 ))
@@ -26024,14 +26150,18 @@ impl ExcelRuntime {
 
         match member {
             "SeriesCollection" => {
-                let axis_group = {
+                let (axis_group, group_index_filter) = {
                     let chart = self.chart_group_model(workbook, chart_id, group_index)?;
-                    chart_group_axis_group(chart, group_index)?
+                    (
+                        chart_group_axis_group(chart, group_index)?,
+                        chart_group_overlay_is_stable(chart).then_some(group_index),
+                    )
                 };
                 let handle = self.register_object(RuntimeObjectKind::SeriesCollection {
                     workbook,
                     chart_id,
                     axis_group_filter: Some(axis_group),
+                    group_index_filter,
                     full: false,
                     chart_object_parent,
                 });
@@ -26065,6 +26195,9 @@ impl ExcelRuntime {
                     )));
                 }
                 let chart = self.chart_group_model(workbook, chart_id, group_index)?;
+                let group = chart_group_overlay_is_stable(chart)
+                    .then(|| chart.groups.get(group_index))
+                    .flatten();
                 match member {
                     "ChartType" => {
                         let group_chart_type = chart_group_chart_type(chart, group_index)?;
@@ -26086,24 +26219,32 @@ impl ExcelRuntime {
                         let restrict_to_primitive_group =
                             chart_type_is_volume_stock(&chart.chart_type);
                         let has_lines = match kind {
-                            ChartGroupLineKind::SeriesLines => chart.has_series_lines,
+                            ChartGroupLineKind::SeriesLines => group
+                                .and_then(|group| group.has_series_lines)
+                                .or(chart.has_series_lines),
                             ChartGroupLineKind::DropLines
                                 if !restrict_to_primitive_group
                                     || chart_type_supports_high_low_lines(&group_chart_type) =>
                             {
-                                chart.has_drop_lines
+                                group
+                                    .and_then(|group| group.has_drop_lines)
+                                    .or(chart.has_drop_lines)
                             }
                             ChartGroupLineKind::HiLoLines
                                 if !restrict_to_primitive_group
                                     || chart_type_supports_high_low_lines(&group_chart_type) =>
                             {
-                                chart.has_hi_lo_lines
+                                group
+                                    .and_then(|group| group.has_hi_lo_lines)
+                                    .or(chart.has_hi_lo_lines)
                             }
                             ChartGroupLineKind::UpBars | ChartGroupLineKind::DownBars => {
                                 if !restrict_to_primitive_group
                                     || chart_type_supports_up_down_bars(&group_chart_type)
                                 {
-                                    chart.has_up_down_bars
+                                    group
+                                        .and_then(|group| group.has_up_down_bars)
+                                        .or(chart.has_up_down_bars)
                                 } else {
                                     Some(false)
                                 }
@@ -26155,19 +26296,47 @@ impl ExcelRuntime {
                         Ok(OmValue::Bool(position != ChartTickLabelPosition::None))
                     }
                     "VaryByCategories" => {
-                        Ok(OmValue::Bool(chart.vary_by_categories.unwrap_or(false)))
+                        Ok(OmValue::Bool(
+                            group
+                                .and_then(|group| group.vary_by_categories)
+                                .or(chart.vary_by_categories)
+                                .unwrap_or(false),
+                        ))
                     }
-                    "GapWidth" => Ok(OmValue::Number(f64::from(chart.gap_width.unwrap_or(150)))),
-                    "Overlap" => Ok(OmValue::Number(f64::from(chart.overlap.unwrap_or(0)))),
-                    "HasSeriesLines" => Ok(OmValue::Bool(chart.has_series_lines.unwrap_or(false))),
-                    "HasDropLines" => Ok(OmValue::Bool(chart.has_drop_lines.unwrap_or(false))),
+                    "GapWidth" => Ok(OmValue::Number(f64::from(
+                        group
+                            .and_then(|group| group.gap_width)
+                            .or(chart.gap_width)
+                            .unwrap_or(150),
+                    ))),
+                    "Overlap" => Ok(OmValue::Number(f64::from(
+                        group
+                            .and_then(|group| group.overlap)
+                            .or(chart.overlap)
+                            .unwrap_or(0),
+                    ))),
+                    "HasSeriesLines" => Ok(OmValue::Bool(
+                        group
+                            .and_then(|group| group.has_series_lines)
+                            .or(chart.has_series_lines)
+                            .unwrap_or(false),
+                    )),
+                    "HasDropLines" => Ok(OmValue::Bool(
+                        group
+                            .and_then(|group| group.has_drop_lines)
+                            .or(chart.has_drop_lines)
+                            .unwrap_or(false),
+                    )),
                     "HasHiLoLines" => Ok(OmValue::Bool(
                         (!chart_type_is_volume_stock(&chart.chart_type)
                             || chart_type_supports_high_low_lines(&chart_group_chart_type(
                                 chart,
                                 group_index,
                             )?))
-                            && chart.has_hi_lo_lines.unwrap_or(false),
+                            && group
+                                .and_then(|group| group.has_hi_lo_lines)
+                                .or(chart.has_hi_lo_lines)
+                                .unwrap_or(false),
                     )),
                     "HasUpDownBars" => Ok(OmValue::Bool(
                         (!chart_type_is_volume_stock(&chart.chart_type)
@@ -26175,40 +26344,83 @@ impl ExcelRuntime {
                                 chart,
                                 group_index,
                             )?))
-                            && chart.has_up_down_bars.unwrap_or(false),
+                            && group
+                                .and_then(|group| group.has_up_down_bars)
+                                .or(chart.has_up_down_bars)
+                                .unwrap_or(false),
                     )),
                     "FirstSliceAngle" => Ok(OmValue::Number(f64::from(
-                        chart.first_slice_angle.unwrap_or(0),
+                        group
+                            .and_then(|group| group.first_slice_angle)
+                            .or(chart.first_slice_angle)
+                            .unwrap_or(0),
                     ))),
-                    "Explosion" => Ok(OmValue::Number(f64::from(chart.explosion.unwrap_or(0)))),
+                    "Explosion" => Ok(OmValue::Number(f64::from(
+                        group
+                            .and_then(|group| group.explosion)
+                            .or(chart.explosion)
+                            .unwrap_or(0),
+                    ))),
                     "BubbleScale" => Ok(OmValue::Number(f64::from(
-                        chart.bubble_scale.unwrap_or(100),
+                        group
+                            .and_then(|group| group.bubble_scale)
+                            .or(chart.bubble_scale)
+                            .unwrap_or(100),
                     ))),
                     "ShowNegativeBubbles" => {
-                        Ok(OmValue::Bool(chart.show_negative_bubbles.unwrap_or(false)))
+                        Ok(OmValue::Bool(
+                            group
+                                .and_then(|group| group.show_negative_bubbles)
+                                .or(chart.show_negative_bubbles)
+                                .unwrap_or(false),
+                        ))
                     }
-                    "Has3DShading" => Ok(OmValue::Bool(chart.has_3d_shading.unwrap_or(false))),
+                    "Has3DShading" => Ok(OmValue::Bool(
+                        group
+                            .and_then(|group| group.has_3d_shading)
+                            .or(chart.has_3d_shading)
+                            .unwrap_or(false),
+                    )),
                     "DoughnutHoleSize" => Ok(OmValue::Number(f64::from(
-                        chart.doughnut_hole_size.unwrap_or(75),
+                        group
+                            .and_then(|group| group.doughnut_hole_size)
+                            .or(chart.doughnut_hole_size)
+                            .unwrap_or(75),
                     ))),
                     "SecondPlotSize" => Ok(OmValue::Number(f64::from(
-                        chart.second_plot_size.unwrap_or(75),
+                        group
+                            .and_then(|group| group.second_plot_size)
+                            .or(chart.second_plot_size)
+                            .unwrap_or(75),
                     ))),
                     "SizeRepresents" => Ok(OmValue::Number(f64::from(
-                        match chart.size_represents.unwrap_or(ChartSizeRepresents::Area) {
+                        match group
+                            .and_then(|group| group.size_represents)
+                            .or(chart.size_represents)
+                            .unwrap_or(ChartSizeRepresents::Area)
+                        {
                             ChartSizeRepresents::Area => XL_SIZE_IS_AREA,
                             ChartSizeRepresents::Width => XL_SIZE_IS_WIDTH,
                         },
                     ))),
                     "SplitType" => Ok(OmValue::Number(f64::from(
-                        match chart.split_type.unwrap_or(ChartSplitType::Position) {
+                        match group
+                            .and_then(|group| group.split_type)
+                            .or(chart.split_type)
+                            .unwrap_or(ChartSplitType::Position)
+                        {
                             ChartSplitType::Custom => XL_SPLIT_BY_CUSTOM_SPLIT,
                             ChartSplitType::PercentValue => XL_SPLIT_BY_PERCENT_VALUE,
                             ChartSplitType::Position => XL_SPLIT_BY_POSITION,
                             ChartSplitType::Value => XL_SPLIT_BY_VALUE,
                         },
                     ))),
-                    "SplitValue" => Ok(OmValue::Number(chart.split_value.unwrap_or(0.0))),
+                    "SplitValue" => Ok(OmValue::Number(
+                        group
+                            .and_then(|group| group.split_value)
+                            .or(chart.split_value)
+                            .unwrap_or(0.0),
+                    )),
                     "Creator" => Ok(OmValue::Number(f64::from(XL_CREATOR_CODE))),
                     "Application" => Ok(OmValue::Object(self.root_application())),
                     "Parent" => Ok(OmValue::Object(
@@ -26338,12 +26550,23 @@ impl ExcelRuntime {
                 }
                 let chart = self.chart_model(workbook, chart_id)?;
                 chart_group_axis_group(chart, group_index)?;
+                let group = chart_group_overlay_is_stable(chart)
+                    .then(|| chart.groups.get(group_index))
+                    .flatten();
                 let exists = match kind {
-                    ChartGroupLineKind::SeriesLines => chart.has_series_lines,
-                    ChartGroupLineKind::DropLines => chart.has_drop_lines,
-                    ChartGroupLineKind::HiLoLines => chart.has_hi_lo_lines,
+                    ChartGroupLineKind::SeriesLines => group
+                        .and_then(|group| group.has_series_lines)
+                        .or(chart.has_series_lines),
+                    ChartGroupLineKind::DropLines => group
+                        .and_then(|group| group.has_drop_lines)
+                        .or(chart.has_drop_lines),
+                    ChartGroupLineKind::HiLoLines => group
+                        .and_then(|group| group.has_hi_lo_lines)
+                        .or(chart.has_hi_lo_lines),
                     ChartGroupLineKind::UpBars | ChartGroupLineKind::DownBars => {
-                        chart.has_up_down_bars
+                        group
+                            .and_then(|group| group.has_up_down_bars)
+                            .or(chart.has_up_down_bars)
                     }
                 };
                 if exists != Some(true) {
@@ -26390,21 +26613,49 @@ impl ExcelRuntime {
                         .get_mut(&chart_id)
                         .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart not found"))?;
                     chart_group_axis_group(chart, group_index)?;
-                    let target = match kind {
-                        ChartGroupLineKind::SeriesLines => &mut chart.has_series_lines,
-                        ChartGroupLineKind::DropLines => &mut chart.has_drop_lines,
-                        ChartGroupLineKind::HiLoLines => &mut chart.has_hi_lo_lines,
+                    let current = chart.groups.get(group_index).and_then(|group| match kind {
+                        ChartGroupLineKind::SeriesLines => group.has_series_lines,
+                        ChartGroupLineKind::DropLines => group.has_drop_lines,
+                        ChartGroupLineKind::HiLoLines => group.has_hi_lo_lines,
                         ChartGroupLineKind::UpBars | ChartGroupLineKind::DownBars => {
-                            &mut chart.has_up_down_bars
+                            group.has_up_down_bars
+                        }
+                    });
+                    let fallback = match kind {
+                        ChartGroupLineKind::SeriesLines => chart.has_series_lines,
+                        ChartGroupLineKind::DropLines => chart.has_drop_lines,
+                        ChartGroupLineKind::HiLoLines => chart.has_hi_lo_lines,
+                        ChartGroupLineKind::UpBars | ChartGroupLineKind::DownBars => {
+                            chart.has_up_down_bars
                         }
                     };
-                    if *target != Some(true) {
+                    if current.or(fallback) != Some(true) {
                         return Err(OmError::new(
                             OmErrorCode::NotFound,
                             format!("{surface} not found"),
                         ));
                     }
-                    *target = Some(false);
+                    match kind {
+                        ChartGroupLineKind::SeriesLines => chart.has_series_lines = Some(false),
+                        ChartGroupLineKind::DropLines => chart.has_drop_lines = Some(false),
+                        ChartGroupLineKind::HiLoLines => chart.has_hi_lo_lines = Some(false),
+                        ChartGroupLineKind::UpBars | ChartGroupLineKind::DownBars => {
+                            chart.has_up_down_bars = Some(false)
+                        }
+                    }
+                    if let Some(group) = chart.groups.get_mut(group_index) {
+                        match kind {
+                            ChartGroupLineKind::SeriesLines => {
+                                group.has_series_lines = Some(false)
+                            }
+                            ChartGroupLineKind::DropLines => group.has_drop_lines = Some(false),
+                            ChartGroupLineKind::HiLoLines => group.has_hi_lo_lines = Some(false),
+                            ChartGroupLineKind::UpBars | ChartGroupLineKind::DownBars => {
+                                group.has_up_down_bars = Some(false)
+                            }
+                        }
+                        group.dirty = true;
+                    }
                     chart.content_dirty = true;
                     chart.dirty = true;
                     runtime.dirty = true;
@@ -26440,12 +26691,23 @@ impl ExcelRuntime {
                     .get_mut(&chart_id)
                     .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart not found"))?;
                 chart_group_axis_group(chart, group_index)?;
+                let group = chart_group_overlay_is_stable(chart)
+                    .then(|| chart.groups.get(group_index))
+                    .flatten();
                 let exists = match kind {
-                    ChartGroupLineKind::SeriesLines => chart.has_series_lines,
-                    ChartGroupLineKind::DropLines => chart.has_drop_lines,
-                    ChartGroupLineKind::HiLoLines => chart.has_hi_lo_lines,
+                    ChartGroupLineKind::SeriesLines => group
+                        .and_then(|group| group.has_series_lines)
+                        .or(chart.has_series_lines),
+                    ChartGroupLineKind::DropLines => group
+                        .and_then(|group| group.has_drop_lines)
+                        .or(chart.has_drop_lines),
+                    ChartGroupLineKind::HiLoLines => group
+                        .and_then(|group| group.has_hi_lo_lines)
+                        .or(chart.has_hi_lo_lines),
                     ChartGroupLineKind::UpBars | ChartGroupLineKind::DownBars => {
-                        chart.has_up_down_bars
+                        group
+                            .and_then(|group| group.has_up_down_bars)
+                            .or(chart.has_up_down_bars)
                     }
                 };
                 if exists != Some(true) {
@@ -27473,6 +27735,7 @@ impl ExcelRuntime {
         workbook: WorkbookHandle,
         chart_id: ChartId,
         axis_group_filter: Option<ChartAxisGroup>,
+        group_index_filter: Option<usize>,
         full: bool,
         chart_object_parent: Option<ChartObjectsParent>,
         member: &str,
@@ -27491,13 +27754,20 @@ impl ExcelRuntime {
                 }
                 let chart = self.chart_model(workbook, chart_id)?;
                 let count =
-                    series_collection_indices(chart, axis_group_filter, full).len();
+                    series_collection_indices(
+                        chart,
+                        axis_group_filter,
+                        group_index_filter,
+                        full,
+                    )
+                    .len();
                 Ok(OmValue::Number(count as f64))
             }
             "Item" => self.dispatch_invoke_series_collection(
                 workbook,
                 chart_id,
                 axis_group_filter,
+                group_index_filter,
                 full,
                 chart_object_parent,
                 member,
@@ -27545,6 +27815,7 @@ impl ExcelRuntime {
         workbook: WorkbookHandle,
         chart_id: ChartId,
         axis_group_filter: Option<ChartAxisGroup>,
+        group_index_filter: Option<usize>,
         full: bool,
         chart_object_parent: Option<ChartObjectsParent>,
         member: &str,
@@ -27566,7 +27837,12 @@ impl ExcelRuntime {
                         let index = coerce_u32_arg(index, "SeriesCollection.Item index")? as usize;
                         let chart = self.chart_model(workbook, chart_id)?;
                         let matching_indices =
-                            series_collection_indices(chart, axis_group_filter, full);
+                            series_collection_indices(
+                                chart,
+                                axis_group_filter,
+                                group_index_filter,
+                                full,
+                            );
                         if index == 0 || index > matching_indices.len() {
                             return Err(OmError::invalid_argument(
                                 "SeriesCollection.Item index is out of bounds",
@@ -27582,7 +27858,12 @@ impl ExcelRuntime {
                         })?;
                         let mut matched_index = None;
                         for series_index in
-                            series_collection_indices(chart, axis_group_filter, full)
+                            series_collection_indices(
+                                chart,
+                                axis_group_filter,
+                                group_index_filter,
+                                full,
+                            )
                         {
                             let series = &chart.series[series_index];
                             let Some(source) = series.name.as_ref() else {
@@ -28179,7 +28460,7 @@ impl ExcelRuntime {
                 let Some(series) = chart.series.get(series_index) else {
                     return Err(OmError::new(OmErrorCode::NotFound, "series not found"));
                 };
-                let series_chart_type = chart_type_for_axis_group(chart, series.axis_group);
+                let series_chart_type = chart_type_for_series(chart, series);
                 Ok(OmValue::Number(f64::from(chart_type_to_excel_value(
                     &series_chart_type,
                 )?)))
@@ -31032,6 +31313,7 @@ impl ExcelRuntime {
                         title: None,
                         legend: None,
                         axes: default_chart_axes(),
+                        groups: Vec::new(),
                         vary_by_categories: None,
                         gap_width: None,
                         gap_depth: None,
@@ -33913,11 +34195,13 @@ impl ExcelRuntime {
         &mut self,
         workbook: WorkbookHandle,
         chart_id: ChartId,
+        shortcut: Option<ChartGroupShortcutKind>,
         chart_object_parent: Option<ChartObjectsParent>,
     ) -> ObjectHandle {
         self.register_object(RuntimeObjectKind::ChartGroups {
             workbook,
             chart_id,
+            shortcut,
             chart_object_parent,
         })
     }
@@ -34011,6 +34295,7 @@ impl ExcelRuntime {
             workbook,
             chart_id,
             axis_group_filter: None,
+            group_index_filter: None,
             full: false,
             chart_object_parent,
         })
@@ -34026,6 +34311,7 @@ impl ExcelRuntime {
             workbook,
             chart_id,
             axis_group_filter: None,
+            group_index_filter: None,
             full: true,
             chart_object_parent,
         })
@@ -35511,8 +35797,15 @@ impl ExcelRuntime {
             .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart not found"))?;
         let mut changed = false;
         if chart.data_labels.as_ref() != Some(&data_labels) {
-            chart.data_labels = Some(data_labels);
+            chart.data_labels = Some(data_labels.clone());
             changed = true;
+        }
+        for group in &mut chart.groups {
+            if group.data_labels.as_ref() != Some(&data_labels) {
+                group.data_labels = Some(data_labels.clone());
+                group.dirty = true;
+                changed = true;
+            }
         }
         for series in &mut chart.series {
             if series.data_labels.is_some() {
@@ -38001,6 +38294,9 @@ impl ExcelRuntime {
             chart.dirty = false;
             for series in &mut chart.series {
                 series.filter_dirty = false;
+            }
+            for group in &mut chart.groups {
+                group.dirty = false;
             }
         }
         for drawing in runtime.loaded.state.drawings.values_mut() {
@@ -40536,20 +40832,46 @@ fn chart_type_for_axis_group(
     }
 }
 
+fn chart_type_for_series(chart: &ChartModel, series: &SeriesModel) -> ChartType {
+    if chart_group_overlay_is_stable(chart)
+        && let Some(raw_index) = series.raw_index
+        && let Some(group) = chart
+            .groups
+            .iter()
+            .find(|group| group.series_raw_indices.contains(&raw_index))
+    {
+        return group.chart_type.clone();
+    }
+    chart_type_for_axis_group(chart, series.axis_group)
+}
+
 fn series_collection_indices(
     chart: &ChartModel,
     axis_group_filter: Option<ChartAxisGroup>,
+    group_index_filter: Option<usize>,
     full: bool,
 ) -> Vec<usize> {
+    let group_raw_indices = group_index_filter
+        .and_then(|group_index| chart.groups.get(group_index))
+        .map(|group| group.series_raw_indices.iter().copied().collect::<BTreeSet<_>>());
     let mut indices = chart
         .series
         .iter()
         .enumerate()
         .filter_map(|(series_index, series)| {
             ((full || !series.is_filtered)
-                && axis_group_filter
-                    .map(|axis_group| series.axis_group == axis_group)
-                    .unwrap_or(true))
+                && group_raw_indices.as_ref().map_or_else(
+                    || {
+                        axis_group_filter
+                            .map(|axis_group| series.axis_group == axis_group)
+                            .unwrap_or(true)
+                    },
+                    |raw_indices| {
+                        series
+                            .raw_index
+                            .is_some_and(|raw_index| raw_indices.contains(&raw_index))
+                    },
+                ))
             .then_some(series_index)
         })
         .collect::<Vec<_>>();
@@ -42964,6 +43286,469 @@ fn rewrite_loaded_chart_series_filtering(
     Ok((rewritten, groups.len()))
 }
 
+fn chart_group_direct_property_name(local_name: &[u8]) -> bool {
+    matches!(
+        local_name,
+        b"barDir"
+            | b"grouping"
+            | b"shape"
+            | b"marker"
+            | b"scatterStyle"
+            | b"radarStyle"
+            | b"ofPieType"
+            | b"wireframe"
+            | b"varyColors"
+            | b"gapWidth"
+            | b"gapDepth"
+            | b"overlap"
+            | b"firstSliceAng"
+            | b"bubbleScale"
+            | b"showNegBubbles"
+            | b"bubble3D"
+            | b"holeSize"
+            | b"secondPieSize"
+            | b"sizeRepresents"
+            | b"splitType"
+            | b"splitPos"
+            | b"dLbls"
+            | b"serLines"
+            | b"dropLines"
+            | b"hiLowLines"
+            | b"upDownBars"
+    )
+}
+
+fn chart_group_line_flag(group: &ChartGroupModel, local_name: &[u8]) -> Option<bool> {
+    match local_name {
+        b"serLines" => group.has_series_lines,
+        b"dropLines" => group.has_drop_lines,
+        b"hiLowLines" => group.has_hi_lo_lines,
+        b"upDownBars" => group.has_up_down_bars,
+        _ => None,
+    }
+}
+
+fn chart_group_direct_property_value(
+    group: &ChartGroupModel,
+    local_name: &[u8],
+) -> Option<String> {
+    match local_name {
+        b"varyColors" => group
+            .vary_by_categories
+            .map(|value| if value { "1" } else { "0" }.to_string()),
+        b"gapWidth" => group.gap_width.map(|value| value.to_string()),
+        b"gapDepth" => group.gap_depth.map(|value| value.to_string()),
+        b"overlap" => group.overlap.map(|value| value.to_string()),
+        b"firstSliceAng" => group.first_slice_angle.map(|value| value.to_string()),
+        b"bubbleScale" => group.bubble_scale.map(|value| value.to_string()),
+        b"showNegBubbles" => group
+            .show_negative_bubbles
+            .map(|value| if value { "1" } else { "0" }.to_string()),
+        b"bubble3D" => group
+            .has_3d_shading
+            .map(|value| if value { "1" } else { "0" }.to_string()),
+        b"holeSize" => group.doughnut_hole_size.map(|value| value.to_string()),
+        b"secondPieSize" => group.second_plot_size.map(|value| value.to_string()),
+        b"sizeRepresents" => group.size_represents.map(|value| match value {
+            ChartSizeRepresents::Area => "area".to_string(),
+            ChartSizeRepresents::Width => "w".to_string(),
+        }),
+        b"splitType" => group.split_type.map(|value| match value {
+            ChartSplitType::Custom => "cust".to_string(),
+            ChartSplitType::PercentValue => "percent".to_string(),
+            ChartSplitType::Position => "pos".to_string(),
+            ChartSplitType::Value => "val".to_string(),
+        }),
+        b"splitPos" => group.split_value.map(|value| value.to_string()),
+        _ => None,
+    }
+}
+
+fn rewrite_chart_group_val_element(
+    element: &BytesStart<'_>,
+    decoder: quick_xml::encoding::Decoder,
+    replacement: &str,
+) -> OmResult<BytesStart<'static>> {
+    let qualified_name = String::from_utf8_lossy(element.name().as_ref()).into_owned();
+    let mut rewritten = BytesStart::new(qualified_name);
+    let mut wrote_value = false;
+    for attr in element.attributes() {
+        let attr = attr.map_err(runtime_xml_error)?;
+        let key = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
+        let value = attr
+            .decode_and_unescape_value(decoder)
+            .map_err(runtime_xml_error)?
+            .into_owned();
+        if xml_local_name(attr.key.as_ref()) == b"val" {
+            rewritten.push_attribute((key.as_str(), replacement));
+            wrote_value = true;
+        } else {
+            rewritten.push_attribute((key.as_str(), value.as_str()));
+        }
+    }
+    if !wrote_value {
+        rewritten.push_attribute(("val", replacement));
+    }
+    Ok(rewritten)
+}
+
+fn write_missing_chart_group_properties(
+    writer: &mut Writer<Cursor<Vec<u8>>>,
+    group: &ChartGroupModel,
+    seen: &BTreeSet<Vec<u8>>,
+    prefix: bool,
+) -> OmResult<()> {
+    let names: &[&[u8]] = if prefix {
+        &[b"varyColors"]
+    } else {
+        &[
+            b"gapWidth",
+            b"gapDepth",
+            b"overlap",
+            b"firstSliceAng",
+            b"bubbleScale",
+            b"showNegBubbles",
+            b"bubble3D",
+            b"holeSize",
+            b"secondPieSize",
+            b"sizeRepresents",
+            b"splitType",
+            b"splitPos",
+        ]
+    };
+    for local_name in names {
+        if seen.contains(*local_name) {
+            continue;
+        }
+        let Some(value) = chart_group_direct_property_value(group, local_name) else {
+            continue;
+        };
+        let qualified_name = format!("c:{}", String::from_utf8_lossy(local_name));
+        let mut element = BytesStart::new(qualified_name);
+        element.push_attribute(("val", value.as_str()));
+        writer
+            .write_event(Event::Empty(element))
+            .map_err(runtime_xml_error)?;
+    }
+    if !prefix {
+        if !seen.contains(b"dLbls".as_slice())
+            && let Some(data_labels) = group.data_labels.as_ref().filter(|labels| labels.dirty)
+        {
+            writer
+                .get_mut()
+                .write_all(chart_data_labels_xml_string(data_labels).as_bytes())
+                .map_err(runtime_xml_error)?;
+        }
+        for (local_name, qualified_name) in [
+            (b"serLines".as_slice(), "c:serLines"),
+            (b"dropLines".as_slice(), "c:dropLines"),
+            (b"hiLowLines".as_slice(), "c:hiLowLines"),
+            (b"upDownBars".as_slice(), "c:upDownBars"),
+        ] {
+            if !seen.contains(local_name) && chart_group_line_flag(group, local_name) == Some(true)
+            {
+                writer
+                    .write_event(Event::Empty(BytesStart::new(qualified_name)))
+                    .map_err(runtime_xml_error)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn patch_loaded_chart_group_properties(
+    existing_chart_xml: &[u8],
+    chart: &ChartModel,
+) -> OmResult<Vec<u8>> {
+    if chart.groups.is_empty() || !chart.groups.iter().any(|group| group.dirty) {
+        return Ok(existing_chart_xml.to_vec());
+    }
+
+    let mut reader = Reader::from_reader(Cursor::new(existing_chart_xml));
+    reader.config_mut().trim_text(false);
+    let mut writer = Writer::new(Cursor::new(Vec::with_capacity(existing_chart_xml.len())));
+    let mut buffer = Vec::new();
+    let mut element_stack = Vec::<Vec<u8>>::new();
+    let mut current_group_index = None::<usize>;
+    let mut current_group_depth = None::<usize>;
+    let mut seen = vec![BTreeSet::<Vec<u8>>::new(); chart.groups.len()];
+    let mut prefix_inserted = vec![false; chart.groups.len()];
+    let mut tail_inserted = vec![false; chart.groups.len()];
+    let mut next_group_index = 0usize;
+    let mut skip_depth = 0usize;
+
+    loop {
+        match reader.read_event_into(&mut buffer) {
+            Ok(Event::Start(_element)) if skip_depth > 0 => {
+                skip_depth += 1;
+            }
+            Ok(Event::Empty(_)) if skip_depth > 0 => {}
+            Ok(Event::End(_)) if skip_depth > 0 => {
+                skip_depth -= 1;
+            }
+            Ok(Event::Text(_) | Event::CData(_) | Event::Comment(_) | Event::GeneralRef(_))
+                if skip_depth > 0 => {}
+            Ok(Event::Start(element)) => {
+                let local_name = xml_local_name(element.name().as_ref()).to_vec();
+                let parent_name = element_stack.last().map(Vec::as_slice);
+                if parent_name == Some(b"plotArea".as_slice())
+                    && chart_type_from_group_name(local_name.as_slice()).is_some()
+                {
+                    let group = chart.groups.get(next_group_index).ok_or_else(|| {
+                        OmError::unsupported(
+                            "loaded chart group count changed before lossless property patch",
+                        )
+                    })?;
+                    if group.raw_name.as_bytes() != local_name.as_slice() {
+                        return Err(OmError::unsupported(
+                            "loaded chart group order or type changed before lossless property patch",
+                        ));
+                    }
+                    current_group_index = Some(next_group_index);
+                    current_group_depth = Some(element_stack.len() + 1);
+                    next_group_index += 1;
+                }
+                if let Some(group_index) = current_group_index
+                    && parent_name.is_some_and(|parent| {
+                        chart_type_from_group_name(parent).is_some()
+                    })
+                    && chart_group_direct_property_name(local_name.as_slice())
+                {
+                    seen[group_index].insert(local_name.clone());
+                    if local_name.as_slice() == b"dLbls"
+                        && let Some(data_labels) = chart.groups[group_index]
+                            .data_labels
+                            .as_ref()
+                            .filter(|labels| labels.dirty)
+                    {
+                        writer
+                            .get_mut()
+                            .write_all(chart_data_labels_xml_string(data_labels).as_bytes())
+                            .map_err(runtime_xml_error)?;
+                        skip_depth = 1;
+                        buffer.clear();
+                        continue;
+                    }
+                    if let Some(enabled) = chart_group_line_flag(
+                        &chart.groups[group_index],
+                        local_name.as_slice(),
+                    ) && !enabled
+                    {
+                        skip_depth = 1;
+                        buffer.clear();
+                        continue;
+                    }
+                }
+                if let Some(group_index) = current_group_index
+                    && parent_name.is_some_and(|parent| {
+                        chart_type_from_group_name(parent).is_some()
+                    })
+                    && local_name.as_slice() == b"ser"
+                    && !prefix_inserted[group_index]
+                {
+                    write_missing_chart_group_properties(
+                        &mut writer,
+                        &chart.groups[group_index],
+                        &seen[group_index],
+                        true,
+                    )?;
+                    prefix_inserted[group_index] = true;
+                }
+                if let Some(group_index) = current_group_index
+                    && parent_name.is_some_and(|parent| {
+                        chart_type_from_group_name(parent).is_some()
+                    })
+                    && matches!(local_name.as_slice(), b"axId" | b"extLst")
+                    && !tail_inserted[group_index]
+                {
+                    write_missing_chart_group_properties(
+                        &mut writer,
+                        &chart.groups[group_index],
+                        &seen[group_index],
+                        false,
+                    )?;
+                    tail_inserted[group_index] = true;
+                }
+                let mut output = element.into_owned();
+                if let Some(group_index) = current_group_index
+                    && parent_name.is_some_and(|parent| {
+                        chart_type_from_group_name(parent).is_some()
+                    })
+                    && let Some(value) = chart_group_direct_property_value(
+                        &chart.groups[group_index],
+                        local_name.as_slice(),
+                    )
+                {
+                    output = rewrite_chart_group_val_element(
+                        &output,
+                        reader.decoder(),
+                        value.as_str(),
+                    )?;
+                }
+                writer
+                    .write_event(Event::Start(output))
+                    .map_err(runtime_xml_error)?;
+                element_stack.push(local_name);
+            }
+            Ok(Event::Empty(element)) => {
+                let local_name = xml_local_name(element.name().as_ref()).to_vec();
+                let parent_name = element_stack.last().map(Vec::as_slice);
+                if let Some(group_index) = current_group_index
+                    && parent_name.is_some_and(|parent| {
+                        chart_type_from_group_name(parent).is_some()
+                    })
+                    && matches!(local_name.as_slice(), b"axId" | b"extLst")
+                    && !tail_inserted[group_index]
+                {
+                    write_missing_chart_group_properties(
+                        &mut writer,
+                        &chart.groups[group_index],
+                        &seen[group_index],
+                        false,
+                    )?;
+                    tail_inserted[group_index] = true;
+                }
+                if let Some(group_index) = current_group_index
+                    && parent_name.is_some_and(|parent| {
+                        chart_type_from_group_name(parent).is_some()
+                    })
+                    && chart_group_direct_property_name(local_name.as_slice())
+                {
+                    seen[group_index].insert(local_name.clone());
+                    if local_name.as_slice() == b"dLbls"
+                        && let Some(data_labels) = chart.groups[group_index]
+                            .data_labels
+                            .as_ref()
+                            .filter(|labels| labels.dirty)
+                    {
+                        writer
+                            .get_mut()
+                            .write_all(chart_data_labels_xml_string(data_labels).as_bytes())
+                            .map_err(runtime_xml_error)?;
+                        buffer.clear();
+                        continue;
+                    }
+                    if let Some(enabled) = chart_group_line_flag(
+                        &chart.groups[group_index],
+                        local_name.as_slice(),
+                    ) {
+                        if enabled {
+                            writer
+                                .write_event(Event::Empty(element.into_owned()))
+                                .map_err(runtime_xml_error)?;
+                        }
+                        buffer.clear();
+                        continue;
+                    }
+                    if let Some(value) = chart_group_direct_property_value(
+                        &chart.groups[group_index],
+                        local_name.as_slice(),
+                    ) {
+                        writer
+                            .write_event(Event::Empty(rewrite_chart_group_val_element(
+                                &element,
+                                reader.decoder(),
+                                value.as_str(),
+                            )?))
+                            .map_err(runtime_xml_error)?;
+                    } else {
+                        writer
+                            .write_event(Event::Empty(element.into_owned()))
+                            .map_err(runtime_xml_error)?;
+                    }
+                    buffer.clear();
+                    continue;
+                }
+                writer
+                    .write_event(Event::Empty(element.into_owned()))
+                    .map_err(runtime_xml_error)?;
+            }
+            Ok(Event::End(element)) => {
+                let local_name = xml_local_name(element.name().as_ref()).to_vec();
+                if let Some(group_index) = current_group_index
+                    && current_group_depth == Some(element_stack.len())
+                    && chart_type_from_group_name(local_name.as_slice()).is_some()
+                {
+                    if !prefix_inserted[group_index] {
+                        write_missing_chart_group_properties(
+                            &mut writer,
+                            &chart.groups[group_index],
+                            &seen[group_index],
+                            true,
+                        )?;
+                    }
+                    if !tail_inserted[group_index] {
+                        write_missing_chart_group_properties(
+                            &mut writer,
+                            &chart.groups[group_index],
+                            &seen[group_index],
+                            false,
+                        )?;
+                    }
+                    current_group_index = None;
+                    current_group_depth = None;
+                }
+                writer
+                    .write_event(Event::End(element.into_owned()))
+                    .map_err(runtime_xml_error)?;
+                element_stack.pop();
+            }
+            Ok(Event::Eof) => break,
+            Ok(event) => writer
+                .write_event(event.into_owned())
+                .map_err(runtime_xml_error)?,
+            Err(error) => return Err(runtime_xml_error(error)),
+        }
+        buffer.clear();
+    }
+    if next_group_index != chart.groups.len() {
+        return Err(OmError::unsupported(
+            "loaded chart group count changed before lossless property patch",
+        ));
+    }
+    Ok(writer.into_inner().into_inner())
+}
+
+fn copy_chart_xml_subtree(
+    reader: &mut Reader<Cursor<&[u8]>>,
+    writer: &mut Writer<Cursor<Vec<u8>>>,
+    buffer: &mut Vec<u8>,
+    start: BytesStart<'static>,
+) -> OmResult<()> {
+    writer
+        .write_event(Event::Start(start))
+        .map_err(runtime_xml_error)?;
+    let mut depth = 1usize;
+    while depth > 0 {
+        buffer.clear();
+        match reader.read_event_into(buffer) {
+            Ok(Event::Start(element)) => {
+                depth += 1;
+                writer
+                    .write_event(Event::Start(element.into_owned()))
+                    .map_err(runtime_xml_error)?;
+            }
+            Ok(Event::End(element)) => {
+                depth -= 1;
+                writer
+                    .write_event(Event::End(element.into_owned()))
+                    .map_err(runtime_xml_error)?;
+            }
+            Ok(Event::Eof) => {
+                return Err(OmError::new(
+                    OmErrorCode::Parse,
+                    "unexpected EOF while preserving chart group property subtree",
+                ));
+            }
+            Ok(event) => writer
+                .write_event(event.into_owned())
+                .map_err(runtime_xml_error)?,
+            Err(error) => return Err(runtime_xml_error(error)),
+        }
+    }
+    Ok(())
+}
+
 fn patch_loaded_chart_model_xml(
     existing_chart_xml: &[u8],
     chart: &ChartModel,
@@ -42987,6 +43772,13 @@ fn patch_loaded_chart_model_xml(
         }
         rewritten_chart_xml = rewritten;
         rewritten_chart_xml.as_slice()
+    } else {
+        existing_chart_xml
+    };
+    let rewritten_group_xml;
+    let existing_chart_xml = if chart.groups.iter().any(|group| group.dirty) {
+        rewritten_group_xml = patch_loaded_chart_group_properties(existing_chart_xml, chart)?;
+        rewritten_group_xml.as_slice()
     } else {
         existing_chart_xml
     };
@@ -43053,7 +43845,6 @@ fn patch_loaded_chart_model_xml(
         .map(|value| value.to_string());
     let expected_overlap = chart.overlap.map(|value| value.to_string());
     let expected_first_slice_angle = chart.first_slice_angle.map(|value| value.to_string());
-    let expected_explosion = chart_explosion_xml_value(chart);
     let expected_bubble_scale = chart.bubble_scale.map(|value| value.to_string());
     let expected_show_negative_bubbles = chart
         .show_negative_bubbles
@@ -43092,7 +43883,6 @@ fn patch_loaded_chart_model_xml(
     let expected_gap_depth = expected_gap_depth.as_deref();
     let expected_overlap = expected_overlap.as_deref();
     let expected_first_slice_angle = expected_first_slice_angle.as_deref();
-    let expected_explosion = expected_explosion.as_deref();
     let expected_bubble_scale = expected_bubble_scale.as_deref();
     let expected_doughnut_hole_size = expected_doughnut_hole_size.as_deref();
     let expected_second_plot_size = expected_second_plot_size.as_deref();
@@ -43779,6 +44569,29 @@ fn patch_loaded_chart_model_xml(
             } else {
                 chart.chart_type.clone()
             }
+        })
+        .collect::<Vec<_>>();
+    let expected_series_explosions = model_series_chart_types
+        .iter()
+        .enumerate()
+        .map(|(series_index, chart_type)| {
+            if !chart_type_supports_explosion(chart_type) {
+                return None;
+            }
+            model_series_group_indices[series_index]
+                .and_then(|group_index| chart.groups.get(group_index))
+                .and_then(|group| group.explosion)
+                .or(chart.explosion)
+                .or_else(|| {
+                    matches!(
+                        chart_type,
+                        ChartType::PieExploded
+                            | ChartType::Pie3DExploded
+                            | ChartType::DoughnutExploded
+                    )
+                    .then_some(25)
+                })
+                .map(|value| value.to_string())
         })
         .collect::<Vec<_>>();
 
@@ -44539,6 +45352,23 @@ fn patch_loaded_chart_model_xml(
                     current_chart_group_depth = Some(depth);
                     chart_group_axis_refs_seen.clear();
                 }
+                if preserve_loaded_group_types
+                    && parent_name.is_some_and(|parent| {
+                        chart_type_from_group_name(parent).is_some()
+                    })
+                    && chart_group_direct_property_name(local_name.as_slice())
+                {
+                    let element = element.into_owned();
+                    buffer.clear();
+                    copy_chart_xml_subtree(
+                        &mut reader,
+                        &mut writer,
+                        &mut buffer,
+                        element,
+                    )?;
+                    buffer.clear();
+                    continue;
+                }
                 if local_name.as_slice() == b"ser" {
                     let Some(series_index) = loaded_series_model_indices
                         .get(next_loaded_series_index)
@@ -45238,7 +46068,10 @@ fn patch_loaded_chart_model_xml(
                     if let Some(seen) = series_explosion_seen.get_mut(series_index) {
                         *seen = true;
                     }
-                    if let Some(value) = expected_explosion {
+                    if let Some(value) = expected_series_explosions
+                        .get(series_index)
+                        .and_then(Option::as_deref)
+                    {
                         writer
                             .write_event(Event::Start(rewrite_val_attribute_element(
                                 &element,
@@ -46170,6 +47003,18 @@ fn patch_loaded_chart_model_xml(
                     .checked_sub(2)
                     .and_then(|index| element_stack.get(index))
                     .map(Vec::as_slice);
+                if preserve_loaded_group_types
+                    && parent_name.is_some_and(|parent| {
+                        chart_type_from_group_name(parent).is_some()
+                    })
+                    && chart_group_direct_property_name(local_name.as_slice())
+                {
+                    writer
+                        .write_event(Event::Empty(element.into_owned()))
+                        .map_err(runtime_xml_error)?;
+                    buffer.clear();
+                    continue;
+                }
                 if parent_name == Some(b"plotArea".as_slice())
                     && local_name.as_slice() != b"layout"
                     && !plot_area_layout_container_seen
@@ -46789,7 +47634,10 @@ fn patch_loaded_chart_model_xml(
                     if let Some(seen) = series_explosion_seen.get_mut(series_index) {
                         *seen = true;
                     }
-                    if let Some(value) = expected_explosion {
+                    if let Some(value) = expected_series_explosions
+                        .get(series_index)
+                        .and_then(Option::as_deref)
+                    {
                         writer
                             .write_event(Event::Empty(rewrite_val_attribute_element(
                                 &element,
@@ -47881,7 +48729,9 @@ fn patch_loaded_chart_model_xml(
                         .get(series_index)
                         .copied()
                         .unwrap_or(false)
-                        && let Some(value) = expected_explosion
+                        && let Some(value) = expected_series_explosions
+                            .get(series_index)
+                            .and_then(Option::as_deref)
                     {
                         let mut explosion = BytesStart::new("c:explosion");
                         explosion.push_attribute(("val", value));
@@ -48678,7 +49528,10 @@ fn patch_loaded_chart_model_xml(
                         writer
                             .write_event(Event::Empty(order_element))
                             .map_err(runtime_xml_error)?;
-                        if let Some(value) = expected_explosion {
+                        if let Some(value) = expected_series_explosions
+                            .get(series_index)
+                            .and_then(Option::as_deref)
+                        {
                             let mut explosion = BytesStart::new("c:explosion");
                             explosion.push_attribute(("val", value));
                             writer
@@ -49266,8 +50119,9 @@ fn patch_loaded_chart_model_xml(
             .zip(series_explosion_written.iter())
             .zip(series_explosion_inserted.iter())
             .zip(series_explosion_removed.iter())
+            .zip(expected_series_explosions.iter())
             .all(
-                |(((seen, written), inserted), removed)| match expected_explosion {
+                |((((seen, written), inserted), removed), expected)| match expected {
                     Some(_) if *seen => *written,
                     Some(_) => *inserted,
                     None if *seen => *removed,
@@ -49872,22 +50726,22 @@ fn patch_loaded_chart_model_xml(
         && chart_protection_matches
         && data_table_matches
         && plot_area_layout_matches
-        && vary_colors_matches
-        && bar_direction_matches
-        && chart_grouping_matches
-        && bar_shape_matches
-        && line_marker_matches
-        && scatter_style_matches
-        && radar_style_matches
-        && of_pie_type_matches
-        && surface_wireframe_matches
-        && gap_width_matches
-        && gap_depth_matches
-        && overlap_matches
-        && data_labels_match
+        && (preserve_loaded_group_types || vary_colors_matches)
+        && (preserve_loaded_group_types || bar_direction_matches)
+        && (preserve_loaded_group_types || chart_grouping_matches)
+        && (preserve_loaded_group_types || bar_shape_matches)
+        && (preserve_loaded_group_types || line_marker_matches)
+        && (preserve_loaded_group_types || scatter_style_matches)
+        && (preserve_loaded_group_types || radar_style_matches)
+        && (preserve_loaded_group_types || of_pie_type_matches)
+        && (preserve_loaded_group_types || surface_wireframe_matches)
+        && (preserve_loaded_group_types || gap_width_matches)
+        && (preserve_loaded_group_types || gap_depth_matches)
+        && (preserve_loaded_group_types || overlap_matches)
+        && (preserve_loaded_group_types || data_labels_match)
         && series_data_labels_match
-        && chart_group_numeric_settings_match
-        && chart_group_line_flags_match
+        && (preserve_loaded_group_types || chart_group_numeric_settings_match)
+        && (preserve_loaded_group_types || chart_group_line_flags_match)
         && axes_match
         && axis_scale_units_match
         && axis_orientation_match
@@ -51105,6 +51959,13 @@ fn chart_object_z_order_operation(command: &OmValue, surface: &str) -> OmResult<
 }
 
 fn chart_group_axis_groups(chart: &ChartModel) -> Vec<ChartAxisGroup> {
+    if chart_group_overlay_is_stable(chart) {
+        return chart
+            .groups
+            .iter()
+            .map(|group| group.axis_group)
+            .collect();
+    }
     if chart_type_is_volume_stock(&chart.chart_type) {
         return vec![ChartAxisGroup::Primary, ChartAxisGroup::Secondary];
     }
@@ -51127,6 +51988,124 @@ fn chart_group_axis_groups(chart: &ChartModel) -> Vec<ChartAxisGroup> {
     groups
 }
 
+fn chart_group_indices(
+    chart: &ChartModel,
+    shortcut: Option<ChartGroupShortcutKind>,
+) -> Vec<usize> {
+    chart_group_axis_groups(chart)
+        .iter()
+        .enumerate()
+        .filter_map(|(index, _)| {
+            shortcut
+                .is_none_or(|shortcut| {
+                    chart_group_chart_type(chart, index)
+                        .is_ok_and(|chart_type| {
+                            chart_type_matches_group_shortcut(&chart_type, shortcut)
+                        })
+                })
+                .then_some(index)
+        })
+        .collect()
+}
+
+fn chart_type_matches_group_shortcut(
+    chart_type: &ChartType,
+    shortcut: ChartGroupShortcutKind,
+) -> bool {
+    match shortcut {
+        ChartGroupShortcutKind::Area => matches!(
+            chart_type,
+            ChartType::Area
+                | ChartType::Area3D
+                | ChartType::AreaStacked
+                | ChartType::Area3DStacked
+                | ChartType::AreaStacked100
+                | ChartType::Area3DStacked100
+        ),
+        ChartGroupShortcutKind::Bar => matches!(
+            chart_type,
+            ChartType::Bar
+                | ChartType::Bar3DClustered
+                | ChartType::BarStacked
+                | ChartType::Bar3DStacked
+                | ChartType::BarStacked100
+                | ChartType::Bar3DStacked100
+                | ChartType::CylinderBarClustered
+                | ChartType::CylinderBarStacked
+                | ChartType::CylinderBarStacked100
+                | ChartType::ConeBarClustered
+                | ChartType::ConeBarStacked
+                | ChartType::ConeBarStacked100
+                | ChartType::PyramidBarClustered
+                | ChartType::PyramidBarStacked
+                | ChartType::PyramidBarStacked100
+        ),
+        ChartGroupShortcutKind::Column => matches!(
+            chart_type,
+            ChartType::Column
+                | ChartType::Column3D
+                | ChartType::Column3DClustered
+                | ChartType::ColumnStacked
+                | ChartType::Column3DStacked
+                | ChartType::ColumnStacked100
+                | ChartType::Column3DStacked100
+                | ChartType::CylinderColumn
+                | ChartType::CylinderColumnClustered
+                | ChartType::CylinderColumnStacked
+                | ChartType::CylinderColumnStacked100
+                | ChartType::ConeColumn
+                | ChartType::ConeColumnClustered
+                | ChartType::ConeColumnStacked
+                | ChartType::ConeColumnStacked100
+                | ChartType::PyramidColumn
+                | ChartType::PyramidColumnClustered
+                | ChartType::PyramidColumnStacked
+                | ChartType::PyramidColumnStacked100
+        ),
+        ChartGroupShortcutKind::Doughnut => {
+            matches!(chart_type, ChartType::Doughnut | ChartType::DoughnutExploded)
+        }
+        ChartGroupShortcutKind::Line => matches!(
+            chart_type,
+            ChartType::Line
+                | ChartType::Line3D
+                | ChartType::LineMarkers
+                | ChartType::LineMarkersStacked
+                | ChartType::LineMarkersStacked100
+                | ChartType::LineStacked
+                | ChartType::LineStacked100
+        ),
+        ChartGroupShortcutKind::Pie => matches!(
+            chart_type,
+            ChartType::Pie
+                | ChartType::Pie3D
+                | ChartType::PieExploded
+                | ChartType::Pie3DExploded
+                | ChartType::PieOfPie
+                | ChartType::BarOfPie
+        ),
+        ChartGroupShortcutKind::Radar => matches!(
+            chart_type,
+            ChartType::Radar | ChartType::RadarMarkers | ChartType::RadarFilled
+        ),
+        ChartGroupShortcutKind::Surface => matches!(
+            chart_type,
+            ChartType::Surface
+                | ChartType::SurfaceWireframe
+                | ChartType::SurfaceTopView
+                | ChartType::SurfaceTopViewWireframe
+        ),
+        ChartGroupShortcutKind::Scatter => matches!(
+            chart_type,
+            ChartType::Scatter
+                | ChartType::ScatterLines
+                | ChartType::ScatterLinesNoMarkers
+                | ChartType::ScatterSmooth
+                | ChartType::ScatterSmoothNoMarkers
+        ),
+    }
+}
+
 fn chart_group_axis_group(chart: &ChartModel, group_index: usize) -> OmResult<ChartAxisGroup> {
     chart_group_axis_groups(chart)
         .get(group_index)
@@ -51135,10 +52114,27 @@ fn chart_group_axis_group(chart: &ChartModel, group_index: usize) -> OmResult<Ch
 }
 
 fn chart_group_chart_type(chart: &ChartModel, group_index: usize) -> OmResult<ChartType> {
+    if chart_group_overlay_is_stable(chart)
+        && let Some(group) = chart.groups.get(group_index)
+    {
+        return Ok(group.chart_type.clone());
+    }
     Ok(chart_type_for_axis_group(
         chart,
         chart_group_axis_group(chart, group_index)?,
     ))
+}
+
+fn chart_group_overlay_is_stable(chart: &ChartModel) -> bool {
+    !chart.groups.is_empty()
+        && chart.series.iter().all(|series| {
+            series.raw_index.is_some_and(|raw_index| {
+                chart.groups.iter().any(|group| {
+                    group.axis_group == series.axis_group
+                        && group.series_raw_indices.contains(&raw_index)
+                })
+            })
+        })
 }
 
 fn chart_plot_by_from_optional_arg(value: Option<&OmValue>, label: &str) -> OmResult<Option<i32>> {
@@ -130313,6 +131309,299 @@ mod tests {
     }
 
     #[test]
+    fn loaded_combo_chart_group_properties_patch_independently() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_filtered_combo_chart_series_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open loaded combo chart groups");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let groups = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartGroups", &[])
+                .expect("Chart.ChartGroups"),
+        );
+        let bar_group = expect_object_handle(
+            runtime
+                .dispatch_invoke(groups, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartGroups.Item(1)"),
+        );
+        let line_group = expect_object_handle(
+            runtime
+                .dispatch_invoke(groups, "Item", &[OmValue::Number(2.0)])
+                .expect("ChartGroups.Item(2)"),
+        );
+        for (member, expected_chart_type) in [
+            ("ColumnGroups", super::XL_COLUMN_CLUSTERED),
+            ("LineGroups", super::XL_LINE),
+        ] {
+            let shortcut_groups = expect_object_handle(
+                runtime
+                    .dispatch_get(chart, member, &[])
+                    .unwrap_or_else(|error| panic!("Chart.{member}: {error:?}")),
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(shortcut_groups, "Count", &[])
+                    .unwrap_or_else(|error| panic!("{member}.Count: {error:?}")),
+                OmValue::Number(1.0)
+            );
+            let shortcut_group = expect_object_handle(
+                runtime
+                    .dispatch_invoke(shortcut_groups, "Item", &[OmValue::Number(1.0)])
+                    .unwrap_or_else(|error| panic!("{member}.Item(1): {error:?}")),
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(shortcut_group, "ChartType", &[])
+                    .unwrap_or_else(|error| panic!("{member}(1).ChartType: {error:?}")),
+                OmValue::Number(f64::from(expected_chart_type))
+            );
+        }
+
+        assert_eq!(
+            runtime
+                .dispatch_get(bar_group, "ChartType", &[])
+                .expect("bar ChartGroup.ChartType"),
+            OmValue::Number(f64::from(super::XL_COLUMN_CLUSTERED))
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(line_group, "ChartType", &[])
+                .expect("line ChartGroup.ChartType"),
+            OmValue::Number(f64::from(super::XL_LINE))
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(bar_group, "VaryByCategories", &[])
+                .expect("bar VaryByCategories"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(line_group, "VaryByCategories", &[])
+                .expect("line VaryByCategories"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(bar_group, "GapWidth", &[])
+                .expect("bar GapWidth"),
+            OmValue::Number(111.0)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(line_group, "HasDropLines", &[])
+                .expect("line HasDropLines"),
+            OmValue::Bool(true)
+        );
+        for (group, expected_name, expected_chart_type) in [
+            (bar_group, "Bar Visible", super::XL_COLUMN_CLUSTERED),
+            (line_group, "Line Visible", super::XL_LINE),
+        ] {
+            let collection = expect_object_handle(
+                runtime
+                    .dispatch_get(group, "SeriesCollection", &[])
+                    .expect("ChartGroup.SeriesCollection"),
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(collection, "Count", &[])
+                    .expect("ChartGroup.SeriesCollection.Count"),
+                OmValue::Number(1.0)
+            );
+            let series = expect_object_handle(
+                runtime
+                    .dispatch_invoke(collection, "Item", &[OmValue::Number(1.0)])
+                    .expect("ChartGroup.SeriesCollection.Item(1)"),
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(series, "Name", &[])
+                    .expect("group Series.Name"),
+                OmValue::Text(format!("=\"{expected_name}\""))
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(series, "ChartType", &[])
+                    .expect("group Series.ChartType"),
+                OmValue::Number(f64::from(expected_chart_type))
+            );
+        }
+
+        runtime
+            .dispatch_set(bar_group, "GapWidth", OmValue::Number(210.0), &[])
+            .expect("set bar GapWidth");
+        runtime
+            .dispatch_set(bar_group, "VaryByCategories", OmValue::Bool(false), &[])
+            .expect("set bar VaryByCategories");
+        runtime
+            .dispatch_set(line_group, "VaryByCategories", OmValue::Bool(true), &[])
+            .expect("set line VaryByCategories");
+        runtime
+            .dispatch_set(line_group, "HasDropLines", OmValue::Bool(false), &[])
+            .expect("clear line HasDropLines");
+        runtime
+            .dispatch_set(line_group, "HasHiLoLines", OmValue::Bool(true), &[])
+            .expect("set line HasHiLoLines");
+        runtime
+            .dispatch_invoke(
+                chart,
+                "ApplyDataLabels",
+                &[OmValue::Number(f64::from(
+                    super::XL_DATA_LABELS_SHOW_VALUE,
+                ))],
+            )
+            .expect("apply chart data labels to all loaded groups");
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save loaded combo group property edits");
+        let package = OpcPackage::from_bytes(&saved).expect("saved combo group package");
+        let chart_xml = std::str::from_utf8(
+            package
+                .part("xl/charts/chart1.xml")
+                .expect("saved combo chart part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved combo chart XML");
+        let bar_start = chart_xml.find("<c:barChart>").expect("bar group start");
+        let bar_end = chart_xml.find("</c:barChart>").expect("bar group end");
+        let line_start = chart_xml.find("<c:lineChart>").expect("line group start");
+        let line_end = chart_xml.find("</c:lineChart>").expect("line group end");
+        let bar_xml = &chart_xml[bar_start..bar_end];
+        let line_xml = &chart_xml[line_start..line_end];
+        assert!(bar_xml.contains(r#"<c:varyColors val="0"/>"#));
+        assert!(bar_xml.contains(r#"<c:gapWidth val="210"/>"#));
+        assert!(!bar_xml.contains("<c:dropLines"));
+        assert!(!bar_xml.contains("<c:hiLowLines"));
+        assert!(bar_xml.contains(r#"<c:dLbls><c:showVal val="1"/></c:dLbls>"#));
+        assert!(line_xml.contains(r#"<c:varyColors val="1"/>"#));
+        assert!(!line_xml.contains("<c:gapWidth"));
+        assert!(!line_xml.contains("<c:dropLines"));
+        assert!(line_xml.contains("<c:hiLowLines"));
+        assert!(line_xml.contains(r#"<c:dLbls><c:showVal val="1"/></c:dLbls>"#));
+        assert!(chart_xml.contains(r#"<test:opaque group="bar" keep="true"/>"#));
+        assert!(chart_xml.contains(r#"<test:opaque group="line" keep="true"/>"#));
+        assert!(chart_xml.contains(r#"<a:ln w="12700"/>"#));
+        assert!(chart_xml.contains(r#"<a:ln w="25400"/>"#));
+
+        let mut reopened = ExcelRuntime::new();
+        let reopened_workbook = reopened
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen combo group property edits");
+        let reopened_worksheet = expect_object_handle(
+            reopened
+                .dispatch_get(
+                    reopened_workbook.0,
+                    "Worksheets",
+                    &[OmValue::Number(1.0)],
+                )
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened
+                .dispatch_invoke(
+                    reopened_chart_objects,
+                    "Item",
+                    &[OmValue::Number(1.0)],
+                )
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        let reopened_groups = expect_object_handle(
+            reopened
+                .dispatch_get(reopened_chart, "ChartGroups", &[])
+                .expect("reopened Chart.ChartGroups"),
+        );
+        let reopened_bar = expect_object_handle(
+            reopened
+                .dispatch_invoke(reopened_groups, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartGroups.Item(1)"),
+        );
+        let reopened_line = expect_object_handle(
+            reopened
+                .dispatch_invoke(reopened_groups, "Item", &[OmValue::Number(2.0)])
+                .expect("reopened ChartGroups.Item(2)"),
+        );
+        assert_eq!(
+            reopened
+                .dispatch_get(reopened_bar, "GapWidth", &[])
+                .expect("reopened bar GapWidth"),
+            OmValue::Number(210.0)
+        );
+        assert_eq!(
+            reopened
+                .dispatch_get(reopened_bar, "VaryByCategories", &[])
+                .expect("reopened bar VaryByCategories"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            reopened
+                .dispatch_get(reopened_line, "VaryByCategories", &[])
+                .expect("reopened line VaryByCategories"),
+            OmValue::Bool(true)
+        );
+        assert_eq!(
+            reopened
+                .dispatch_get(reopened_line, "HasDropLines", &[])
+                .expect("reopened line HasDropLines"),
+            OmValue::Bool(false)
+        );
+        assert_eq!(
+            reopened
+                .dispatch_get(reopened_line, "HasHiLoLines", &[])
+                .expect("reopened line HasHiLoLines"),
+            OmValue::Bool(true)
+        );
+    }
+
+    #[test]
     fn loaded_combo_chart_topology_changes_are_rejected_losslessly() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
@@ -160458,6 +161747,86 @@ mod tests {
                     .expect("reopened ChartGroups.Count"),
                 OmValue::Number(2.0)
             );
+            let reopened_volume_group = expect_object_handle(
+                reopened
+                    .dispatch_invoke(reopened_groups, "Item", &[OmValue::Number(1.0)])
+                    .expect("reopened volume ChartGroups.Item(1)"),
+            );
+            let reopened_stock_group = expect_object_handle(
+                reopened
+                    .dispatch_invoke(reopened_groups, "Item", &[OmValue::Number(2.0)])
+                    .expect("reopened stock ChartGroups.Item(2)"),
+            );
+            assert_eq!(
+                reopened
+                    .dispatch_get(reopened_volume_group, "ChartType", &[])
+                    .expect("reopened volume group ChartType"),
+                OmValue::Number(f64::from(super::XL_COLUMN_CLUSTERED))
+            );
+            assert_eq!(
+                reopened
+                    .dispatch_get(reopened_stock_group, "ChartType", &[])
+                    .expect("reopened stock group ChartType"),
+                OmValue::Number(f64::from(stock_group_type))
+            );
+            reopened
+                .dispatch_set(
+                    reopened_volume_group,
+                    "GapWidth",
+                    OmValue::Number(240.0),
+                    &[],
+                )
+                .expect("set reopened volume group GapWidth");
+            reopened
+                .dispatch_set(
+                    reopened_stock_group,
+                    "HasDropLines",
+                    OmValue::Bool(false),
+                    &[],
+                )
+                .expect("clear reopened stock group drop lines");
+            let resaved = reopened
+                .save_workbook(
+                    reopened_workbook,
+                    SaveWorkbookSpec {
+                        format: FileFormat::Xlsx,
+                        profile: ExcelProfile::Excel365,
+                        lossless: true,
+                    },
+                )
+                .expect("resave volume stock group-local edits");
+            let resaved_package =
+                OpcPackage::from_bytes(&resaved).expect("resaved volume stock package");
+            let resaved_chart_xml = std::str::from_utf8(
+                resaved_package
+                    .part("xl/charts/chart1.xml")
+                    .expect("resaved volume stock chart part")
+                    .bytes
+                    .as_slice(),
+            )
+            .expect("resaved volume stock chart XML");
+            let resaved_volume_end = resaved_chart_xml
+                .find("</c:barChart>")
+                .expect("resaved volume group end");
+            let resaved_stock_start = resaved_chart_xml
+                .find("<c:stockChart>")
+                .expect("resaved stock group start");
+            let resaved_stock_end = resaved_chart_xml
+                .find("</c:stockChart>")
+                .expect("resaved stock group end");
+            let resaved_volume_xml = &resaved_chart_xml[..resaved_volume_end];
+            let resaved_stock_xml =
+                &resaved_chart_xml[resaved_stock_start..resaved_stock_end];
+            assert!(resaved_volume_xml.contains(r#"<c:gapWidth val="240"/>"#));
+            assert!(!resaved_stock_xml.contains("<c:gapWidth"));
+            assert!(!resaved_stock_xml.contains("<c:dropLines"));
+            assert!(resaved_stock_xml.contains("<c:hiLowLines"));
+            assert!(resaved_volume_xml.contains(
+                r#"<c:axId val="10"/><c:axId val="20"/>"#
+            ));
+            assert!(resaved_stock_xml.contains(
+                r#"<c:axId val="10"/><c:axId val="50"/>"#
+            ));
         }
     }
 
@@ -185610,16 +186979,18 @@ mod tests {
                 br#"<?xml version="1.0" encoding="UTF-8"?>
 <c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:c15="http://schemas.microsoft.com/office/drawing/2012/chart" xmlns:test="urn:filtered-combo-test">
   <c:chart><c:plotArea>
-    <c:barChart><c:barDir val="col"/><c:grouping val="clustered"/>
+    <c:barChart><c:barDir val="col"/><c:grouping val="clustered"/><c:varyColors val="1"/>
       <c:ser><c:idx val="10"/><c:order val="0"/><c:tx><c:v>Bar Visible</c:v></c:tx><c:val><c:numRef><c:f>Sheet1!$A$1</c:f></c:numRef></c:val></c:ser>
+      <c:gapWidth val="111"/><c:overlap val="-10"/>
       <c:axId val="10"/><c:axId val="20"/>
       <c:extLst>
         <c:ext uri="{02D57815-91ED-43cb-92C2-25804820EDAC}"><c15:filteredBarSeries><c15:ser><c:idx val="20"/><c:order val="1"/><c:tx><c:v>Bar Filtered</c:v></c:tx><c:spPr><a:ln w="12700"/></c:spPr><c:val><c:numRef><c:f>Sheet1!$B$1</c:f></c:numRef></c:val></c15:ser></c15:filteredBarSeries></c:ext>
         <c:ext uri="urn:combo-bar-sibling"><test:opaque group="bar" keep="true"/></c:ext>
       </c:extLst>
     </c:barChart>
-    <c:lineChart>
+    <c:lineChart><c:grouping val="standard"/><c:varyColors val="0"/>
       <c:ser><c:idx val="30"/><c:order val="2"/><c:tx><c:v>Line Visible</c:v></c:tx><c:spPr><a:ln w="25400"/></c:spPr><c:val><c:numRef><c:f>Sheet1!$C$1</c:f></c:numRef></c:val></c:ser>
+      <c:dropLines/>
       <c:axId val="10"/><c:axId val="50"/>
       <c:extLst>
         <c:ext uri="{02D57815-91ED-43cb-92C2-25804820EDAC}"><c15:filteredLineSeries><c15:ser><c:idx val="40"/><c:order val="3"/><c:tx><c:v>Line Filtered</c:v></c:tx><c:val><c:numRef><c:f>Sheet1!$A$1</c:f></c:numRef></c:val></c15:ser></c15:filteredLineSeries></c:ext>
