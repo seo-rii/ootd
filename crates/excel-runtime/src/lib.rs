@@ -5973,9 +5973,76 @@ impl ExcelRuntime {
                         self.series_model(workbook, chart_id, series_index)?;
                         let axis_group =
                             chart_axis_group_from_excel_value(number as u32, "Series.AxisGroup")?;
-                        let has_loaded_groups =
-                            self.chart_model(workbook, chart_id)?.groups.len() > 1;
-                        if !has_loaded_groups && axis_group == ChartAxisGroup::Secondary {
+                        let uses_loaded_group_topology = {
+                            let chart = self.chart_model(workbook, chart_id)?;
+                            let series = chart.series.get(series_index).ok_or_else(|| {
+                                OmError::new(OmErrorCode::NotFound, "series not found")
+                            })?;
+                            series
+                                .raw_index
+                                .and_then(|raw_index| {
+                                    chart.groups.iter().find(|group| {
+                                        group.series_raw_indices.contains(&raw_index)
+                                    })
+                                })
+                                .is_some_and(|group| {
+                                    group.loaded_index.is_some() && !group.axis_ids.is_empty()
+                                })
+                        };
+                        if uses_loaded_group_topology {
+                            if self.runtime_workbook(workbook)?.read_only {
+                                return Err(OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "cannot modify a read-only workbook",
+                                ));
+                            }
+                            let (candidate, axis_topology_changed) = {
+                                let chart = self.chart_model(workbook, chart_id)?;
+                                let series = chart.series.get(series_index).ok_or_else(|| {
+                                    OmError::new(OmErrorCode::NotFound, "series not found")
+                                })?;
+                                if series.axis_group == axis_group {
+                                    return Ok(());
+                                }
+                                let raw_index = series.raw_index.ok_or_else(|| {
+                                    OmError::new(
+                                        OmErrorCode::InvalidState,
+                                        "loaded chart series has no stable c:idx identity",
+                                    )
+                                })?;
+                                let mut candidate = chart.clone();
+                                let axis_topology_changed = move_series_to_chart_group(
+                                    &mut candidate,
+                                    raw_index,
+                                    axis_group,
+                                )?;
+                                candidate.series[series_index].axis_group = axis_group;
+                                candidate.content_dirty = true;
+                                candidate.dirty = true;
+                                (candidate, axis_topology_changed)
+                            };
+                            {
+                                let runtime = self.runtime_workbook_mut(workbook)?;
+                                let chart = runtime
+                                    .loaded
+                                    .state
+                                    .charts
+                                    .get_mut(&chart_id)
+                                    .ok_or_else(|| {
+                                        OmError::new(OmErrorCode::NotFound, "chart not found")
+                                    })?;
+                                *chart = candidate;
+                                runtime.dirty = true;
+                            }
+                            if axis_topology_changed {
+                                self.stale_axis_handles_for_chart(workbook, chart_id);
+                            }
+                            self.find_state = None;
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
+                            return Ok(());
+                        }
+                        if axis_group == ChartAxisGroup::Secondary {
                             self.set_chart_axis_presence(
                                 workbook,
                                 chart_id,
@@ -6000,22 +6067,6 @@ impl ExcelRuntime {
                                 .ok_or_else(|| {
                                     OmError::new(OmErrorCode::NotFound, "chart not found")
                                 })?;
-                        let raw_index = chart
-                            .series
-                            .get(series_index)
-                            .ok_or_else(|| {
-                                OmError::new(OmErrorCode::NotFound, "series not found")
-                            })?
-                            .raw_index;
-                        if has_loaded_groups {
-                            let raw_index = raw_index.ok_or_else(|| {
-                                OmError::new(
-                                    OmErrorCode::InvalidState,
-                                    "loaded chart series has no stable c:idx identity",
-                                )
-                            })?;
-                            move_series_to_chart_group(chart, raw_index, axis_group)?;
-                        }
                         let series = chart.series.get_mut(series_index).ok_or_else(|| {
                             OmError::new(OmErrorCode::NotFound, "series not found")
                         })?;
@@ -43251,6 +43302,145 @@ fn rewrite_loaded_chart_group_additions(
     Ok(rewritten)
 }
 
+fn serialize_loaded_chart_axis_shell(chart: &ChartModel, axis: &AxisModel) -> OmResult<Vec<u8>> {
+    let axis_id = axis.raw_id.as_deref().ok_or_else(|| {
+        OmError::new(
+            OmErrorCode::InvalidState,
+            "new loaded chart axes require a stable axis identity",
+        )
+    })?;
+    let qualified_name = format!("c:{}", chart_axis_xml_name(axis.kind));
+    let mut writer = Writer::new(Cursor::new(Vec::new()));
+    let mut start = BytesStart::new(qualified_name.clone());
+    start.push_attribute((
+        "xmlns:c",
+        "http://schemas.openxmlformats.org/drawingml/2006/chart",
+    ));
+    writer
+        .write_event(Event::Start(start))
+        .map_err(runtime_xml_error)?;
+    let mut axis_id_element = BytesStart::new("c:axId");
+    axis_id_element.push_attribute(("val", axis_id));
+    writer
+        .write_event(Event::Empty(axis_id_element))
+        .map_err(runtime_xml_error)?;
+    if let Some(cross_axis_id) = chart_axis_cross_target_id(&chart.axes, axis) {
+        let mut cross_axis = BytesStart::new("c:crossAx");
+        cross_axis.push_attribute(("val", cross_axis_id.as_str()));
+        writer
+            .write_event(Event::Empty(cross_axis))
+            .map_err(runtime_xml_error)?;
+    }
+    writer
+        .write_event(Event::End(BytesEnd::new(qualified_name)))
+        .map_err(runtime_xml_error)?;
+    Ok(writer.into_inner().into_inner())
+}
+
+fn element_val_attribute(
+    element: &BytesStart<'_>,
+    decoder: quick_xml::encoding::Decoder,
+) -> OmResult<Option<String>> {
+    for attr in element.attributes() {
+        let attr = attr.map_err(runtime_xml_error)?;
+        if xml_local_name(attr.key.as_ref()) == b"val" {
+            return Ok(Some(
+                attr.decode_and_unescape_value(decoder)
+                    .map_err(runtime_xml_error)?
+                    .into_owned(),
+            ));
+        }
+    }
+    Ok(None)
+}
+
+fn rewrite_loaded_chart_axis_additions(
+    existing_chart_xml: &[u8],
+    chart: &ChartModel,
+) -> OmResult<Vec<u8>> {
+    let mut reader = Reader::from_reader(Cursor::new(existing_chart_xml));
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+    let mut element_stack = Vec::<Vec<u8>>::new();
+    let mut loaded_axes = Vec::<(ChartAxisKind, Option<String>)>::new();
+    let mut saw_axis = false;
+    let mut first_after_axes_start = None::<usize>;
+    let mut plot_area_end = None::<usize>;
+    loop {
+        let event_start = usize::try_from(reader.buffer_position()).map_err(|_| {
+            OmError::new(OmErrorCode::InvalidState, "chart XML position overflow")
+        })?;
+        match reader.read_event_into(&mut buffer) {
+            Ok(Event::Start(element)) => {
+                let local_name = xml_local_name(element.name().as_ref()).to_vec();
+                if element_stack.last().map(Vec::as_slice) == Some(b"plotArea".as_slice()) {
+                    if let Some(axis_kind) = chart_axis_kind_from_xml_name(local_name.as_slice()) {
+                        loaded_axes.push((axis_kind, None));
+                        saw_axis = true;
+                    } else if saw_axis && first_after_axes_start.is_none() {
+                        first_after_axes_start = Some(event_start);
+                    }
+                }
+                element_stack.push(local_name);
+            }
+            Ok(Event::Empty(element)) => {
+                let local_name = xml_local_name(element.name().as_ref()).to_vec();
+                if element_stack.last().map(Vec::as_slice) == Some(b"plotArea".as_slice()) {
+                    if let Some(axis_kind) = chart_axis_kind_from_xml_name(local_name.as_slice()) {
+                        loaded_axes.push((axis_kind, None));
+                        saw_axis = true;
+                    } else if saw_axis && first_after_axes_start.is_none() {
+                        first_after_axes_start = Some(event_start);
+                    }
+                } else if local_name.as_slice() == b"axId"
+                    && element_stack
+                        .last()
+                        .is_some_and(|parent| chart_axis_kind_from_xml_name(parent).is_some())
+                    && let Some((_, axis_id)) = loaded_axes.last_mut()
+                {
+                    *axis_id = element_val_attribute(&element, reader.decoder())?;
+                }
+            }
+            Ok(Event::End(element)) => {
+                let element_name = element.name();
+                if xml_local_name(element_name.as_ref()) == b"plotArea" {
+                    plot_area_end = Some(event_start);
+                }
+                element_stack.pop();
+            }
+            Ok(Event::Eof) => break,
+            Ok(_) => {}
+            Err(error) => return Err(runtime_xml_error(error)),
+        }
+        buffer.clear();
+    }
+    if loaded_axes.len() >= chart.axes.len()
+        || loaded_axes
+        .iter()
+        .zip(chart.axes.iter())
+        .any(|((loaded_kind, loaded_id), axis)| {
+            *loaded_kind != axis.kind || loaded_id.as_ref() != axis.raw_id.as_ref()
+        })
+    {
+        return Ok(existing_chart_xml.to_vec());
+    }
+    let insertion_position = first_after_axes_start.or(plot_area_end).ok_or_else(|| {
+        OmError::new(
+            OmErrorCode::Parse,
+            "loaded chart plot area has no axis insertion position",
+        )
+    })?;
+    let mut addition = Vec::new();
+    for axis in &chart.axes[loaded_axes.len()..] {
+        addition.extend_from_slice(&serialize_loaded_chart_axis_shell(chart, axis)?);
+    }
+    let mut rewritten = Vec::with_capacity(existing_chart_xml.len() + addition.len());
+    rewritten.extend_from_slice(&existing_chart_xml[..insertion_position]);
+    rewritten.extend_from_slice(&addition);
+    rewritten.extend_from_slice(&existing_chart_xml[insertion_position..]);
+    Ok(rewritten)
+}
+
 fn rewrite_loaded_chart_series_topology(
     existing_chart_xml: &[u8],
     chart: &ChartModel,
@@ -44215,6 +44405,14 @@ fn patch_loaded_chart_model_xml(
         rewritten_group_topology_xml =
             rewrite_loaded_chart_group_additions(existing_chart_xml, chart)?;
         rewritten_group_topology_xml.as_slice()
+    } else {
+        existing_chart_xml
+    };
+    let rewritten_axis_topology_xml;
+    let existing_chart_xml = if !chart.groups.is_empty() {
+        rewritten_axis_topology_xml =
+            rewrite_loaded_chart_axis_additions(existing_chart_xml, chart)?;
+        rewritten_axis_topology_xml.as_slice()
     } else {
         existing_chart_xml
     };
@@ -45267,21 +45465,6 @@ fn patch_loaded_chart_model_xml(
             rewritten.push_attribute((key.as_str(), value.as_str()));
         }
         Ok(rewritten)
-    };
-    let element_val_attribute = |element: &BytesStart<'_>,
-                                 decoder: quick_xml::encoding::Decoder|
-     -> OmResult<Option<String>> {
-        for attr in element.attributes() {
-            let attr = attr.map_err(runtime_xml_error)?;
-            if xml_local_name(attr.key.as_ref()) == b"val" {
-                return Ok(Some(
-                    attr.decode_and_unescape_value(decoder)
-                        .map_err(runtime_xml_error)?
-                        .into_owned(),
-                ));
-            }
-        }
-        Ok(None)
     };
     let write_chart_text_element =
         |writer: &mut Writer<Cursor<Vec<u8>>>, root_name: &str, text: &str| -> OmResult<()> {
@@ -52756,9 +52939,9 @@ fn move_series_to_chart_group(
     chart: &mut ChartModel,
     raw_index: u32,
     axis_group: ChartAxisGroup,
-) -> OmResult<()> {
+) -> OmResult<bool> {
     if chart.groups.is_empty() {
-        return Ok(());
+        return Ok(false);
     }
     if chart_type_is_volume_stock(&chart.chart_type) {
         return Err(OmError::unsupported(
@@ -52773,9 +52956,10 @@ fn move_series_to_chart_group(
     }
     let source_group_index = chart_group_index_for_series_raw_index(chart, raw_index)?;
     if chart.groups[source_group_index].axis_group == axis_group {
-        return Ok(());
+        return Ok(false);
     }
     let source_chart_type = chart.groups[source_group_index].chart_type.clone();
+    let mut axis_topology_changed = false;
     let target_group_index = if let Some(group_index) = chart
         .groups
         .iter()
@@ -52783,16 +52967,94 @@ fn move_series_to_chart_group(
     {
         group_index
     } else {
-        let target_axis_ids = chart
-            .groups
+        let source_axis_ids = chart.groups[source_group_index].axis_ids.clone();
+        let source_axes = source_axis_ids
             .iter()
-            .find(|group| group.axis_group == axis_group)
-            .map(|group| group.axis_ids.clone())
+            .map(|axis_id| {
+                chart
+                    .axes
+                    .iter()
+                    .find(|axis| axis.raw_id.as_ref() == Some(axis_id))
+                    .map(|axis| axis.kind)
+                    .ok_or_else(|| {
+                        OmError::new(
+                            OmErrorCode::InvalidState,
+                            format!("loaded chart group references unknown axis {axis_id}"),
+                        )
+                    })
+            })
+            .collect::<OmResult<Vec<_>>>()?;
+        if source_axes
+            .iter()
+            .filter(|kind| **kind == ChartAxisKind::Value)
+            .count()
+            != 1
+            || !source_axes
+                .iter()
+                .any(|kind| matches!(kind, ChartAxisKind::Category | ChartAxisKind::Date))
+            || source_axes
+                .iter()
+                .any(|kind| *kind == ChartAxisKind::Series)
+        {
+            return Err(OmError::unsupported(
+                "creating a loaded target axis group requires one value axis and a category or date axis",
+            ));
+        }
+        if !chart_type_has_axes(&source_chart_type) {
+            return Err(OmError::unsupported(
+                "Series.AxisGroup is unavailable for chart types without axes",
+            ));
+        }
+        let preferred_value_axis_id = match axis_group {
+            ChartAxisGroup::Primary => 20,
+            ChartAxisGroup::Secondary => 50,
+        };
+        axis_topology_changed = ensure_chart_axis(
+            chart,
+            ChartAxisKind::Value,
+            axis_group,
+            preferred_value_axis_id,
+        );
+        if axis_topology_changed {
+            axis_topology_changed |= reconcile_chart_axis_crossings(&mut chart.axes);
+        }
+        let target_value_axis_id = chart
+            .axes
+            .iter()
+            .find(|axis| {
+                axis.axis_group == axis_group && axis.kind == ChartAxisKind::Value
+            })
+            .and_then(|axis| axis.raw_id.clone())
             .ok_or_else(|| {
-                OmError::unsupported(
-                    "moving a loaded series requires an existing target axis group",
+                OmError::new(
+                    OmErrorCode::InvalidState,
+                    "target chart axis group has no value axis identity",
                 )
             })?;
+        let target_axis_ids = source_axis_ids
+            .iter()
+            .zip(source_axes.iter())
+            .map(|(source_axis_id, source_axis_kind)| match source_axis_kind {
+                ChartAxisKind::Value => Ok(target_value_axis_id.clone()),
+                ChartAxisKind::Category | ChartAxisKind::Date => Ok(chart
+                    .axes
+                    .iter()
+                    .find(|axis| {
+                        axis.axis_group == axis_group
+                            && (axis.kind == *source_axis_kind
+                                || matches!(
+                                    (axis.kind, source_axis_kind),
+                                    (ChartAxisKind::Category, ChartAxisKind::Date)
+                                        | (ChartAxisKind::Date, ChartAxisKind::Category)
+                                ))
+                    })
+                    .and_then(|axis| axis.raw_id.clone())
+                    .unwrap_or_else(|| source_axis_id.clone())),
+                ChartAxisKind::Series => Err(OmError::unsupported(
+                    "creating a loaded target series-axis group is not supported losslessly",
+                )),
+            })
+            .collect::<OmResult<Vec<_>>>()?;
         let mut new_group = chart.groups[source_group_index].clone();
         new_group.loaded_index = None;
         new_group.axis_group = axis_group;
@@ -52805,7 +53067,7 @@ fn move_series_to_chart_group(
     };
     detach_series_from_chart_group(chart, raw_index)?;
     attach_series_to_chart_group(chart, target_group_index, raw_index);
-    Ok(())
+    Ok(axis_topology_changed)
 }
 
 fn chart_plot_by_from_optional_arg(value: Option<&OmValue>, label: &str) -> OmResult<Option<i32>> {
@@ -133390,6 +133652,395 @@ mod tests {
                 .dispatch_get(reopened_line, "AxisGroup", &[])
                 .expect("reopened Line Visible.AxisGroup"),
             OmValue::Number(f64::from(super::XL_PRIMARY))
+        );
+    }
+
+    #[test]
+    fn loaded_single_group_axis_move_creates_secondary_group_and_axis_losslessly() {
+        let mut package =
+            OpcPackage::from_bytes(&synthetic_workbook_with_filtered_chart_series_bytes())
+                .expect("filtered chart package");
+        let chart_xml = String::from_utf8(
+            package
+                .part("xl/charts/chart1.xml")
+                .expect("filtered chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("filtered chart XML")
+        .replace(
+            r#"<c:catAx><c:axId val="10"/></c:catAx>"#,
+            r#"<c:catAx><c:axId val="10"/><c:title><c:tx><c:rich><a:p><a:r><a:t>Quarter</a:t></a:r></a:p></c:rich></c:tx></c:title></c:catAx>"#,
+        )
+        .replace(
+            r#"<c:valAx><c:axId val="20"/></c:valAx>"#,
+            r#"<c:valAx><c:axId val="20"/><c:title><c:tx><c:rich><a:p><a:r><a:t>Revenue</a:t></a:r></a:p></c:rich></c:tx></c:title></c:valAx>"#,
+        )
+        .replace(
+            "</c:plotArea>",
+            r#"<c:extLst><c:ext uri="urn:plot-area-preserve"><test:plot keep="true"/></c:ext></c:extLst></c:plotArea>"#,
+        );
+        package
+            .replace_part_bytes("xl/charts/chart1.xml", chart_xml.into_bytes())
+            .expect("add plot-area extension");
+
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: package.to_bytes().expect("single-group package bytes"),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open loaded single-group chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let groups = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartGroups", &[])
+                .expect("Chart.ChartGroups"),
+        );
+        let primary_group = expect_object_handle(
+            runtime
+                .dispatch_invoke(groups, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartGroups.Item(1)"),
+        );
+        let full_series = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "FullSeriesCollection", &[])
+                .expect("Chart.FullSeriesCollection"),
+        );
+        let moved_series = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    full_series,
+                    "Item",
+                    &[OmValue::Text("Last Visible".to_string())],
+                )
+                .expect("FullSeriesCollection.Item Last Visible"),
+        );
+        runtime
+            .dispatch_set(
+                moved_series,
+                "AxisGroup",
+                OmValue::Number(f64::from(super::XL_SECONDARY)),
+                &[],
+            )
+            .expect("move loaded series to a new secondary axis group");
+
+        assert_eq!(
+            runtime
+                .dispatch_get(groups, "Count", &[])
+                .expect("ChartGroups.Count after axis move"),
+            OmValue::Number(2.0)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(primary_group, "ChartType", &[])
+                .expect("existing primary group handle"),
+            OmValue::Number(f64::from(super::XL_COLUMN_CLUSTERED))
+        );
+        let secondary_axis = expect_object_handle(
+            runtime
+                .dispatch_get(
+                    chart,
+                    "Axes",
+                    &[
+                        OmValue::Number(f64::from(super::XL_VALUE)),
+                        OmValue::Number(f64::from(super::XL_SECONDARY)),
+                    ],
+                )
+                .expect("Chart.Axes(xlValue, xlSecondary)"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(secondary_axis, "AxisGroup", &[])
+                .expect("secondary Axis.AxisGroup"),
+            OmValue::Number(f64::from(super::XL_SECONDARY))
+        );
+
+        let first_saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save loaded secondary axis creation");
+        let second_saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save loaded secondary axis creation again");
+        let first_package = OpcPackage::from_bytes(&first_saved).expect("first saved package");
+        let second_package = OpcPackage::from_bytes(&second_saved).expect("second saved package");
+        assert_eq!(
+            first_package
+                .part("xl/charts/chart1.xml")
+                .expect("first chart part")
+                .bytes,
+            second_package
+                .part("xl/charts/chart1.xml")
+                .expect("second chart part")
+                .bytes
+        );
+        let chart_xml = std::str::from_utf8(
+            &first_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes,
+        )
+        .expect("saved chart XML");
+        assert_eq!(chart_xml.matches("<c:barChart").count(), 2);
+        assert_eq!(chart_xml.matches("<c:valAx").count(), 2);
+        let first_group_start = chart_xml.find("<c:barChart").expect("primary bar group");
+        let first_group_end = chart_xml[first_group_start..]
+            .find("</c:barChart>")
+            .map(|offset| first_group_start + offset)
+            .expect("primary bar group end");
+        let second_group_start = chart_xml[first_group_end..]
+            .find("<c:barChart")
+            .map(|offset| first_group_end + offset)
+            .expect("secondary bar group");
+        let second_group_end = chart_xml[second_group_start..]
+            .find("</c:barChart>")
+            .map(|offset| second_group_start + offset)
+            .expect("secondary bar group end");
+        let primary_group_xml = &chart_xml[first_group_start..first_group_end];
+        let secondary_group_xml = &chart_xml[second_group_start..second_group_end];
+        assert!(primary_group_xml.contains(r#"<c:idx val="10"/>"#));
+        assert!(primary_group_xml.contains(r#"<c:idx val="20"/>"#));
+        assert!(!primary_group_xml.contains(r#"<c:idx val="30"/>"#));
+        assert!(secondary_group_xml.contains(r#"<c:idx val="30"/>"#));
+        assert!(secondary_group_xml.contains(r#"<c:axId val="10"/>"#));
+        assert!(secondary_group_xml.contains(r#"<c:axId val="50"/>"#));
+        assert!(!secondary_group_xml.contains(r#"<c:axId val="20"/>"#));
+        assert!(chart_xml.contains(r#"<a:ln w="12700"/>"#));
+        assert!(chart_xml.contains(r#"<c:ext uri="urn:filtered-series-sibling""#));
+        assert!(chart_xml.contains(r#"<test:opaque keep="true"/>"#));
+        assert!(chart_xml.contains(r#"<test:plot keep="true"/>"#));
+        assert!(chart_xml.contains("<a:t>Quarter</a:t>"));
+        assert!(chart_xml.contains("<a:t>Revenue</a:t>"));
+        let secondary_axis_start = chart_xml
+            .find(r#"<c:valAx xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:axId val="50"/>"#)
+            .expect("new secondary value axis");
+        let plot_extension_start = chart_xml
+            .find(r#"<c:ext uri="urn:plot-area-preserve""#)
+            .expect("plot-area extension");
+        assert!(secondary_axis_start < plot_extension_start);
+
+        let mut reopened = ExcelRuntime::new();
+        let reopened_workbook = reopened
+            .open_workbook(OpenWorkbookSpec {
+                bytes: second_saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen loaded secondary axis creation");
+        let reopened_sheet = expect_object_handle(
+            reopened
+                .dispatch_get(
+                    reopened_workbook.0,
+                    "Worksheets",
+                    &[OmValue::Number(1.0)],
+                )
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_objects = expect_object_handle(
+            reopened
+                .dispatch_get(reopened_sheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_object = expect_object_handle(
+            reopened
+                .dispatch_invoke(reopened_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened
+                .dispatch_get(reopened_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        let reopened_groups = expect_object_handle(
+            reopened
+                .dispatch_get(reopened_chart, "ChartGroups", &[])
+                .expect("reopened Chart.ChartGroups"),
+        );
+        assert_eq!(
+            reopened
+                .dispatch_get(reopened_groups, "Count", &[])
+                .expect("reopened ChartGroups.Count"),
+            OmValue::Number(2.0)
+        );
+        let reopened_full = expect_object_handle(
+            reopened
+                .dispatch_get(reopened_chart, "FullSeriesCollection", &[])
+                .expect("reopened FullSeriesCollection"),
+        );
+        let reopened_series = expect_object_handle(
+            reopened
+                .dispatch_invoke(
+                    reopened_full,
+                    "Item",
+                    &[OmValue::Text("Last Visible".to_string())],
+                )
+                .expect("reopened Last Visible"),
+        );
+        assert_eq!(
+            reopened
+                .dispatch_get(reopened_series, "AxisGroup", &[])
+                .expect("reopened Last Visible.AxisGroup"),
+            OmValue::Number(f64::from(super::XL_SECONDARY))
+        );
+    }
+
+    #[test]
+    fn loaded_axis_group_creation_rejects_unsupported_axis_shape_atomically() {
+        let mut package =
+            OpcPackage::from_bytes(&synthetic_workbook_with_filtered_chart_series_bytes())
+                .expect("filtered chart package");
+        let source_chart_xml = String::from_utf8(
+            package
+                .part("xl/charts/chart1.xml")
+                .expect("filtered chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("filtered chart XML")
+        .replacen(
+            r#"<c:axId val="10"/><c:axId val="20"/>"#,
+            r#"<c:axId val="20"/>"#,
+            1,
+        )
+        .into_bytes();
+        package
+            .replace_part_bytes("xl/charts/chart1.xml", source_chart_xml.clone())
+            .expect("replace unsupported group axis shape");
+
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: package.to_bytes().expect("unsupported axis package bytes"),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open unsupported loaded axis shape");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let full_series = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "FullSeriesCollection", &[])
+                .expect("Chart.FullSeriesCollection"),
+        );
+        let series = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    full_series,
+                    "Item",
+                    &[OmValue::Text("Last Visible".to_string())],
+                )
+                .expect("FullSeriesCollection.Item Last Visible"),
+        );
+        let error = runtime
+            .dispatch_set(
+                series,
+                "AxisGroup",
+                OmValue::Number(f64::from(super::XL_SECONDARY)),
+                &[],
+            )
+            .expect_err("unsupported loaded axis shape must be rejected");
+        assert_eq!(error.code, OmErrorCode::Unsupported);
+        assert!(error.message.contains("category or date axis"));
+        let groups = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartGroups", &[])
+                .expect("Chart.ChartGroups"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(groups, "Count", &[])
+                .expect("ChartGroups.Count after rejection"),
+            OmValue::Number(1.0)
+        );
+        let axes = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "Axes", &[])
+                .expect("Chart.Axes"),
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(axes, "Count", &[])
+                .expect("Axes.Count after rejection"),
+            OmValue::Number(2.0)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved after rejection"),
+            OmValue::Bool(true)
+        );
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save after rejected loaded axis creation");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        assert_eq!(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes,
+            source_chart_xml
         );
     }
 
