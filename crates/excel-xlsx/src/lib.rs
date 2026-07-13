@@ -24204,20 +24204,45 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
         buffer.clear();
     }
 
-    let mut seen_category_axis = false;
-    let mut seen_value_axis = false;
-    let mut seen_series_axis = false;
-    for axis in &mut axes {
-        let seen = match axis.kind {
-            ChartAxisKind::Category | ChartAxisKind::Date => &mut seen_category_axis,
-            ChartAxisKind::Value => &mut seen_value_axis,
-            ChartAxisKind::Series => &mut seen_series_axis,
-        };
-        if *seen {
-            axis.axis_group = ChartAxisGroup::Secondary;
-        } else {
-            axis.axis_group = ChartAxisGroup::Primary;
-            *seen = true;
+    if let Some((primary_group_index, primary_group)) = groups
+        .iter()
+        .enumerate()
+        .find(|(_, group)| !group.axis_ids.is_empty())
+    {
+        let primary_axis_ids = primary_group.axis_ids.iter().collect::<BTreeSet<_>>();
+        let secondary_axis_ids = groups
+            .iter()
+            .skip(primary_group_index + 1)
+            .flat_map(|group| group.axis_ids.iter())
+            .filter(|axis_id| !primary_axis_ids.contains(axis_id))
+            .collect::<BTreeSet<_>>();
+        for axis in &mut axes {
+            axis.axis_group = if axis
+                .raw_id
+                .as_ref()
+                .is_some_and(|axis_id| secondary_axis_ids.contains(axis_id))
+            {
+                ChartAxisGroup::Secondary
+            } else {
+                ChartAxisGroup::Primary
+            };
+        }
+    } else {
+        let mut seen_category_axis = false;
+        let mut seen_value_axis = false;
+        let mut seen_series_axis = false;
+        for axis in &mut axes {
+            let seen = match axis.kind {
+                ChartAxisKind::Category | ChartAxisKind::Date => &mut seen_category_axis,
+                ChartAxisKind::Value => &mut seen_value_axis,
+                ChartAxisKind::Series => &mut seen_series_axis,
+            };
+            if *seen {
+                axis.axis_group = ChartAxisGroup::Secondary;
+            } else {
+                axis.axis_group = ChartAxisGroup::Primary;
+                *seen = true;
+            }
         }
     }
     let axis_groups_by_id = axes
@@ -37817,6 +37842,56 @@ mod tests {
             super::chart_type_from_group_summary(&summary.groups[1]),
             ChartType::Line
         );
+    }
+
+    #[test]
+    fn parse_chart_part_summary_classifies_scatter_axis_pairs_from_group_bindings() {
+        let chart_xml = br#"<?xml version="1.0" encoding="UTF-8"?>
+<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart">
+  <c:chart><c:plotArea>
+    <c:scatterChart><c:scatterStyle val="lineMarker"/>
+      <c:ser><c:idx val="0"/><c:order val="0"/></c:ser>
+      <c:axId val="10"/><c:axId val="20"/>
+    </c:scatterChart>
+    <c:scatterChart><c:scatterStyle val="smoothMarker"/>
+      <c:ser><c:idx val="1"/><c:order val="1"/></c:ser>
+      <c:axId val="40"/><c:axId val="50"/>
+    </c:scatterChart>
+    <c:valAx><c:axId val="10"/><c:crossAx val="20"/></c:valAx>
+    <c:valAx><c:axId val="40"/><c:crossAx val="50"/></c:valAx>
+    <c:valAx><c:axId val="20"/><c:crossAx val="10"/></c:valAx>
+    <c:valAx><c:axId val="50"/><c:crossAx val="40"/></c:valAx>
+  </c:plotArea></c:chart>
+</c:chartSpace>"#;
+        let summary = super::parse_chart_part_summary(chart_xml).expect("scatter chart summary");
+
+        assert_eq!(summary.axes.len(), 4);
+        for axis_id in ["10", "20"] {
+            assert_eq!(
+                summary
+                    .axes
+                    .iter()
+                    .find(|axis| axis.raw_id.as_deref() == Some(axis_id))
+                    .expect("primary scatter axis")
+                    .axis_group,
+                ChartAxisGroup::Primary
+            );
+        }
+        for axis_id in ["40", "50"] {
+            assert_eq!(
+                summary
+                    .axes
+                    .iter()
+                    .find(|axis| axis.raw_id.as_deref() == Some(axis_id))
+                    .expect("secondary scatter axis")
+                    .axis_group,
+                ChartAxisGroup::Secondary
+            );
+        }
+        assert_eq!(summary.groups[0].axis_group, ChartAxisGroup::Primary);
+        assert_eq!(summary.groups[1].axis_group, ChartAxisGroup::Secondary);
+        assert_eq!(summary.series[0].axis_group, ChartAxisGroup::Primary);
+        assert_eq!(summary.series[1].axis_group, ChartAxisGroup::Secondary);
     }
 
     #[test]
