@@ -4999,6 +4999,8 @@
   - 범위: loaded heterogeneous combo chart에서 `Series.AxisGroup` 대상 축 세트에 동일 chart family group이 없으면 source group의 typed 속성을 복제한 새 group shell을 기존 group 뒤와 axis 앞에 schema 순서대로 추가하고, 대상 axis group의 raw axis ID를 재사용해 direct/filtered series subtree를 stable `c:idx`로 이동하며 후속 series 이동은 같은 새 group을 재사용하도록 구현; loaded group identity, 기존 runtime group handle 안정성, inline series name/opaque extension/formatting 보존, 양방향 primary-secondary 이동, save-twice/reopen 회귀를 고정
   - `Step 7.177 DONE` loaded single-group secondary axis topology creation
   - 범위: category/date + value axis를 가진 loaded 단일 chart group에서 `Series.AxisGroup = xlSecondary`가 stable `c:idx` series를 source group에서 분리하고 secondary value axis와 동일 family group을 append하도록 구현; 새 group은 category/date axis를 공유하고 새 value axis의 stable raw ID와 crossing을 연결하며, 원본 direct/filtered series subtree, formatting, axis title, group/plot opaque extension을 보존하는 local XML patch와 save-twice/reopen 회귀를 고정하고 지원하지 않는 axis shape는 workbook dirty 전 원자적으로 거절
+  - `Step 7.178 DONE` loaded XY chart paired axis topology creation
+  - 범위: chart group의 `axId` ownership을 기준으로 loaded scatter/bubble의 두 value axis를 같은 primary/secondary pair로 분류하고, loaded 단일 XY group의 `Series.AxisGroup` 이동이 대상 X/Y value axis 두 개를 stable raw ID로 함께 append해 상호 crossing한 뒤 동일 family group을 생성하도록 구현; 기존 대상 XY group이 있으면 그 group의 axis 순서를 재사용하고 partial target pair는 mutation 전 원자적으로 거절하며, direct/filtered series, formatting, axis title, opaque extension, save-twice/reopen 보존 회귀를 고정
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.
