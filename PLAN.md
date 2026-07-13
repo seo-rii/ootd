@@ -4991,6 +4991,8 @@
   - 범위: loaded chart group의 XML 순서/type/axis group/raw axis ID/stable series `c:idx` ownership과 group-level 속성을 `ChartGroupModel` overlay로 보존하고, `ChartGroups` 및 type-specific shortcut collection, group-local `SeriesCollection`, `ChartType`, gap/overlap/vary/line/data-label 등 getter/setter를 실제 owning group에 연결하며, bar+line 및 volume+stock의 서로 다른 group 속성을 sibling group이나 opaque extension/series formatting을 건드리지 않고 원본 subtree에 patch하고 save/reopen하는 회귀를 구현
   - `Step 7.173 DONE` loaded combo filtered-series and content patch composition
   - 범위: loaded heterogeneous combo chart에서 stable `c:idx` 기반 filtered-series extension 이동을 먼저 적용한 뒤 group-local property와 일반 chart/series content patch를 같은 원본 XML에 연속 적용하도록 저장 파이프라인을 통합하고, bar series refilter와 `Values` 변경, bar group `GapWidth`, chart legend 변경을 한 save에서 수행해 sibling filtered line wrappers, opaque group extension, series formatting을 보존하고 save/reopen하는 회귀를 구현
+  - `Step 7.174 DONE` loaded combo stable series topology patching
+  - 범위: loaded multi-group chart의 series raw `c:idx`를 정확히 하나의 `ChartGroupModel`에 귀속시키는 partition invariant를 도입하고, `Chart.SeriesCollection.NewSeries`, 선택한 `ChartGroup.SeriesCollection.Add`, direct/filtered `Series.Delete`, 동일 chart type의 기존 primary/secondary group 간 `Series.AxisGroup` 이동을 원본 group shell/axis graph는 고정한 채 구조 patch로 처리하며, 새 filtered series wrapper 생성, 마지막 series 삭제 후 빈 group shell, 원본 series subtree/formatting/opaque extension 보존과 save/reopen을 검증하고 cross-family 및 loaded group-axis topology 변경은 mutation 전에 원자적으로 거절
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.
