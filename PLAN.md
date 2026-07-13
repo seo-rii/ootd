@@ -4989,6 +4989,8 @@
   - 범위: loaded bar+line 및 volume+stock chart의 원본 group 순서/type, unique `c:idx` series membership, axis kind/raw ID topology를 저장 전에 검증하고, topology가 유지되는 title, 기존 series source/order/format, 기존 axis property edit를 각 원본 subtree에 patch해 opaque group extension/formatting/axis refs를 보존하며, series 추가·삭제·group 이동·axis reshape처럼 typed fallback serializer가 원본 heterogeneous XML을 잃을 수 있는 변경은 explicit `Unsupported`로 차단
   - `Step 7.172 DONE` loaded heterogeneous chart-group typed overlay and local property patching
   - 범위: loaded chart group의 XML 순서/type/axis group/raw axis ID/stable series `c:idx` ownership과 group-level 속성을 `ChartGroupModel` overlay로 보존하고, `ChartGroups` 및 type-specific shortcut collection, group-local `SeriesCollection`, `ChartType`, gap/overlap/vary/line/data-label 등 getter/setter를 실제 owning group에 연결하며, bar+line 및 volume+stock의 서로 다른 group 속성을 sibling group이나 opaque extension/series formatting을 건드리지 않고 원본 subtree에 patch하고 save/reopen하는 회귀를 구현
+  - `Step 7.173 DONE` loaded combo filtered-series and content patch composition
+  - 범위: loaded heterogeneous combo chart에서 stable `c:idx` 기반 filtered-series extension 이동을 먼저 적용한 뒤 group-local property와 일반 chart/series content patch를 같은 원본 XML에 연속 적용하도록 저장 파이프라인을 통합하고, bar series refilter와 `Values` 변경, bar group `GapWidth`, chart legend 변경을 한 save에서 수행해 sibling filtered line wrappers, opaque group extension, series formatting을 보존하고 save/reopen하는 회귀를 구현
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.
