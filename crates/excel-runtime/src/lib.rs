@@ -42991,62 +42991,6 @@ fn patch_loaded_chart_model_xml(
         existing_chart_xml
     };
 
-    // Secondary series require separate chart groups; the loaded-chart patcher
-    // only rewrites existing element content and cannot safely reshape that tree.
-    if chart
-        .series
-        .iter()
-        .any(|series| series.axis_group == ChartAxisGroup::Secondary)
-    {
-        return Ok(None);
-    }
-
-    let expected_dirty_sources = chart
-        .series
-        .iter()
-        .map(|series| {
-            let mut count = 0usize;
-            if series.name.as_ref().is_some_and(|source| source.dirty) {
-                count += 1;
-            }
-            if series.x_values.as_ref().is_some_and(|source| source.dirty) {
-                count += 1;
-            }
-            if series.values.as_ref().is_some_and(|source| source.dirty) {
-                count += 1;
-            }
-            if chart_type_uses_bubble_size(&chart.chart_type)
-                && series
-                    .bubble_size
-                    .as_ref()
-                    .is_some_and(|source| source.dirty)
-            {
-                count += 1;
-            }
-            count
-        })
-        .sum::<usize>();
-    let expected_dirty_point_explosions = chart
-        .series
-        .iter()
-        .map(|series| {
-            if chart_type_supports_explosion(&chart.chart_type) {
-                series
-                    .points
-                    .iter()
-                    .filter_map(|(point_index, point)| {
-                        point
-                            .dirty
-                            .then_some(point.explosion)
-                            .flatten()
-                            .map(|explosion| (*point_index, explosion))
-                    })
-                    .collect::<Vec<_>>()
-            } else {
-                Vec::new()
-            }
-        })
-        .collect::<Vec<_>>();
     let expected_chart_style = chart.style.map(|style| style.to_string());
     let expected_chart_style = expected_chart_style.as_deref();
     let expected_chart_protection = chart.protection_dirty.then_some(chart.protection);
@@ -43088,46 +43032,6 @@ fn patch_loaded_chart_model_xml(
     let expected_bar_direction = chart_type_bar_direction_xml_value(&chart.chart_type);
     let expected_chart_grouping = chart_type_grouping_xml_value(&chart.chart_type);
     let expected_bar_shape = chart_effective_bar_shape(chart).map(chart_bar_shape_xml_value);
-    let expected_series_bar_shapes = chart
-        .series
-        .iter()
-        .map(|series| {
-            chart_type_supports_bar_shape(&chart.chart_type)
-                .then_some(series.bar_shape)
-                .flatten()
-                .map(chart_bar_shape_xml_value)
-        })
-        .collect::<Vec<_>>();
-    let expected_series_smooth_values = chart
-        .series
-        .iter()
-        .map(|series| {
-            chart_type_supports_series_smooth(&chart.chart_type)
-                .then_some(series.smooth)
-                .flatten()
-                .map(|value| if value { "1" } else { "0" })
-        })
-        .collect::<Vec<_>>();
-    let expected_series_marker_styles = chart
-        .series
-        .iter()
-        .map(|series| {
-            chart_type_supports_series_marker(&chart.chart_type)
-                .then_some(series.marker_style)
-                .flatten()
-                .map(chart_marker_style_xml_value)
-        })
-        .collect::<Vec<_>>();
-    let expected_series_marker_sizes = chart
-        .series
-        .iter()
-        .map(|series| {
-            chart_type_supports_series_marker(&chart.chart_type)
-                .then_some(series.marker_size)
-                .flatten()
-                .map(|value| value.to_string())
-        })
-        .collect::<Vec<_>>();
     let expected_series_invert_if_negative_values = chart
         .series
         .iter()
@@ -43542,8 +43446,11 @@ fn patch_loaded_chart_model_xml(
     struct LoadedSeriesSignature {
         raw_index: Option<u32>,
         sources: [Option<String>; 4],
+        group_index: usize,
     }
     let mut loaded_series_signatures = Vec::<LoadedSeriesSignature>::new();
+    let mut loaded_chart_group_names = Vec::<Vec<u8>>::new();
+    let mut loaded_axis_signatures = Vec::<(ChartAxisKind, Option<String>)>::new();
     {
         let mut signature_reader = Reader::from_reader(Cursor::new(existing_chart_xml));
         signature_reader.config_mut().trim_text(false);
@@ -43552,15 +43459,34 @@ fn patch_loaded_chart_model_xml(
         let mut active_signature_depth = 0usize;
         let mut signature_source_stack = Vec::<ChartSourceXmlSlot>::new();
         let mut signature_formula = None::<(ChartSourceXmlSlot, String, usize)>;
+        let mut signature_element_stack = Vec::<Vec<u8>>::new();
+        let mut active_group_index = None::<usize>;
+        let mut active_axis_index = None::<usize>;
+        let mut active_axis_depth = 0usize;
 
         loop {
             match signature_reader.read_event_into(&mut signature_buffer) {
                 Ok(Event::Start(element)) => {
                     let local_name = xml_local_name(element.name().as_ref()).to_vec();
+                    let parent_name = signature_element_stack.last().map(Vec::as_slice);
+                    if parent_name == Some(b"plotArea".as_slice())
+                        && chart_type_from_group_name(local_name.as_slice()).is_some()
+                    {
+                        active_group_index = Some(loaded_chart_group_names.len());
+                        loaded_chart_group_names.push(local_name.clone());
+                    }
+                    if let Some(axis_kind) = chart_axis_kind_from_xml_name(local_name.as_slice()) {
+                        active_axis_index = Some(loaded_axis_signatures.len());
+                        active_axis_depth = 1;
+                        loaded_axis_signatures.push((axis_kind, None));
+                    } else if active_axis_index.is_some() {
+                        active_axis_depth += 1;
+                    }
                     if local_name.as_slice() == b"ser" && active_signature.is_none() {
                         active_signature = Some(LoadedSeriesSignature {
                             raw_index: None,
                             sources: [None, None, None, None],
+                            group_index: active_group_index.unwrap_or(0),
                         });
                         active_signature_depth = 1;
                     } else if active_signature.is_some() {
@@ -43591,10 +43517,34 @@ fn patch_loaded_chart_model_xml(
                             signature_formula = Some((slot, String::new(), 1));
                         }
                     }
+                    signature_element_stack.push(local_name);
                 }
                 Ok(Event::Empty(element)) => {
+                    let local_name = xml_local_name(element.name().as_ref()).to_vec();
+                    if signature_element_stack.last().map(Vec::as_slice)
+                        == Some(b"plotArea".as_slice())
+                        && chart_type_from_group_name(local_name.as_slice()).is_some()
+                    {
+                        loaded_chart_group_names.push(local_name.clone());
+                    }
+                    if local_name.as_slice() == b"axId"
+                        && active_axis_depth == 1
+                        && let Some(axis_index) = active_axis_index
+                    {
+                        for attr in element.attributes() {
+                            let attr = attr.map_err(runtime_xml_error)?;
+                            if xml_local_name(attr.key.as_ref()) == b"val" {
+                                loaded_axis_signatures[axis_index].1 = Some(
+                                    attr.decode_and_unescape_value(signature_reader.decoder())
+                                        .map_err(runtime_xml_error)?
+                                        .into_owned(),
+                                );
+                                break;
+                            }
+                        }
+                    }
                     if active_signature_depth == 1
-                        && xml_local_name(element.name().as_ref()) == b"idx"
+                        && local_name.as_slice() == b"idx"
                         && let Some(signature) = active_signature.as_mut()
                     {
                         for attr in element.attributes() {
@@ -43656,6 +43606,25 @@ fn patch_loaded_chart_model_xml(
                     } else if active_signature_depth > 0 {
                         active_signature_depth -= 1;
                     }
+                    if active_axis_depth > 0 {
+                        if active_axis_depth == 1
+                            && chart_axis_kind_from_xml_name(local_name.as_slice()).is_some()
+                        {
+                            active_axis_index = None;
+                            active_axis_depth = 0;
+                        } else {
+                            active_axis_depth -= 1;
+                        }
+                    }
+                    if active_group_index.is_some()
+                        && chart_type_from_group_name(local_name.as_slice()).is_some()
+                        && signature_element_stack
+                            .get(signature_element_stack.len().saturating_sub(2))
+                            .is_some_and(|name| name.as_slice() == b"plotArea")
+                    {
+                        active_group_index = None;
+                    }
+                    signature_element_stack.pop();
                 }
                 Ok(Event::Eof) => break,
                 Ok(_) => {}
@@ -43719,6 +43688,195 @@ fn patch_loaded_chart_model_xml(
         })
         .collect::<Vec<_>>();
 
+    let loaded_chart_group_count = loaded_chart_group_names.len();
+    let preserve_loaded_group_types = loaded_chart_group_count > 1;
+    if !preserve_loaded_group_types
+        && chart
+            .series
+            .iter()
+            .any(|series| series.axis_group == ChartAxisGroup::Secondary)
+    {
+        return Ok(None);
+    }
+    let mut model_series_group_indices = vec![None; chart.series.len()];
+    for (loaded_index, model_index) in loaded_series_model_indices.iter().enumerate() {
+        if let Some(model_index) = model_index {
+            model_series_group_indices[*model_index] = loaded_series_signatures
+                .get(loaded_index)
+                .map(|signature| signature.group_index);
+        }
+    }
+    if preserve_loaded_group_types {
+        let group_shape_matches = if chart_type_is_volume_stock(&chart.chart_type) {
+            loaded_chart_group_names.as_slice() == [b"barChart".as_slice(), b"stockChart".as_slice()]
+        } else {
+            chart_group_xml_name(&chart.chart_type).is_some_and(|target_name| {
+                loaded_chart_group_names
+                    .first()
+                    .is_some_and(|loaded_name| loaded_name.as_slice() == target_name.as_bytes())
+            })
+        };
+        if !group_shape_matches {
+            return Err(OmError::unsupported(
+                "loaded multi-group chart type reshaping is not supported losslessly",
+            ));
+        }
+        let loaded_raw_indices = loaded_series_signatures
+            .iter()
+            .filter_map(|signature| signature.raw_index)
+            .collect::<BTreeSet<_>>();
+        let model_raw_indices = chart
+            .series
+            .iter()
+            .filter_map(|series| series.raw_index)
+            .collect::<BTreeSet<_>>();
+        let stable_series_topology = loaded_raw_indices.len() == loaded_series_signatures.len()
+            && model_raw_indices.len() == chart.series.len()
+            && loaded_raw_indices == model_raw_indices
+            && loaded_series_model_indices.iter().all(Option::is_some)
+            && model_series_group_indices.iter().all(Option::is_some);
+        if !stable_series_topology {
+            return Err(OmError::unsupported(
+                "loaded multi-group chart series topology changes are not supported losslessly",
+            ));
+        }
+        let axis_topology_matches = loaded_axis_signatures.len() == chart.axes.len()
+            && loaded_axis_signatures
+                .iter()
+                .zip(chart.axes.iter())
+                .all(|((loaded_kind, loaded_id), axis)| {
+                    *loaded_kind == axis.kind && loaded_id.as_ref() == axis.raw_id.as_ref()
+                });
+        if !axis_topology_matches {
+            return Err(OmError::unsupported(
+                "loaded multi-group chart axis topology changes are not supported losslessly",
+            ));
+        }
+        let axis_groups_match = chart.series.iter().enumerate().all(|(series_index, series)| {
+            model_series_group_indices[series_index].is_some_and(|group_index| {
+                series.axis_group
+                    == if group_index == 0 {
+                        ChartAxisGroup::Primary
+                    } else {
+                        ChartAxisGroup::Secondary
+                    }
+            })
+        });
+        if !axis_groups_match {
+            return Err(OmError::unsupported(
+                "moving loaded series between chart groups is not supported losslessly",
+            ));
+        }
+    }
+    let model_series_chart_types = model_series_group_indices
+        .iter()
+        .map(|group_index| {
+            if preserve_loaded_group_types {
+                group_index
+                    .and_then(|group_index| loaded_chart_group_names.get(group_index))
+                    .and_then(|group_name| chart_type_from_group_name(group_name.as_slice()))
+                    .unwrap_or_else(|| chart.chart_type.clone())
+            } else {
+                chart.chart_type.clone()
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let expected_dirty_sources = chart
+        .series
+        .iter()
+        .enumerate()
+        .map(|(series_index, series)| {
+            usize::from(series.name.as_ref().is_some_and(|source| source.dirty))
+                + usize::from(
+                    series
+                        .x_values
+                        .as_ref()
+                        .is_some_and(|source| source.dirty),
+                )
+                + usize::from(
+                    series
+                        .values
+                        .as_ref()
+                        .is_some_and(|source| source.dirty),
+                )
+                + usize::from(
+                    chart_type_uses_bubble_size(&model_series_chart_types[series_index])
+                        && series
+                            .bubble_size
+                            .as_ref()
+                            .is_some_and(|source| source.dirty),
+                )
+        })
+        .sum::<usize>();
+
+    let expected_dirty_point_explosions = chart
+        .series
+        .iter()
+        .enumerate()
+        .map(|(series_index, series)| {
+            if chart_type_supports_explosion(&model_series_chart_types[series_index]) {
+                series
+                    .points
+                    .iter()
+                    .filter_map(|(point_index, point)| {
+                        point
+                            .dirty
+                            .then_some(point.explosion)
+                            .flatten()
+                            .map(|explosion| (*point_index, explosion))
+                    })
+                    .collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            }
+        })
+        .collect::<Vec<_>>();
+    let expected_series_bar_shapes = chart
+        .series
+        .iter()
+        .enumerate()
+        .map(|(series_index, series)| {
+            chart_type_supports_bar_shape(&model_series_chart_types[series_index])
+                .then_some(series.bar_shape)
+                .flatten()
+                .map(chart_bar_shape_xml_value)
+        })
+        .collect::<Vec<_>>();
+    let expected_series_smooth_values = chart
+        .series
+        .iter()
+        .enumerate()
+        .map(|(series_index, series)| {
+            chart_type_supports_series_smooth(&model_series_chart_types[series_index])
+                .then_some(series.smooth)
+                .flatten()
+                .map(|value| if value { "1" } else { "0" })
+        })
+        .collect::<Vec<_>>();
+    let expected_series_marker_styles = chart
+        .series
+        .iter()
+        .enumerate()
+        .map(|(series_index, series)| {
+            chart_type_supports_series_marker(&model_series_chart_types[series_index])
+                .then_some(series.marker_style)
+                .flatten()
+                .map(chart_marker_style_xml_value)
+        })
+        .collect::<Vec<_>>();
+    let expected_series_marker_sizes = chart
+        .series
+        .iter()
+        .enumerate()
+        .map(|(series_index, series)| {
+            chart_type_supports_series_marker(&model_series_chart_types[series_index])
+                .then_some(series.marker_size)
+                .flatten()
+                .map(|value| value.to_string())
+        })
+        .collect::<Vec<_>>();
+
     let source_for_slot =
         |series_index: usize, slot: ChartSourceXmlSlot| -> Option<&ChartSourceExpr> {
             chart
@@ -43729,7 +43887,7 @@ fn patch_loaded_chart_model_xml(
                     ChartSourceXmlSlot::XValues => series.x_values.as_ref(),
                     ChartSourceXmlSlot::Values => series.values.as_ref(),
                     ChartSourceXmlSlot::BubbleSize
-                        if chart_type_uses_bubble_size(&chart.chart_type) =>
+                        if chart_type_uses_bubble_size(&model_series_chart_types[series_index]) =>
                     {
                         series.bubble_size.as_ref()
                     }
@@ -43762,19 +43920,10 @@ fn patch_loaded_chart_model_xml(
         ChartSourceXmlSlot::Values,
         ChartSourceXmlSlot::BubbleSize,
     ];
-    let source_slots_without_bubble_size = [
-        ChartSourceXmlSlot::Name,
-        ChartSourceXmlSlot::XValues,
-        ChartSourceXmlSlot::Values,
-    ];
-    let source_slots_in_order: &[ChartSourceXmlSlot] =
-        if chart_type_uses_bubble_size(&chart.chart_type) {
-            &source_slots_with_bubble_size
-        } else {
-            &source_slots_without_bubble_size
-        };
-    let source_container_target_local_name = |slot: ChartSourceXmlSlot| -> &'static str {
-        match (&chart.chart_type, slot) {
+    let source_slots_in_order: &[ChartSourceXmlSlot] = &source_slots_with_bubble_size;
+    let source_container_target_local_name =
+        |series_index: usize, slot: ChartSourceXmlSlot| -> &'static str {
+        match (&model_series_chart_types[series_index], slot) {
             (_, ChartSourceXmlSlot::Name) => "tx",
             (chart_type, ChartSourceXmlSlot::XValues) if chart_type_uses_xy_values(chart_type) => {
                 "xVal"
@@ -43788,10 +43937,15 @@ fn patch_loaded_chart_model_xml(
         }
     };
     let write_chart_source_container = |writer: &mut Writer<Cursor<Vec<u8>>>,
+                                        series_index: usize,
                                         slot: ChartSourceXmlSlot,
                                         source: &ChartSourceExpr|
      -> OmResult<()> {
-        let xml = chart_source_container_xml_string(&chart.chart_type, slot, source)?;
+        let xml = chart_source_container_xml_string(
+            &model_series_chart_types[series_index],
+            slot,
+            source,
+        )?;
         writer
             .get_mut()
             .write_all(xml.as_bytes())
@@ -44379,10 +44533,9 @@ fn patch_loaded_chart_model_xml(
                     plot_area_manual_layout_written = true;
                 }
                 if let Some(next_chart_type) = chart_type_from_group_name(local_name.as_slice()) {
-                    if chart_type.is_some() {
-                        return Ok(None);
+                    if chart_type.is_none() {
+                        chart_type = Some(next_chart_type);
                     }
-                    chart_type = Some(next_chart_type);
                     current_chart_group_depth = Some(depth);
                     chart_group_axis_refs_seen.clear();
                 }
@@ -44529,7 +44682,12 @@ fn patch_loaded_chart_model_xml(
                                 .unwrap_or(false)
                                 && let Some(source) = source_for_slot(series_index, prior_slot)
                             {
-                                write_chart_source_container(&mut writer, prior_slot, source)?;
+                                write_chart_source_container(
+                                    &mut writer,
+                                    series_index,
+                                    prior_slot,
+                                    source,
+                                )?;
                                 if let Some(seen) = source_slots_seen.get_mut(series_index) {
                                     seen[slot_index(prior_slot)] = true;
                                 }
@@ -44539,7 +44697,12 @@ fn patch_loaded_chart_model_xml(
                             }
                         }
                         if source.dirty && chart_source_literal_values(source)?.is_some() {
-                            write_chart_source_container(&mut writer, slot, source)?;
+                            write_chart_source_container(
+                                &mut writer,
+                                series_index,
+                                slot,
+                                source,
+                            )?;
                             if let Some(seen) = source_slots_seen.get_mut(series_index) {
                                 seen[slot_index(slot)] = true;
                             }
@@ -45037,7 +45200,11 @@ fn patch_loaded_chart_model_xml(
                 if !wrote_start_element
                     && local_name.as_slice() == b"explosion"
                     && parent_name == Some(b"dPt".as_slice())
-                    && !chart_type_supports_explosion(&chart.chart_type)
+                    && current_series_index.is_some_and(|series_index| {
+                        !chart_type_supports_explosion(
+                            &model_series_chart_types[series_index],
+                        )
+                    })
                 {
                     skip_depth = 1;
                     buffer.clear();
@@ -45194,7 +45361,9 @@ fn patch_loaded_chart_model_xml(
                     if let Some(seen) = series_marker_seen.get_mut(series_index) {
                         *seen = true;
                     }
-                    if !chart_type_supports_series_marker(&chart.chart_type) {
+                    if !chart_type_supports_series_marker(
+                        &model_series_chart_types[series_index],
+                    ) {
                         if let Some(removed) = series_marker_removed.get_mut(series_index) {
                             *removed = true;
                         }
@@ -45261,9 +45430,10 @@ fn patch_loaded_chart_model_xml(
                 }
                 if !wrote_start_element
                     && let Some(slot) = source_container_slot(local_name.as_slice())
-                    && current_series_index.is_some()
+                    && let Some(series_index) = current_series_index
                 {
-                    let target_local_name = source_container_target_local_name(slot);
+                    let target_local_name =
+                        source_container_target_local_name(series_index, slot);
                     if target_local_name.as_bytes() != local_name.as_slice() {
                         writer
                             .write_event(Event::Start(rewrite_element_name(
@@ -45278,6 +45448,7 @@ fn patch_loaded_chart_model_xml(
                 if !wrote_start_element
                     && let Some(source_chart_type) =
                         chart_type_from_group_name(local_name.as_slice())
+                    && !preserve_loaded_group_types
                     && source_chart_type != chart.chart_type
                     && let Some(target_local_name) = target_chart_group_name
                 {
@@ -46536,10 +46707,9 @@ fn patch_loaded_chart_model_xml(
                     continue;
                 }
                 if let Some(next_chart_type) = chart_type_from_group_name(local_name.as_slice()) {
-                    if chart_type.is_some() {
-                        return Ok(None);
+                    if chart_type.is_none() {
+                        chart_type = Some(next_chart_type);
                     }
-                    chart_type = Some(next_chart_type);
                 }
                 if local_name.as_slice() == b"axId"
                     && current_chart_group_depth == Some(element_stack.len())
@@ -46583,7 +46753,11 @@ fn patch_loaded_chart_model_xml(
                 }
                 if local_name.as_slice() == b"explosion"
                     && parent_name == Some(b"dPt".as_slice())
-                    && !chart_type_supports_explosion(&chart.chart_type)
+                    && current_series_index.is_some_and(|series_index| {
+                        !chart_type_supports_explosion(
+                            &model_series_chart_types[series_index],
+                        )
+                    })
                 {
                     buffer.clear();
                     continue;
@@ -46633,6 +46807,7 @@ fn patch_loaded_chart_model_xml(
                     continue;
                 }
                 if let Some(source_chart_type) = chart_type_from_group_name(local_name.as_slice())
+                    && !preserve_loaded_group_types
                     && source_chart_type != chart.chart_type
                     && let Some(target_local_name) = target_chart_group_name
                 {
@@ -47175,7 +47350,9 @@ fn patch_loaded_chart_model_xml(
                     if let Some(seen) = series_marker_seen.get_mut(series_index) {
                         *seen = true;
                     }
-                    if !chart_type_supports_series_marker(&chart.chart_type) {
+                    if !chart_type_supports_series_marker(
+                        &model_series_chart_types[series_index],
+                    ) {
                         if let Some(removed) = series_marker_removed.get_mut(series_index) {
                             *removed = true;
                         }
@@ -47771,7 +47948,12 @@ fn patch_loaded_chart_model_xml(
                             .unwrap_or(false)
                             && let Some(source) = source_for_slot(series_index, slot)
                         {
-                            write_chart_source_container(&mut writer, slot, source)?;
+                            write_chart_source_container(
+                                &mut writer,
+                                series_index,
+                                slot,
+                                source,
+                            )?;
                             if let Some(seen) = source_slots_seen.get_mut(series_index) {
                                 seen[slot_index(slot)] = true;
                             }
@@ -48471,6 +48653,7 @@ fn patch_loaded_chart_model_xml(
                 }
                 if chart_type_from_group_name(local_name.as_slice()).is_some()
                     && current_chart_group_depth == Some(element_stack.len())
+                    && !preserve_loaded_group_types
                 {
                     for (series_index, series) in chart.series.iter().enumerate() {
                         if series_emitted.get(series_index).copied().unwrap_or(false) {
@@ -48622,7 +48805,12 @@ fn patch_loaded_chart_model_xml(
                         }
                         for slot in source_slots_in_order.iter().copied() {
                             if let Some(source) = source_for_slot(series_index, slot) {
-                                write_chart_source_container(&mut writer, slot, source)?;
+                                write_chart_source_container(
+                                    &mut writer,
+                                    series_index,
+                                    slot,
+                                    source,
+                                )?;
                                 source_seen[slot_index(slot)] = true;
                                 if source.dirty {
                                     patched_sources += 1;
@@ -48830,6 +49018,12 @@ fn patch_loaded_chart_model_xml(
                     }
                     current_chart_group_depth = None;
                 }
+                if chart_type_from_group_name(local_name.as_slice()).is_some()
+                    && current_chart_group_depth == Some(element_stack.len())
+                {
+                    current_chart_group_depth = None;
+                    chart_group_axis_refs_seen.clear();
+                }
 
                 if local_name.as_slice() == b"legend"
                     && expected_legend_position.is_some()
@@ -48956,6 +49150,7 @@ fn patch_loaded_chart_model_xml(
                 }
 
                 if chart_type_from_group_name(local_name.as_slice()).is_some()
+                    && !preserve_loaded_group_types
                     && chart_type.as_ref() != Some(&chart.chart_type)
                     && let Some(target_local_name) = target_chart_group_name
                 {
@@ -48968,7 +49163,10 @@ fn patch_loaded_chart_model_xml(
                 } else if let Some(slot) = source_container_slot(local_name.as_slice())
                     && current_series_index.is_some()
                 {
-                    let target_local_name = source_container_target_local_name(slot);
+                    let target_local_name = source_container_target_local_name(
+                        current_series_index.expect("series source container"),
+                        slot,
+                    );
                     if target_local_name.as_bytes() != local_name.as_slice() {
                         writer
                             .write_event(Event::End(BytesEnd::new(qualified_replacement_name(
@@ -49027,22 +49225,26 @@ fn patch_loaded_chart_model_xml(
         buffer.clear();
     }
 
-    let chart_type_matches = match chart_type.as_ref() {
-        Some(source_chart_type) if source_chart_type == &chart.chart_type => true,
-        Some(_) => chart_type_rewritten,
-        None => false,
-    };
+    let chart_type_matches = preserve_loaded_group_types
+        || match chart_type.as_ref() {
+            Some(source_chart_type) if source_chart_type == &chart.chart_type => true,
+            Some(_) => chart_type_rewritten,
+            None => false,
+        };
     let series_sources_match = source_slots_seen.len() == chart.series.len()
         && source_slots_seen
             .iter()
             .zip(chart.series.iter())
-            .all(|(seen, series)| {
+            .enumerate()
+            .all(|(series_index, (seen, series))| {
                 seen[0] == series.name.is_some()
                     && seen[1] == series.x_values.is_some()
                     && seen[2] == series.values.is_some()
                     && seen[3]
                         == (series.bubble_size.is_some()
-                            && chart_type_uses_bubble_size(&chart.chart_type))
+                            && chart_type_uses_bubble_size(
+                                &model_series_chart_types[series_index],
+                            ))
             });
     let series_orders_match = series_order_seen.len() == chart.series.len()
         && series_order_seen
@@ -49140,7 +49342,7 @@ fn patch_loaded_chart_model_xml(
             .get(series_index)
             .copied()
             .unwrap_or(false);
-        if !chart_type_supports_series_marker(&chart.chart_type) {
+        if !chart_type_supports_series_marker(&model_series_chart_types[series_index]) {
             return !marker_seen
                 || series_marker_removed
                     .get(series_index)
@@ -49695,6 +49897,10 @@ fn patch_loaded_chart_model_xml(
         && axis_gridlines_match
     {
         Ok(Some(writer.into_inner().into_inner()))
+    } else if preserve_loaded_group_types {
+        Err(OmError::unsupported(
+            "loaded multi-group chart edit could not be applied losslessly",
+        ))
     } else {
         Ok(None)
     }
@@ -129955,6 +130161,209 @@ mod tests {
             .expect_err("mixed combo filter and content edits should be rejected losslessly");
         assert_eq!(mixed_edit_error.code, OmErrorCode::Unsupported);
         assert!(mixed_edit_error.message.contains("other loaded multi-group chart edits"));
+    }
+
+    #[test]
+    fn loaded_combo_chart_local_edits_preserve_opaque_group_xml() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_filtered_combo_chart_series_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open loaded combo chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+
+        runtime
+            .dispatch_set(chart, "HasTitle", OmValue::Bool(true), &[])
+            .expect("set Chart.HasTitle");
+        let chart_title = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartTitle", &[])
+                .expect("Chart.ChartTitle"),
+        );
+        runtime
+            .dispatch_set(
+                chart_title,
+                "Text",
+                OmValue::Text("Preserved Combo".to_string()),
+                &[],
+            )
+            .expect("set ChartTitle.Text");
+
+        let full_series = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "FullSeriesCollection", &[])
+                .expect("Chart.FullSeriesCollection"),
+        );
+        let line_series = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    full_series,
+                    "Item",
+                    &[OmValue::Text("Line Visible".to_string())],
+                )
+                .expect("FullSeriesCollection.Item Line Visible"),
+        );
+        runtime
+            .dispatch_set(
+                line_series,
+                "Values",
+                OmValue::Text("=Sheet1!$B$1".to_string()),
+                &[],
+            )
+            .expect("set secondary line Series.Values");
+
+        let secondary_value_axis = expect_object_handle(
+            runtime
+                .dispatch_get(
+                    chart,
+                    "Axes",
+                    &[
+                        OmValue::Number(f64::from(super::XL_VALUE)),
+                        OmValue::Number(f64::from(super::XL_SECONDARY)),
+                    ],
+                )
+                .expect("Chart.Axes(xlValue, xlSecondary)"),
+        );
+        runtime
+            .dispatch_set(
+                secondary_value_axis,
+                "MaximumScale",
+                OmValue::Number(75.0),
+                &[],
+            )
+            .expect("set secondary Axis.MaximumScale");
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save loaded combo chart local edits");
+        let package = OpcPackage::from_bytes(&saved).expect("saved combo package");
+        let chart_xml = std::str::from_utf8(
+            package
+                .part("xl/charts/chart1.xml")
+                .expect("saved combo chart part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved combo chart XML");
+
+        assert_eq!(chart_xml.matches("<c:barChart").count(), 1);
+        assert_eq!(chart_xml.matches("<c:lineChart").count(), 1);
+        assert!(chart_xml.contains("Preserved Combo"));
+        assert!(chart_xml.contains(r#"<c:max val="75"/>"#));
+        assert!(chart_xml.contains(r#"<a:ln w="12700"/>"#));
+        assert!(chart_xml.contains(r#"<a:ln w="25400"/>"#));
+        assert!(chart_xml.contains(r#"<test:opaque group="bar" keep="true"/>"#));
+        assert!(chart_xml.contains(r#"<test:opaque group="line" keep="true"/>"#));
+        assert!(chart_xml.contains(r#"<c:ext uri="urn:combo-bar-sibling""#));
+        assert!(chart_xml.contains(r#"<c:ext uri="urn:combo-line-sibling""#));
+
+        let bar_end = chart_xml.find("</c:barChart>").expect("bar group end");
+        let line_start = chart_xml.find("<c:lineChart>").expect("line group start");
+        let line_end = chart_xml.find("</c:lineChart>").expect("line group end");
+        let bar_xml = &chart_xml[..bar_end];
+        let line_xml = &chart_xml[line_start..line_end];
+        assert!(bar_xml.contains(r#"<c:axId val="10"/>"#));
+        assert!(bar_xml.contains(r#"<c:axId val="20"/>"#));
+        assert!(!bar_xml.contains(r#"<c:axId val="50"/>"#));
+        assert!(line_xml.contains(r#"<c:axId val="10"/>"#));
+        assert!(line_xml.contains(r#"<c:axId val="50"/>"#));
+        assert!(!line_xml.contains(r#"<c:axId val="20"/>"#));
+        assert!(line_xml.contains("Sheet1!$B$1"));
+        assert!(!line_xml.contains("Sheet1!$C$1"));
+
+        let secondary_axis_start = chart_xml
+            .find(r#"<c:valAx><c:axId val="50"/>"#)
+            .expect("secondary value axis start");
+        let secondary_axis_end = chart_xml[secondary_axis_start..]
+            .find("</c:valAx>")
+            .map(|offset| secondary_axis_start + offset)
+            .expect("secondary value axis end");
+        assert!(chart_xml[secondary_axis_start..secondary_axis_end]
+            .contains(r#"<c:max val="75"/>"#));
+    }
+
+    #[test]
+    fn loaded_combo_chart_topology_changes_are_rejected_losslessly() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_filtered_combo_chart_series_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open loaded combo chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection"),
+        );
+        runtime
+            .dispatch_invoke(series_collection, "NewSeries", &[])
+            .expect("SeriesCollection.NewSeries");
+
+        let error = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect_err("loaded combo topology change should be rejected");
+        assert_eq!(error.code, OmErrorCode::Unsupported);
+        assert!(error.message.contains("series topology"));
     }
 
     #[test]
