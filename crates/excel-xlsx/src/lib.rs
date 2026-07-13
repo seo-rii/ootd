@@ -1047,6 +1047,7 @@ pub struct ChartDataTableSummary {
 pub struct ChartAxisSummary {
     pub raw_id: Option<String>,
     pub cross_axis_raw_id: Option<String>,
+    pub deleted: Option<bool>,
     pub kind: ChartAxisKind,
     pub axis_group: ChartAxisGroup,
     pub title_text: Option<String>,
@@ -4340,6 +4341,7 @@ fn build_chart_model_overlay(
                         .map(|axis| AxisModel {
                             raw_id: axis.raw_id.clone(),
                             cross_axis_raw_id: axis.cross_axis_raw_id.clone(),
+                            deleted: axis.deleted,
                             kind: axis.kind,
                             axis_group: axis.axis_group,
                             title: axis
@@ -21519,6 +21521,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
     let mut active_series = None::<ChartSeriesSummary>;
     let mut active_axis_index = None::<usize>;
     let mut active_axis_depth = 0usize;
+    let mut active_axis_prefix = None::<Vec<u8>>;
     let mut axis_title_text_depth = 0usize;
     let mut display_unit_label_text_depth = 0usize;
     let mut data_labels_target = None::<ChartDataLabelsTarget>;
@@ -22560,6 +22563,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     axes.push(ChartAxisSummary {
                         raw_id: None,
                         cross_axis_raw_id: None,
+                        deleted: None,
                         kind,
                         axis_group: ChartAxisGroup::Primary,
                         title_text: None,
@@ -22592,6 +22596,13 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     });
                     active_axis_index = Some(axes.len() - 1);
                     active_axis_depth = 1;
+                    let qualified_name = element.name();
+                    let qualified_name = qualified_name.as_ref();
+                    let prefix_end = qualified_name
+                        .iter()
+                        .position(|byte| *byte == b':')
+                        .unwrap_or(0);
+                    active_axis_prefix = Some(qualified_name[..prefix_end].to_vec());
                 } else if active_axis_index.is_some() {
                     active_axis_depth += 1;
                 }
@@ -22607,6 +22618,24 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     && let Some(axis_id) = parse_string_val_attr(&element, &reader)?
                 {
                     axes[axis_index].cross_axis_raw_id = Some(axis_id);
+                }
+                if local_name == b"delete"
+                    && let Some(axis_index) = active_axis_index
+                    && element_path.last().is_some_and(|name| {
+                        matches!(name.as_str(), "catAx" | "valAx" | "dateAx" | "serAx")
+                    })
+                    && {
+                        let qualified_name = element.name();
+                        let qualified_name = qualified_name.as_ref();
+                        let prefix_end = qualified_name
+                            .iter()
+                            .position(|byte| *byte == b':')
+                            .unwrap_or(0);
+                        active_axis_prefix.as_deref() == Some(&qualified_name[..prefix_end])
+                    }
+                {
+                    axes[axis_index].deleted =
+                        Some(parse_bool_val_attr(&element, &reader)?.unwrap_or(true));
                 }
                 if local_name == b"axId"
                     && active_axis_index.is_none()
@@ -23738,6 +23767,24 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 {
                     axes[axis_index].cross_axis_raw_id = Some(axis_id);
                 }
+                if local_name == b"delete"
+                    && let Some(axis_index) = active_axis_index
+                    && element_path.last().is_some_and(|name| {
+                        matches!(name.as_str(), "catAx" | "valAx" | "dateAx" | "serAx")
+                    })
+                    && {
+                        let qualified_name = element.name();
+                        let qualified_name = qualified_name.as_ref();
+                        let prefix_end = qualified_name
+                            .iter()
+                            .position(|byte| *byte == b':')
+                            .unwrap_or(0);
+                        active_axis_prefix.as_deref() == Some(&qualified_name[..prefix_end])
+                    }
+                {
+                    axes[axis_index].deleted =
+                        Some(parse_bool_val_attr(&element, &reader)?.unwrap_or(true));
+                }
                 if local_name == b"axId"
                     && active_axis_index.is_none()
                     && element_path
@@ -24226,6 +24273,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         }
                         active_axis_index = None;
                         active_axis_depth = 0;
+                        active_axis_prefix = None;
                     } else {
                         active_axis_depth -= 1;
                     }
@@ -30915,8 +30963,8 @@ mod tests {
         <c:hiLowLines/>
         <c:upDownBars/>
       </c:barChart>
-      <c:catAx><c:axId val="10"/><c:title><c:tx><c:rich><a:p><a:r><a:t>Quarter</a:t></a:r></a:p></c:rich></c:tx></c:title><c:majorTickMark val="out"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/><c:tickLblSkip val="2"/><c:tickMarkSkip val="3"/><c:crosses val="autoZero"/></c:catAx>
-      <c:valAx><c:axId val="20"/><c:scaling><c:logBase val="10"/><c:orientation val="maxMin"/><c:min val="0"/><c:max val="1000"/></c:scaling><c:majorGridlines/><c:minorGridlines/><c:title><c:tx><c:rich><a:p><a:r><a:t>Revenue</a:t></a:r></a:p></c:rich></c:tx></c:title><c:majorTickMark val="cross"/><c:minorTickMark val="in"/><c:tickLblPos val="low"/><c:majorUnit val="250"/><c:minorUnit val="50"/><c:crossesAt val="10"/><c:crossBetween val="midCat"/></c:valAx>
+      <c:catAx><c:axId val="10"/><c:delete></c:delete><c:title><c:tx><c:rich><a:p><a:r><a:t>Quarter</a:t></a:r></a:p></c:rich></c:tx></c:title><c:majorTickMark val="out"/><c:minorTickMark val="none"/><c:tickLblPos val="nextTo"/><c:tickLblSkip val="2"/><c:tickMarkSkip val="3"/><c:crosses val="autoZero"/></c:catAx>
+      <c:valAx><c:axId val="20"/><c:scaling><c:logBase val="10"/><c:orientation val="maxMin"/><c:min val="0"/><c:max val="1000"/></c:scaling><c:delete val="0"/><c:majorGridlines/><c:minorGridlines/><c:title><c:tx><c:rich><a:p><a:r><a:t>Revenue</a:t></a:r></a:p></c:rich></c:tx></c:title><c:majorTickMark val="cross"/><c:minorTickMark val="in"/><c:tickLblPos val="low"/><c:majorUnit val="250"/><c:minorUnit val="50"/><c:crossesAt val="10"/><c:crossBetween val="midCat"/></c:valAx>
     </c:plotArea>
     <c:legend><c:legendPos val="r"/><c:overlay val="1"/></c:legend>
     <c:plotVisOnly val="0"/>
@@ -31217,6 +31265,7 @@ mod tests {
                 ChartAxisSummary {
                     raw_id: Some("10".to_string()),
                     cross_axis_raw_id: None,
+                    deleted: Some(true),
                     kind: ChartAxisKind::Category,
                     axis_group: ChartAxisGroup::Primary,
                     title_text: Some("Quarter".to_string()),
@@ -31250,6 +31299,7 @@ mod tests {
                 ChartAxisSummary {
                     raw_id: Some("20".to_string()),
                     cross_axis_raw_id: None,
+                    deleted: Some(false),
                     kind: ChartAxisKind::Value,
                     axis_group: ChartAxisGroup::Primary,
                     title_text: Some("Revenue".to_string()),
@@ -37815,7 +37865,7 @@ mod tests {
     #[test]
     fn parse_chart_part_summary_maps_series_to_secondary_axis_group() {
         let chart_xml = br#"<?xml version="1.0" encoding="UTF-8"?>
-<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart">
+<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:test="urn:axis-delete-collision">
   <c:chart>
     <c:plotArea>
       <c:barChart>
@@ -37832,7 +37882,7 @@ mod tests {
         <c:axId val="10"/><c:axId val="50"/>
       </c:lineChart>
       <c:catAx><c:axId val="10"/></c:catAx>
-      <c:valAx><c:axId val="20"/></c:valAx>
+      <c:valAx><c:axId val="20"/><test:delete val="1"/></c:valAx>
       <c:valAx><c:axId val="50"/></c:valAx>
     </c:plotArea>
   </c:chart>
@@ -37843,6 +37893,7 @@ mod tests {
         assert_eq!(summary.axes[0].axis_group, ChartAxisGroup::Primary);
         assert_eq!(summary.axes[1].axis_group, ChartAxisGroup::Primary);
         assert_eq!(summary.axes[2].axis_group, ChartAxisGroup::Secondary);
+        assert!(summary.axes.iter().all(|axis| axis.deleted.is_none()));
         assert_eq!(summary.series.len(), 2);
         assert_eq!(summary.series[0].axis_ids, vec!["10", "20"]);
         assert_eq!(summary.series[0].axis_group, ChartAxisGroup::Primary);

@@ -394,6 +394,8 @@ pub enum ChartLegendPosition {
 pub struct AxisModel {
     pub raw_id: Option<String>,
     pub cross_axis_raw_id: Option<String>,
+    /// OOXML `c:delete`: absent, explicitly visible, or hidden.
+    pub deleted: Option<bool>,
     pub kind: ChartAxisKind,
     pub axis_group: ChartAxisGroup,
     pub title: Option<ChartText>,

@@ -18445,13 +18445,15 @@ impl ExcelRuntime {
                             let chart = runtime.loaded.state.charts.get_mut(&chart_id).ok_or_else(
                                 || OmError::new(OmErrorCode::NotFound, "chart not found"),
                             )?;
-                            if axis_index >= chart.axes.len() {
-                                return Err(OmError::new(OmErrorCode::NotFound, "axis not found"));
+                            let axis = chart.axes.get_mut(axis_index).ok_or_else(|| {
+                                OmError::new(OmErrorCode::NotFound, "axis not found")
+                            })?;
+                            if axis.deleted != Some(true) {
+                                axis.deleted = Some(true);
+                                chart.content_dirty = true;
+                                chart.dirty = true;
+                                runtime.dirty = true;
                             }
-                            chart.axes.remove(axis_index);
-                            chart.content_dirty = true;
-                            chart.dirty = true;
-                            runtime.dirty = true;
                         }
                         self.stale_axis_handles_for_chart(workbook, chart_id);
                         self.find_state = None;
@@ -27357,7 +27359,11 @@ impl ExcelRuntime {
                     ));
                 }
                 Ok(OmValue::Number(
-                    self.chart_model(workbook, chart_id)?.axes.len() as f64,
+                    self.chart_model(workbook, chart_id)?
+                        .axes
+                        .iter()
+                        .filter(|axis| axis.deleted != Some(true))
+                        .count() as f64,
                 ))
             }
             "Item" => {
@@ -27539,8 +27545,12 @@ impl ExcelRuntime {
                     chart
                         .axes
                         .iter()
-                        .find(|axis| axis.kind == ChartAxisKind::Value)
-                        .and_then(|axis| axis.axis_between_categories)
+                        .find(|value_axis| {
+                            value_axis.deleted != Some(true)
+                                && value_axis.axis_group == axis.axis_group
+                                && value_axis.kind == ChartAxisKind::Value
+                        })
+                        .and_then(|value_axis| value_axis.axis_between_categories)
                         .unwrap_or(true),
                 ))
             }
@@ -36072,6 +36082,7 @@ impl ExcelRuntime {
         self.chart_model(workbook, chart_id)?
             .axes
             .get(axis_index)
+            .filter(|axis| axis.deleted != Some(true))
             .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "axis not found"))
     }
 
@@ -36182,10 +36193,15 @@ impl ExcelRuntime {
                 "ChartGroup.RadarAxisLabels is only supported for radar chart groups",
             ));
         }
+        let axis_group = chart_group_axis_group(chart, group_index)?;
         chart
             .axes
             .iter()
-            .position(|axis| matches!(axis.kind, ChartAxisKind::Category | ChartAxisKind::Date))
+            .position(|axis| {
+                axis.deleted != Some(true)
+                    && axis.axis_group == axis_group
+                    && matches!(axis.kind, ChartAxisKind::Category | ChartAxisKind::Date)
+            })
             .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "radar axis labels not found"))
     }
 
@@ -36252,7 +36268,7 @@ impl ExcelRuntime {
             .chart_model(workbook, chart_id)?
             .axes
             .iter()
-            .position(|axis| match axis_type {
+            .position(|axis| axis.deleted != Some(true) && match axis_type {
                 XL_CATEGORY => {
                     axis.axis_group == axis_group
                         && matches!(axis.kind, ChartAxisKind::Category | ChartAxisKind::Date)
@@ -36298,7 +36314,7 @@ impl ExcelRuntime {
                     "axis visibility is unavailable for chart types without axes",
                 ));
             }
-            let axis_index = chart.axes.iter().position(|axis| match axis_type {
+            let axis_matches = |axis: &AxisModel| match axis_type {
                 XL_CATEGORY => {
                     axis.axis_group == axis_group
                         && matches!(axis.kind, ChartAxisKind::Category | ChartAxisKind::Date)
@@ -36308,10 +36324,25 @@ impl ExcelRuntime {
                     axis.axis_group == axis_group && axis.kind == ChartAxisKind::Series
                 }
                 _ => false,
-            });
-            let mut changed = if has_axis {
-                if axis_index.is_some() {
+            };
+            let axis_indices = chart
+                .axes
+                .iter()
+                .enumerate()
+                .filter_map(|(axis_index, axis)| axis_matches(axis).then_some(axis_index))
+                .collect::<Vec<_>>();
+            let mut topology_changed = false;
+            let changed = if has_axis {
+                if axis_indices
+                    .iter()
+                    .any(|axis_index| chart.axes[*axis_index].deleted != Some(true))
+                {
                     false
+                } else if !axis_indices.is_empty() {
+                    for axis_index in axis_indices {
+                        chart.axes[axis_index].deleted = Some(false);
+                    }
+                    true
                 } else {
                     let (kind, preferred_axis_id) = match (axis_type, axis_group) {
                         (XL_CATEGORY, ChartAxisGroup::Primary) => (ChartAxisKind::Category, 10),
@@ -36326,16 +36357,22 @@ impl ExcelRuntime {
                         }
                         _ => unreachable!("axis type validated above"),
                     };
-                    ensure_chart_axis(chart, kind, axis_group, preferred_axis_id)
+                    topology_changed =
+                        ensure_chart_axis(chart, kind, axis_group, preferred_axis_id);
+                    topology_changed
                 }
-            } else if let Some(axis_index) = axis_index {
-                chart.axes.remove(axis_index);
-                true
             } else {
-                false
+                let mut hidden = false;
+                for axis_index in axis_indices {
+                    if chart.axes[axis_index].deleted != Some(true) {
+                        chart.axes[axis_index].deleted = Some(true);
+                        hidden = true;
+                    }
+                }
+                hidden
             };
-            if changed {
-                changed |= reconcile_chart_axis_crossings(&mut chart.axes);
+            if topology_changed {
+                reconcile_chart_axis_crossings(&mut chart.axes);
             }
             if changed {
                 chart.content_dirty = true;
@@ -36450,6 +36487,32 @@ impl ExcelRuntime {
                             ..
                         },
                     ..
+                } if *object_workbook == workbook && *object_chart_id == chart_id => {
+                    Some(object_id)
+                }
+                RuntimeObjectKind::PictureCrop {
+                    workbook: object_workbook,
+                    parent:
+                        ChartFormatParent::Axis {
+                            chart_id: object_chart_id,
+                            ..
+                        }
+                        | ChartFormatParent::AxisTitle {
+                            chart_id: object_chart_id,
+                            ..
+                        }
+                        | ChartFormatParent::DisplayUnitLabel {
+                            chart_id: object_chart_id,
+                            ..
+                        }
+                        | ChartFormatParent::TickLabels {
+                            chart_id: object_chart_id,
+                            ..
+                        }
+                        | ChartFormatParent::Gridlines {
+                            chart_id: object_chart_id,
+                            ..
+                        },
                 } if *object_workbook == workbook && *object_chart_id == chart_id => {
                     Some(object_id)
                 }
@@ -43858,6 +43921,13 @@ fn serialize_loaded_chart_axis_shell(chart: &ChartModel, axis: &AxisModel) -> Om
     writer
         .write_event(Event::Empty(axis_id_element))
         .map_err(runtime_xml_error)?;
+    if let Some(deleted) = axis.deleted {
+        let mut delete = BytesStart::new("c:delete");
+        delete.push_attribute(("val", if deleted { "1" } else { "0" }));
+        writer
+            .write_event(Event::Empty(delete))
+            .map_err(runtime_xml_error)?;
+    }
     if let Some(cross_axis_id) = chart_axis_cross_target_id(&chart.axes, axis) {
         let mut cross_axis = BytesStart::new("c:crossAx");
         cross_axis.push_attribute(("val", cross_axis_id.as_str()));
@@ -43898,12 +43968,26 @@ fn rewrite_loaded_chart_axis_additions(
         start_tag_end: usize,
         end: usize,
     }
+    struct AxisChildSpan {
+        start: usize,
+        start_tag_end: usize,
+        end: usize,
+    }
+    struct AxisDeleteSpan {
+        span: AxisChildSpan,
+        value: bool,
+    }
     struct AxisSpan {
         kind: ChartAxisKind,
         raw_id: Option<String>,
+        qualified_name: String,
         start: usize,
+        start_tag_end: usize,
         end: usize,
         end_tag_start: usize,
+        axis_id: Option<AxisChildSpan>,
+        scaling: Option<AxisChildSpan>,
+        delete: Option<AxisDeleteSpan>,
         cross_axis: Option<AxisCrossSpan>,
     }
     let mut reader = Reader::from_reader(Cursor::new(existing_chart_xml));
@@ -43914,6 +43998,22 @@ fn rewrite_loaded_chart_axis_additions(
     let mut saw_axis = false;
     let mut first_after_axes_start = None::<usize>;
     let mut plot_area_end = None::<usize>;
+    let parse_axis_delete = |element: &BytesStart<'_>,
+                             decoder: quick_xml::encoding::Decoder|
+     -> OmResult<bool> {
+        Ok(match element_val_attribute(element, decoder)?.as_deref() {
+            None | Some("1") => true,
+            Some("0") => false,
+            Some(value) if value.eq_ignore_ascii_case("true") => true,
+            Some(value) if value.eq_ignore_ascii_case("false") => false,
+            Some(value) => {
+                return Err(OmError::new(
+                    OmErrorCode::Parse,
+                    format!("invalid chart axis delete value: {value}"),
+                ));
+            }
+        })
+    };
     loop {
         let event_start = usize::try_from(reader.buffer_position()).map_err(|_| {
             OmError::new(OmErrorCode::InvalidState, "chart XML position overflow")
@@ -43926,9 +44026,22 @@ fn rewrite_loaded_chart_axis_additions(
                         loaded_axes.push(AxisSpan {
                             kind: axis_kind,
                             raw_id: None,
+                            qualified_name: String::from_utf8_lossy(element.name().as_ref())
+                                .into_owned(),
                             start: event_start,
+                            start_tag_end: usize::try_from(reader.buffer_position()).map_err(
+                                |_| {
+                                    OmError::new(
+                                        OmErrorCode::InvalidState,
+                                        "chart XML position overflow",
+                                    )
+                                },
+                            )?,
                             end: 0,
                             end_tag_start: 0,
+                            axis_id: None,
+                            scaling: None,
+                            delete: None,
                             cross_axis: None,
                         });
                         saw_axis = true;
@@ -43942,6 +44055,65 @@ fn rewrite_loaded_chart_axis_additions(
                     && let Some(axis) = loaded_axes.last_mut()
                 {
                     axis.raw_id = element_val_attribute(&element, reader.decoder())?;
+                    let start_tag_end = usize::try_from(reader.buffer_position()).map_err(|_| {
+                        OmError::new(OmErrorCode::InvalidState, "chart XML position overflow")
+                    })?;
+                    axis.axis_id = Some(AxisChildSpan {
+                        start: event_start,
+                        start_tag_end,
+                        end: 0,
+                    });
+                } else if local_name.as_slice() == b"scaling"
+                    && element_stack
+                        .last()
+                        .is_some_and(|parent| chart_axis_kind_from_xml_name(parent).is_some())
+                    && let Some(axis) = loaded_axes.last_mut()
+                {
+                    let start_tag_end = usize::try_from(reader.buffer_position()).map_err(|_| {
+                        OmError::new(OmErrorCode::InvalidState, "chart XML position overflow")
+                    })?;
+                    axis.scaling = Some(AxisChildSpan {
+                        start: event_start,
+                        start_tag_end,
+                        end: 0,
+                    });
+                } else if local_name.as_slice() == b"delete"
+                    && element_stack
+                        .last()
+                        .is_some_and(|parent| chart_axis_kind_from_xml_name(parent).is_some())
+                    && let Some(axis) = loaded_axes.last_mut()
+                    && {
+                        let element_name = element.name();
+                        let element_name = element_name.as_ref();
+                        let element_prefix_end = element_name
+                            .iter()
+                            .position(|byte| *byte == b':')
+                            .unwrap_or(0);
+                        let axis_name = axis.qualified_name.as_bytes();
+                        let axis_prefix_end = axis_name
+                            .iter()
+                            .position(|byte| *byte == b':')
+                            .unwrap_or(0);
+                        element_name[..element_prefix_end] == axis_name[..axis_prefix_end]
+                    }
+                {
+                    if axis.delete.is_some() {
+                        return Err(OmError::new(
+                            OmErrorCode::Parse,
+                            "loaded chart axis has duplicate delete elements",
+                        ));
+                    }
+                    let start_tag_end = usize::try_from(reader.buffer_position()).map_err(|_| {
+                        OmError::new(OmErrorCode::InvalidState, "chart XML position overflow")
+                    })?;
+                    axis.delete = Some(AxisDeleteSpan {
+                        span: AxisChildSpan {
+                            start: event_start,
+                            start_tag_end,
+                            end: 0,
+                        },
+                        value: parse_axis_delete(&element, reader.decoder())?,
+                    });
                 } else if local_name.as_slice() == b"crossAx"
                     && element_stack
                         .last()
@@ -43979,9 +44151,15 @@ fn rewrite_loaded_chart_axis_additions(
                         loaded_axes.push(AxisSpan {
                             kind: axis_kind,
                             raw_id: None,
+                            qualified_name: String::from_utf8_lossy(element.name().as_ref())
+                                .into_owned(),
                             start: event_start,
+                            start_tag_end: event_end,
                             end: event_end,
                             end_tag_start: event_start,
+                            axis_id: None,
+                            scaling: None,
+                            delete: None,
                             cross_axis: None,
                         });
                         saw_axis = true;
@@ -43995,6 +44173,65 @@ fn rewrite_loaded_chart_axis_additions(
                     && let Some(axis) = loaded_axes.last_mut()
                 {
                     axis.raw_id = element_val_attribute(&element, reader.decoder())?;
+                    let event_end = usize::try_from(reader.buffer_position()).map_err(|_| {
+                        OmError::new(OmErrorCode::InvalidState, "chart XML position overflow")
+                    })?;
+                    axis.axis_id = Some(AxisChildSpan {
+                        start: event_start,
+                        start_tag_end: event_end,
+                        end: event_end,
+                    });
+                } else if local_name.as_slice() == b"scaling"
+                    && element_stack
+                        .last()
+                        .is_some_and(|parent| chart_axis_kind_from_xml_name(parent).is_some())
+                    && let Some(axis) = loaded_axes.last_mut()
+                {
+                    let event_end = usize::try_from(reader.buffer_position()).map_err(|_| {
+                        OmError::new(OmErrorCode::InvalidState, "chart XML position overflow")
+                    })?;
+                    axis.scaling = Some(AxisChildSpan {
+                        start: event_start,
+                        start_tag_end: event_end,
+                        end: event_end,
+                    });
+                } else if local_name.as_slice() == b"delete"
+                    && element_stack
+                        .last()
+                        .is_some_and(|parent| chart_axis_kind_from_xml_name(parent).is_some())
+                    && let Some(axis) = loaded_axes.last_mut()
+                    && {
+                        let element_name = element.name();
+                        let element_name = element_name.as_ref();
+                        let element_prefix_end = element_name
+                            .iter()
+                            .position(|byte| *byte == b':')
+                            .unwrap_or(0);
+                        let axis_name = axis.qualified_name.as_bytes();
+                        let axis_prefix_end = axis_name
+                            .iter()
+                            .position(|byte| *byte == b':')
+                            .unwrap_or(0);
+                        element_name[..element_prefix_end] == axis_name[..axis_prefix_end]
+                    }
+                {
+                    if axis.delete.is_some() {
+                        return Err(OmError::new(
+                            OmErrorCode::Parse,
+                            "loaded chart axis has duplicate delete elements",
+                        ));
+                    }
+                    let event_end = usize::try_from(reader.buffer_position()).map_err(|_| {
+                        OmError::new(OmErrorCode::InvalidState, "chart XML position overflow")
+                    })?;
+                    axis.delete = Some(AxisDeleteSpan {
+                        span: AxisChildSpan {
+                            start: event_start,
+                            start_tag_end: event_end,
+                            end: event_end,
+                        },
+                        value: parse_axis_delete(&element, reader.decoder())?,
+                    });
                 } else if local_name.as_slice() == b"crossAx"
                     && element_stack
                         .last()
@@ -44021,6 +44258,35 @@ fn rewrite_loaded_chart_axis_additions(
             Ok(Event::End(element)) => {
                 let element_name = element.name();
                 let local_name = xml_local_name(element_name.as_ref());
+                if element_stack.len() >= 2
+                    && chart_axis_kind_from_xml_name(
+                        element_stack[element_stack.len() - 2].as_slice(),
+                    )
+                    .is_some()
+                    && let Some(axis) = loaded_axes.last_mut()
+                {
+                    let event_end = usize::try_from(reader.buffer_position()).map_err(|_| {
+                        OmError::new(OmErrorCode::InvalidState, "chart XML position overflow")
+                    })?;
+                    match local_name {
+                        b"axId" => {
+                            if let Some(span) = axis.axis_id.as_mut() {
+                                span.end = event_end;
+                            }
+                        }
+                        b"scaling" => {
+                            if let Some(span) = axis.scaling.as_mut() {
+                                span.end = event_end;
+                            }
+                        }
+                        b"delete" => {
+                            if let Some(delete) = axis.delete.as_mut() {
+                                delete.span.end = event_end;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
                 if element_stack.len() >= 2
                     && chart_axis_kind_from_xml_name(
                         element_stack[element_stack.len() - 2].as_slice(),
@@ -44075,6 +44341,12 @@ fn rewrite_loaded_chart_axis_additions(
                 .cross_axis
                 .as_ref()
                 .is_some_and(|cross_axis| cross_axis.end == 0)
+            || axis.axis_id.as_ref().is_some_and(|span| span.end == 0)
+            || axis.scaling.as_ref().is_some_and(|span| span.end == 0)
+            || axis
+                .delete
+                .as_ref()
+                .is_some_and(|delete| delete.span.end == 0)
     }) {
         return Err(OmError::new(
             OmErrorCode::Parse,
@@ -44170,6 +44442,96 @@ fn rewrite_loaded_chart_axis_additions(
                 .map_err(runtime_xml_error)?;
             Ok(writer.into_inner().into_inner())
         };
+    let rewrite_delete_start = |span: &AxisChildSpan, deleted: bool| -> OmResult<Vec<u8>> {
+        let mut reader = Reader::from_reader(Cursor::new(
+            &existing_chart_xml[span.start..span.start_tag_end],
+        ));
+        reader.config_mut().trim_text(false);
+        let mut buffer = Vec::new();
+        let event = reader
+            .read_event_into(&mut buffer)
+            .map_err(runtime_xml_error)?;
+        let (element, is_empty) = match event {
+            Event::Start(element) => (element, false),
+            Event::Empty(element) => (element, true),
+            _ => {
+                return Err(OmError::new(
+                    OmErrorCode::Parse,
+                    "loaded chart delete span does not start with an element",
+                ));
+            }
+        };
+        let qualified_name = String::from_utf8_lossy(element.name().as_ref()).into_owned();
+        let mut rewritten = BytesStart::new(qualified_name);
+        let replacement = if deleted { "1" } else { "0" };
+        let mut wrote_value = false;
+        for attr in element.attributes() {
+            let attr = attr.map_err(runtime_xml_error)?;
+            let key = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
+            let value = attr
+                .decode_and_unescape_value(reader.decoder())
+                .map_err(runtime_xml_error)?
+                .into_owned();
+            if xml_local_name(attr.key.as_ref()) == b"val" {
+                rewritten.push_attribute((key.as_str(), replacement));
+                wrote_value = true;
+            } else {
+                rewritten.push_attribute((key.as_str(), value.as_str()));
+            }
+        }
+        if !wrote_value {
+            rewritten.push_attribute(("val", replacement));
+        }
+        let mut writer = Writer::new(Cursor::new(Vec::new()));
+        writer
+            .write_event(if is_empty {
+                Event::Empty(rewritten)
+            } else {
+                Event::Start(rewritten)
+            })
+            .map_err(runtime_xml_error)?;
+        Ok(writer.into_inner().into_inner())
+    };
+    for (loaded_index, loaded_axis) in loaded_axes.iter().enumerate() {
+        let Some(model_index) = loaded_model_indices[loaded_index] else {
+            continue;
+        };
+        let Some(expected) = chart.axes[model_index].deleted else {
+            continue;
+        };
+        match loaded_axis.delete.as_ref() {
+            Some(delete) if delete.value != expected => edits.push((
+                delete.span.start,
+                delete.span.start_tag_end,
+                rewrite_delete_start(&delete.span, expected)?,
+            )),
+            Some(_) => {}
+            None => {
+                let insertion_position = loaded_axis
+                    .scaling
+                    .as_ref()
+                    .map(|span| span.end)
+                    .or_else(|| loaded_axis.axis_id.as_ref().map(|span| span.end))
+                    .unwrap_or(loaded_axis.start_tag_end);
+                let qualified_name = loaded_axis
+                    .qualified_name
+                    .rsplit_once(':')
+                    .map(|(prefix, _)| format!("{prefix}:delete"))
+                    .unwrap_or_else(|| "delete".to_string());
+                let mut delete = BytesStart::new(qualified_name);
+                delete.push_attribute(("val", if expected { "1" } else { "0" }));
+                let mut writer = Writer::new(Cursor::new(Vec::new()));
+                writer
+                    .write_event(Event::Empty(delete))
+                    .map_err(runtime_xml_error)?;
+                edits.push((
+                    insertion_position,
+                    insertion_position,
+                    writer.into_inner().into_inner(),
+                ));
+            }
+        }
+    }
     if axis_topology_changed {
         for (loaded_index, loaded_axis) in loaded_axes.iter().enumerate() {
             let Some(model_index) = loaded_model_indices[loaded_index] else {
@@ -44208,7 +44570,7 @@ fn rewrite_loaded_chart_axis_additions(
         }
     }
     if additions.is_empty() {
-        return apply_loaded_chart_xml_edits(existing_chart_xml, edits, "axis removal");
+        return apply_loaded_chart_xml_edits(existing_chart_xml, edits, "axis update");
     }
     let insertion_position = first_after_axes_start.or(plot_area_end).ok_or_else(|| {
         OmError::new(
@@ -46656,6 +47018,13 @@ fn patch_loaded_chart_model_xml(
         let axis_id = chart_axis_id(axis_index, axis);
         write_chart_axis_ref_element(writer, &axis_id)?;
         write_chart_axis_scaling_element(writer, axis)?;
+        if let Some(deleted) = axis.deleted {
+            write_chart_string_val_element(
+                writer,
+                "c:delete",
+                if deleted { "1" } else { "0" },
+            )?;
+        }
         if axis.has_major_gridlines == Some(true) {
             writer
                 .write_event(Event::Empty(BytesStart::new("c:majorGridlines")))
@@ -52747,6 +53116,15 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
                     )
                 })
                 .unwrap_or_default();
+            let axis_deleted_xml = axis
+                .deleted
+                .map(|value| {
+                    format!(
+                        r#"<c:delete val="{}"/>"#,
+                        if value { "1" } else { "0" }
+                    )
+                })
+                .unwrap_or_default();
             let major_gridlines_xml = if axis.has_major_gridlines == Some(true) {
                 r#"<c:majorGridlines/>"#
             } else {
@@ -52901,7 +53279,7 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
                 })
                 .unwrap_or_default();
             axes_xml.push_str(&format!(
-                r#"<c:{axis_tag}><c:axId val="{escaped_axis_id}"/>{scaling_xml}{major_gridlines_xml}{minor_gridlines_xml}{axis_title_xml}{tick_label_number_format_xml}{major_tick_mark_xml}{minor_tick_mark_xml}{tick_label_position_xml}{tick_label_spacing_xml}{tick_mark_spacing_xml}{major_unit_xml}{minor_unit_xml}{display_units_xml}{cross_axis_xml}{crossing_xml}{cross_between_xml}{category_type_auto_xml}{base_unit_xml}{major_time_unit_xml}{minor_time_unit_xml}</c:{axis_tag}>"#
+                r#"<c:{axis_tag}><c:axId val="{escaped_axis_id}"/>{scaling_xml}{axis_deleted_xml}{major_gridlines_xml}{minor_gridlines_xml}{axis_title_xml}{tick_label_number_format_xml}{major_tick_mark_xml}{minor_tick_mark_xml}{tick_label_position_xml}{tick_label_spacing_xml}{tick_mark_spacing_xml}{major_unit_xml}{minor_unit_xml}{display_units_xml}{cross_axis_xml}{crossing_xml}{cross_between_xml}{category_type_auto_xml}{base_unit_xml}{major_time_unit_xml}{minor_time_unit_xml}</c:{axis_tag}>"#
             ));
         }
     }
@@ -53070,6 +53448,7 @@ fn default_chart_axis(raw_id: Option<String>, kind: ChartAxisKind) -> AxisModel 
     AxisModel {
         raw_id,
         cross_axis_raw_id: None,
+        deleted: None,
         kind,
         axis_group: ChartAxisGroup::Primary,
         title: None,
@@ -53108,12 +53487,16 @@ fn ensure_chart_axis(
     axis_group: ChartAxisGroup,
     preferred_axis_id: u32,
 ) -> bool {
-    if chart.axes.iter().any(|axis| {
+    if let Some(axis) = chart.axes.iter_mut().find(|axis| {
         axis.axis_group == axis_group
             && (axis.kind == kind
                 || (matches!(kind, ChartAxisKind::Category | ChartAxisKind::Date)
                     && matches!(axis.kind, ChartAxisKind::Category | ChartAxisKind::Date)))
     }) {
+        if axis.deleted == Some(true) {
+            axis.deleted = Some(false);
+            return true;
+        }
         return false;
     }
     let axis_id = next_chart_axis_raw_id(chart, preferred_axis_id);
@@ -178915,7 +179298,7 @@ mod tests {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
             .open_workbook(OpenWorkbookSpec {
-                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                bytes: synthetic_workbook_with_axis_delete_preservation_bytes(),
                 format_hint: Some(FileFormat::Xlsx),
                 profile: ExcelProfile::Excel365,
                 read_only: false,
@@ -179052,6 +179435,29 @@ mod tests {
                 },
             )
             .expect("save workbook after Axis.Delete");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved chart package");
+        let saved_chart_xml = String::from_utf8(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("saved chart XML");
+        assert_eq!(saved_chart_xml.matches("<c:valAx").count(), 1);
+        assert!(saved_chart_xml.contains(
+            r#"<c:barChart><c:barDir val="col"/><c:grouping val="clustered"/>"#
+        ));
+        assert!(saved_chart_xml.contains(
+            r#"<c:axId val="10"/><c:axId val="20"/>"#
+        ));
+        assert!(saved_chart_xml.contains(
+            r#"</c:scaling><c:delete val="1"/><test:delete keep="true"/>"#
+        ));
+        assert!(saved_chart_xml.contains(r#"<c:valAx test:axis="keep">"#));
+        assert!(saved_chart_xml.contains(r#"<c:crossAx val="10"/>"#));
+        assert!(saved_chart_xml.contains(r#"<test:axisOpaque keep="true"/>"#));
+        assert!(saved_chart_xml.contains(r#"<test:opaque keep="true"/>"#));
         let mut reopened_runtime = ExcelRuntime::new();
         let reopened_workbook = reopened_runtime
             .open_workbook(OpenWorkbookSpec {
@@ -179101,6 +179507,260 @@ mod tests {
                 .expect("reopened Chart.HasAxis(xlCategory)"),
             OmValue::Bool(true)
         );
+
+        let reopened_axes = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "Axes", &[])
+                .expect("reopened Chart.Axes after Axis.Delete"),
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_axes, "Count", &[])
+                    .expect("reopened Axes.Count after Axis.Delete")
+            ),
+            1.0
+        );
+        reopened_runtime
+            .dispatch_set(
+                reopened_chart,
+                "HasAxis",
+                OmValue::Bool(true),
+                &[OmValue::Number(f64::from(super::XL_VALUE))],
+            )
+            .expect("restore deleted value axis through Chart.HasAxis");
+        assert_eq!(
+            reopened_runtime
+                .dispatch_get(
+                    reopened_chart,
+                    "HasAxis",
+                    &[OmValue::Number(f64::from(super::XL_VALUE))],
+                )
+                .expect("Chart.HasAxis(xlValue) after restore"),
+            OmValue::Bool(true)
+        );
+        let restored = reopened_runtime
+            .save_workbook(
+                reopened_workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after restoring deleted axis");
+        let restored_package = OpcPackage::from_bytes(&restored).expect("restored chart package");
+        let restored_chart_xml = String::from_utf8(
+            restored_package
+                .part("xl/charts/chart1.xml")
+                .expect("restored chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("restored chart XML");
+        assert_eq!(restored_chart_xml.matches("<c:valAx").count(), 1);
+        assert!(restored_chart_xml.contains(
+            r#"</c:scaling><c:delete val="0"/><test:delete keep="true"/>"#
+        ));
+        assert!(restored_chart_xml.contains(r#"<test:axisOpaque keep="true"/>"#));
+        let restored_again = reopened_runtime
+            .save_workbook(
+                reopened_workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save restored axis workbook again");
+        let restored_again_package =
+            OpcPackage::from_bytes(&restored_again).expect("restored chart package again");
+        assert_eq!(
+            restored_again_package
+                .part("xl/charts/chart1.xml")
+                .expect("restored chart part again")
+                .bytes,
+            restored_package
+                .part("xl/charts/chart1.xml")
+                .expect("restored chart part")
+                .bytes
+        );
+        assert!(restored_chart_xml.contains(r#"<test:opaque keep="true"/>"#));
+    }
+
+    #[test]
+    fn chart_has_axis_tombstones_and_restores_loaded_scatter_axis_pair() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_filtered_scatter_chart_series_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with scatter chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let axes = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "Axes", &[])
+                .expect("scatter Chart.Axes"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(axes, "Count", &[])
+                    .expect("scatter Axes.Count")
+            ),
+            2.0
+        );
+
+        runtime
+            .dispatch_set(
+                chart,
+                "HasAxis",
+                OmValue::Bool(false),
+                &[OmValue::Number(f64::from(super::XL_VALUE))],
+            )
+            .expect("hide scatter value axis pair");
+        assert_eq!(
+            runtime
+                .dispatch_get(
+                    chart,
+                    "HasAxis",
+                    &[OmValue::Number(f64::from(super::XL_VALUE))],
+                )
+                .expect("scatter Chart.HasAxis after hide"),
+            OmValue::Bool(false)
+        );
+        let hidden_axes = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "Axes", &[])
+                .expect("scatter Chart.Axes after hide"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(hidden_axes, "Count", &[])
+                    .expect("scatter Axes.Count after hide")
+            ),
+            0.0
+        );
+        let hidden = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save hidden scatter axis pair");
+        let hidden_package = OpcPackage::from_bytes(&hidden).expect("hidden scatter package");
+        let hidden_chart_xml = String::from_utf8(
+            hidden_package
+                .part("xl/charts/chart1.xml")
+                .expect("hidden scatter chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("hidden scatter chart XML");
+        assert_eq!(hidden_chart_xml.matches(r#"<c:delete val="1"/>"#).count(), 2);
+        assert!(hidden_chart_xml.contains(r#"<c:axId val="10"/><c:axId val="20"/>"#));
+        assert!(hidden_chart_xml.contains(r#"<c:crossAx val="20"/>"#));
+        assert!(hidden_chart_xml.contains(r#"<c:crossAx val="10"/>"#));
+        assert!(hidden_chart_xml.contains(r#"<test:plot keep="true"/>"#));
+
+        let mut reopened = ExcelRuntime::new();
+        let reopened_workbook = reopened
+            .open_workbook(OpenWorkbookSpec {
+                bytes: hidden,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen hidden scatter chart");
+        let reopened_worksheet = expect_object_handle(
+            reopened
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened
+                .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened
+                .dispatch_invoke(reopened_chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        reopened
+            .dispatch_set(
+                reopened_chart,
+                "HasAxis",
+                OmValue::Bool(true),
+                &[OmValue::Number(f64::from(super::XL_VALUE))],
+            )
+            .expect("restore scatter value axis pair");
+        let restored_axes = expect_object_handle(
+            reopened
+                .dispatch_get(reopened_chart, "Axes", &[])
+                .expect("restored scatter Chart.Axes"),
+        );
+        assert_eq!(
+            expect_number(
+                reopened
+                    .dispatch_get(restored_axes, "Count", &[])
+                    .expect("restored scatter Axes.Count")
+            ),
+            2.0
+        );
+        let restored = reopened
+            .save_workbook(
+                reopened_workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save restored scatter axis pair");
+        let restored_package = OpcPackage::from_bytes(&restored).expect("restored scatter package");
+        let restored_chart_xml = String::from_utf8(
+            restored_package
+                .part("xl/charts/chart1.xml")
+                .expect("restored scatter chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("restored scatter chart XML");
+        assert_eq!(restored_chart_xml.matches(r#"<c:delete val="0"/>"#).count(), 2);
+        assert_eq!(restored_chart_xml.matches("<c:valAx>").count(), 2);
+        assert!(restored_chart_xml.contains(r#"<test:plot keep="true"/>"#));
     }
 
     #[test]
@@ -179187,6 +179847,21 @@ mod tests {
                 .dispatch_get(value_axis_tick_labels, "Format", &[])
                 .expect("TickLabels.Format before Axis.Delete"),
         );
+        let value_axis_format = expect_object_handle(
+            runtime
+                .dispatch_get(value_axis, "Format", &[])
+                .expect("Axis.Format before Axis.Delete"),
+        );
+        let value_axis_picture_format = expect_object_handle(
+            runtime
+                .dispatch_get(value_axis_format, "PictureFormat", &[])
+                .expect("Axis.Format.PictureFormat before Axis.Delete"),
+        );
+        let value_axis_picture_crop = expect_object_handle(
+            runtime
+                .dispatch_get(value_axis_picture_format, "Crop", &[])
+                .expect("Axis.Format.PictureFormat.Crop before Axis.Delete"),
+        );
         runtime
             .dispatch_invoke(value_axis, "Delete", &[])
             .expect("Axis.Delete");
@@ -179236,6 +179911,13 @@ mod tests {
             runtime
                 .dispatch_get(value_axis_tick_labels_format, "Creator", &[])
                 .expect_err("tick labels format handle should be stale after Axis.Delete")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(value_axis_picture_crop, "Creator", &[])
+                .expect_err("axis picture crop handle should be stale after Axis.Delete")
                 .code,
             OmErrorCode::InvalidState
         );
@@ -193985,6 +194667,30 @@ mod tests {
             )
             .expect("replace filtered chart XML");
         package.to_bytes().expect("filtered chart package bytes")
+    }
+
+    fn synthetic_workbook_with_axis_delete_preservation_bytes() -> Vec<u8> {
+        let mut package =
+            OpcPackage::from_bytes(&synthetic_workbook_with_filtered_chart_series_bytes())
+                .expect("filtered chart package");
+        let chart_xml = String::from_utf8(
+            package
+                .part("xl/charts/chart1.xml")
+                .expect("filtered chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("filtered chart XML")
+        .replace(
+            r#"<c:catAx><c:axId val="10"/></c:catAx><c:valAx><c:axId val="20"/></c:valAx>"#,
+            r#"<c:catAx><c:axId val="10"/><c:crossAx val="20"/></c:catAx><c:valAx test:axis="keep"><c:axId val="20"/><c:scaling test:scale="keep"><c:orientation val="minMax"/><test:scaleChild keep="true"/></c:scaling><test:delete keep="true"/><c:crossAx val="10"/><c:extLst><c:ext uri="urn:axis-preserve"><test:axisOpaque keep="true"/></c:ext></c:extLst></c:valAx>"#,
+        );
+        package
+            .replace_part_bytes("xl/charts/chart1.xml", chart_xml.into_bytes())
+            .expect("replace axis preservation chart XML");
+        package
+            .to_bytes()
+            .expect("axis preservation chart package bytes")
     }
 
     fn synthetic_workbook_with_filtered_scatter_chart_series_bytes() -> Vec<u8> {
