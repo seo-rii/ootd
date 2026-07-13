@@ -6675,6 +6675,15 @@ impl ExcelRuntime {
                                 "Series.Formula bubble size is only supported for bubble charts",
                             ));
                         }
+                        if chart_type_is_volume_stock(&chart.chart_type)
+                            && chart.groups.len() > 1
+                            && series_plot_order(&chart.series[series_index], series_index)
+                                != plot_order
+                        {
+                            return Err(OmError::unsupported(
+                                "changing loaded volume-stock plot roles is not supported losslessly",
+                            ));
+                        }
                         update_series_plot_order(&mut chart.series, series_index, plot_order);
                         let series = chart.series.get_mut(series_index).ok_or_else(|| {
                             OmError::new(OmErrorCode::NotFound, "series not found")
@@ -6734,6 +6743,15 @@ impl ExcelRuntime {
                         }
                         if series_index >= chart.series.len() {
                             return Err(OmError::new(OmErrorCode::NotFound, "series not found"));
+                        }
+                        if chart_type_is_volume_stock(&chart.chart_type)
+                            && chart.groups.len() > 1
+                            && series_plot_order(&chart.series[series_index], series_index)
+                                != plot_order
+                        {
+                            return Err(OmError::unsupported(
+                                "changing loaded volume-stock plot roles is not supported losslessly",
+                            ));
                         }
                         if update_series_plot_order(&mut chart.series, series_index, plot_order) {
                             normalize_volume_stock_chart(chart);
@@ -17080,7 +17098,7 @@ impl ExcelRuntime {
                         &args[0],
                         "Chart.SetSourceData",
                     )?;
-                    let new_series = self.chart_series_models_for_range_source(
+                    let mut new_series = self.chart_series_models_for_range_source(
                         workbook,
                         &source_range,
                         plot_by,
@@ -17089,6 +17107,63 @@ impl ExcelRuntime {
                         false,
                         false,
                     )?;
+                    let replacement_chart = {
+                        let chart = self.chart_model(workbook, chart_id)?;
+                        if chart_type_is_volume_stock(&chart.chart_type)
+                            && !chart.groups.is_empty()
+                        {
+                            let expected_series_count = volume_stock_series_count(&chart.chart_type)
+                                .expect("volume-stock chart types have a fixed series count");
+                            if new_series.len() != expected_series_count {
+                                return Err(OmError::invalid_argument(format!(
+                                    "loaded volume-stock SetSourceData requires exactly {expected_series_count} series"
+                                )));
+                            }
+                            if !chart_group_overlay_is_stable(chart) {
+                                return Err(OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "loaded volume-stock series-to-group partition is inconsistent",
+                                ));
+                            }
+                            let mut existing_indices =
+                                chart.series.iter().enumerate().collect::<Vec<_>>();
+                            existing_indices.sort_by_key(|(series_index, series)| {
+                                (series.order.unwrap_or(*series_index as u32), *series_index)
+                            });
+                            let existing_raw_indices = existing_indices
+                                .into_iter()
+                                .map(|(_, series)| {
+                                    series.raw_index.ok_or_else(|| {
+                                        OmError::new(
+                                            OmErrorCode::InvalidState,
+                                            "loaded volume-stock series has no stable c:idx identity",
+                                        )
+                                    })
+                                })
+                                .collect::<OmResult<Vec<_>>>()?;
+                            let mut new_indices =
+                                new_series.iter().enumerate().collect::<Vec<_>>();
+                            new_indices.sort_by_key(|(series_index, series)| {
+                                (series.order.unwrap_or(*series_index as u32), *series_index)
+                            });
+                            let new_indices = new_indices
+                                .into_iter()
+                                .map(|(series_index, _)| series_index)
+                                .collect::<Vec<_>>();
+                            for (series_index, raw_index) in
+                                new_indices.into_iter().zip(existing_raw_indices)
+                            {
+                                new_series[series_index].raw_index = Some(raw_index);
+                            }
+                            let mut candidate = chart.clone();
+                            candidate.series = new_series.clone();
+                            normalize_volume_stock_chart(&mut candidate);
+                            reconcile_loaded_volume_stock_group_membership(&mut candidate)?;
+                            Some(candidate)
+                        } else {
+                            None
+                        }
+                    };
                     {
                         let runtime = self.runtime_workbook_mut(workbook)?;
                         if runtime.read_only {
@@ -17106,8 +17181,12 @@ impl ExcelRuntime {
                                 .ok_or_else(|| {
                                     OmError::new(OmErrorCode::NotFound, "chart not found")
                                 })?;
-                        chart.series = new_series;
-                        normalize_volume_stock_chart(chart);
+                        if let Some(replacement_chart) = replacement_chart {
+                            *chart = replacement_chart;
+                        } else {
+                            chart.series = new_series;
+                            normalize_volume_stock_chart(chart);
+                        }
                         chart.content_dirty = true;
                         chart.dirty = true;
                         runtime.dirty = true;
@@ -40895,6 +40974,14 @@ fn chart_type_is_volume_stock(chart_type: &ChartType) -> bool {
     matches!(chart_type, ChartType::StockVHLC | ChartType::StockVOHLC)
 }
 
+fn volume_stock_series_count(chart_type: &ChartType) -> Option<usize> {
+    match chart_type {
+        ChartType::StockVHLC => Some(4),
+        ChartType::StockVOHLC => Some(5),
+        _ => None,
+    }
+}
+
 fn chart_type_for_axis_group(
     chart: &ChartModel,
     axis_group: ChartAxisGroup,
@@ -50889,11 +50976,8 @@ fn patch_loaded_chart_model_xml(
 
 fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
     if chart_type_is_volume_stock(&chart.chart_type) {
-        let expected_series_count = if chart.chart_type == ChartType::StockVOHLC {
-            5
-        } else {
-            4
-        };
+        let expected_series_count = volume_stock_series_count(&chart.chart_type)
+            .expect("volume-stock chart types have a fixed series count");
         if chart.series.len() != expected_series_count {
             return Err(OmError::new(
                 OmErrorCode::InvalidState,
@@ -51826,6 +51910,56 @@ fn normalize_volume_stock_chart(chart: &mut ChartModel) -> bool {
     );
     changed |= reconcile_chart_axis_crossings(&mut chart.axes);
     changed
+}
+
+fn reconcile_loaded_volume_stock_group_membership(chart: &mut ChartModel) -> OmResult<()> {
+    if !chart_type_is_volume_stock(&chart.chart_type) || chart.groups.is_empty() {
+        return Ok(());
+    }
+    let expected_series_count = volume_stock_series_count(&chart.chart_type)
+        .expect("volume-stock chart types have a fixed series count");
+    if chart.series.len() != expected_series_count {
+        return Err(OmError::invalid_argument(format!(
+            "loaded volume-stock SetSourceData requires exactly {expected_series_count} series"
+        )));
+    }
+    if chart.groups.len() != 2
+        || chart.groups[0].axis_group != ChartAxisGroup::Primary
+        || chart.groups[1].axis_group != ChartAxisGroup::Secondary
+        || chart.groups[0].chart_type != ChartType::Column
+        || !matches!(
+            chart.groups[1].chart_type,
+            ChartType::StockHLC | ChartType::StockOHLC
+        )
+    {
+        return Err(OmError::unsupported(
+            "loaded volume-stock chart group topology is not recognized",
+        ));
+    }
+    let membership = chart
+        .series
+        .iter()
+        .map(|series| {
+            let raw_index = series.raw_index.ok_or_else(|| {
+                OmError::new(
+                    OmErrorCode::InvalidState,
+                    "loaded volume-stock series has no stable c:idx identity",
+                )
+            })?;
+            Ok((series.axis_group, raw_index))
+        })
+        .collect::<OmResult<Vec<_>>>()?;
+    for group in &mut chart.groups {
+        group.series_raw_indices.clear();
+    }
+    for (axis_group, raw_index) in membership {
+        let group_index = match axis_group {
+            ChartAxisGroup::Primary => 0,
+            ChartAxisGroup::Secondary => 1,
+        };
+        chart.groups[group_index].series_raw_indices.push(raw_index);
+    }
+    Ok(())
 }
 
 fn chart_object_placement_value(placement: &ObjectPlacement) -> OmResult<i32> {
@@ -162807,12 +162941,69 @@ mod tests {
                 .dispatch_invoke(volume_series, "Delete", &[])
                 .expect_err("loaded volume-stock Series.Delete must be atomic");
             assert_eq!(delete_error.code, OmErrorCode::Unsupported);
+            let plot_order_error = reopened
+                .dispatch_set(
+                    volume_series,
+                    "PlotOrder",
+                    OmValue::Number(2.0),
+                    &[],
+                )
+                .expect_err("loaded volume-stock PlotOrder must preserve roles");
+            assert_eq!(plot_order_error.code, OmErrorCode::Unsupported);
             assert_eq!(
                 reopened
                     .dispatch_get(reopened_workbook.0, "Saved", &[])
                     .expect("reopened volume-stock Workbook.Saved"),
                 OmValue::Bool(true)
             );
+            let invalid_source = expect_object_handle(
+                reopened
+                    .dispatch_invoke(
+                        reopened_worksheet,
+                        "Range",
+                        &[OmValue::Text("A1:C3".to_string())],
+                    )
+                    .expect("reopened invalid volume-stock source"),
+            );
+            let invalid_source_error = reopened
+                .dispatch_invoke(
+                    reopened_chart,
+                    "SetSourceData",
+                    &[
+                        OmValue::Object(invalid_source),
+                        OmValue::Number(f64::from(super::XL_PLOT_BY_COLUMNS)),
+                    ],
+                )
+                .expect_err("loaded volume-stock source cardinality validation");
+            assert_eq!(invalid_source_error.code, OmErrorCode::InvalidArgument);
+            assert_eq!(
+                reopened
+                    .dispatch_get(reopened_workbook.0, "Saved", &[])
+                    .expect("Workbook.Saved after invalid volume-stock source"),
+                OmValue::Bool(true)
+            );
+            let source_last_column = if series_count == 4 { "D" } else { "E" };
+            let valid_source = expect_object_handle(
+                reopened
+                    .dispatch_invoke(
+                        reopened_worksheet,
+                        "Range",
+                        &[OmValue::Text(format!(
+                            "A1:{source_last_column}3"
+                        ))],
+                    )
+                    .expect("reopened valid volume-stock source"),
+            );
+            reopened
+                .dispatch_invoke(
+                    reopened_chart,
+                    "SetSourceData",
+                    &[
+                        OmValue::Object(valid_source),
+                        OmValue::Number(f64::from(super::XL_PLOT_BY_COLUMNS)),
+                    ],
+                )
+                .expect("loaded volume-stock SetSourceData");
             reopened
                 .dispatch_set(
                     reopened_volume_group,
@@ -162862,9 +163053,14 @@ mod tests {
             let resaved_stock_xml =
                 &resaved_chart_xml[resaved_stock_start..resaved_stock_end];
             assert!(resaved_volume_xml.contains(r#"<c:gapWidth val="240"/>"#));
+            assert!(resaved_volume_xml.contains("Sheet1!$A$1:$A$3"));
             assert!(!resaved_stock_xml.contains("<c:gapWidth"));
             assert!(!resaved_stock_xml.contains("<c:dropLines"));
             assert!(resaved_stock_xml.contains("<c:hiLowLines"));
+            assert!(resaved_stock_xml.contains("Sheet1!$B$1:$B$3"));
+            assert!(resaved_stock_xml.contains(&format!(
+                "Sheet1!${source_last_column}$1:${source_last_column}$3"
+            )));
             assert!(resaved_volume_xml.contains(
                 r#"<c:axId val="10"/><c:axId val="20"/>"#
             ));
