@@ -175,6 +175,8 @@ pub enum ChartType {
     RadarFilled,
     StockHLC,
     StockOHLC,
+    StockVHLC,
+    StockVOHLC,
     Surface,
     SurfaceWireframe,
     SurfaceTopView,
@@ -351,6 +353,7 @@ pub enum ChartLegendPosition {
 #[derive(Debug, Clone, PartialEq)]
 pub struct AxisModel {
     pub raw_id: Option<String>,
+    pub cross_axis_raw_id: Option<String>,
     pub kind: ChartAxisKind,
     pub axis_group: ChartAxisGroup,
     pub title: Option<ChartText>,

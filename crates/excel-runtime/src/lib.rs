@@ -6621,6 +6621,7 @@ impl ExcelRuntime {
                         series.x_values = x_values_source;
                         series.values = values_source;
                         series.bubble_size = bubble_size_source;
+                        normalize_volume_stock_chart(chart);
                         chart.content_dirty = true;
                         chart.dirty = true;
                         runtime.dirty = true;
@@ -6673,6 +6674,7 @@ impl ExcelRuntime {
                             return Err(OmError::new(OmErrorCode::NotFound, "series not found"));
                         }
                         if update_series_plot_order(&mut chart.series, series_index, plot_order) {
+                            normalize_volume_stock_chart(chart);
                             chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
@@ -8425,11 +8427,8 @@ impl ExcelRuntime {
                             XL_RADAR_FILLED => ChartType::RadarFilled,
                             XL_STOCK_HLC => ChartType::StockHLC,
                             XL_STOCK_OHLC => ChartType::StockOHLC,
-                            XL_STOCK_VHLC | XL_STOCK_VOHLC => {
-                                return Err(OmError::unsupported(
-                                    "volume stock chart types require combo chart support",
-                                ));
-                            }
+                            XL_STOCK_VHLC => ChartType::StockVHLC,
+                            XL_STOCK_VOHLC => ChartType::StockVOHLC,
                             XL_SURFACE => ChartType::Surface,
                             XL_SURFACE_WIREFRAME => ChartType::SurfaceWireframe,
                             XL_SURFACE_TOP_VIEW => ChartType::SurfaceTopView,
@@ -8483,8 +8482,8 @@ impl ExcelRuntime {
                                     _ => None,
                                 };
                                 let chart_type_stock_up_down_bars = match chart_type {
-                                    ChartType::StockHLC => Some(false),
-                                    ChartType::StockOHLC => Some(true),
+                                    ChartType::StockHLC | ChartType::StockVHLC => Some(false),
+                                    ChartType::StockOHLC | ChartType::StockVOHLC => Some(true),
                                     _ => None,
                                 };
                                 let chart_type_explosion = match chart_type {
@@ -8493,6 +8492,8 @@ impl ExcelRuntime {
                                     | ChartType::DoughnutExploded => Some(25),
                                     _ => None,
                                 };
+                                let was_volume_stock =
+                                    chart_type_is_volume_stock(&chart.chart_type);
                                 chart.chart_type = chart_type;
                                 chart.bar_shape = chart_bar_shape;
                                 if !chart_type_uses_bubble_size(&chart.chart_type) {
@@ -8565,6 +8566,18 @@ impl ExcelRuntime {
                                 } else if !chart_type_has_axes && !chart.axes.is_empty() {
                                     chart.axes.clear();
                                     stale_axis_handles = true;
+                                }
+                                if chart_type_is_volume_stock(&chart.chart_type) {
+                                    stale_axis_handles |= normalize_volume_stock_chart(chart);
+                                } else if was_volume_stock {
+                                    for series in &mut chart.series {
+                                        series.axis_group = ChartAxisGroup::Primary;
+                                    }
+                                    let axis_count = chart.axes.len();
+                                    chart.axes.retain(|axis| {
+                                        axis.axis_group != ChartAxisGroup::Secondary
+                                    });
+                                    stale_axis_handles |= chart.axes.len() != axis_count;
                                 }
                                 chart.content_dirty = true;
                                 chart.dirty = true;
@@ -15875,6 +15888,7 @@ impl ExcelRuntime {
                                 is_filtered: false,
                                 filter_dirty: false,
                             });
+                            normalize_volume_stock_chart(chart);
                             chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
@@ -16857,6 +16871,7 @@ impl ExcelRuntime {
                                     OmError::new(OmErrorCode::NotFound, "chart not found")
                                 })?;
                         chart.series = new_series;
+                        normalize_volume_stock_chart(chart);
                         chart.content_dirty = true;
                         chart.dirty = true;
                         runtime.dirty = true;
@@ -17480,6 +17495,7 @@ impl ExcelRuntime {
                         for (index, series) in chart.series.iter_mut().enumerate() {
                             series.order = u32::try_from(index).ok();
                         }
+                        normalize_volume_stock_chart(chart);
                         chart.content_dirty = true;
                         chart.dirty = true;
                         runtime.dirty = true;
@@ -17685,6 +17701,7 @@ impl ExcelRuntime {
                                 || OmError::new(OmErrorCode::NotFound, "chart not found"),
                             )?;
                             chart.series.clear();
+                            normalize_volume_stock_chart(chart);
                             chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
@@ -17748,6 +17765,7 @@ impl ExcelRuntime {
                                 || OmError::new(OmErrorCode::NotFound, "chart not found"),
                             )?;
                             chart.series.clear();
+                            normalize_volume_stock_chart(chart);
                             chart.content_dirty = true;
                             chart.dirty = true;
                             runtime.dirty = true;
@@ -26048,9 +26066,12 @@ impl ExcelRuntime {
                 }
                 let chart = self.chart_group_model(workbook, chart_id, group_index)?;
                 match member {
-                    "ChartType" => Ok(OmValue::Number(f64::from(chart_type_to_excel_value(
-                        &chart.chart_type,
-                    )?))),
+                    "ChartType" => {
+                        let group_chart_type = chart_group_chart_type(chart, group_index)?;
+                        Ok(OmValue::Number(f64::from(chart_type_to_excel_value(
+                            &group_chart_type,
+                        )?)))
+                    }
                     "Index" => Ok(OmValue::Number((group_index + 1) as f64)),
                     "AxisGroup" => Ok(OmValue::Number(f64::from(
                         match chart_group_axis_group(chart, group_index)? {
@@ -26061,13 +26082,33 @@ impl ExcelRuntime {
                     "SeriesLines" | "DropLines" | "HiLoLines" | "UpBars" | "DownBars" => {
                         let kind = ChartGroupLineKind::from_chart_group_member(member)
                             .expect("matched ChartGroup line object member");
+                        let group_chart_type = chart_group_chart_type(chart, group_index)?;
+                        let restrict_to_primitive_group =
+                            chart_type_is_volume_stock(&chart.chart_type);
                         let has_lines = match kind {
                             ChartGroupLineKind::SeriesLines => chart.has_series_lines,
-                            ChartGroupLineKind::DropLines => chart.has_drop_lines,
-                            ChartGroupLineKind::HiLoLines => chart.has_hi_lo_lines,
-                            ChartGroupLineKind::UpBars | ChartGroupLineKind::DownBars => {
-                                chart.has_up_down_bars
+                            ChartGroupLineKind::DropLines
+                                if !restrict_to_primitive_group
+                                    || chart_type_supports_high_low_lines(&group_chart_type) =>
+                            {
+                                chart.has_drop_lines
                             }
+                            ChartGroupLineKind::HiLoLines
+                                if !restrict_to_primitive_group
+                                    || chart_type_supports_high_low_lines(&group_chart_type) =>
+                            {
+                                chart.has_hi_lo_lines
+                            }
+                            ChartGroupLineKind::UpBars | ChartGroupLineKind::DownBars => {
+                                if !restrict_to_primitive_group
+                                    || chart_type_supports_up_down_bars(&group_chart_type)
+                                {
+                                    chart.has_up_down_bars
+                                } else {
+                                    Some(false)
+                                }
+                            }
+                            _ => Some(false),
                         };
                         if has_lines != Some(true) {
                             return Err(OmError::new(
@@ -26120,8 +26161,22 @@ impl ExcelRuntime {
                     "Overlap" => Ok(OmValue::Number(f64::from(chart.overlap.unwrap_or(0)))),
                     "HasSeriesLines" => Ok(OmValue::Bool(chart.has_series_lines.unwrap_or(false))),
                     "HasDropLines" => Ok(OmValue::Bool(chart.has_drop_lines.unwrap_or(false))),
-                    "HasHiLoLines" => Ok(OmValue::Bool(chart.has_hi_lo_lines.unwrap_or(false))),
-                    "HasUpDownBars" => Ok(OmValue::Bool(chart.has_up_down_bars.unwrap_or(false))),
+                    "HasHiLoLines" => Ok(OmValue::Bool(
+                        (!chart_type_is_volume_stock(&chart.chart_type)
+                            || chart_type_supports_high_low_lines(&chart_group_chart_type(
+                                chart,
+                                group_index,
+                            )?))
+                            && chart.has_hi_lo_lines.unwrap_or(false),
+                    )),
+                    "HasUpDownBars" => Ok(OmValue::Bool(
+                        (!chart_type_is_volume_stock(&chart.chart_type)
+                            || chart_type_supports_up_down_bars(&chart_group_chart_type(
+                                chart,
+                                group_index,
+                            )?))
+                            && chart.has_up_down_bars.unwrap_or(false),
+                    )),
                     "FirstSliceAngle" => Ok(OmValue::Number(f64::from(
                         chart.first_slice_angle.unwrap_or(0),
                     ))),
@@ -27634,6 +27689,7 @@ impl ExcelRuntime {
                     {
                         update_series_plot_order(&mut chart.series, series_index, plot_order);
                     }
+                    normalize_volume_stock_chart(chart);
                     chart.content_dirty = true;
                     chart.dirty = true;
                     runtime.dirty = true;
@@ -27775,6 +27831,7 @@ impl ExcelRuntime {
                     }
                     let first_new_series_index = chart.series.len();
                     chart.series.append(&mut new_series);
+                    normalize_volume_stock_chart(chart);
                     chart.content_dirty = true;
                     chart.dirty = true;
                     runtime.dirty = true;
@@ -28119,11 +28176,12 @@ impl ExcelRuntime {
             }
             "ChartType" => {
                 let chart = self.chart_model(workbook, chart_id)?;
-                if chart.series.get(series_index).is_none() {
+                let Some(series) = chart.series.get(series_index) else {
                     return Err(OmError::new(OmErrorCode::NotFound, "series not found"));
-                }
+                };
+                let series_chart_type = chart_type_for_axis_group(chart, series.axis_group);
                 Ok(OmValue::Number(f64::from(chart_type_to_excel_value(
-                    &chart.chart_type,
+                    &series_chart_type,
                 )?)))
             }
             "Values" => Ok(chart_source_expr_text(
@@ -35545,40 +35603,24 @@ impl ExcelRuntime {
                 }
                 _ => false,
             });
-            let changed = if has_axis {
+            let mut changed = if has_axis {
                 if axis_index.is_some() {
                     false
                 } else {
-                    let preferred_axis_id = match (axis_type, axis_group) {
-                        (XL_CATEGORY, ChartAxisGroup::Primary) => 10,
-                        (XL_VALUE, ChartAxisGroup::Primary) => 20,
-                        (XL_SERIES_AXIS, ChartAxisGroup::Primary) => 30,
-                        (XL_CATEGORY, ChartAxisGroup::Secondary) => 40,
-                        (XL_VALUE, ChartAxisGroup::Secondary) => 50,
-                        (XL_SERIES_AXIS, ChartAxisGroup::Secondary) => 60,
+                    let (kind, preferred_axis_id) = match (axis_type, axis_group) {
+                        (XL_CATEGORY, ChartAxisGroup::Primary) => (ChartAxisKind::Category, 10),
+                        (XL_VALUE, ChartAxisGroup::Primary) => (ChartAxisKind::Value, 20),
+                        (XL_SERIES_AXIS, ChartAxisGroup::Primary) => (ChartAxisKind::Series, 30),
+                        (XL_CATEGORY, ChartAxisGroup::Secondary) => {
+                            (ChartAxisKind::Category, 40)
+                        }
+                        (XL_VALUE, ChartAxisGroup::Secondary) => (ChartAxisKind::Value, 50),
+                        (XL_SERIES_AXIS, ChartAxisGroup::Secondary) => {
+                            (ChartAxisKind::Series, 60)
+                        }
                         _ => unreachable!("axis type validated above"),
                     };
-                    let used_axis_ids = chart
-                        .axes
-                        .iter()
-                        .filter_map(|axis| axis.raw_id.as_deref())
-                        .collect::<BTreeSet<_>>();
-                    let mut axis_id = preferred_axis_id;
-                    while used_axis_ids.contains(axis_id.to_string().as_str()) {
-                        axis_id += 10;
-                    }
-                    let mut axis = default_chart_axis(
-                        Some(axis_id.to_string()),
-                        match axis_type {
-                            XL_CATEGORY => ChartAxisKind::Category,
-                            XL_VALUE => ChartAxisKind::Value,
-                            XL_SERIES_AXIS => ChartAxisKind::Series,
-                            _ => unreachable!("axis type validated above"),
-                        },
-                    );
-                    axis.axis_group = axis_group;
-                    chart.axes.push(axis);
-                    true
+                    ensure_chart_axis(chart, kind, axis_group, preferred_axis_id)
                 }
             } else if let Some(axis_index) = axis_index {
                 chart.axes.remove(axis_index);
@@ -35586,6 +35628,9 @@ impl ExcelRuntime {
             } else {
                 false
             };
+            if changed {
+                changed |= reconcile_chart_axis_crossings(&mut chart.axes);
+            }
             if changed {
                 chart.content_dirty = true;
                 chart.dirty = true;
@@ -40384,7 +40429,10 @@ fn chart_group_xml_name(chart_type: &ChartType) -> Option<&'static str> {
         ChartType::Pie3D | ChartType::Pie3DExploded => Some("pie3DChart"),
         ChartType::PieOfPie | ChartType::BarOfPie => Some("ofPieChart"),
         ChartType::Radar | ChartType::RadarMarkers | ChartType::RadarFilled => Some("radarChart"),
-        ChartType::StockHLC | ChartType::StockOHLC => Some("stockChart"),
+        ChartType::StockHLC
+        | ChartType::StockOHLC
+        | ChartType::StockVHLC
+        | ChartType::StockVOHLC => Some("stockChart"),
         ChartType::Surface | ChartType::SurfaceWireframe => Some("surface3DChart"),
         ChartType::SurfaceTopView | ChartType::SurfaceTopViewWireframe => Some("surfaceChart"),
         ChartType::Unknown | ChartType::Unsupported(_) => None,
@@ -40463,8 +40511,28 @@ fn chart_filtered_series_wrapper_name(chart_type: &ChartType) -> Option<&'static
         | ChartType::SurfaceTopViewWireframe => Some("filteredSurfaceSeries"),
         ChartType::StockHLC
         | ChartType::StockOHLC
+        | ChartType::StockVHLC
+        | ChartType::StockVOHLC
         | ChartType::Unknown
         | ChartType::Unsupported(_) => None,
+    }
+}
+
+fn chart_type_is_volume_stock(chart_type: &ChartType) -> bool {
+    matches!(chart_type, ChartType::StockVHLC | ChartType::StockVOHLC)
+}
+
+fn chart_type_for_axis_group(
+    chart: &ChartModel,
+    axis_group: ChartAxisGroup,
+) -> ChartType {
+    match (&chart.chart_type, axis_group) {
+        (ChartType::StockVHLC | ChartType::StockVOHLC, ChartAxisGroup::Primary) => {
+            ChartType::Column
+        }
+        (ChartType::StockVHLC, ChartAxisGroup::Secondary) => ChartType::StockHLC,
+        (ChartType::StockVOHLC, ChartAxisGroup::Secondary) => ChartType::StockOHLC,
+        _ => chart.chart_type.clone(),
     }
 }
 
@@ -43126,11 +43194,21 @@ fn patch_loaded_chart_model_xml(
     let expected_second_plot_size = expected_second_plot_size.as_deref();
     let expected_split_value = expected_split_value.as_deref();
     let expected_has_hi_lo_lines = chart.has_hi_lo_lines.or_else(|| {
-        matches!(chart.chart_type, ChartType::StockHLC | ChartType::StockOHLC).then_some(true)
+        matches!(
+            chart.chart_type,
+            ChartType::StockHLC
+                | ChartType::StockOHLC
+                | ChartType::StockVHLC
+                | ChartType::StockVOHLC
+        )
+        .then_some(true)
     });
     let expected_has_up_down_bars = chart
         .has_up_down_bars
-        .or_else(|| matches!(chart.chart_type, ChartType::StockOHLC).then_some(true));
+        .or_else(|| {
+            matches!(chart.chart_type, ChartType::StockOHLC | ChartType::StockVOHLC)
+                .then_some(true)
+        });
     let expected_chart_group_line_flags: [(&[u8], &str, Option<bool>); 4] = [
         (b"serLines", "c:serLines", chart.has_series_lines),
         (b"dropLines", "c:dropLines", chart.has_drop_lines),
@@ -44159,6 +44237,9 @@ fn patch_loaded_chart_model_xml(
             write_chart_val_element(writer, "c:minorUnit", value)?;
         }
         write_chart_axis_display_units_element(writer, axis)?;
+        if let Some(axis_id) = chart_axis_cross_target_id(&chart.axes, axis) {
+            write_chart_string_val_element(writer, "c:crossAx", axis_id.as_str())?;
+        }
         write_chart_axis_crossing_elements(writer, axis)?;
         if let Some(value) = axis.category_type_auto {
             write_chart_string_val_element(writer, "c:auto", if value { "1" } else { "0" })?;
@@ -49620,11 +49701,64 @@ fn patch_loaded_chart_model_xml(
 }
 
 fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
+    if chart_type_is_volume_stock(&chart.chart_type) {
+        let expected_series_count = if chart.chart_type == ChartType::StockVOHLC {
+            5
+        } else {
+            4
+        };
+        if chart.series.len() != expected_series_count {
+            return Err(OmError::new(
+                OmErrorCode::InvalidState,
+                format!(
+                    "volume stock charts require exactly {expected_series_count} ordered series"
+                ),
+            ));
+        }
+        let mut ordered_series = chart.series.iter().enumerate().collect::<Vec<_>>();
+        ordered_series.sort_by_key(|(series_index, series)| {
+            (series.order.unwrap_or(*series_index as u32), *series_index)
+        });
+        if ordered_series
+            .first()
+            .is_none_or(|(_, series)| series.axis_group != ChartAxisGroup::Primary)
+            || ordered_series
+                .iter()
+                .skip(1)
+                .any(|(_, series)| series.axis_group != ChartAxisGroup::Secondary)
+        {
+            return Err(OmError::new(
+                OmErrorCode::InvalidState,
+                "volume stock charts require the volume series on the primary axis and price series on the secondary axis",
+            ));
+        }
+        let has_primary_category = chart.axes.iter().any(|axis| {
+            axis.axis_group == ChartAxisGroup::Primary
+                && matches!(axis.kind, ChartAxisKind::Category | ChartAxisKind::Date)
+        });
+        let has_primary_value = chart.axes.iter().any(|axis| {
+            axis.axis_group == ChartAxisGroup::Primary && axis.kind == ChartAxisKind::Value
+        });
+        let has_secondary_value = chart.axes.iter().any(|axis| {
+            axis.axis_group == ChartAxisGroup::Secondary && axis.kind == ChartAxisKind::Value
+        });
+        if !(has_primary_category && has_primary_value && has_secondary_value) {
+            return Err(OmError::new(
+                OmErrorCode::InvalidState,
+                "volume stock charts require shared category, primary volume, and secondary price axes",
+            ));
+        }
+    }
     let series_xml_for_axis_group =
         |axis_group: ChartAxisGroup| -> OmResult<(String, String)> {
+        let group_chart_type = chart_type_for_axis_group(chart, axis_group);
         let mut series_xml = String::new();
         let mut filtered_series_extensions_xml = String::new();
-        for (series_index, series) in chart.series.iter().enumerate() {
+        let mut ordered_series = chart.series.iter().enumerate().collect::<Vec<_>>();
+        ordered_series.sort_by_key(|(series_index, series)| {
+            (series.order.unwrap_or(*series_index as u32), *series_index)
+        });
+        for (series_index, series) in ordered_series {
             if series.axis_group != axis_group {
                 continue;
             }
@@ -49639,7 +49773,7 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
             if let Some(explosion) = chart_explosion_xml_value(chart) {
                 series_xml.push_str(&format!(r#"<c:explosion val="{explosion}"/>"#));
             }
-            if chart_type_supports_explosion(&chart.chart_type) {
+            if chart_type_supports_explosion(&group_chart_type) {
                 for (point_index, point) in &series.points {
                     if let Some(explosion) = point.explosion {
                         series_xml.push_str(&format!(
@@ -49649,7 +49783,7 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
                 }
             }
             series_xml.push_str(&chart_series_data_labels_xml_string(series));
-            if chart_type_supports_series_marker(&chart.chart_type)
+            if chart_type_supports_series_marker(&group_chart_type)
                 && (series.marker_style.is_some() || series.marker_size.is_some())
             {
                 series_xml.push_str("<c:marker>");
@@ -49664,30 +49798,30 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
             }
             if let Some(name) = series.name.as_ref() {
                 series_xml.push_str(&chart_source_container_xml_string(
-                    &chart.chart_type,
+                    &group_chart_type,
                     ChartSourceXmlSlot::Name,
                     name,
                 )?);
             }
             if let Some(x_values) = series.x_values.as_ref() {
                 series_xml.push_str(&chart_source_container_xml_string(
-                    &chart.chart_type,
+                    &group_chart_type,
                     ChartSourceXmlSlot::XValues,
                     x_values,
                 )?);
             }
             if let Some(values) = series.values.as_ref() {
                 series_xml.push_str(&chart_source_container_xml_string(
-                    &chart.chart_type,
+                    &group_chart_type,
                     ChartSourceXmlSlot::Values,
                     values,
                 )?);
             }
-            if chart_type_uses_bubble_size(&chart.chart_type)
+            if chart_type_uses_bubble_size(&group_chart_type)
                 && let Some(bubble_size) = series.bubble_size.as_ref()
             {
                 series_xml.push_str(&chart_source_container_xml_string(
-                    &chart.chart_type,
+                    &group_chart_type,
                     ChartSourceXmlSlot::BubbleSize,
                     bubble_size,
                 )?);
@@ -49698,13 +49832,13 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
                     if invert_if_negative { "1" } else { "0" }
                 ));
             }
-            if chart_type_supports_bar_shape(&chart.chart_type)
+            if chart_type_supports_bar_shape(&group_chart_type)
                 && let Some(bar_shape) = series.bar_shape
             {
                 let bar_shape = chart_bar_shape_xml_value(bar_shape);
                 series_xml.push_str(&format!(r#"<c:shape val="{bar_shape}"/>"#));
             }
-            if chart_type_supports_series_smooth(&chart.chart_type)
+            if chart_type_supports_series_smooth(&group_chart_type)
                 && let Some(smooth) = series.smooth
             {
                 series_xml.push_str(&format!(
@@ -49715,7 +49849,7 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
             series_xml.push_str(&format!("</{series_tag}>"));
             if series.is_filtered {
                 let series_fragment = series_xml.split_off(series_start);
-                let wrapper_name = chart_filtered_series_wrapper_name(&chart.chart_type)
+                let wrapper_name = chart_filtered_series_wrapper_name(&group_chart_type)
                     .ok_or_else(|| {
                         OmError::unsupported(
                             "saving filtered series requires a supported chart type",
@@ -49788,7 +49922,14 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
         ""
     };
     let has_hi_lo_lines = chart.has_hi_lo_lines.or_else(|| {
-        matches!(chart.chart_type, ChartType::StockHLC | ChartType::StockOHLC).then_some(true)
+        matches!(
+            chart.chart_type,
+            ChartType::StockHLC
+                | ChartType::StockOHLC
+                | ChartType::StockVHLC
+                | ChartType::StockVOHLC
+        )
+        .then_some(true)
     });
     let hi_lo_lines_xml = if has_hi_lo_lines == Some(true) {
         r#"<c:hiLowLines/>"#
@@ -49797,7 +49938,10 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
     };
     let has_up_down_bars = chart
         .has_up_down_bars
-        .or_else(|| matches!(chart.chart_type, ChartType::StockOHLC).then_some(true));
+        .or_else(|| {
+            matches!(chart.chart_type, ChartType::StockOHLC | ChartType::StockVOHLC)
+                .then_some(true)
+        });
     let up_down_bars_xml = if has_up_down_bars == Some(true) {
         r#"<c:upDownBars/>"#
     } else {
@@ -49947,8 +50091,9 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
         .map(chart_data_table_xml_string)
         .unwrap_or_default();
     let chart_has_axes = chart_type_has_axes(&chart.chart_type);
-    let has_secondary_series =
-        !secondary_series_xml.is_empty() || !secondary_filtered_series_xml.is_empty();
+    let has_secondary_series = chart_type_is_volume_stock(&chart.chart_type)
+        || !secondary_series_xml.is_empty()
+        || !secondary_filtered_series_xml.is_empty();
     let has_secondary_category_axis = chart.axes.iter().any(|axis| {
         axis.axis_group == ChartAxisGroup::Secondary
             && matches!(axis.kind, ChartAxisKind::Category | ChartAxisKind::Date)
@@ -50127,6 +50272,14 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
                     .map(|value| format!(r#"<c:crosses val="{value}"/>"#))
                     .unwrap_or_default()
             };
+            let cross_axis_xml = chart_axis_cross_target_id(&chart.axes, axis)
+                .map(|axis_id| {
+                    format!(
+                        r#"<c:crossAx val="{}"/>"#,
+                        partial_escape(axis_id.as_str())
+                    )
+                })
+                .unwrap_or_default();
             let cross_between_xml = axis
                 .axis_between_categories
                 .map(|value| {
@@ -50168,7 +50321,7 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
                 })
                 .unwrap_or_default();
             axes_xml.push_str(&format!(
-                r#"<c:{axis_tag}><c:axId val="{escaped_axis_id}"/>{scaling_xml}{major_gridlines_xml}{minor_gridlines_xml}{axis_title_xml}{tick_label_number_format_xml}{major_tick_mark_xml}{minor_tick_mark_xml}{tick_label_position_xml}{tick_label_spacing_xml}{tick_mark_spacing_xml}{major_unit_xml}{minor_unit_xml}{display_units_xml}{crossing_xml}{cross_between_xml}{category_type_auto_xml}{base_unit_xml}{major_time_unit_xml}{minor_time_unit_xml}</c:{axis_tag}>"#
+                r#"<c:{axis_tag}><c:axId val="{escaped_axis_id}"/>{scaling_xml}{major_gridlines_xml}{minor_gridlines_xml}{axis_title_xml}{tick_label_number_format_xml}{major_tick_mark_xml}{minor_tick_mark_xml}{tick_label_position_xml}{tick_label_spacing_xml}{tick_mark_spacing_xml}{major_unit_xml}{minor_unit_xml}{display_units_xml}{cross_axis_xml}{crossing_xml}{cross_between_xml}{category_type_auto_xml}{base_unit_xml}{major_time_unit_xml}{minor_time_unit_xml}</c:{axis_tag}>"#
             ));
         }
     }
@@ -50189,7 +50342,22 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
             r#"<c:{chart_group_name}>{bar_direction_xml}{chart_grouping_xml}{bar_shape_xml}{line_marker_xml}{scatter_style_xml}{radar_style_xml}{of_pie_type_xml}{surface_wireframe_xml}{vary_colors_xml}{series_xml}{gap_width_xml}{gap_depth_xml}{overlap_xml}{first_slice_angle_xml}{bubble_scale_xml}{show_negative_bubbles_xml}{has_3d_shading_xml}{doughnut_hole_size_xml}{second_plot_size_xml}{size_represents_xml}{split_type_xml}{split_value_xml}{data_labels_xml}{series_lines_xml}{drop_lines_xml}{hi_lo_lines_xml}{up_down_bars_xml}{axis_refs}{filtered_series_extensions_xml}</c:{chart_group_name}>"#
         )
     };
-    let chart_groups_xml = if has_secondary_series {
+    let filtered_series_extensions = |filtered_series_xml: &str| {
+        if filtered_series_xml.is_empty() {
+            String::new()
+        } else {
+            format!("<c:extLst>{filtered_series_xml}</c:extLst>")
+        }
+    };
+    let chart_groups_xml = if chart_type_is_volume_stock(&chart.chart_type) {
+        let volume_extensions_xml =
+            filtered_series_extensions(&primary_filtered_series_xml);
+        let stock_extensions_xml =
+            filtered_series_extensions(&secondary_filtered_series_xml);
+        format!(
+            r#"<c:barChart><c:barDir val="col"/><c:grouping val="clustered"/>{vary_colors_xml}{primary_series_xml}{gap_width_xml}{overlap_xml}{primary_axis_refs}{volume_extensions_xml}</c:barChart><c:stockChart>{secondary_series_xml}{data_labels_xml}{drop_lines_xml}{hi_lo_lines_xml}{up_down_bars_xml}{secondary_axis_refs}{stock_extensions_xml}</c:stockChart>"#
+        )
+    } else if has_secondary_series {
         let mut chart_groups_xml = String::new();
         if !primary_series_xml.is_empty() || !primary_filtered_series_xml.is_empty() {
             chart_groups_xml.push_str(&chart_group_xml(
@@ -50273,6 +50441,8 @@ fn chart_type_to_excel_value(chart_type: &ChartType) -> OmResult<i32> {
         ChartType::RadarFilled => Ok(XL_RADAR_FILLED),
         ChartType::StockHLC => Ok(XL_STOCK_HLC),
         ChartType::StockOHLC => Ok(XL_STOCK_OHLC),
+        ChartType::StockVHLC => Ok(XL_STOCK_VHLC),
+        ChartType::StockVOHLC => Ok(XL_STOCK_VOHLC),
         ChartType::Surface => Ok(XL_SURFACE),
         ChartType::SurfaceWireframe => Ok(XL_SURFACE_WIREFRAME),
         ChartType::SurfaceTopView => Ok(XL_SURFACE_TOP_VIEW),
@@ -50308,15 +50478,18 @@ fn chart_type_to_excel_value(chart_type: &ChartType) -> OmResult<i32> {
 }
 
 fn default_chart_axes() -> Vec<AxisModel> {
-    vec![
+    let mut axes = vec![
         default_chart_axis(Some("10".to_string()), ChartAxisKind::Category),
         default_chart_axis(Some("20".to_string()), ChartAxisKind::Value),
-    ]
+    ];
+    reconcile_chart_axis_crossings(&mut axes);
+    axes
 }
 
 fn default_chart_axis(raw_id: Option<String>, kind: ChartAxisKind) -> AxisModel {
     AxisModel {
         raw_id,
+        cross_axis_raw_id: None,
         kind,
         axis_group: ChartAxisGroup::Primary,
         title: None,
@@ -50347,6 +50520,125 @@ fn default_chart_axis(raw_id: Option<String>, kind: ChartAxisKind) -> AxisModel 
         major_unit: None,
         minor_unit: None,
     }
+}
+
+fn ensure_chart_axis(
+    chart: &mut ChartModel,
+    kind: ChartAxisKind,
+    axis_group: ChartAxisGroup,
+    preferred_axis_id: u32,
+) -> bool {
+    if chart.axes.iter().any(|axis| {
+        axis.axis_group == axis_group
+            && (axis.kind == kind
+                || (matches!(kind, ChartAxisKind::Category | ChartAxisKind::Date)
+                    && matches!(axis.kind, ChartAxisKind::Category | ChartAxisKind::Date)))
+    }) {
+        return false;
+    }
+    let used_axis_ids = chart
+        .axes
+        .iter()
+        .filter_map(|axis| axis.raw_id.as_deref())
+        .collect::<BTreeSet<_>>();
+    let mut axis_id = preferred_axis_id;
+    while used_axis_ids.contains(axis_id.to_string().as_str()) {
+        axis_id += 10;
+    }
+    let mut axis = default_chart_axis(Some(axis_id.to_string()), kind);
+    axis.axis_group = axis_group;
+    chart.axes.push(axis);
+    true
+}
+
+fn reconcile_chart_axis_crossings(axes: &mut [AxisModel]) -> bool {
+    let mut changed = false;
+    for axis_index in 0..axes.len() {
+        let target = chart_axis_cross_target_id(axes, &axes[axis_index]);
+        if axes[axis_index].cross_axis_raw_id != target {
+            axes[axis_index].cross_axis_raw_id = target;
+            changed = true;
+        }
+    }
+    changed
+}
+
+fn chart_axis_cross_target_id(axes: &[AxisModel], axis: &AxisModel) -> Option<String> {
+    if let Some(axis_id) = axis.cross_axis_raw_id.as_ref()
+        && axes
+            .iter()
+            .any(|candidate| candidate.raw_id.as_ref() == Some(axis_id))
+    {
+        return Some(axis_id.clone());
+    }
+    match axis.kind {
+        ChartAxisKind::Value => axes
+            .iter()
+            .find(|candidate| {
+                candidate.axis_group == axis.axis_group
+                    && matches!(candidate.kind, ChartAxisKind::Category | ChartAxisKind::Date)
+            })
+            .or_else(|| {
+                axes.iter().find(|candidate| {
+                    candidate.axis_group == ChartAxisGroup::Primary
+                        && matches!(candidate.kind, ChartAxisKind::Category | ChartAxisKind::Date)
+                })
+            }),
+        ChartAxisKind::Category | ChartAxisKind::Date | ChartAxisKind::Series => axes
+            .iter()
+            .find(|candidate| {
+                candidate.axis_group == axis.axis_group
+                    && candidate.kind == ChartAxisKind::Value
+            })
+            .or_else(|| {
+                axes.iter().find(|candidate| {
+                    candidate.axis_group == ChartAxisGroup::Primary
+                        && candidate.kind == ChartAxisKind::Value
+                })
+            }),
+    }
+    .and_then(|target| target.raw_id.clone())
+}
+
+fn normalize_volume_stock_chart(chart: &mut ChartModel) -> bool {
+    if !chart_type_is_volume_stock(&chart.chart_type) {
+        return false;
+    }
+    let mut ordered_series = chart
+        .series
+        .iter()
+        .enumerate()
+        .map(|(index, series)| (series.order.unwrap_or(index as u32), index))
+        .collect::<Vec<_>>();
+    ordered_series.sort_by_key(|(order, index)| (*order, *index));
+    let volume_series_index = ordered_series.first().map(|(_, index)| *index);
+    let mut changed = false;
+    for (series_index, series) in chart.series.iter_mut().enumerate() {
+        let axis_group = if Some(series_index) == volume_series_index {
+            ChartAxisGroup::Primary
+        } else {
+            ChartAxisGroup::Secondary
+        };
+        if series.axis_group != axis_group {
+            series.axis_group = axis_group;
+            changed = true;
+        }
+    }
+    changed |= ensure_chart_axis(
+        chart,
+        ChartAxisKind::Category,
+        ChartAxisGroup::Primary,
+        10,
+    );
+    changed |= ensure_chart_axis(chart, ChartAxisKind::Value, ChartAxisGroup::Primary, 20);
+    changed |= ensure_chart_axis(
+        chart,
+        ChartAxisKind::Value,
+        ChartAxisGroup::Secondary,
+        50,
+    );
+    changed |= reconcile_chart_axis_crossings(&mut chart.axes);
+    changed
 }
 
 fn chart_object_placement_value(placement: &ObjectPlacement) -> OmResult<i32> {
@@ -50607,6 +50899,9 @@ fn chart_object_z_order_operation(command: &OmValue, surface: &str) -> OmResult<
 }
 
 fn chart_group_axis_groups(chart: &ChartModel) -> Vec<ChartAxisGroup> {
+    if chart_type_is_volume_stock(&chart.chart_type) {
+        return vec![ChartAxisGroup::Primary, ChartAxisGroup::Secondary];
+    }
     let mut groups = Vec::new();
     if chart.series.is_empty()
         || chart
@@ -50631,6 +50926,13 @@ fn chart_group_axis_group(chart: &ChartModel, group_index: usize) -> OmResult<Ch
         .get(group_index)
         .copied()
         .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart group not found"))
+}
+
+fn chart_group_chart_type(chart: &ChartModel, group_index: usize) -> OmResult<ChartType> {
+    Ok(chart_type_for_axis_group(
+        chart,
+        chart_group_axis_group(chart, group_index)?,
+    ))
 }
 
 fn chart_plot_by_from_optional_arg(value: Option<&OmValue>, label: &str) -> OmResult<Option<i32>> {
@@ -159440,7 +159742,318 @@ mod tests {
     }
 
     #[test]
-    fn chart_type_setter_rejects_volume_stock_combo_chart_types() {
+    fn chart_type_setter_serializes_volume_stock_combo_chart_types() {
+        for (chart_type_value, stock_group_type, series_count, has_up_down_bars) in [
+            (
+                super::XL_STOCK_VHLC,
+                super::XL_STOCK_HLC,
+                4usize,
+                false,
+            ),
+            (
+                super::XL_STOCK_VOHLC,
+                super::XL_STOCK_OHLC,
+                5usize,
+                true,
+            ),
+        ] {
+            let mut runtime = ExcelRuntime::new();
+            let workbook = runtime
+                .open_workbook(OpenWorkbookSpec {
+                    bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                    format_hint: Some(FileFormat::Xlsx),
+                    profile: ExcelProfile::Excel365,
+                    read_only: false,
+                })
+                .expect("open workbook with embedded chart");
+            let worksheet = expect_object_handle(
+                runtime
+                    .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                    .expect("Workbook.Worksheets(1)"),
+            );
+            let chart_objects = expect_object_handle(
+                runtime
+                    .dispatch_get(worksheet, "ChartObjects", &[])
+                    .expect("Worksheet.ChartObjects"),
+            );
+            let chart_object = expect_object_handle(
+                runtime
+                    .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                    .expect("ChartObjects.Item(1)"),
+            );
+            let chart = expect_object_handle(
+                runtime
+                    .dispatch_get(chart_object, "Chart", &[])
+                    .expect("ChartObject.Chart"),
+            );
+            let series_collection = expect_object_handle(
+                runtime
+                    .dispatch_get(chart, "SeriesCollection", &[])
+                    .expect("Chart.SeriesCollection"),
+            );
+            let chart_type_before_series = chart_type_value == super::XL_STOCK_VOHLC;
+            if chart_type_before_series {
+                runtime
+                    .dispatch_set(
+                        chart,
+                        "ChartType",
+                        OmValue::Number(f64::from(chart_type_value)),
+                        &[],
+                    )
+                    .expect("set volume stock Chart.ChartType before adding series");
+            }
+            for _ in 1..series_count {
+                runtime
+                    .dispatch_invoke(series_collection, "NewSeries", &[])
+                    .expect("SeriesCollection.NewSeries");
+            }
+            if !chart_type_before_series {
+                runtime
+                    .dispatch_set(
+                        chart,
+                        "ChartType",
+                        OmValue::Number(f64::from(chart_type_value)),
+                        &[],
+                    )
+                    .expect("set volume stock Chart.ChartType after adding series");
+            }
+            let original_volume_series = expect_object_handle(
+                runtime
+                    .dispatch_invoke(series_collection, "Item", &[OmValue::Number(1.0)])
+                    .expect("SeriesCollection.Item(1)"),
+            );
+            let promoted_volume_series = expect_object_handle(
+                runtime
+                    .dispatch_invoke(
+                        series_collection,
+                        "Item",
+                        &[OmValue::Number(series_count as f64)],
+                    )
+                    .expect("SeriesCollection.Item(last)"),
+            );
+            runtime
+                .dispatch_set(
+                    promoted_volume_series,
+                    "PlotOrder",
+                    OmValue::Number(1.0),
+                    &[],
+                )
+                .expect("promote last series to volume plot order");
+            assert_eq!(
+                runtime
+                    .dispatch_get(promoted_volume_series, "AxisGroup", &[])
+                    .expect("promoted volume AxisGroup"),
+                OmValue::Number(f64::from(super::XL_PRIMARY))
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(original_volume_series, "AxisGroup", &[])
+                    .expect("former volume AxisGroup"),
+                OmValue::Number(f64::from(super::XL_SECONDARY))
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(promoted_volume_series, "ChartType", &[])
+                    .expect("promoted volume ChartType"),
+                OmValue::Number(f64::from(super::XL_COLUMN_CLUSTERED))
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(original_volume_series, "ChartType", &[])
+                    .expect("former volume ChartType"),
+                OmValue::Number(f64::from(stock_group_type))
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(chart, "ChartType", &[])
+                    .expect("volume stock Chart.ChartType"),
+                OmValue::Number(f64::from(chart_type_value))
+            );
+            let chart_groups = expect_object_handle(
+                runtime
+                    .dispatch_get(chart, "ChartGroups", &[])
+                    .expect("Chart.ChartGroups"),
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(chart_groups, "Count", &[])
+                    .expect("ChartGroups.Count"),
+                OmValue::Number(2.0)
+            );
+            let volume_group = expect_object_handle(
+                runtime
+                    .dispatch_invoke(chart_groups, "Item", &[OmValue::Number(1.0)])
+                    .expect("ChartGroups.Item(1)"),
+            );
+            let stock_group = expect_object_handle(
+                runtime
+                    .dispatch_invoke(chart_groups, "Item", &[OmValue::Number(2.0)])
+                    .expect("ChartGroups.Item(2)"),
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(volume_group, "ChartType", &[])
+                    .expect("volume group ChartType"),
+                OmValue::Number(f64::from(super::XL_COLUMN_CLUSTERED))
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(stock_group, "ChartType", &[])
+                    .expect("stock group ChartType"),
+                OmValue::Number(f64::from(stock_group_type))
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(volume_group, "HasHiLoLines", &[])
+                    .expect("volume group HasHiLoLines"),
+                OmValue::Bool(false)
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(volume_group, "HasUpDownBars", &[])
+                    .expect("volume group HasUpDownBars"),
+                OmValue::Bool(false)
+            );
+            for (group, expected_count) in
+                [(volume_group, 1usize), (stock_group, series_count - 1)]
+            {
+                let group_series = expect_object_handle(
+                    runtime
+                        .dispatch_get(group, "SeriesCollection", &[])
+                        .expect("ChartGroup.SeriesCollection"),
+                );
+                assert_eq!(
+                    runtime
+                        .dispatch_get(group_series, "Count", &[])
+                        .expect("ChartGroup SeriesCollection.Count"),
+                    OmValue::Number(expected_count as f64)
+                );
+            }
+            assert_eq!(
+                runtime
+                    .dispatch_get(stock_group, "HasHiLoLines", &[])
+                    .expect("stock group HasHiLoLines"),
+                OmValue::Bool(true)
+            );
+            assert_eq!(
+                runtime
+                    .dispatch_get(stock_group, "HasUpDownBars", &[])
+                    .expect("stock group HasUpDownBars"),
+                OmValue::Bool(has_up_down_bars)
+            );
+
+            let saved = runtime
+                .save_workbook(
+                    workbook,
+                    SaveWorkbookSpec {
+                        format: FileFormat::Xlsx,
+                        profile: ExcelProfile::Excel365,
+                        lossless: true,
+                    },
+                )
+                .expect("save volume stock chart");
+            let package = OpcPackage::from_bytes(&saved).expect("saved volume stock package");
+            let chart_xml = std::str::from_utf8(
+                &package
+                    .part("xl/charts/chart1.xml")
+                    .expect("saved volume stock chart part")
+                    .bytes,
+            )
+            .expect("saved volume stock chart XML");
+            let volume_start = chart_xml.find("<c:barChart>").expect("volume column group");
+            let volume_end = chart_xml
+                .find("</c:barChart>")
+                .expect("volume column group end");
+            let stock_start = chart_xml.find("<c:stockChart>").expect("stock group");
+            let stock_end = chart_xml
+                .find("</c:stockChart>")
+                .expect("stock group end");
+            assert!(volume_end < stock_start);
+            let volume_xml = &chart_xml[volume_start..volume_end];
+            let stock_xml = &chart_xml[stock_start..stock_end];
+            assert!(volume_xml.contains(r#"<c:barDir val="col"/>"#));
+            assert!(volume_xml.contains(r#"<c:grouping val="clustered"/>"#));
+            assert_eq!(volume_xml.matches("<c:ser>").count(), 1);
+            assert!(volume_xml.contains(&format!(
+                r#"<c:idx val="{}"/>"#,
+                series_count - 1
+            )));
+            assert_eq!(stock_xml.matches("<c:ser>").count(), series_count - 1);
+            assert!(!volume_xml.contains("<c:hiLowLines"));
+            assert!(!volume_xml.contains("<c:upDownBars"));
+            assert!(stock_xml.contains("<c:hiLowLines"));
+            assert_eq!(stock_xml.contains("<c:upDownBars"), has_up_down_bars);
+            assert!(volume_xml.contains(
+                r#"<c:axId val="10"/><c:axId val="20"/>"#
+            ));
+            assert!(stock_xml.contains(
+                r#"<c:axId val="10"/><c:axId val="50"/>"#
+            ));
+            assert_eq!(chart_xml.matches(r#"<c:catAx><c:axId val="10"/>"#).count(), 1);
+            assert_eq!(chart_xml.matches(r#"<c:valAx><c:axId val="20"/>"#).count(), 1);
+            assert_eq!(chart_xml.matches(r#"<c:valAx><c:axId val="50"/>"#).count(), 1);
+            assert_eq!(chart_xml.matches(r#"<c:crossAx val="20"/>"#).count(), 1);
+            assert_eq!(chart_xml.matches(r#"<c:crossAx val="10"/>"#).count(), 2);
+
+            let mut reopened = ExcelRuntime::new();
+            let reopened_workbook = reopened
+                .open_workbook(OpenWorkbookSpec {
+                    bytes: saved,
+                    format_hint: Some(FileFormat::Xlsx),
+                    profile: ExcelProfile::Excel365,
+                    read_only: false,
+                })
+                .expect("reopen volume stock chart");
+            let reopened_worksheet = expect_object_handle(
+                reopened
+                    .dispatch_get(
+                        reopened_workbook.0,
+                        "Worksheets",
+                        &[OmValue::Number(1.0)],
+                    )
+                    .expect("reopened Workbook.Worksheets(1)"),
+            );
+            let reopened_chart_objects = expect_object_handle(
+                reopened
+                    .dispatch_get(reopened_worksheet, "ChartObjects", &[])
+                    .expect("reopened Worksheet.ChartObjects"),
+            );
+            let reopened_chart_object = expect_object_handle(
+                reopened
+                    .dispatch_invoke(
+                        reopened_chart_objects,
+                        "Item",
+                        &[OmValue::Number(1.0)],
+                    )
+                    .expect("reopened ChartObjects.Item(1)"),
+            );
+            let reopened_chart = expect_object_handle(
+                reopened
+                    .dispatch_get(reopened_chart_object, "Chart", &[])
+                    .expect("reopened ChartObject.Chart"),
+            );
+            assert_eq!(
+                reopened
+                    .dispatch_get(reopened_chart, "ChartType", &[])
+                    .expect("reopened volume stock ChartType"),
+                OmValue::Number(f64::from(chart_type_value))
+            );
+            let reopened_groups = expect_object_handle(
+                reopened
+                    .dispatch_get(reopened_chart, "ChartGroups", &[])
+                    .expect("reopened Chart.ChartGroups"),
+            );
+            assert_eq!(
+                reopened
+                    .dispatch_get(reopened_groups, "Count", &[])
+                    .expect("reopened ChartGroups.Count"),
+                OmValue::Number(2.0)
+            );
+        }
+    }
+
+    #[test]
+    fn volume_stock_save_rejects_incomplete_series_sets() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
             .open_workbook(OpenWorkbookSpec {
@@ -159470,33 +160083,143 @@ mod tests {
                 .dispatch_get(chart_object, "Chart", &[])
                 .expect("ChartObject.Chart"),
         );
+        runtime
+            .dispatch_set(
+                chart,
+                "ChartType",
+                OmValue::Number(f64::from(super::XL_STOCK_VHLC)),
+                &[],
+            )
+            .expect("set incomplete volume stock chart type");
 
-        for chart_type_value in [super::XL_STOCK_VHLC, super::XL_STOCK_VOHLC] {
-            let error = runtime
-                .dispatch_set(
-                    chart,
-                    "ChartType",
-                    OmValue::Number(f64::from(chart_type_value)),
-                    &[],
-                )
-                .expect_err("volume stock ChartType should require combo chart support");
-            assert_eq!(error.code, OmErrorCode::Unsupported);
-            assert!(error.message.contains("combo chart"));
-        }
+        let error = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect_err("incomplete volume stock chart must not serialize");
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("exactly 4 ordered series"));
+    }
 
-        assert_eq!(
-            expect_number(
+    #[test]
+    fn volume_stock_set_source_data_normalizes_both_operation_orders() {
+        for chart_type_first in [false, true] {
+            let mut runtime = ExcelRuntime::new();
+            let workbook = runtime
+                .open_workbook(OpenWorkbookSpec {
+                    bytes: synthetic_workbook_bytes(),
+                    format_hint: Some(FileFormat::Xlsx),
+                    profile: ExcelProfile::Excel365,
+                    read_only: false,
+                })
+                .expect("open workbook");
+            let worksheet = expect_object_handle(
                 runtime
-                    .dispatch_get(chart, "ChartType", &[])
-                    .expect("Chart.ChartType after rejected volume stock types")
-            ),
-            f64::from(super::XL_BAR_CLUSTERED)
-        );
-        assert!(expect_bool(
+                    .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                    .expect("Workbook.Worksheets(1)"),
+            );
+            let source = expect_object_handle(
+                runtime
+                    .dispatch_invoke(
+                        worksheet,
+                        "Range",
+                        &[OmValue::Text("A1:D3".to_string())],
+                    )
+                    .expect("Worksheet.Range(A1:D3)"),
+            );
+            let chart_objects = expect_object_handle(
+                runtime
+                    .dispatch_get(worksheet, "ChartObjects", &[])
+                    .expect("Worksheet.ChartObjects"),
+            );
+            let chart_object = expect_object_handle(
+                runtime
+                    .dispatch_invoke(
+                        chart_objects,
+                        "Add",
+                        &[
+                            OmValue::Number(10.0),
+                            OmValue::Number(10.0),
+                            OmValue::Number(320.0),
+                            OmValue::Number(200.0),
+                        ],
+                    )
+                    .expect("ChartObjects.Add"),
+            );
+            let chart = expect_object_handle(
+                runtime
+                    .dispatch_get(chart_object, "Chart", &[])
+                    .expect("ChartObject.Chart"),
+            );
+            if chart_type_first {
+                runtime
+                    .dispatch_set(
+                        chart,
+                        "ChartType",
+                        OmValue::Number(f64::from(super::XL_STOCK_VHLC)),
+                        &[],
+                    )
+                    .expect("set volume chart type before source");
+            }
             runtime
-                .dispatch_get(workbook.0, "Saved", &[])
-                .expect("Workbook.Saved after rejected volume stock types")
-        ));
+                .dispatch_invoke(
+                    chart,
+                    "SetSourceData",
+                    &[
+                        OmValue::Object(source),
+                        OmValue::Number(f64::from(super::XL_PLOT_BY_COLUMNS)),
+                    ],
+                )
+                .expect("Chart.SetSourceData for volume stock");
+            if !chart_type_first {
+                runtime
+                    .dispatch_set(
+                        chart,
+                        "ChartType",
+                        OmValue::Number(f64::from(super::XL_STOCK_VHLC)),
+                        &[],
+                    )
+                    .expect("set volume chart type after source");
+            }
+            let groups = expect_object_handle(
+                runtime
+                    .dispatch_get(chart, "ChartGroups", &[])
+                    .expect("Chart.ChartGroups"),
+            );
+            for (group_index, expected_series_count) in [(1.0, 1.0), (2.0, 3.0)] {
+                let group = expect_object_handle(
+                    runtime
+                        .dispatch_invoke(groups, "Item", &[OmValue::Number(group_index)])
+                        .expect("ChartGroups.Item"),
+                );
+                let series = expect_object_handle(
+                    runtime
+                        .dispatch_get(group, "SeriesCollection", &[])
+                        .expect("ChartGroup.SeriesCollection"),
+                );
+                assert_eq!(
+                    runtime
+                        .dispatch_get(series, "Count", &[])
+                        .expect("ChartGroup SeriesCollection.Count"),
+                    OmValue::Number(expected_series_count)
+                );
+            }
+            runtime
+                .save_workbook(
+                    workbook,
+                    SaveWorkbookSpec {
+                        format: FileFormat::Xlsx,
+                        profile: ExcelProfile::Excel365,
+                        lossless: true,
+                    },
+                )
+                .expect("save normalized SetSourceData volume stock chart");
+        }
     }
 
     #[test]

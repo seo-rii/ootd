@@ -1010,6 +1010,7 @@ pub struct ChartDataTableSummary {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ChartAxisSummary {
     pub raw_id: Option<String>,
+    pub cross_axis_raw_id: Option<String>,
     pub kind: ChartAxisKind,
     pub axis_group: ChartAxisGroup,
     pub title_text: Option<String>,
@@ -1043,6 +1044,8 @@ pub struct ChartAxisSummary {
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ChartSeriesSummary {
+    pub chart_group_index: usize,
+    pub chart_group_name: Option<String>,
     pub is_filtered: bool,
     pub name_ref: Option<String>,
     pub name_full_ref: Option<String>,
@@ -4300,6 +4303,7 @@ fn build_chart_model_overlay(
                         .flat_map(|summary| summary.axes.iter())
                         .map(|axis| AxisModel {
                             raw_id: axis.raw_id.clone(),
+                            cross_axis_raw_id: axis.cross_axis_raw_id.clone(),
                             kind: axis.kind,
                             axis_group: axis.axis_group,
                             title: axis
@@ -4489,6 +4493,28 @@ fn chart_type_from_summary(summary: Option<&ChartPartSummary>) -> ChartType {
     let Some(summary) = summary else {
         return ChartType::Unknown;
     };
+    let volume_stock_series_count = if summary.has_up_down_bars == Some(true) {
+        5
+    } else {
+        4
+    };
+    if summary.chart_type_names == ["barChart", "stockChart"]
+        && summary.bar_direction.as_deref() == Some("col")
+        && summary.series.len() == volume_stock_series_count
+        && summary.series.first().is_some_and(|series| {
+            series.chart_group_index == 0 && series.chart_group_name.as_deref() == Some("barChart")
+        })
+        && summary.series.iter().skip(1).all(|series| {
+            series.chart_group_index == 1
+                && series.chart_group_name.as_deref() == Some("stockChart")
+        })
+    {
+        return if summary.has_up_down_bars == Some(true) {
+            ChartType::StockVOHLC
+        } else {
+            ChartType::StockVHLC
+        };
+    }
     match summary.chart_type_names.first().map(String::as_str) {
         Some("areaChart") => match summary.chart_grouping.as_deref() {
             Some("stacked") => ChartType::AreaStacked,
@@ -21403,6 +21429,8 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
     let mut data_label_separator_depth = 0usize;
     let mut active_chart_group_series_start = None::<usize>;
     let mut active_chart_group_axis_ids = Vec::<String>::new();
+    let mut active_chart_group_index = None::<usize>;
+    let mut active_chart_group_name = None::<String>;
     let mut element_path = Vec::<String>::new();
 
     let parse_u32_val_attr = |element: &BytesStart<'_>,
@@ -21744,8 +21772,10 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     root_name = Some(local_name_text.clone());
                 }
                 if local_name.ends_with(b"Chart") && local_name != b"chart" {
-                    chart_group_count += 1;
                     let name = String::from_utf8_lossy(local_name).into_owned();
+                    active_chart_group_index = Some(chart_group_count);
+                    active_chart_group_name = Some(name.clone());
+                    chart_group_count += 1;
                     if chart_type_names.iter().all(|existing| existing != &name) {
                         chart_type_names.push(name);
                     }
@@ -22354,6 +22384,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 } {
                     axes.push(ChartAxisSummary {
                         raw_id: None,
+                        cross_axis_raw_id: None,
                         kind,
                         axis_group: ChartAxisGroup::Primary,
                         title_text: None,
@@ -22395,6 +22426,12 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     && axes[axis_index].raw_id.is_none()
                 {
                     axes[axis_index].raw_id = Some(axis_id);
+                }
+                if local_name == b"crossAx"
+                    && let Some(axis_index) = active_axis_index
+                    && let Some(axis_id) = parse_string_val_attr(&element, &reader)?
+                {
+                    axes[axis_index].cross_axis_raw_id = Some(axis_id);
                 }
                 if local_name == b"axId"
                     && active_axis_index.is_none()
@@ -22568,6 +22605,8 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 }
                 if local_name == b"ser" && active_series.is_none() {
                     let mut series_summary = ChartSeriesSummary::default();
+                    series_summary.chart_group_index = active_chart_group_index.unwrap_or(0);
+                    series_summary.chart_group_name = active_chart_group_name.clone();
                     series_summary.is_filtered = element_path.len() >= 4
                         && element_path[element_path.len() - 3] == "extLst"
                         && element_path[element_path.len() - 2] == "ext"
@@ -23456,6 +23495,12 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 {
                     axes[axis_index].raw_id = Some(axis_id);
                 }
+                if local_name == b"crossAx"
+                    && let Some(axis_index) = active_axis_index
+                    && let Some(axis_id) = parse_string_val_attr(&element, &reader)?
+                {
+                    axes[axis_index].cross_axis_raw_id = Some(axis_id);
+                }
                 if local_name == b"axId"
                     && active_axis_index.is_none()
                     && element_path
@@ -23901,6 +23946,8 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         series.axis_ids = active_chart_group_axis_ids.clone();
                     }
                     active_chart_group_axis_ids.clear();
+                    active_chart_group_index = None;
+                    active_chart_group_name = None;
                 }
                 if active_axis_depth > 0 {
                     if active_axis_depth == 1
@@ -23966,6 +24013,37 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
             })
         {
             series.axis_group = ChartAxisGroup::Secondary;
+        }
+    }
+    let volume_stock_series_count = if has_up_down_bars == Some(true) { 5 } else { 4 };
+    let is_volume_stock = chart_type_names == ["barChart", "stockChart"]
+        && bar_direction.as_deref() == Some("col")
+        && series.len() == volume_stock_series_count
+        && series.first().is_some_and(|series| {
+            series.chart_group_index == 0 && series.chart_group_name.as_deref() == Some("barChart")
+        })
+        && series.iter().skip(1).all(|series| {
+            series.chart_group_index == 1
+                && series.chart_group_name.as_deref() == Some("stockChart")
+        });
+    if is_volume_stock {
+        let primary_axis_ids = series[0].axis_ids.iter().collect::<BTreeSet<_>>();
+        let secondary_axis_ids = series[1].axis_ids.iter().collect::<BTreeSet<_>>();
+        for axis in &mut axes {
+            axis.axis_group = if axis.raw_id.as_ref().is_some_and(|axis_id| {
+                secondary_axis_ids.contains(axis_id) && !primary_axis_ids.contains(axis_id)
+            }) {
+                ChartAxisGroup::Secondary
+            } else {
+                ChartAxisGroup::Primary
+            };
+        }
+        for series in &mut series {
+            series.axis_group = if series.chart_group_index == 0 {
+                ChartAxisGroup::Primary
+            } else {
+                ChartAxisGroup::Secondary
+            };
         }
     }
 
@@ -30840,6 +30918,7 @@ mod tests {
             vec![
                 ChartAxisSummary {
                     raw_id: Some("10".to_string()),
+                    cross_axis_raw_id: None,
                     kind: ChartAxisKind::Category,
                     axis_group: ChartAxisGroup::Primary,
                     title_text: Some("Quarter".to_string()),
@@ -30872,6 +30951,7 @@ mod tests {
                 },
                 ChartAxisSummary {
                     raw_id: Some("20".to_string()),
+                    cross_axis_raw_id: None,
                     kind: ChartAxisKind::Value,
                     axis_group: ChartAxisGroup::Primary,
                     title_text: Some("Revenue".to_string()),
@@ -30915,6 +30995,8 @@ mod tests {
         assert_eq!(
             chart_summary.series,
             vec![ChartSeriesSummary {
+                chart_group_index: 0,
+                chart_group_name: Some("barChart".to_string()),
                 is_filtered: false,
                 name_ref: Some("Sheet1!$C$1".to_string()),
                 name_full_ref: None,
@@ -37463,6 +37545,58 @@ mod tests {
         assert_eq!(summary.series[0].axis_group, ChartAxisGroup::Primary);
         assert_eq!(summary.series[1].axis_ids, vec!["10", "50"]);
         assert_eq!(summary.series[1].axis_group, ChartAxisGroup::Secondary);
+    }
+
+    #[test]
+    fn parse_chart_part_summary_recognizes_volume_stock_groups_by_ownership() {
+        let chart_xml = br#"<?xml version="1.0" encoding="UTF-8"?>
+<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart">
+  <c:chart><c:plotArea>
+    <c:barChart><c:barDir val="col"/><c:grouping val="clustered"/>
+      <c:ser><c:idx val="0"/><c:order val="0"/></c:ser>
+      <c:axId val="10"/><c:axId val="20"/>
+    </c:barChart>
+    <c:stockChart>
+      <c:ser><c:idx val="1"/><c:order val="1"/></c:ser>
+      <c:ser><c:idx val="2"/><c:order val="2"/></c:ser>
+      <c:ser><c:idx val="3"/><c:order val="3"/></c:ser>
+      <c:hiLowLines/><c:axId val="10"/><c:axId val="50"/>
+    </c:stockChart>
+    <c:catAx><c:axId val="10"/><c:crossAx val="20"/></c:catAx>
+    <c:valAx><c:axId val="50"/><c:crossAx val="10"/></c:valAx>
+    <c:valAx><c:axId val="20"/><c:crossAx val="10"/></c:valAx>
+  </c:plotArea></c:chart>
+</c:chartSpace>"#;
+        let summary = super::parse_chart_part_summary(chart_xml).expect("volume stock summary");
+
+        assert_eq!(
+            super::chart_type_from_summary(Some(&summary)),
+            ChartType::StockVHLC
+        );
+        assert_eq!(summary.series[0].chart_group_index, 0);
+        assert_eq!(
+            summary.series[0].chart_group_name.as_deref(),
+            Some("barChart")
+        );
+        assert!(summary.series[1..].iter().all(|series| {
+            series.chart_group_index == 1
+                && series.chart_group_name.as_deref() == Some("stockChart")
+                && series.axis_group == ChartAxisGroup::Secondary
+        }));
+        let primary_value = summary
+            .axes
+            .iter()
+            .find(|axis| axis.raw_id.as_deref() == Some("20"))
+            .expect("primary volume value axis");
+        let secondary_value = summary
+            .axes
+            .iter()
+            .find(|axis| axis.raw_id.as_deref() == Some("50"))
+            .expect("secondary price value axis");
+        assert_eq!(primary_value.axis_group, ChartAxisGroup::Primary);
+        assert_eq!(secondary_value.axis_group, ChartAxisGroup::Secondary);
+        assert_eq!(primary_value.cross_axis_raw_id.as_deref(), Some("10"));
+        assert_eq!(secondary_value.cross_axis_raw_id.as_deref(), Some("10"));
     }
 
     #[test]
