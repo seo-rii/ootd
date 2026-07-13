@@ -4995,6 +4995,8 @@
   - 범위: loaded multi-group chart의 series raw `c:idx`를 정확히 하나의 `ChartGroupModel`에 귀속시키는 partition invariant를 도입하고, `Chart.SeriesCollection.NewSeries`, 선택한 `ChartGroup.SeriesCollection.Add`, direct/filtered `Series.Delete`, 동일 chart type의 기존 primary/secondary group 간 `Series.AxisGroup` 이동을 원본 group shell/axis graph는 고정한 채 구조 patch로 처리하며, 새 filtered series wrapper 생성, 마지막 series 삭제 후 빈 group shell, 원본 series subtree/formatting/opaque extension 보존과 save/reopen을 검증하고 cross-family 및 loaded group-axis topology 변경은 mutation 전에 원자적으로 거절
   - `Step 7.175 DONE` loaded volume-stock atomic source replacement
   - 범위: loaded `xlStockVHLC`/`xlStockVOHLC`의 `Chart.SetSourceData`를 4/5-series cardinality로 mutation 전에 검증하고 기존 plot-order별 raw `c:idx`를 새 series에 재사용한 뒤 volume primary/stock secondary group membership을 재구성해 group shell/axis graph/group-local property를 보존하며 source와 group property를 한 save에서 patch하고 재로드하는 회귀를 구현하고, invalid source cardinality와 개별 NewSeries/Delete/PlotOrder role 변경은 workbook dirty state 없이 원자적으로 거절
+  - `Step 7.176 DONE` loaded combo same-family chart-group creation
+  - 범위: loaded heterogeneous combo chart에서 `Series.AxisGroup` 대상 축 세트에 동일 chart family group이 없으면 source group의 typed 속성을 복제한 새 group shell을 기존 group 뒤와 axis 앞에 schema 순서대로 추가하고, 대상 axis group의 raw axis ID를 재사용해 direct/filtered series subtree를 stable `c:idx`로 이동하며 후속 series 이동은 같은 새 group을 재사용하도록 구현; loaded group identity, 기존 runtime group handle 안정성, inline series name/opaque extension/formatting 보존, 양방향 primary-secondary 이동, save-twice/reopen 회귀를 고정
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.
