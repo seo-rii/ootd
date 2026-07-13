@@ -4983,6 +4983,8 @@
   - 범위: OOXML `c15:filtered*Series/c15:ser`를 stable `c:idx` identity와 함께 typed series overlay로 읽고, `SeriesCollection`은 visible series만, `FullSeriesCollection`은 filtered series를 포함한 plot order로 노출하며 `Series.IsFiltered` read/write와 dynamic parent를 pinned OM surface에 연결하고, loaded single-group chart에서는 원본 series subtree만 chart group과 filtered extension 사이에서 이동해 sibling extension/series formatting을 보존하며 새 chart fallback serializer도 schema-correct `c15:ser`를 생성하도록 구현
   - `Step 7.169 DONE` combo and secondary filtered-series lossless structural mutation
   - 범위: loaded chart의 series를 unique `c:idx`로 실제 chart group에 매핑하고 group별 direct-series insertion point와 `extLst` removal/addition을 독립 계획해 bar/line 등 각 group type에 맞는 `c15:filtered*Series` wrapper를 사용하며, combo/secondary filter-only save는 generic fallback serializer를 거치지 않고 원본 subtree/opaque sibling extension/formatting/axis binding을 보존하고 다른 chart content mutation과 혼합된 저장은 explicit unsupported로 차단하도록 chart content dirty 원인을 분리
+  - `Step 7.170 DONE` Volume-HLC and Volume-OHLC typed combo chart support
+  - 범위: `xlStockVHLC`/`xlStockVOHLC`를 aggregate chart type으로 추가하고 plot order 기준 첫 series를 primary volume column group, 나머지를 shared category axis와 secondary value axis를 쓰는 HLC/OHLC stock group으로 정규화하며, `SetSourceData`/NewSeries/Delete/PlotOrder 경로에서 이 invariant를 유지하고 exact 4/5-series validation, group별 ChartType/series surface, `crossAx` axis graph, barChart+stockChart serialization, group ownership 기반 load classification과 save/reopen 회귀를 구현
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.
