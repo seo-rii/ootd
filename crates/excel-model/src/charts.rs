@@ -55,6 +55,7 @@ pub struct ChartModel {
     pub protection: Option<ChartProtectionModel>,
     pub protection_dirty: bool,
     pub raw_part_uri: Option<String>,
+    pub series_topology_dirty: bool,
     pub content_dirty: bool,
     pub dirty: bool,
 }

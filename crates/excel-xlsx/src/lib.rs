@@ -4422,6 +4422,7 @@ fn build_chart_model_overlay(
                         })
                         .collect(),
                     raw_part_uri: Some(chart_part_uri.clone()),
+                    series_topology_dirty: false,
                     content_dirty: false,
                     dirty: false,
                 },
@@ -22240,19 +22241,21 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 }
                 if local_name == b"shape"
                     && element_path.last().is_some_and(|name| name == "bar3DChart")
-                    && bar_shape.is_none()
                     && let Some(value) = parse_string_val_attr(&element, &reader)?
                 {
-                    bar_shape = match value.as_str() {
+                    let parsed_shape = match value.as_str() {
                         "box" => Some(ChartBarShape::Box),
                         "pyramid" => Some(ChartBarShape::PyramidToPoint),
                         "pyramidToMax" => Some(ChartBarShape::PyramidToMax),
                         "cylinder" => Some(ChartBarShape::Cylinder),
                         "cone" => Some(ChartBarShape::ConeToPoint),
                         "coneToMax" => Some(ChartBarShape::ConeToMax),
-                        _ => bar_shape,
+                        _ => None,
                     };
-                    set_active_group_field!(bar_shape, bar_shape);
+                    if bar_shape.is_none() {
+                        bar_shape = parsed_shape;
+                    }
+                    set_active_group_field!(bar_shape, parsed_shape);
                 }
                 if local_name == b"shape"
                     && element_path.last().is_some_and(|name| name == "ser")
@@ -22310,36 +22313,44 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     && element_path
                         .last()
                         .is_some_and(|name| name == "scatterChart")
-                    && scatter_style.is_none()
                     && let Some(value) = parse_string_val_attr(&element, &reader)?
                 {
-                    scatter_style = match value.as_str() {
-                        "line" | "lineMarker" | "marker" | "smooth" | "smoothMarker" => Some(value),
-                        _ => scatter_style,
+                    let parsed_style = match value.as_str() {
+                        "line" | "lineMarker" | "marker" | "smooth" | "smoothMarker" => {
+                            Some(value)
+                        }
+                        _ => None,
                     };
-                    set_active_group_field!(scatter_style, scatter_style.clone());
+                    if scatter_style.is_none() {
+                        scatter_style = parsed_style.clone();
+                    }
+                    set_active_group_field!(scatter_style, parsed_style);
                 }
                 if local_name == b"radarStyle"
                     && element_path.last().is_some_and(|name| name == "radarChart")
-                    && radar_style.is_none()
                     && let Some(value) = parse_string_val_attr(&element, &reader)?
                 {
-                    radar_style = match value.as_str() {
+                    let parsed_style = match value.as_str() {
                         "filled" | "marker" | "standard" => Some(value),
-                        _ => radar_style,
+                        _ => None,
                     };
-                    set_active_group_field!(radar_style, radar_style.clone());
+                    if radar_style.is_none() {
+                        radar_style = parsed_style.clone();
+                    }
+                    set_active_group_field!(radar_style, parsed_style);
                 }
                 if local_name == b"ofPieType"
                     && element_path.last().is_some_and(|name| name == "ofPieChart")
-                    && of_pie_type.is_none()
                     && let Some(value) = parse_string_val_attr(&element, &reader)?
                 {
-                    of_pie_type = match value.as_str() {
+                    let parsed_type = match value.as_str() {
                         "bar" | "pie" => Some(value),
-                        _ => of_pie_type,
+                        _ => None,
                     };
-                    set_active_group_field!(of_pie_type, of_pie_type.clone());
+                    if of_pie_type.is_none() {
+                        of_pie_type = parsed_type.clone();
+                    }
+                    set_active_group_field!(of_pie_type, parsed_type);
                 }
                 if local_name == b"wireframe"
                     && element_path
@@ -22424,12 +22435,19 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 if local_name == b"explosion"
                     && active_series.is_some()
                     && element_path.last().is_some_and(|name| name == "ser")
-                    && explosion.is_none()
                     && let Some(value) = parse_i32_val_attr(&element, &reader, "explosion")?
                     && (0..=400).contains(&value)
                 {
-                    explosion = Some(value as u16);
-                    set_active_group_field!(explosion, explosion);
+                    let parsed_explosion = Some(value as u16);
+                    if explosion.is_none() {
+                        explosion = parsed_explosion;
+                    }
+                    if let Some(group_index) = active_chart_group_index
+                        && let Some(group) = groups.get_mut(group_index)
+                        && group.explosion.is_none()
+                    {
+                        group.explosion = parsed_explosion;
+                    }
                 }
                 if local_name == b"bubbleScale"
                     && element_path
@@ -23398,19 +23416,21 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 }
                 if local_name == b"shape"
                     && element_path.last().is_some_and(|name| name == "bar3DChart")
-                    && bar_shape.is_none()
                     && let Some(value) = parse_string_val_attr(&element, &reader)?
                 {
-                    bar_shape = match value.as_str() {
+                    let parsed_shape = match value.as_str() {
                         "box" => Some(ChartBarShape::Box),
                         "pyramid" => Some(ChartBarShape::PyramidToPoint),
                         "pyramidToMax" => Some(ChartBarShape::PyramidToMax),
                         "cylinder" => Some(ChartBarShape::Cylinder),
                         "cone" => Some(ChartBarShape::ConeToPoint),
                         "coneToMax" => Some(ChartBarShape::ConeToMax),
-                        _ => bar_shape,
+                        _ => None,
                     };
-                    set_active_group_field!(bar_shape, bar_shape);
+                    if bar_shape.is_none() {
+                        bar_shape = parsed_shape;
+                    }
+                    set_active_group_field!(bar_shape, parsed_shape);
                 }
                 if local_name == b"shape"
                     && element_path.last().is_some_and(|name| name == "ser")
@@ -23468,36 +23488,44 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     && element_path
                         .last()
                         .is_some_and(|name| name == "scatterChart")
-                    && scatter_style.is_none()
                     && let Some(value) = parse_string_val_attr(&element, &reader)?
                 {
-                    scatter_style = match value.as_str() {
-                        "line" | "lineMarker" | "marker" | "smooth" | "smoothMarker" => Some(value),
-                        _ => scatter_style,
+                    let parsed_style = match value.as_str() {
+                        "line" | "lineMarker" | "marker" | "smooth" | "smoothMarker" => {
+                            Some(value)
+                        }
+                        _ => None,
                     };
-                    set_active_group_field!(scatter_style, scatter_style.clone());
+                    if scatter_style.is_none() {
+                        scatter_style = parsed_style.clone();
+                    }
+                    set_active_group_field!(scatter_style, parsed_style);
                 }
                 if local_name == b"radarStyle"
                     && element_path.last().is_some_and(|name| name == "radarChart")
-                    && radar_style.is_none()
                     && let Some(value) = parse_string_val_attr(&element, &reader)?
                 {
-                    radar_style = match value.as_str() {
+                    let parsed_style = match value.as_str() {
                         "filled" | "marker" | "standard" => Some(value),
-                        _ => radar_style,
+                        _ => None,
                     };
-                    set_active_group_field!(radar_style, radar_style.clone());
+                    if radar_style.is_none() {
+                        radar_style = parsed_style.clone();
+                    }
+                    set_active_group_field!(radar_style, parsed_style);
                 }
                 if local_name == b"ofPieType"
                     && element_path.last().is_some_and(|name| name == "ofPieChart")
-                    && of_pie_type.is_none()
                     && let Some(value) = parse_string_val_attr(&element, &reader)?
                 {
-                    of_pie_type = match value.as_str() {
+                    let parsed_type = match value.as_str() {
                         "bar" | "pie" => Some(value),
-                        _ => of_pie_type,
+                        _ => None,
                     };
-                    set_active_group_field!(of_pie_type, of_pie_type.clone());
+                    if of_pie_type.is_none() {
+                        of_pie_type = parsed_type.clone();
+                    }
+                    set_active_group_field!(of_pie_type, parsed_type);
                 }
                 if local_name == b"wireframe"
                     && element_path
@@ -23582,12 +23610,19 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 if local_name == b"explosion"
                     && active_series.is_some()
                     && element_path.last().is_some_and(|name| name == "ser")
-                    && explosion.is_none()
                     && let Some(value) = parse_i32_val_attr(&element, &reader, "explosion")?
                     && (0..=400).contains(&value)
                 {
-                    explosion = Some(value as u16);
-                    set_active_group_field!(explosion, explosion);
+                    let parsed_explosion = Some(value as u16);
+                    if explosion.is_none() {
+                        explosion = parsed_explosion;
+                    }
+                    if let Some(group_index) = active_chart_group_index
+                        && let Some(group) = groups.get_mut(group_index)
+                        && group.explosion.is_none()
+                    {
+                        group.explosion = parsed_explosion;
+                    }
                 }
                 if local_name == b"bubbleScale"
                     && element_path
@@ -37890,8 +37925,84 @@ mod tests {
         }
         assert_eq!(summary.groups[0].axis_group, ChartAxisGroup::Primary);
         assert_eq!(summary.groups[1].axis_group, ChartAxisGroup::Secondary);
+        assert_eq!(summary.groups[0].scatter_style.as_deref(), Some("lineMarker"));
+        assert_eq!(summary.groups[1].scatter_style.as_deref(), Some("smoothMarker"));
+        assert_eq!(
+            super::chart_type_from_group_summary(&summary.groups[0]),
+            ChartType::ScatterLines
+        );
+        assert_eq!(
+            super::chart_type_from_group_summary(&summary.groups[1]),
+            ChartType::ScatterSmooth
+        );
         assert_eq!(summary.series[0].axis_group, ChartAxisGroup::Primary);
         assert_eq!(summary.series[1].axis_group, ChartAxisGroup::Secondary);
+    }
+
+    #[test]
+    fn parse_chart_part_summary_preserves_each_group_style_discriminator() {
+        let chart_xml = br#"<?xml version="1.0" encoding="UTF-8"?>
+<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart">
+  <c:chart><c:plotArea>
+    <c:radarChart><c:radarStyle val="filled"/></c:radarChart>
+    <c:radarChart><c:radarStyle val="marker"/></c:radarChart>
+    <c:ofPieChart><c:ofPieType val="pie"/></c:ofPieChart>
+    <c:ofPieChart><c:ofPieType val="bar"/></c:ofPieChart>
+    <c:bar3DChart><c:barDir val="col"/><c:grouping val="clustered"/><c:shape val="cylinder"/></c:bar3DChart>
+    <c:bar3DChart><c:barDir val="col"/><c:grouping val="clustered"/><c:shape val="cone"/></c:bar3DChart>
+    <c:pieChart><c:ser><c:explosion val="10"/></c:ser></c:pieChart>
+    <c:pieChart><c:ser><c:explosion val="20"/></c:ser></c:pieChart>
+  </c:plotArea></c:chart>
+</c:chartSpace>"#;
+        let summary = super::parse_chart_part_summary(chart_xml).expect("styled group summary");
+
+        assert_eq!(summary.groups.len(), 8);
+        assert_eq!(summary.groups[0].radar_style.as_deref(), Some("filled"));
+        assert_eq!(summary.groups[1].radar_style.as_deref(), Some("marker"));
+        assert_eq!(summary.groups[2].of_pie_type.as_deref(), Some("pie"));
+        assert_eq!(summary.groups[3].of_pie_type.as_deref(), Some("bar"));
+        assert_eq!(
+            super::chart_type_from_group_summary(&summary.groups[0]),
+            ChartType::RadarFilled
+        );
+        assert_eq!(
+            super::chart_type_from_group_summary(&summary.groups[1]),
+            ChartType::RadarMarkers
+        );
+        assert_eq!(
+            super::chart_type_from_group_summary(&summary.groups[2]),
+            ChartType::PieOfPie
+        );
+        assert_eq!(
+            super::chart_type_from_group_summary(&summary.groups[3]),
+            ChartType::BarOfPie
+        );
+        assert_eq!(
+            summary.groups[4].bar_shape,
+            Some(excel_model::ChartBarShape::Cylinder)
+        );
+        assert_eq!(
+            summary.groups[5].bar_shape,
+            Some(excel_model::ChartBarShape::ConeToPoint)
+        );
+        assert_eq!(
+            super::chart_type_from_group_summary(&summary.groups[4]),
+            ChartType::CylinderColumnClustered
+        );
+        assert_eq!(
+            super::chart_type_from_group_summary(&summary.groups[5]),
+            ChartType::ConeColumnClustered
+        );
+        assert_eq!(summary.groups[6].explosion, Some(10));
+        assert_eq!(summary.groups[7].explosion, Some(20));
+        assert_eq!(
+            super::chart_type_from_group_summary(&summary.groups[6]),
+            ChartType::PieExploded
+        );
+        assert_eq!(
+            super::chart_type_from_group_summary(&summary.groups[7]),
+            ChartType::PieExploded
+        );
     }
 
     #[test]
