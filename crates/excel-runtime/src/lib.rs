@@ -5920,7 +5920,14 @@ impl ExcelRuntime {
                             .ok_or_else(|| {
                                 OmError::new(OmErrorCode::NotFound, "chart not found")
                             })?;
-                        if chart_filtered_series_wrapper_name(&chart.chart_type).is_none() {
+                        let series_chart_type = chart
+                            .series
+                            .get(series_index)
+                            .map(|series| chart_type_for_series(chart, series))
+                            .ok_or_else(|| {
+                                OmError::new(OmErrorCode::NotFound, "series not found")
+                            })?;
+                        if chart_filtered_series_wrapper_name(&series_chart_type).is_none() {
                             return Err(OmError::unsupported(
                                 "Series.IsFiltered is unavailable for this chart type",
                             ));
@@ -5966,7 +5973,9 @@ impl ExcelRuntime {
                         self.series_model(workbook, chart_id, series_index)?;
                         let axis_group =
                             chart_axis_group_from_excel_value(number as u32, "Series.AxisGroup")?;
-                        if axis_group == ChartAxisGroup::Secondary {
+                        let has_loaded_groups =
+                            self.chart_model(workbook, chart_id)?.groups.len() > 1;
+                        if !has_loaded_groups && axis_group == ChartAxisGroup::Secondary {
                             self.set_chart_axis_presence(
                                 workbook,
                                 chart_id,
@@ -5991,6 +6000,22 @@ impl ExcelRuntime {
                                 .ok_or_else(|| {
                                     OmError::new(OmErrorCode::NotFound, "chart not found")
                                 })?;
+                        let raw_index = chart
+                            .series
+                            .get(series_index)
+                            .ok_or_else(|| {
+                                OmError::new(OmErrorCode::NotFound, "series not found")
+                            })?
+                            .raw_index;
+                        if has_loaded_groups {
+                            let raw_index = raw_index.ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "loaded chart series has no stable c:idx identity",
+                                )
+                            })?;
+                            move_series_to_existing_chart_group(chart, raw_index, axis_group)?;
+                        }
                         let series = chart.series.get_mut(series_index).ok_or_else(|| {
                             OmError::new(OmErrorCode::NotFound, "series not found")
                         })?;
@@ -7775,14 +7800,22 @@ impl ExcelRuntime {
                                 "ChartGroup.AxisGroup expects an integral XlAxisGroup value",
                             ));
                         }
-                        let current_axis_group = {
+                        let (current_axis_group, has_loaded_groups) = {
                             let chart = self.chart_group_model(workbook, chart_id, group_index)?;
-                            chart_group_axis_group(chart, group_index)?
+                            (
+                                chart_group_axis_group(chart, group_index)?,
+                                chart.groups.len() > 1,
+                            )
                         };
                         let axis_group = chart_axis_group_from_excel_value(
                             number as u32,
                             "ChartGroup.AxisGroup",
                         )?;
+                        if has_loaded_groups && current_axis_group != axis_group {
+                            return Err(OmError::unsupported(
+                                "changing a loaded chart group's axis topology is not supported losslessly",
+                            ));
+                        }
                         if axis_group == ChartAxisGroup::Secondary {
                             self.set_chart_axis_presence(
                                 workbook,
@@ -17697,6 +17730,26 @@ impl ExcelRuntime {
                                 })?;
                         if series_index >= chart.series.len() {
                             return Err(OmError::new(OmErrorCode::NotFound, "series not found"));
+                        }
+                        if !chart.groups.is_empty() {
+                            if chart_type_is_volume_stock(&chart.chart_type) {
+                                return Err(OmError::unsupported(
+                                    "loaded volume-stock series deletion requires an atomic cardinality-preserving edit",
+                                ));
+                            }
+                            if !chart_group_overlay_is_stable(chart) {
+                                return Err(OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "loaded chart series-to-group partition is inconsistent",
+                                ));
+                            }
+                            let raw_index = chart.series[series_index].raw_index.ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "loaded chart series has no stable c:idx identity",
+                                )
+                            })?;
+                            detach_series_from_chart_group(chart, raw_index)?;
                         }
                         chart.series.remove(series_index);
                         for (index, series) in chart.series.iter_mut().enumerate() {
@@ -27920,7 +27973,11 @@ impl ExcelRuntime {
                     ));
                 }
                 let axis_group = axis_group_filter.unwrap_or(ChartAxisGroup::Primary);
-                if axis_group == ChartAxisGroup::Secondary {
+                let target_group_index = {
+                    let chart = self.chart_model(workbook, chart_id)?;
+                    resolve_series_insert_group(chart, axis_group, group_index_filter)?
+                };
+                if target_group_index.is_none() && axis_group == ChartAxisGroup::Secondary {
                     self.set_chart_axis_presence(
                         workbook,
                         chart_id,
@@ -27964,6 +28021,9 @@ impl ExcelRuntime {
                         is_filtered: false,
                         filter_dirty: false,
                     });
+                    if let Some(group_index) = target_group_index {
+                        attach_series_to_chart_group(chart, group_index, raw_index);
+                    }
                     if let Some(plot_order) = series_index
                         .checked_add(1)
                         .and_then(|index| u32::try_from(index).ok())
@@ -28031,6 +28091,12 @@ impl ExcelRuntime {
                 let chart = self.chart_model(workbook, chart_id)?;
                 let existing_series_len = chart.series.len();
                 let first_raw_index = next_chart_series_raw_index(chart)?;
+                let target_axis_group = axis_group_filter.unwrap_or(ChartAxisGroup::Primary);
+                let target_group_index = resolve_series_insert_group(
+                    chart,
+                    target_axis_group,
+                    group_index_filter,
+                )?;
                 let mut new_series = self.chart_series_models_for_range_source(
                     workbook,
                     &source_range,
@@ -28040,18 +28106,20 @@ impl ExcelRuntime {
                     series_labels,
                     category_labels,
                 )?;
-                if let Some(axis_group) = axis_group_filter {
-                    if axis_group == ChartAxisGroup::Secondary {
-                        self.set_chart_axis_presence(
-                            workbook,
-                            chart_id,
-                            XL_VALUE,
-                            ChartAxisGroup::Secondary,
-                            true,
-                        )?;
-                    }
+                if target_group_index.is_none()
+                    && target_axis_group == ChartAxisGroup::Secondary
+                {
+                    self.set_chart_axis_presence(
+                        workbook,
+                        chart_id,
+                        XL_VALUE,
+                        ChartAxisGroup::Secondary,
+                        true,
+                    )?;
+                }
+                if axis_group_filter.is_some() || target_group_index.is_some() {
                     for series in &mut new_series {
-                        series.axis_group = axis_group;
+                        series.axis_group = target_axis_group;
                     }
                 }
                 let replacement_category_sources = if replace {
@@ -28111,7 +28179,16 @@ impl ExcelRuntime {
                         }
                     }
                     let first_new_series_index = chart.series.len();
+                    let new_raw_indices = new_series
+                        .iter()
+                        .filter_map(|series| series.raw_index)
+                        .collect::<Vec<_>>();
                     chart.series.append(&mut new_series);
+                    if let Some(group_index) = target_group_index {
+                        for raw_index in new_raw_indices {
+                            attach_series_to_chart_group(chart, group_index, raw_index);
+                        }
+                    }
                     normalize_volume_stock_chart(chart);
                     chart.content_dirty = true;
                     chart.dirty = true;
@@ -42856,10 +42933,10 @@ fn rewrite_chart_series_outer_name(
     Ok(writer.into_inner().into_inner())
 }
 
-fn rewrite_loaded_chart_series_filtering(
+fn rewrite_loaded_chart_series_topology(
     existing_chart_xml: &[u8],
     chart: &ChartModel,
-) -> OmResult<(Vec<u8>, usize)> {
+) -> OmResult<Vec<u8>> {
     let mut reader = Reader::from_reader(Cursor::new(existing_chart_xml));
     reader.config_mut().trim_text(false);
     let mut buffer = Vec::new();
@@ -43063,8 +43140,25 @@ fn rewrite_loaded_chart_series_filtering(
 
     if groups.is_empty() {
         return Err(OmError::unsupported(
-            "Series.IsFiltered requires at least one loaded chart group",
+            "loaded series topology patching requires at least one chart group",
         ));
+    }
+    if !chart.groups.is_empty() {
+        if groups.len() != chart.groups.len()
+            || groups.iter().zip(chart.groups.iter()).any(|(loaded, model)| {
+                loaded.local_name.as_slice() != model.raw_name.as_bytes()
+            })
+        {
+            return Err(OmError::unsupported(
+                "loaded chart group topology changed before series patching",
+            ));
+        }
+        if !chart_group_overlay_is_stable(chart) {
+            return Err(OmError::new(
+                OmErrorCode::InvalidState,
+                "loaded chart series-to-group partition is inconsistent",
+            ));
+        }
     }
 
     let mut loaded_series_by_raw_index = BTreeMap::<u32, usize>::new();
@@ -43080,22 +43174,37 @@ fn rewrite_loaded_chart_series_filtering(
             duplicate_raw_indices.insert(raw_index);
         }
     }
+    if !duplicate_raw_indices.is_empty() {
+        return Err(OmError::unsupported(
+            "loaded chart contains duplicate series c:idx identities",
+        ));
+    }
+    let mut model_series_by_raw_index = BTreeMap::<u32, usize>::new();
     let mut model_to_loaded = vec![None; chart.series.len()];
+    let mut model_group_indices = vec![None; chart.series.len()];
     for (model_index, series) in chart.series.iter().enumerate() {
-        if !series.filter_dirty {
-            continue;
-        }
         let raw_index = series.raw_index.ok_or_else(|| {
             OmError::unsupported(
-                "Series.IsFiltered requires a stable loaded c:idx identity",
+                "loaded chart topology changes require stable series c:idx identities",
             )
         })?;
-        if duplicate_raw_indices.contains(&raw_index) {
-            return Err(OmError::unsupported(format!(
-                "Series.IsFiltered cannot losslessly match duplicate c:idx {raw_index}"
-            )));
+        if model_series_by_raw_index
+            .insert(raw_index, model_index)
+            .is_some()
+        {
+            return Err(OmError::new(
+                OmErrorCode::InvalidState,
+                format!("chart model contains duplicate series c:idx {raw_index}"),
+            ));
         }
         model_to_loaded[model_index] = loaded_series_by_raw_index.get(&raw_index).copied();
+        model_group_indices[model_index] = if chart.groups.is_empty() {
+            loaded_series_by_raw_index
+                .get(&raw_index)
+                .map(|loaded_index| series_spans[*loaded_index].group_index)
+        } else {
+            Some(chart_group_index_for_series_raw_index(chart, raw_index)?)
+        };
     }
 
     #[derive(Debug)]
@@ -43117,34 +43226,30 @@ fn rewrite_loaded_chart_series_filtering(
         .map(|_| GroupFilterEdits::default())
         .collect::<Vec<_>>();
     let mut removal_starts = BTreeSet::<usize>::new();
+    let mut relocated_series_xml = vec![None::<Vec<u8>>; chart.series.len()];
 
-    for (model_index, series) in chart.series.iter().enumerate() {
-        if !series.filter_dirty {
+    for loaded in &series_spans {
+        let model_index = loaded
+            .raw_index
+            .and_then(|raw_index| model_series_by_raw_index.get(&raw_index).copied());
+        let should_relocate = model_index.is_some_and(|model_index| {
+            model_group_indices[model_index] != Some(loaded.group_index)
+                || chart.series[model_index].is_filtered != loaded.is_filtered
+        });
+        if model_index.is_some() && !should_relocate {
             continue;
         }
-        let loaded_index = model_to_loaded[model_index].ok_or_else(|| {
-            OmError::unsupported(
-                "Series.IsFiltered could not match the loaded series without rebuilding the chart",
-            )
-        })?;
-        let loaded = &series_spans[loaded_index];
-        if loaded.is_filtered == series.is_filtered {
-            continue;
+        if let Some(model_index) = model_index {
+            relocated_series_xml[model_index] =
+                Some(existing_chart_xml[loaded.start..loaded.end].to_vec());
         }
-        let original_series = &existing_chart_xml[loaded.start..loaded.end];
-        if series.is_filtered {
+        if !loaded.is_filtered {
             removal_starts.insert(loaded.start);
             edits.push(ByteEdit {
                 start: loaded.start,
                 end: loaded.end,
                 replacement: Vec::new(),
             });
-            group_edits[loaded.group_index]
-                .filtered_additions
-                .push(rewrite_chart_series_outer_name(
-                original_series,
-                "c15:ser",
-            )?);
         } else {
             let removal_start = loaded
                 .extension_start
@@ -43153,12 +43258,14 @@ fn rewrite_loaded_chart_series_filtering(
                         .get(extension_start)
                         .is_some_and(|span| span.child_element_count == 1)
                 })
-                .or(loaded.wrapper_start)
-                .ok_or_else(|| {
-                    OmError::unsupported(
-                        "Series.IsFiltered cannot identify the filtered-series wrapper",
-                    )
-                })?;
+                .or_else(|| {
+                    loaded.wrapper_start.filter(|wrapper_start| {
+                        element_spans
+                            .get(wrapper_start)
+                            .is_some_and(|span| span.child_element_count == 1)
+                    })
+                })
+                .unwrap_or(loaded.start);
             let removal = element_spans.get(&removal_start).ok_or_else(|| {
                 OmError::new(
                     OmErrorCode::Parse,
@@ -43177,9 +43284,41 @@ fn rewrite_loaded_chart_series_filtering(
                     .removed_extension_starts
                     .insert(removal_start);
             }
-            group_edits[loaded.group_index]
+        }
+    }
+
+    for (model_index, series) in chart.series.iter().enumerate() {
+        let needs_addition = model_to_loaded[model_index].is_none()
+            || relocated_series_xml[model_index].is_some();
+        if !needs_addition {
+            continue;
+        }
+        let raw_index = series.raw_index.ok_or_else(|| {
+            OmError::new(
+                OmErrorCode::InvalidState,
+                "chart series has no c:idx identity",
+            )
+        })?;
+        let group_index = model_group_indices[model_index].ok_or_else(|| {
+            OmError::unsupported(
+                "chart series could not be assigned to a loaded chart group",
+            )
+        })?;
+        let series_xml = relocated_series_xml[model_index].take().unwrap_or_else(|| {
+            format!(
+                r#"<c:ser xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:idx val="{raw_index}"/><c:order val="{}"/></c:ser>"#,
+                series.order.unwrap_or(model_index as u32),
+            )
+            .into_bytes()
+        });
+        if series.is_filtered {
+            group_edits[group_index]
+                .filtered_additions
+                .push(rewrite_chart_series_outer_name(&series_xml, "c15:ser")?);
+        } else {
+            group_edits[group_index]
                 .direct_additions
-                .push(rewrite_chart_series_outer_name(original_series, "c:ser")?);
+                .push(rewrite_chart_series_outer_name(&series_xml, "c:ser")?);
         }
     }
 
@@ -43283,7 +43422,7 @@ fn rewrite_loaded_chart_series_filtering(
         cursor = edit.end;
     }
     rewritten.extend_from_slice(&existing_chart_xml[cursor..]);
-    Ok((rewritten, groups.len()))
+    Ok(rewritten)
 }
 
 fn chart_group_direct_property_name(local_name: &[u8]) -> bool {
@@ -43754,8 +43893,10 @@ fn patch_loaded_chart_model_xml(
     chart: &ChartModel,
 ) -> OmResult<Option<Vec<u8>>> {
     let rewritten_chart_xml;
-    let existing_chart_xml = if chart.series.iter().any(|series| series.filter_dirty) {
-        let (rewritten, _) = rewrite_loaded_chart_series_filtering(existing_chart_xml, chart)?;
+    let existing_chart_xml = if chart.groups.len() > 1
+        || chart.series.iter().any(|series| series.filter_dirty)
+    {
+        let rewritten = rewrite_loaded_chart_series_topology(existing_chart_xml, chart)?;
         rewritten_chart_xml = rewritten;
         rewritten_chart_xml.as_slice()
     } else {
@@ -52112,15 +52253,157 @@ fn chart_group_chart_type(chart: &ChartModel, group_index: usize) -> OmResult<Ch
 }
 
 fn chart_group_overlay_is_stable(chart: &ChartModel) -> bool {
-    !chart.groups.is_empty()
-        && chart.series.iter().all(|series| {
-            series.raw_index.is_some_and(|raw_index| {
-                chart.groups.iter().any(|group| {
-                    group.axis_group == series.axis_group
-                        && group.series_raw_indices.contains(&raw_index)
-                })
-            })
-        })
+    if chart.groups.is_empty() {
+        return false;
+    }
+    let mut series_by_raw_index = BTreeMap::<u32, ChartAxisGroup>::new();
+    for series in &chart.series {
+        let Some(raw_index) = series.raw_index else {
+            return false;
+        };
+        if series_by_raw_index
+            .insert(raw_index, series.axis_group)
+            .is_some()
+        {
+            return false;
+        }
+    }
+    let mut grouped_raw_indices = BTreeSet::new();
+    for group in &chart.groups {
+        for raw_index in &group.series_raw_indices {
+            if !grouped_raw_indices.insert(*raw_index)
+                || series_by_raw_index.get(raw_index) != Some(&group.axis_group)
+            {
+                return false;
+            }
+        }
+    }
+    grouped_raw_indices.len() == series_by_raw_index.len()
+}
+
+fn chart_group_index_for_series_raw_index(
+    chart: &ChartModel,
+    raw_index: u32,
+) -> OmResult<usize> {
+    let mut matches = chart
+        .groups
+        .iter()
+        .enumerate()
+        .filter_map(|(group_index, group)| {
+            group
+                .series_raw_indices
+                .contains(&raw_index)
+                .then_some(group_index)
+        });
+    let group_index = matches.next().ok_or_else(|| {
+        OmError::new(
+            OmErrorCode::InvalidState,
+            format!("chart series c:idx {raw_index} has no owning chart group"),
+        )
+    })?;
+    if matches.next().is_some() {
+        return Err(OmError::new(
+            OmErrorCode::InvalidState,
+            format!("chart series c:idx {raw_index} belongs to multiple chart groups"),
+        ));
+    }
+    Ok(group_index)
+}
+
+fn resolve_series_insert_group(
+    chart: &ChartModel,
+    axis_group: ChartAxisGroup,
+    requested_group_index: Option<usize>,
+) -> OmResult<Option<usize>> {
+    if chart.groups.is_empty() {
+        return Ok(None);
+    }
+    if chart_type_is_volume_stock(&chart.chart_type) {
+        return Err(OmError::unsupported(
+            "loaded volume-stock series topology changes require an atomic cardinality-preserving edit",
+        ));
+    }
+    if !chart_group_overlay_is_stable(chart) {
+        return Err(OmError::new(
+            OmErrorCode::InvalidState,
+            "loaded chart series-to-group partition is inconsistent",
+        ));
+    }
+    let group_index = if let Some(group_index) = requested_group_index {
+        let group = chart.groups.get(group_index).ok_or_else(|| {
+            OmError::new(OmErrorCode::NotFound, "target chart group not found")
+        })?;
+        if group.axis_group != axis_group {
+            return Err(OmError::invalid_argument(
+                "target chart group does not use the requested axis group",
+            ));
+        }
+        group_index
+    } else {
+        chart
+            .groups
+            .iter()
+            .position(|group| group.axis_group == axis_group)
+            .ok_or_else(|| {
+                OmError::unsupported(
+                    "loaded chart has no existing group for the requested axis group",
+                )
+            })?
+    };
+    Ok(Some(group_index))
+}
+
+fn attach_series_to_chart_group(chart: &mut ChartModel, group_index: usize, raw_index: u32) {
+    let group = &mut chart.groups[group_index];
+    if !group.series_raw_indices.contains(&raw_index) {
+        group.series_raw_indices.push(raw_index);
+    }
+}
+
+fn detach_series_from_chart_group(chart: &mut ChartModel, raw_index: u32) -> OmResult<usize> {
+    let group_index = chart_group_index_for_series_raw_index(chart, raw_index)?;
+    chart.groups[group_index]
+        .series_raw_indices
+        .retain(|candidate| *candidate != raw_index);
+    Ok(group_index)
+}
+
+fn move_series_to_existing_chart_group(
+    chart: &mut ChartModel,
+    raw_index: u32,
+    axis_group: ChartAxisGroup,
+) -> OmResult<()> {
+    if chart.groups.is_empty() {
+        return Ok(());
+    }
+    if chart_type_is_volume_stock(&chart.chart_type) {
+        return Err(OmError::unsupported(
+            "loaded volume-stock series group moves are not supported losslessly",
+        ));
+    }
+    if !chart_group_overlay_is_stable(chart) {
+        return Err(OmError::new(
+            OmErrorCode::InvalidState,
+            "loaded chart series-to-group partition is inconsistent",
+        ));
+    }
+    let source_group_index = chart_group_index_for_series_raw_index(chart, raw_index)?;
+    if chart.groups[source_group_index].axis_group == axis_group {
+        return Ok(());
+    }
+    let source_chart_type = chart.groups[source_group_index].chart_type.clone();
+    let target_group_index = chart
+        .groups
+        .iter()
+        .position(|group| group.axis_group == axis_group && group.chart_type == source_chart_type)
+        .ok_or_else(|| {
+            OmError::unsupported(
+                "moving a loaded series requires an existing compatible target chart group",
+            )
+        })?;
+    detach_series_from_chart_group(chart, raw_index)?;
+    attach_series_to_chart_group(chart, target_group_index, raw_index);
+    Ok(())
 }
 
 fn chart_plot_by_from_optional_arg(value: Option<&OmValue>, label: &str) -> OmResult<Option<i32>> {
@@ -131700,7 +131983,7 @@ mod tests {
     }
 
     #[test]
-    fn loaded_combo_chart_topology_changes_are_rejected_losslessly() {
+    fn loaded_combo_chart_additions_target_requested_groups_losslessly() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
             .open_workbook(OpenWorkbookSpec {
@@ -131735,11 +132018,78 @@ mod tests {
                 .dispatch_get(chart, "SeriesCollection", &[])
                 .expect("Chart.SeriesCollection"),
         );
+        let new_series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "NewSeries", &[])
+                .expect("SeriesCollection.NewSeries"),
+        );
         runtime
-            .dispatch_invoke(series_collection, "NewSeries", &[])
-            .expect("SeriesCollection.NewSeries");
+            .dispatch_set(
+                new_series,
+                "Name",
+                OmValue::Text("=\"Added Bar\"".to_string()),
+                &[],
+            )
+            .expect("set new bar series name");
+        runtime
+            .dispatch_set(
+                new_series,
+                "Values",
+                OmValue::Text("=Sheet1!$A$1".to_string()),
+                &[],
+            )
+            .expect("set new bar series values");
+        let groups = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartGroups", &[])
+                .expect("Chart.ChartGroups"),
+        );
+        let line_group = expect_object_handle(
+            runtime
+                .dispatch_invoke(groups, "Item", &[OmValue::Number(2.0)])
+                .expect("ChartGroups.Item(2)"),
+        );
+        let line_series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(line_group, "SeriesCollection", &[])
+                .expect("line ChartGroup.SeriesCollection"),
+        );
+        let source = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    worksheet,
+                    "Range",
+                    &[OmValue::Text("A1".to_string())],
+                )
+                .expect("Worksheet.Range(A1)"),
+        );
+        let added_line_series = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    line_series_collection,
+                    "Add",
+                    &[OmValue::Object(source)],
+                )
+                .expect("line SeriesCollection.Add"),
+        );
+        runtime
+            .dispatch_set(
+                added_line_series,
+                "Name",
+                OmValue::Text("=\"Added Line\"".to_string()),
+                &[],
+            )
+            .expect("set added line series name");
+        runtime
+            .dispatch_set(
+                added_line_series,
+                "IsFiltered",
+                OmValue::Bool(true),
+                &[],
+            )
+            .expect("filter added line series");
 
-        let error = runtime
+        let saved = runtime
             .save_workbook(
                 workbook,
                 SaveWorkbookSpec {
@@ -131748,9 +132098,577 @@ mod tests {
                     lossless: true,
                 },
             )
-            .expect_err("loaded combo topology change should be rejected");
+            .expect("save loaded combo series addition");
+        let package = OpcPackage::from_bytes(&saved).expect("added combo package");
+        let chart_xml = std::str::from_utf8(
+            &package
+                .part("xl/charts/chart1.xml")
+                .expect("added combo chart part")
+                .bytes,
+        )
+        .expect("added combo chart XML");
+        let bar_end = chart_xml.find("</c:barChart>").expect("bar group end");
+        let line_start = chart_xml.find("<c:lineChart>").expect("line group start");
+        let line_end = chart_xml.find("</c:lineChart>").expect("line group end");
+        let bar_xml = &chart_xml[..bar_end];
+        let line_xml = &chart_xml[line_start..line_end];
+        assert!(bar_xml.contains(r#"<c:idx val="41"/>"#));
+        assert!(bar_xml.contains("<c:v>Added Bar</c:v>"));
+        assert!(bar_xml.contains("<c:f>Sheet1!$A$1</c:f>"));
+        assert!(!line_xml.contains(r#"<c:idx val="41"/>"#));
+        assert!(line_xml.contains(r#"<c:idx val="42"/>"#));
+        assert!(line_xml.contains("<c:v>Added Line</c:v>"));
+        assert_eq!(line_xml.matches("<c15:filteredLineSeries").count(), 2);
+        assert!(!bar_xml.contains(r#"<c:idx val="42"/>"#));
+        assert!(bar_xml.contains(r#"<test:opaque group="bar" keep="true"/>"#));
+        assert!(line_xml.contains(r#"<test:opaque group="line" keep="true"/>"#));
+
+        let mut reopened = ExcelRuntime::new();
+        let reopened_workbook = reopened
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen added combo series");
+        let reopened_sheet = expect_object_handle(
+            reopened
+                .dispatch_get(
+                    reopened_workbook.0,
+                    "Worksheets",
+                    &[OmValue::Number(1.0)],
+                )
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_objects = expect_object_handle(
+            reopened
+                .dispatch_get(reopened_sheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_object = expect_object_handle(
+            reopened
+                .dispatch_invoke(reopened_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened
+                .dispatch_get(reopened_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        let reopened_full = expect_object_handle(
+            reopened
+                .dispatch_get(reopened_chart, "FullSeriesCollection", &[])
+                .expect("reopened FullSeriesCollection"),
+        );
+        assert_eq!(
+            reopened
+                .dispatch_get(reopened_full, "Count", &[])
+                .expect("reopened FullSeriesCollection.Count"),
+            OmValue::Number(6.0)
+        );
+        let reopened_groups = expect_object_handle(
+            reopened
+                .dispatch_get(reopened_chart, "ChartGroups", &[])
+                .expect("reopened Chart.ChartGroups"),
+        );
+        let reopened_bar_group = expect_object_handle(
+            reopened
+                .dispatch_invoke(reopened_groups, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartGroups.Item(1)"),
+        );
+        let reopened_bar_series = expect_object_handle(
+            reopened
+                .dispatch_get(reopened_bar_group, "SeriesCollection", &[])
+                .expect("reopened bar SeriesCollection"),
+        );
+        assert_eq!(
+            reopened
+                .dispatch_get(reopened_bar_series, "Count", &[])
+                .expect("reopened bar SeriesCollection.Count"),
+            OmValue::Number(2.0)
+        );
+        let reopened_line_group = expect_object_handle(
+            reopened
+                .dispatch_invoke(reopened_groups, "Item", &[OmValue::Number(2.0)])
+                .expect("reopened ChartGroups.Item(2)"),
+        );
+        let reopened_line_series = expect_object_handle(
+            reopened
+                .dispatch_get(reopened_line_group, "SeriesCollection", &[])
+                .expect("reopened line SeriesCollection"),
+        );
+        assert_eq!(
+            reopened
+                .dispatch_get(reopened_line_series, "Count", &[])
+                .expect("reopened line SeriesCollection.Count"),
+            OmValue::Number(1.0)
+        );
+    }
+
+    #[test]
+    fn loaded_combo_chart_deletes_direct_and_filtered_series_losslessly() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_filtered_combo_chart_series_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open loaded combo chart for deletion");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let full_series = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "FullSeriesCollection", &[])
+                .expect("Chart.FullSeriesCollection"),
+        );
+        let bar_visible = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    full_series,
+                    "Item",
+                    &[OmValue::Text("Bar Visible".to_string())],
+                )
+                .expect("FullSeriesCollection.Item Bar Visible"),
+        );
+        runtime
+            .dispatch_invoke(bar_visible, "Delete", &[])
+            .expect("delete direct bar series");
+        let full_series = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "FullSeriesCollection", &[])
+                .expect("Chart.FullSeriesCollection after bar delete"),
+        );
+        let line_filtered = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    full_series,
+                    "Item",
+                    &[OmValue::Text("Line Filtered".to_string())],
+                )
+                .expect("FullSeriesCollection.Item Line Filtered"),
+        );
+        runtime
+            .dispatch_invoke(line_filtered, "Delete", &[])
+            .expect("delete filtered line series");
+        let full_series = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "FullSeriesCollection", &[])
+                .expect("Chart.FullSeriesCollection after line delete"),
+        );
+        let bar_filtered = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    full_series,
+                    "Item",
+                    &[OmValue::Text("Bar Filtered".to_string())],
+                )
+                .expect("FullSeriesCollection.Item Bar Filtered"),
+        );
+        runtime
+            .dispatch_invoke(bar_filtered, "Delete", &[])
+            .expect("delete final bar series");
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save loaded combo series deletions");
+        let package = OpcPackage::from_bytes(&saved).expect("deleted combo package");
+        let chart_xml = std::str::from_utf8(
+            &package
+                .part("xl/charts/chart1.xml")
+                .expect("deleted combo chart part")
+                .bytes,
+        )
+        .expect("deleted combo chart XML");
+        assert!(!chart_xml.contains(r#"<c:idx val="10"/>"#));
+        assert!(!chart_xml.contains(r#"<c:idx val="20"/>"#));
+        assert!(!chart_xml.contains(r#"<c:idx val="40"/>"#));
+        assert!(chart_xml.contains(r#"<c:idx val="30"/>"#));
+        assert!(chart_xml.contains(r#"<a:ln w="25400"/>"#));
+        assert!(chart_xml.contains(r#"<test:opaque group="bar" keep="true"/>"#));
+        assert!(chart_xml.contains(r#"<test:opaque group="line" keep="true"/>"#));
+
+        let mut reopened = ExcelRuntime::new();
+        let reopened_workbook = reopened
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen deleted combo series");
+        let reopened_sheet = expect_object_handle(
+            reopened
+                .dispatch_get(
+                    reopened_workbook.0,
+                    "Worksheets",
+                    &[OmValue::Number(1.0)],
+                )
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_objects = expect_object_handle(
+            reopened
+                .dispatch_get(reopened_sheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_object = expect_object_handle(
+            reopened
+                .dispatch_invoke(reopened_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened
+                .dispatch_get(reopened_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        let reopened_full = expect_object_handle(
+            reopened
+                .dispatch_get(reopened_chart, "FullSeriesCollection", &[])
+                .expect("reopened FullSeriesCollection"),
+        );
+        assert_eq!(
+            reopened
+                .dispatch_get(reopened_full, "Count", &[])
+                .expect("reopened FullSeriesCollection.Count"),
+            OmValue::Number(1.0)
+        );
+        let reopened_groups = expect_object_handle(
+            reopened
+                .dispatch_get(reopened_chart, "ChartGroups", &[])
+                .expect("reopened Chart.ChartGroups"),
+        );
+        assert_eq!(
+            reopened
+                .dispatch_get(reopened_groups, "Count", &[])
+                .expect("reopened ChartGroups.Count"),
+            OmValue::Number(2.0)
+        );
+        let reopened_bar_group = expect_object_handle(
+            reopened
+                .dispatch_invoke(reopened_groups, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartGroups.Item(1)"),
+        );
+        let reopened_bar_series = expect_object_handle(
+            reopened
+                .dispatch_get(reopened_bar_group, "SeriesCollection", &[])
+                .expect("reopened empty bar SeriesCollection"),
+        );
+        assert_eq!(
+            reopened
+                .dispatch_get(reopened_bar_series, "Count", &[])
+                .expect("reopened empty bar SeriesCollection.Count"),
+            OmValue::Number(0.0)
+        );
+    }
+
+    #[test]
+    fn loaded_same_family_combo_axis_group_move_preserves_series_xml() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_same_family_combo_chart_series_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open same-family combo chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let full_series = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "FullSeriesCollection", &[])
+                .expect("Chart.FullSeriesCollection"),
+        );
+        let primary_series = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    full_series,
+                    "Item",
+                    &[OmValue::Text("Bar Visible".to_string())],
+                )
+                .expect("FullSeriesCollection.Item primary series"),
+        );
+        runtime
+            .dispatch_set(
+                primary_series,
+                "AxisGroup",
+                OmValue::Number(f64::from(super::XL_SECONDARY)),
+                &[],
+            )
+            .expect("move line series to secondary group");
+        let primary_filtered = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    full_series,
+                    "Item",
+                    &[OmValue::Text("Bar Filtered".to_string())],
+                )
+                .expect("FullSeriesCollection.Item primary filtered series"),
+        );
+        runtime
+            .dispatch_set(
+                primary_filtered,
+                "AxisGroup",
+                OmValue::Number(f64::from(super::XL_SECONDARY)),
+                &[],
+            )
+            .expect("move filtered line series to secondary group");
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save same-family combo series move");
+        let package = OpcPackage::from_bytes(&saved).expect("moved combo package");
+        let chart_xml = std::str::from_utf8(
+            &package
+                .part("xl/charts/chart1.xml")
+                .expect("moved combo chart part")
+                .bytes,
+        )
+        .expect("moved combo chart XML");
+        let first_start = chart_xml.find("<c:lineChart>").expect("first line group");
+        let first_end = chart_xml[first_start..]
+            .find("</c:lineChart>")
+            .map(|offset| first_start + offset)
+            .expect("first line group end");
+        let second_start = chart_xml[first_end + "</c:lineChart>".len()..]
+            .find("<c:lineChart>")
+            .map(|offset| first_end + "</c:lineChart>".len() + offset)
+            .expect("second line group");
+        let second_end = chart_xml[second_start..]
+            .find("</c:lineChart>")
+            .map(|offset| second_start + offset)
+            .expect("second line group end");
+        let first_group_xml = &chart_xml[first_start..first_end];
+        let second_group_xml = &chart_xml[second_start..second_end];
+        assert!(!first_group_xml.contains(r#"<c:idx val="10"/>"#));
+        assert!(!first_group_xml.contains(r#"<c:idx val="20"/>"#));
+        assert!(second_group_xml.contains(r#"<c:idx val="10"/>"#));
+        assert!(second_group_xml.contains(r#"<c:idx val="20"/>"#));
+        assert!(second_group_xml.contains("<c:v>Bar Visible</c:v>"));
+        assert!(second_group_xml.contains("<c:f>Sheet1!$A$1</c:f>"));
+        assert!(second_group_xml.contains(r#"<a:ln w="12700"/>"#));
+        assert!(chart_xml.contains(r#"<test:opaque group="bar" keep="true"/>"#));
+        assert!(chart_xml.contains(r#"<test:opaque group="line" keep="true"/>"#));
+
+        let mut reopened = ExcelRuntime::new();
+        let reopened_workbook = reopened
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen same-family combo series move");
+        let reopened_sheet = expect_object_handle(
+            reopened
+                .dispatch_get(
+                    reopened_workbook.0,
+                    "Worksheets",
+                    &[OmValue::Number(1.0)],
+                )
+                .expect("reopened Workbook.Worksheets(1)"),
+        );
+        let reopened_objects = expect_object_handle(
+            reopened
+                .dispatch_get(reopened_sheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_object = expect_object_handle(
+            reopened
+                .dispatch_invoke(reopened_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened
+                .dispatch_get(reopened_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        let reopened_full = expect_object_handle(
+            reopened
+                .dispatch_get(reopened_chart, "FullSeriesCollection", &[])
+                .expect("reopened FullSeriesCollection"),
+        );
+        let reopened_series = expect_object_handle(
+            reopened
+                .dispatch_invoke(
+                    reopened_full,
+                    "Item",
+                    &[OmValue::Text("Bar Visible".to_string())],
+                )
+                .expect("reopened moved series"),
+        );
+        assert_eq!(
+            reopened
+                .dispatch_get(reopened_series, "AxisGroup", &[])
+                .expect("reopened moved Series.AxisGroup"),
+            OmValue::Number(f64::from(super::XL_SECONDARY))
+        );
+    }
+
+    #[test]
+    fn loaded_heterogeneous_combo_group_moves_are_rejected_atomically() {
+        let source_bytes = synthetic_workbook_with_filtered_combo_chart_series_bytes();
+        let source_package = OpcPackage::from_bytes(&source_bytes).expect("source combo package");
+        let source_chart_xml = source_package
+            .part("xl/charts/chart1.xml")
+            .expect("source combo chart part")
+            .bytes
+            .clone();
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: source_bytes,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open loaded combo chart for atomic group moves");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let full_series = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "FullSeriesCollection", &[])
+                .expect("Chart.FullSeriesCollection"),
+        );
+        let bar_series = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    full_series,
+                    "Item",
+                    &[OmValue::Text("Bar Visible".to_string())],
+                )
+                .expect("FullSeriesCollection.Item Bar Visible"),
+        );
+        let error = runtime
+            .dispatch_set(
+                bar_series,
+                "AxisGroup",
+                OmValue::Number(f64::from(super::XL_SECONDARY)),
+                &[],
+            )
+            .expect_err("bar series cannot move into a line group");
         assert_eq!(error.code, OmErrorCode::Unsupported);
-        assert!(error.message.contains("series topology"));
+        assert!(error.message.contains("compatible target chart group"));
+        assert_eq!(
+            runtime
+                .dispatch_get(bar_series, "AxisGroup", &[])
+                .expect("Bar Visible AxisGroup after rejected move"),
+            OmValue::Number(f64::from(super::XL_PRIMARY))
+        );
+        let groups = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartGroups", &[])
+                .expect("Chart.ChartGroups"),
+        );
+        let bar_group = expect_object_handle(
+            runtime
+                .dispatch_invoke(groups, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartGroups.Item(1)"),
+        );
+        let group_error = runtime
+            .dispatch_set(
+                bar_group,
+                "AxisGroup",
+                OmValue::Number(f64::from(super::XL_SECONDARY)),
+                &[],
+            )
+            .expect_err("loaded chart-group axis topology mutation");
+        assert_eq!(group_error.code, OmErrorCode::Unsupported);
+        assert_eq!(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved after rejected moves"),
+            OmValue::Bool(true)
+        );
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save after rejected combo group moves");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved combo package");
+        assert_eq!(
+            saved_package
+                .part("xl/charts/chart1.xml")
+                .expect("saved combo chart part")
+                .bytes,
+            source_chart_xml
+        );
     }
 
     #[test]
@@ -161867,6 +162785,34 @@ mod tests {
                     .expect("reopened stock group ChartType"),
                 OmValue::Number(f64::from(stock_group_type))
             );
+            let reopened_volume_series = expect_object_handle(
+                reopened
+                    .dispatch_get(reopened_volume_group, "SeriesCollection", &[])
+                    .expect("reopened volume SeriesCollection"),
+            );
+            let add_error = reopened
+                .dispatch_invoke(reopened_volume_series, "NewSeries", &[])
+                .expect_err("loaded volume-stock NewSeries must be atomic");
+            assert_eq!(add_error.code, OmErrorCode::Unsupported);
+            let volume_series = expect_object_handle(
+                reopened
+                    .dispatch_invoke(
+                        reopened_volume_series,
+                        "Item",
+                        &[OmValue::Number(1.0)],
+                    )
+                    .expect("reopened volume SeriesCollection.Item(1)"),
+            );
+            let delete_error = reopened
+                .dispatch_invoke(volume_series, "Delete", &[])
+                .expect_err("loaded volume-stock Series.Delete must be atomic");
+            assert_eq!(delete_error.code, OmErrorCode::Unsupported);
+            assert_eq!(
+                reopened
+                    .dispatch_get(reopened_workbook.0, "Saved", &[])
+                    .expect("reopened volume-stock Workbook.Saved"),
+                OmValue::Bool(true)
+            );
             reopened
                 .dispatch_set(
                     reopened_volume_group,
@@ -187106,6 +188052,34 @@ mod tests {
         package
             .to_bytes()
             .expect("filtered combo chart package bytes")
+    }
+
+    fn synthetic_workbook_with_same_family_combo_chart_series_bytes() -> Vec<u8> {
+        let mut package =
+            OpcPackage::from_bytes(&synthetic_workbook_with_filtered_combo_chart_series_bytes())
+                .expect("filtered combo package");
+        let chart_xml = String::from_utf8(
+            package
+                .part("xl/charts/chart1.xml")
+                .expect("combo chart part")
+                .bytes
+                .clone(),
+        )
+        .expect("combo chart XML")
+        .replacen(
+            r#"<c:barChart><c:barDir val="col"/><c:grouping val="clustered"/>"#,
+            r#"<c:lineChart><c:grouping val="standard"/>"#,
+            1,
+        )
+        .replacen(r#"<c:gapWidth val="111"/><c:overlap val="-10"/>"#, "", 1)
+        .replacen("</c:barChart>", "</c:lineChart>", 1)
+        .replace("filteredBarSeries", "filteredLineSeries");
+        package
+            .replace_part_bytes("xl/charts/chart1.xml", chart_xml.into_bytes())
+            .expect("replace same-family combo chart XML");
+        package
+            .to_bytes()
+            .expect("same-family combo chart package bytes")
     }
 
     fn synthetic_workbook_with_embedded_chart_bytes() -> Vec<u8> {
