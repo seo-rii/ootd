@@ -6,8 +6,8 @@ use excel_model::{
     ChartAxisScaleType, ChartAxisTimeUnit, ChartBarShape, ChartBuiltInDisplayUnit, ChartCacheKind,
     ChartCacheSnapshot, ChartCellMarkerXmlAttrs, ChartDataLabelPosition, ChartDataLabelsModel,
     ChartDataTableModel, ChartDisplayBlanksAs, ChartLayoutMode, ChartLayoutTarget,
-    ChartLegendPosition, ChartManualLayout, ChartMarkerStyle, ChartMarkerXmlAttrs, ChartModel,
-    ChartObjectModel, ChartPointModel, ChartProtectionModel, ChartSheetBinding,
+    ChartGroupModel, ChartLegendPosition, ChartManualLayout, ChartMarkerStyle, ChartMarkerXmlAttrs,
+    ChartModel, ChartObjectModel, ChartPointModel, ChartProtectionModel, ChartSheetBinding,
     ChartSizeRepresents, ChartSourceExpr, ChartSourceReference, ChartSplitType, ChartText,
     ChartTickLabelPosition, ChartTickMark, ChartType, ChartView3DModel, DefinedNameTable,
     DrawingModel, DrawingObjectModel, LegendModel, SeriesModel, WorkbookState, WorksheetData,
@@ -976,12 +976,48 @@ pub struct ChartPartSummary {
     pub rounded_corners: Option<bool>,
     pub protection: Option<ChartProtectionModel>,
     pub axes: Vec<ChartAxisSummary>,
+    pub groups: Vec<ChartGroupSummary>,
     pub series: Vec<ChartSeriesSummary>,
     pub formula_refs: Vec<String>,
     pub has_extension_list: bool,
     pub relationships_part_uri: Option<String>,
     pub support_relationships: Vec<ChartSupportRelationshipBinding>,
     pub opaque_relationships: Vec<ChartOpaqueRelationshipSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ChartGroupSummary {
+    pub raw_name: String,
+    pub axis_group: ChartAxisGroup,
+    pub axis_ids: Vec<String>,
+    pub series_raw_indices: Vec<u32>,
+    pub bar_direction: Option<String>,
+    pub chart_grouping: Option<String>,
+    pub bar_shape: Option<ChartBarShape>,
+    pub line_has_markers: Option<bool>,
+    pub scatter_style: Option<String>,
+    pub radar_style: Option<String>,
+    pub of_pie_type: Option<String>,
+    pub surface_wireframe: Option<bool>,
+    pub vary_by_categories: Option<bool>,
+    pub gap_width: Option<u16>,
+    pub gap_depth: Option<u16>,
+    pub overlap: Option<i16>,
+    pub has_series_lines: Option<bool>,
+    pub has_drop_lines: Option<bool>,
+    pub has_hi_lo_lines: Option<bool>,
+    pub has_up_down_bars: Option<bool>,
+    pub first_slice_angle: Option<u16>,
+    pub explosion: Option<u16>,
+    pub bubble_scale: Option<u16>,
+    pub show_negative_bubbles: Option<bool>,
+    pub has_3d_shading: Option<bool>,
+    pub doughnut_hole_size: Option<u16>,
+    pub second_plot_size: Option<u16>,
+    pub size_represents: Option<ChartSizeRepresents>,
+    pub split_type: Option<ChartSplitType>,
+    pub split_value: Option<f64>,
+    pub data_labels: Option<ChartDataLabelsSummary>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -4341,6 +4377,48 @@ fn build_chart_model_overlay(
                             minor_unit: axis.minor_unit,
                         })
                         .collect(),
+                    groups: summary
+                        .into_iter()
+                        .flat_map(|summary| summary.groups.iter())
+                        .map(|group| ChartGroupModel {
+                            raw_name: group.raw_name.clone(),
+                            chart_type: chart_type_from_group_summary(group),
+                            axis_group: group.axis_group,
+                            axis_ids: group.axis_ids.clone(),
+                            series_raw_indices: group.series_raw_indices.clone(),
+                            bar_direction: group.bar_direction.clone(),
+                            chart_grouping: group.chart_grouping.clone(),
+                            line_has_markers: group.line_has_markers,
+                            scatter_style: group.scatter_style.clone(),
+                            radar_style: group.radar_style.clone(),
+                            of_pie_type: group.of_pie_type.clone(),
+                            surface_wireframe: group.surface_wireframe,
+                            vary_by_categories: group.vary_by_categories,
+                            gap_width: group.gap_width,
+                            gap_depth: group.gap_depth,
+                            overlap: group.overlap,
+                            bar_shape: group.bar_shape,
+                            has_series_lines: group.has_series_lines,
+                            has_drop_lines: group.has_drop_lines,
+                            has_hi_lo_lines: group.has_hi_lo_lines,
+                            has_up_down_bars: group.has_up_down_bars,
+                            first_slice_angle: group.first_slice_angle,
+                            explosion: group.explosion,
+                            bubble_scale: group.bubble_scale,
+                            show_negative_bubbles: group.show_negative_bubbles,
+                            has_3d_shading: group.has_3d_shading,
+                            doughnut_hole_size: group.doughnut_hole_size,
+                            second_plot_size: group.second_plot_size,
+                            size_represents: group.size_represents,
+                            split_type: group.split_type,
+                            split_value: group.split_value,
+                            data_labels: group
+                                .data_labels
+                                .as_ref()
+                                .map(chart_data_labels_model_from_summary),
+                            dirty: false,
+                        })
+                        .collect(),
                     raw_part_uri: Some(chart_part_uri.clone()),
                     content_dirty: false,
                     dirty: false,
@@ -4713,6 +4791,25 @@ fn chart_type_from_summary(summary: Option<&ChartPartSummary>) -> ChartType {
         Some(chart_type_name) => ChartType::Unsupported(chart_type_name.to_string()),
         None => ChartType::Unknown,
     }
+}
+
+fn chart_type_from_group_summary(group: &ChartGroupSummary) -> ChartType {
+    let summary = ChartPartSummary {
+        chart_type_names: vec![group.raw_name.clone()],
+        bar_direction: group.bar_direction.clone(),
+        chart_grouping: group.chart_grouping.clone(),
+        bar_shape: group.bar_shape,
+        line_has_markers: group.line_has_markers,
+        scatter_style: group.scatter_style.clone(),
+        radar_style: group.radar_style.clone(),
+        of_pie_type: group.of_pie_type.clone(),
+        surface_wireframe: group.surface_wireframe,
+        explosion: group.explosion,
+        has_up_down_bars: group.has_up_down_bars,
+        has_3d_shading: group.has_3d_shading,
+        ..ChartPartSummary::default()
+    };
+    chart_type_from_summary(Some(&summary))
 }
 
 fn chart_series_from_summary(
@@ -21396,6 +21493,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
     let mut rounded_corners = None;
     let mut protection = None::<ChartProtectionModel>;
     let mut axes = Vec::new();
+    let mut groups = Vec::<ChartGroupSummary>::new();
     let mut series = Vec::new();
     let mut formula_refs = Vec::new();
     let mut has_extension_list = false;
@@ -21431,7 +21529,18 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
     let mut active_chart_group_axis_ids = Vec::<String>::new();
     let mut active_chart_group_index = None::<usize>;
     let mut active_chart_group_name = None::<String>;
+    let mut active_chart_group_data_labels = None::<ChartDataLabelsSummary>;
     let mut element_path = Vec::<String>::new();
+
+    macro_rules! set_active_group_field {
+        ($field:ident, $value:expr) => {
+            if let Some(group_index) = active_chart_group_index
+                && let Some(group) = groups.get_mut(group_index)
+            {
+                group.$field = $value;
+            }
+        };
+    }
 
     let parse_u32_val_attr = |element: &BytesStart<'_>,
                               reader: &Reader<Cursor<&[u8]>>,
@@ -21773,14 +21882,19 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 }
                 if local_name.ends_with(b"Chart") && local_name != b"chart" {
                     let name = String::from_utf8_lossy(local_name).into_owned();
-                    active_chart_group_index = Some(chart_group_count);
+                    active_chart_group_index = Some(groups.len());
                     active_chart_group_name = Some(name.clone());
                     chart_group_count += 1;
+                    groups.push(ChartGroupSummary {
+                        raw_name: name.clone(),
+                        ..ChartGroupSummary::default()
+                    });
                     if chart_type_names.iter().all(|existing| existing != &name) {
                         chart_type_names.push(name);
                     }
                     active_chart_group_series_start = Some(series.len());
                     active_chart_group_axis_ids.clear();
+                    active_chart_group_data_labels = None;
                 }
                 if local_name == b"extLst" {
                     has_extension_list = true;
@@ -21917,7 +22031,8 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         .last()
                         .is_some_and(|name| name.ends_with("Chart") && name != "chart")
                 {
-                    data_labels.get_or_insert_with(ChartDataLabelsSummary::default);
+                    active_chart_group_data_labels
+                        .get_or_insert_with(ChartDataLabelsSummary::default);
                     data_labels_target = Some(ChartDataLabelsTarget::ChartGroup);
                 } else if local_name == b"dLbls"
                     && element_path.last().is_some_and(|name| name == "ser")
@@ -21991,7 +22106,11 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                                 Some(ChartDataLabelsTarget::Series) => active_series
                                     .as_mut()
                                     .and_then(|series| series.data_labels.as_mut()),
-                                Some(ChartDataLabelsTarget::ChartGroup) | None => Some(
+                                Some(ChartDataLabelsTarget::ChartGroup) => Some(
+                                    active_chart_group_data_labels
+                                        .get_or_insert_with(ChartDataLabelsSummary::default),
+                                ),
+                                None => Some(
                                     data_labels.get_or_insert_with(ChartDataLabelsSummary::default),
                                 ),
                             }
@@ -22016,7 +22135,11 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                                 Some(ChartDataLabelsTarget::Series) => active_series
                                     .as_mut()
                                     .and_then(|series| series.data_labels.as_mut()),
-                                Some(ChartDataLabelsTarget::ChartGroup) | None => Some(
+                                Some(ChartDataLabelsTarget::ChartGroup) => Some(
+                                    active_chart_group_data_labels
+                                        .get_or_insert_with(ChartDataLabelsSummary::default),
+                                ),
+                                None => Some(
                                     data_labels.get_or_insert_with(ChartDataLabelsSummary::default),
                                 ),
                             }
@@ -22052,7 +22175,11 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                                 Some(ChartDataLabelsTarget::Series) => active_series
                                     .as_mut()
                                     .and_then(|series| series.data_labels.as_mut()),
-                                Some(ChartDataLabelsTarget::ChartGroup) | None => Some(
+                                Some(ChartDataLabelsTarget::ChartGroup) => Some(
+                                    active_chart_group_data_labels
+                                        .get_or_insert_with(ChartDataLabelsSummary::default),
+                                ),
+                                None => Some(
                                     data_labels.get_or_insert_with(ChartDataLabelsSummary::default),
                                 ),
                             }
@@ -22080,6 +22207,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         .is_some_and(|name| name.ends_with("Chart") && name != "chart")
                 {
                     vary_by_categories = parse_bool_val_attr(&element, &reader)?.or(Some(true));
+                    set_active_group_field!(vary_by_categories, vary_by_categories);
                 }
                 if local_name == b"barDir"
                     && element_path
@@ -22091,18 +22219,22 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         "bar" | "col" => Some(value),
                         _ => bar_direction,
                     };
+                    set_active_group_field!(bar_direction, bar_direction.clone());
                 }
                 if local_name == b"grouping"
                     && element_path
                         .last()
                         .is_some_and(|name| name.ends_with("Chart") && name != "chart")
-                    && chart_grouping.is_none()
                     && let Some(value) = parse_string_val_attr(&element, &reader)?
                 {
-                    chart_grouping = match value.as_str() {
+                    let parsed_grouping = match value.as_str() {
                         "clustered" | "stacked" | "percentStacked" | "standard" => Some(value),
-                        _ => chart_grouping,
+                        _ => None,
                     };
+                    if chart_grouping.is_none() {
+                        chart_grouping = parsed_grouping.clone();
+                    }
+                    set_active_group_field!(chart_grouping, parsed_grouping);
                 }
                 if local_name == b"shape"
                     && element_path.last().is_some_and(|name| name == "bar3DChart")
@@ -22118,6 +22250,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         "coneToMax" => Some(ChartBarShape::ConeToMax),
                         _ => bar_shape,
                     };
+                    set_active_group_field!(bar_shape, bar_shape);
                 }
                 if local_name == b"shape"
                     && element_path.last().is_some_and(|name| name == "ser")
@@ -22169,6 +22302,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     && element_path.last().is_some_and(|name| name == "lineChart")
                 {
                     line_has_markers = parse_bool_val_attr(&element, &reader)?.or(Some(true));
+                    set_active_group_field!(line_has_markers, line_has_markers);
                 }
                 if local_name == b"scatterStyle"
                     && element_path
@@ -22181,6 +22315,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         "line" | "lineMarker" | "marker" | "smooth" | "smoothMarker" => Some(value),
                         _ => scatter_style,
                     };
+                    set_active_group_field!(scatter_style, scatter_style.clone());
                 }
                 if local_name == b"radarStyle"
                     && element_path.last().is_some_and(|name| name == "radarChart")
@@ -22191,6 +22326,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         "filled" | "marker" | "standard" => Some(value),
                         _ => radar_style,
                     };
+                    set_active_group_field!(radar_style, radar_style.clone());
                 }
                 if local_name == b"ofPieType"
                     && element_path.last().is_some_and(|name| name == "ofPieChart")
@@ -22201,6 +22337,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         "bar" | "pie" => Some(value),
                         _ => of_pie_type,
                     };
+                    set_active_group_field!(of_pie_type, of_pie_type.clone());
                 }
                 if local_name == b"wireframe"
                     && element_path
@@ -22208,6 +22345,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         .is_some_and(|name| name == "surfaceChart" || name == "surface3DChart")
                 {
                     surface_wireframe = parse_bool_val_attr(&element, &reader)?.or(Some(true));
+                    set_active_group_field!(surface_wireframe, surface_wireframe);
                 }
                 if local_name == b"gapWidth"
                     && element_path
@@ -22217,6 +22355,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     && (0..=500).contains(&value)
                 {
                     gap_width = Some(value as u16);
+                    set_active_group_field!(gap_width, gap_width);
                 }
                 if local_name == b"gapDepth"
                     && element_path.last().is_some_and(|name| {
@@ -22226,6 +22365,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     && (0..=500).contains(&value)
                 {
                     gap_depth = Some(value as u16);
+                    set_active_group_field!(gap_depth, gap_depth);
                 }
                 if local_name == b"overlap"
                     && element_path
@@ -22235,6 +22375,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     && (-100..=100).contains(&value)
                 {
                     overlap = Some(value as i16);
+                    set_active_group_field!(overlap, overlap);
                 }
                 if local_name == b"serLines"
                     && element_path
@@ -22242,6 +22383,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         .is_some_and(|name| name.ends_with("Chart") && name != "chart")
                 {
                     has_series_lines = Some(true);
+                    set_active_group_field!(has_series_lines, Some(true));
                 }
                 if local_name == b"dropLines"
                     && element_path
@@ -22249,6 +22391,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         .is_some_and(|name| name.ends_with("Chart") && name != "chart")
                 {
                     has_drop_lines = Some(true);
+                    set_active_group_field!(has_drop_lines, Some(true));
                 }
                 if local_name == b"hiLowLines"
                     && element_path
@@ -22256,6 +22399,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         .is_some_and(|name| name.ends_with("Chart") && name != "chart")
                 {
                     has_hi_lo_lines = Some(true);
+                    set_active_group_field!(has_hi_lo_lines, Some(true));
                 }
                 if local_name == b"upDownBars"
                     && element_path
@@ -22263,6 +22407,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         .is_some_and(|name| name.ends_with("Chart") && name != "chart")
                 {
                     has_up_down_bars = Some(true);
+                    set_active_group_field!(has_up_down_bars, Some(true));
                 }
                 if local_name == b"firstSliceAng"
                     && element_path
@@ -22272,6 +22417,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     && (0..=360).contains(&value)
                 {
                     first_slice_angle = Some(value as u16);
+                    set_active_group_field!(first_slice_angle, first_slice_angle);
                 }
                 if local_name == b"explosion"
                     && active_series.is_some()
@@ -22281,6 +22427,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     && (0..=400).contains(&value)
                 {
                     explosion = Some(value as u16);
+                    set_active_group_field!(explosion, explosion);
                 }
                 if local_name == b"bubbleScale"
                     && element_path
@@ -22290,6 +22437,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     && (0..=300).contains(&value)
                 {
                     bubble_scale = Some(value as u16);
+                    set_active_group_field!(bubble_scale, bubble_scale);
                 }
                 if local_name == b"showNegBubbles"
                     && element_path
@@ -22297,6 +22445,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         .is_some_and(|name| name.ends_with("Chart") && name != "chart")
                 {
                     show_negative_bubbles = parse_bool_val_attr(&element, &reader)?.or(Some(true));
+                    set_active_group_field!(show_negative_bubbles, show_negative_bubbles);
                 }
                 if local_name == b"bubble3D"
                     && element_path
@@ -22304,6 +22453,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         .is_some_and(|name| name.ends_with("Chart") && name != "chart")
                 {
                     has_3d_shading = parse_bool_val_attr(&element, &reader)?.or(Some(true));
+                    set_active_group_field!(has_3d_shading, has_3d_shading);
                 }
                 if local_name == b"holeSize"
                     && element_path
@@ -22314,6 +22464,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     && (10..=90).contains(&value)
                 {
                     doughnut_hole_size = Some(value as u16);
+                    set_active_group_field!(doughnut_hole_size, doughnut_hole_size);
                 }
                 if local_name == b"secondPieSize"
                     && element_path
@@ -22323,6 +22474,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     && (5..=200).contains(&value)
                 {
                     second_plot_size = Some(value as u16);
+                    set_active_group_field!(second_plot_size, second_plot_size);
                 }
                 if local_name == b"sizeRepresents"
                     && element_path
@@ -22335,6 +22487,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         "w" => Some(ChartSizeRepresents::Width),
                         _ => size_represents,
                     };
+                    set_active_group_field!(size_represents, size_represents);
                 }
                 if local_name == b"splitType"
                     && element_path
@@ -22349,6 +22502,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         "val" => Some(ChartSplitType::Value),
                         _ => split_type,
                     };
+                    set_active_group_field!(split_type, split_type);
                 }
                 if local_name == b"splitPos"
                     && element_path
@@ -22357,6 +22511,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     && let Some(value) = parse_f64_val_attr(&element, &reader, "split value")?
                 {
                     split_value = Some(value);
+                    set_active_group_field!(split_value, split_value);
                 }
                 if local_name == b"dispBlanksAs"
                     && element_path.last().is_some_and(|name| name == "chart")
@@ -22743,6 +22898,10 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                 if local_name.ends_with(b"Chart") && local_name != b"chart" {
                     chart_group_count += 1;
                     let name = String::from_utf8_lossy(local_name).into_owned();
+                    groups.push(ChartGroupSummary {
+                        raw_name: name.clone(),
+                        ..ChartGroupSummary::default()
+                    });
                     if chart_type_names.iter().all(|existing| existing != &name) {
                         chart_type_names.push(name);
                     }
@@ -22884,7 +23043,8 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         .last()
                         .is_some_and(|name| name.ends_with("Chart") && name != "chart")
                 {
-                    data_labels.get_or_insert_with(ChartDataLabelsSummary::default);
+                    active_chart_group_data_labels
+                        .get_or_insert_with(ChartDataLabelsSummary::default);
                     data_labels_target = Some(ChartDataLabelsTarget::ChartGroup);
                 } else if local_name == b"dLbls"
                     && element_path.last().is_some_and(|name| name == "ser")
@@ -22940,7 +23100,11 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                             Some(ChartDataLabelsTarget::Series) => active_series
                                 .as_mut()
                                 .and_then(|series| series.data_labels.as_mut()),
-                            Some(ChartDataLabelsTarget::ChartGroup) | None => Some(
+                            Some(ChartDataLabelsTarget::ChartGroup) => Some(
+                                active_chart_group_data_labels
+                                    .get_or_insert_with(ChartDataLabelsSummary::default),
+                            ),
+                            None => Some(
                                 data_labels.get_or_insert_with(ChartDataLabelsSummary::default),
                             ),
                         }
@@ -22969,7 +23133,11 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                             Some(ChartDataLabelsTarget::Series) => active_series
                                 .as_mut()
                                 .and_then(|series| series.data_labels.as_mut()),
-                            Some(ChartDataLabelsTarget::ChartGroup) | None => Some(
+                            Some(ChartDataLabelsTarget::ChartGroup) => Some(
+                                active_chart_group_data_labels
+                                    .get_or_insert_with(ChartDataLabelsSummary::default),
+                            ),
+                            None => Some(
                                 data_labels.get_or_insert_with(ChartDataLabelsSummary::default),
                             ),
                         }
@@ -23006,7 +23174,11 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                             Some(ChartDataLabelsTarget::Series) => active_series
                                 .as_mut()
                                 .and_then(|series| series.data_labels.as_mut()),
-                            Some(ChartDataLabelsTarget::ChartGroup) | None => Some(
+                            Some(ChartDataLabelsTarget::ChartGroup) => Some(
+                                active_chart_group_data_labels
+                                    .get_or_insert_with(ChartDataLabelsSummary::default),
+                            ),
+                            None => Some(
                                 data_labels.get_or_insert_with(ChartDataLabelsSummary::default),
                             ),
                         }
@@ -23193,6 +23365,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         .is_some_and(|name| name.ends_with("Chart") && name != "chart")
                 {
                     vary_by_categories = parse_bool_val_attr(&element, &reader)?.or(Some(true));
+                    set_active_group_field!(vary_by_categories, vary_by_categories);
                 }
                 if local_name == b"barDir"
                     && element_path
@@ -23204,18 +23377,22 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         "bar" | "col" => Some(value),
                         _ => bar_direction,
                     };
+                    set_active_group_field!(bar_direction, bar_direction.clone());
                 }
                 if local_name == b"grouping"
                     && element_path
                         .last()
                         .is_some_and(|name| name.ends_with("Chart") && name != "chart")
-                    && chart_grouping.is_none()
                     && let Some(value) = parse_string_val_attr(&element, &reader)?
                 {
-                    chart_grouping = match value.as_str() {
+                    let parsed_grouping = match value.as_str() {
                         "clustered" | "stacked" | "percentStacked" | "standard" => Some(value),
-                        _ => chart_grouping,
+                        _ => None,
                     };
+                    if chart_grouping.is_none() {
+                        chart_grouping = parsed_grouping.clone();
+                    }
+                    set_active_group_field!(chart_grouping, parsed_grouping);
                 }
                 if local_name == b"shape"
                     && element_path.last().is_some_and(|name| name == "bar3DChart")
@@ -23231,6 +23408,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         "coneToMax" => Some(ChartBarShape::ConeToMax),
                         _ => bar_shape,
                     };
+                    set_active_group_field!(bar_shape, bar_shape);
                 }
                 if local_name == b"shape"
                     && element_path.last().is_some_and(|name| name == "ser")
@@ -23282,6 +23460,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     && element_path.last().is_some_and(|name| name == "lineChart")
                 {
                     line_has_markers = parse_bool_val_attr(&element, &reader)?.or(Some(true));
+                    set_active_group_field!(line_has_markers, line_has_markers);
                 }
                 if local_name == b"scatterStyle"
                     && element_path
@@ -23294,6 +23473,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         "line" | "lineMarker" | "marker" | "smooth" | "smoothMarker" => Some(value),
                         _ => scatter_style,
                     };
+                    set_active_group_field!(scatter_style, scatter_style.clone());
                 }
                 if local_name == b"radarStyle"
                     && element_path.last().is_some_and(|name| name == "radarChart")
@@ -23304,6 +23484,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         "filled" | "marker" | "standard" => Some(value),
                         _ => radar_style,
                     };
+                    set_active_group_field!(radar_style, radar_style.clone());
                 }
                 if local_name == b"ofPieType"
                     && element_path.last().is_some_and(|name| name == "ofPieChart")
@@ -23314,6 +23495,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         "bar" | "pie" => Some(value),
                         _ => of_pie_type,
                     };
+                    set_active_group_field!(of_pie_type, of_pie_type.clone());
                 }
                 if local_name == b"wireframe"
                     && element_path
@@ -23321,6 +23503,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         .is_some_and(|name| name == "surfaceChart" || name == "surface3DChart")
                 {
                     surface_wireframe = parse_bool_val_attr(&element, &reader)?.or(Some(true));
+                    set_active_group_field!(surface_wireframe, surface_wireframe);
                 }
                 if local_name == b"gapWidth"
                     && element_path
@@ -23330,6 +23513,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     && (0..=500).contains(&value)
                 {
                     gap_width = Some(value as u16);
+                    set_active_group_field!(gap_width, gap_width);
                 }
                 if local_name == b"gapDepth"
                     && element_path.last().is_some_and(|name| {
@@ -23339,6 +23523,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     && (0..=500).contains(&value)
                 {
                     gap_depth = Some(value as u16);
+                    set_active_group_field!(gap_depth, gap_depth);
                 }
                 if local_name == b"overlap"
                     && element_path
@@ -23348,6 +23533,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     && (-100..=100).contains(&value)
                 {
                     overlap = Some(value as i16);
+                    set_active_group_field!(overlap, overlap);
                 }
                 if local_name == b"serLines"
                     && element_path
@@ -23355,6 +23541,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         .is_some_and(|name| name.ends_with("Chart") && name != "chart")
                 {
                     has_series_lines = Some(true);
+                    set_active_group_field!(has_series_lines, Some(true));
                 }
                 if local_name == b"dropLines"
                     && element_path
@@ -23362,6 +23549,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         .is_some_and(|name| name.ends_with("Chart") && name != "chart")
                 {
                     has_drop_lines = Some(true);
+                    set_active_group_field!(has_drop_lines, Some(true));
                 }
                 if local_name == b"hiLowLines"
                     && element_path
@@ -23369,6 +23557,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         .is_some_and(|name| name.ends_with("Chart") && name != "chart")
                 {
                     has_hi_lo_lines = Some(true);
+                    set_active_group_field!(has_hi_lo_lines, Some(true));
                 }
                 if local_name == b"upDownBars"
                     && element_path
@@ -23376,6 +23565,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         .is_some_and(|name| name.ends_with("Chart") && name != "chart")
                 {
                     has_up_down_bars = Some(true);
+                    set_active_group_field!(has_up_down_bars, Some(true));
                 }
                 if local_name == b"firstSliceAng"
                     && element_path
@@ -23385,6 +23575,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     && (0..=360).contains(&value)
                 {
                     first_slice_angle = Some(value as u16);
+                    set_active_group_field!(first_slice_angle, first_slice_angle);
                 }
                 if local_name == b"explosion"
                     && active_series.is_some()
@@ -23394,6 +23585,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     && (0..=400).contains(&value)
                 {
                     explosion = Some(value as u16);
+                    set_active_group_field!(explosion, explosion);
                 }
                 if local_name == b"bubbleScale"
                     && element_path
@@ -23403,6 +23595,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     && (0..=300).contains(&value)
                 {
                     bubble_scale = Some(value as u16);
+                    set_active_group_field!(bubble_scale, bubble_scale);
                 }
                 if local_name == b"showNegBubbles"
                     && element_path
@@ -23410,6 +23603,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         .is_some_and(|name| name.ends_with("Chart") && name != "chart")
                 {
                     show_negative_bubbles = parse_bool_val_attr(&element, &reader)?.or(Some(true));
+                    set_active_group_field!(show_negative_bubbles, show_negative_bubbles);
                 }
                 if local_name == b"bubble3D"
                     && element_path
@@ -23417,6 +23611,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         .is_some_and(|name| name.ends_with("Chart") && name != "chart")
                 {
                     has_3d_shading = parse_bool_val_attr(&element, &reader)?.or(Some(true));
+                    set_active_group_field!(has_3d_shading, has_3d_shading);
                 }
                 if local_name == b"holeSize"
                     && element_path
@@ -23427,6 +23622,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     && (10..=90).contains(&value)
                 {
                     doughnut_hole_size = Some(value as u16);
+                    set_active_group_field!(doughnut_hole_size, doughnut_hole_size);
                 }
                 if local_name == b"secondPieSize"
                     && element_path
@@ -23436,6 +23632,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     && (5..=200).contains(&value)
                 {
                     second_plot_size = Some(value as u16);
+                    set_active_group_field!(second_plot_size, second_plot_size);
                 }
                 if local_name == b"sizeRepresents"
                     && element_path
@@ -23448,6 +23645,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         "w" => Some(ChartSizeRepresents::Width),
                         _ => size_represents,
                     };
+                    set_active_group_field!(size_represents, size_represents);
                 }
                 if local_name == b"splitType"
                     && element_path
@@ -23462,6 +23660,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                         "val" => Some(ChartSplitType::Value),
                         _ => split_type,
                     };
+                    set_active_group_field!(split_type, split_type);
                 }
                 if local_name == b"splitPos"
                     && element_path
@@ -23470,6 +23669,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     && let Some(value) = parse_f64_val_attr(&element, &reader, "split value")?
                 {
                     split_value = Some(value);
+                    set_active_group_field!(split_value, split_value);
                 }
                 if local_name == b"dispBlanksAs"
                     && element_path.last().is_some_and(|name| name == "chart")
@@ -23912,7 +24112,12 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                                                 .separator = Some(separator);
                                         }
                                     }
-                                    Some(ChartDataLabelsTarget::ChartGroup) | None => {
+                                    Some(ChartDataLabelsTarget::ChartGroup) => {
+                                        active_chart_group_data_labels
+                                            .get_or_insert_with(ChartDataLabelsSummary::default)
+                                            .separator = Some(separator);
+                                    }
+                                    None => {
                                         data_labels
                                             .get_or_insert_with(ChartDataLabelsSummary::default)
                                             .separator = Some(separator);
@@ -23942,6 +24147,19 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
                     && local_name != b"chart"
                     && let Some(series_start) = active_chart_group_series_start.take()
                 {
+                    if let Some(group_index) = active_chart_group_index
+                        && let Some(group) = groups.get_mut(group_index)
+                    {
+                        group.axis_ids = active_chart_group_axis_ids.clone();
+                        group.series_raw_indices = series[series_start..]
+                            .iter()
+                            .filter_map(|series| series.raw_index)
+                            .collect();
+                        group.data_labels = active_chart_group_data_labels.take();
+                        if data_labels.is_none() {
+                            data_labels = group.data_labels.clone();
+                        }
+                    }
                     for series in &mut series[series_start..] {
                         series.axis_ids = active_chart_group_axis_ids.clone();
                     }
@@ -24014,6 +24232,23 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
         {
             series.axis_group = ChartAxisGroup::Secondary;
         }
+    }
+    for (group_index, group) in groups.iter_mut().enumerate() {
+        group.axis_group = series
+            .iter()
+            .find(|series| series.chart_group_index == group_index)
+            .map(|series| series.axis_group)
+            .unwrap_or_else(|| {
+                if group.axis_ids.iter().any(|axis_id| {
+                    axis_groups_by_id
+                        .get(axis_id)
+                        .is_some_and(|axis_group| *axis_group == ChartAxisGroup::Secondary)
+                }) {
+                    ChartAxisGroup::Secondary
+                } else {
+                    ChartAxisGroup::Primary
+                }
+            });
     }
     let volume_stock_series_count = if has_up_down_bars == Some(true) { 5 } else { 4 };
     let is_volume_stock = chart_type_names == ["barChart", "stockChart"]
@@ -24091,6 +24326,7 @@ fn parse_chart_part_summary(chart_xml: &[u8]) -> OmResult<ChartPartSummary> {
         rounded_corners,
         protection,
         axes,
+        groups,
         series,
         formula_refs,
         has_extension_list,
@@ -30613,7 +30849,7 @@ mod tests {
         <c:splitPos val="10"/>
         <c:dLbls><c:numFmt formatCode="0.0%" sourceLinked="0"/><c:dLblPos val="outEnd"/><c:showLegendKey val="1"/><c:showSerName val="0"/><c:showCatName val="1"/><c:showVal val="1"/><c:showPercent val="0"/><c:showBubbleSize val="0"/><c:separator>, </c:separator></c:dLbls>
         <c:serLines/>
-        <c:dropLines/>
+        <c:dLbls><c:showVal val="1"/></c:dLbls><c:dropLines/>
         <c:hiLowLines/>
         <c:upDownBars/>
       </c:barChart>
@@ -37521,11 +37757,16 @@ mod tests {
   <c:chart>
     <c:plotArea>
       <c:barChart>
+        <c:barDir val="col"/><c:grouping val="clustered"/><c:varyColors val="1"/>
         <c:ser><c:idx val="0"/><c:order val="0"/><c:val><c:numRef><c:f>Sheet1!$A$1:$A$3</c:f></c:numRef></c:val></c:ser>
+        <c:gapWidth val="111"/><c:overlap val="-10"/>
         <c:axId val="10"/><c:axId val="20"/>
       </c:barChart>
       <c:lineChart>
+        <c:grouping val="standard"/><c:varyColors val="0"/>
         <c:ser><c:idx val="1"/><c:order val="1"/><c:val><c:numRef><c:f>Sheet1!$B$1:$B$3</c:f></c:numRef></c:val></c:ser>
+        <c:dLbls><c:showVal val="1"/></c:dLbls>
+        <c:dropLines/>
         <c:axId val="10"/><c:axId val="50"/>
       </c:lineChart>
       <c:catAx><c:axId val="10"/></c:catAx>
@@ -37545,6 +37786,35 @@ mod tests {
         assert_eq!(summary.series[0].axis_group, ChartAxisGroup::Primary);
         assert_eq!(summary.series[1].axis_ids, vec!["10", "50"]);
         assert_eq!(summary.series[1].axis_group, ChartAxisGroup::Secondary);
+        assert_eq!(summary.groups.len(), 2);
+        assert_eq!(summary.groups[0].raw_name, "barChart");
+        assert_eq!(summary.groups[0].axis_group, ChartAxisGroup::Primary);
+        assert_eq!(summary.groups[0].series_raw_indices, vec![0]);
+        assert_eq!(summary.groups[0].chart_grouping.as_deref(), Some("clustered"));
+        assert_eq!(summary.groups[0].vary_by_categories, Some(true));
+        assert_eq!(summary.groups[0].gap_width, Some(111));
+        assert_eq!(summary.groups[0].overlap, Some(-10));
+        assert_eq!(summary.groups[1].raw_name, "lineChart");
+        assert_eq!(summary.groups[1].axis_group, ChartAxisGroup::Secondary);
+        assert_eq!(summary.groups[1].series_raw_indices, vec![1]);
+        assert_eq!(summary.groups[1].chart_grouping.as_deref(), Some("standard"));
+        assert_eq!(summary.groups[1].vary_by_categories, Some(false));
+        assert_eq!(
+            summary.groups[1]
+                .data_labels
+                .as_ref()
+                .and_then(|labels| labels.show_value),
+            Some(true)
+        );
+        assert_eq!(summary.groups[1].has_drop_lines, Some(true));
+        assert_eq!(
+            super::chart_type_from_group_summary(&summary.groups[0]),
+            ChartType::Column
+        );
+        assert_eq!(
+            super::chart_type_from_group_summary(&summary.groups[1]),
+            ChartType::Line
+        );
     }
 
     #[test]
