@@ -26,6 +26,10 @@ use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::name::ResolveResult;
 use quick_xml::{NsReader, Reader, Writer};
 
+mod chart_encoder;
+
+pub use chart_encoder::encode_chart_model_xml;
+
 const CALC_CHAIN_PART_NAME: &str = "xl/calcChain.xml";
 const CALC_CHAIN_RELATIONSHIP_TYPE: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/calcChain";
@@ -1904,7 +1908,18 @@ impl XlsxCodec {
                         }
                     }
                 }
-                if &actual_summary != expected_summary {
+                // Graph copies can register relationship metadata before their first parsed summary.
+                let placeholder_summary = ChartPartSummary {
+                    relationships_part_uri: expected_summary.relationships_part_uri.clone(),
+                    support_relationships: expected_summary.support_relationships.clone(),
+                    opaque_relationships: expected_summary.opaque_relationships.clone(),
+                    ..ChartPartSummary::default()
+                };
+                let dirty_chart_has_placeholder_summary = expected_summary == &placeholder_summary
+                    && workbook.state.charts.values().any(|chart| {
+                        chart.dirty && chart.raw_part_uri.as_deref() == Some(chart_part_uri.as_str())
+                    });
+                if &actual_summary != expected_summary && !dirty_chart_has_placeholder_summary {
                     return Err(OmError::new(
                         OmErrorCode::InvalidState,
                         format!(
@@ -2586,6 +2601,38 @@ impl XlsxCodec {
             }
 
             package.replace_part_bytes(drawing_part_uri, writer.into_inner().into_inner())?;
+        }
+
+        for chart in workbook.state.charts.values().filter(|chart| chart.dirty) {
+            let chart_part_uri = chart.raw_part_uri.as_deref().ok_or_else(|| {
+                OmError::new(
+                    OmErrorCode::InvalidState,
+                    "dirty state-only charts require package graph materialization before save",
+                )
+            })?;
+            let source_xml = package
+                .part(chart_part_uri)
+                .ok_or_else(|| {
+                    OmError::new(
+                        OmErrorCode::InvalidState,
+                        format!("dirty chart part is missing: {chart_part_uri}"),
+                    )
+                })?
+                .bytes
+                .clone();
+            let encoded_xml = encode_chart_model_xml(Some(source_xml.as_slice()), chart)?;
+            let encoded_summary = parse_chart_part_summary(encoded_xml.as_slice())?;
+            let encoded_chart_type = chart_type_from_summary(Some(&encoded_summary));
+            if encoded_chart_type != chart.chart_type {
+                return Err(OmError::new(
+                    OmErrorCode::InvalidState,
+                    format!(
+                        "chart XML encoder produced {:?} for {:?}: {chart_part_uri}",
+                        encoded_chart_type, chart.chart_type
+                    ),
+                ));
+            }
+            package.replace_part_bytes(chart_part_uri, encoded_xml)?;
         }
 
         ensure_support_parts_present_for_save(&package, &workbook.support_parts)?;
@@ -32020,6 +32067,108 @@ mod tests {
                 .to_string()
                 .contains("explicit chart support part is missing: xl/charts/colors1.xml"),
             "{error}"
+        );
+
+        let mut dirty_chart_loaded = loaded.clone();
+        let dirty_chart = dirty_chart_loaded
+            .state
+            .charts
+            .values_mut()
+            .next()
+            .expect("chart model");
+        dirty_chart.title.as_mut().expect("chart title").text = "Updated Revenue".to_string();
+        dirty_chart.content_dirty = true;
+        dirty_chart.dirty = true;
+
+        let mut source_drift_loaded = dirty_chart_loaded.clone();
+        let mut changed_chart_xml = chart_xml.clone();
+        changed_chart_xml.push(b'\n');
+        source_drift_loaded
+            .package
+            .replace_part_bytes("xl/charts/chart1.xml", changed_chart_xml)
+            .expect("replace dirty source chart bytes");
+        let error = codec
+            .save(
+                &source_drift_loaded,
+                office_common::SaveOptions::default(),
+            )
+            .expect_err("dirty loaded chart source drift should be rejected before encoding");
+        assert!(
+            error
+                .message
+                .contains("explicit drawing chart part bytes changed"),
+            "{error}"
+        );
+
+        let mut summary_drift_loaded = dirty_chart_loaded.clone();
+        summary_drift_loaded
+            .sheet_drawing_support_parts
+            .get_mut(&sheet_id)
+            .expect("drawing support")
+            .chart_summaries
+            .get_mut("xl/charts/chart1.xml")
+            .expect("chart summary")
+            .title_text = Some("Inventory Drift".to_string());
+        let error = codec
+            .save(
+                &summary_drift_loaded,
+                office_common::SaveOptions::default(),
+            )
+            .expect_err("dirty loaded chart summary drift should be rejected before encoding");
+        assert!(
+            error
+                .message
+                .contains("explicit chart summary changed"),
+            "{error}"
+        );
+
+        let encoded = codec
+            .save(
+                &dirty_chart_loaded,
+                office_common::SaveOptions::default(),
+            )
+            .expect("direct codec save should encode the dirty chart");
+        let encoded_package = OpcPackage::from_bytes(encoded.as_slice()).expect("encoded package");
+        let encoded_chart_xml = std::str::from_utf8(
+            encoded_package
+                .part("xl/charts/chart1.xml")
+                .expect("encoded chart part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("encoded chart XML utf8");
+        assert!(encoded_chart_xml.contains("Updated Revenue"));
+        assert!(!encoded_chart_xml.contains("Revenue Trend"));
+        assert!(encoded_chart_xml.contains("urn:test"));
+        assert_eq!(
+            encoded_package
+                .part("xl/drawings/drawing1.xml")
+                .expect("preserved drawing part")
+                .bytes,
+            drawing_xml
+        );
+        assert_eq!(
+            encoded_package
+                .part("xl/drawings/_rels/drawing1.xml.rels")
+                .expect("preserved drawing relationships part")
+                .bytes,
+            drawing_rels_xml
+        );
+        let reopened = codec
+            .load(encoded.as_slice(), CommonLoadOptions::default())
+            .expect("reopen codec-encoded chart");
+        assert_eq!(
+            reopened
+                .state
+                .charts
+                .values()
+                .next()
+                .expect("reopened chart")
+                .title
+                .as_ref()
+                .expect("reopened chart title")
+                .text,
+            "Updated Revenue"
         );
     }
 

@@ -5015,6 +5015,8 @@
   - 범위: chart sheet가 `<drawing>` relationship을 갖지 않아도 host chartsheet part URI와 원본 bytes를 drawing preservation inventory에 유지해 clean save에서 exact bytes를 보존하고, package graph에서 host part가 삭제되거나 원본과 다르게 변조되면 기존 drawing host validation이 save 전에 `InvalidState`로 차단하도록 loader 경계를 보강; 일반 worksheet의 empty drawing inventory 생략 동작은 유지하고 load/classification, clean-save, missing/drift 회귀를 고정
   - `Step 7.185 DONE` application default chart type creation semantics
   - 범위: 성공만 반환하던 `Chart.SetDefaultChart`의 built-in numeric `XlChartType` 경로를 application-level default chart state에 연결하고 `Workbooks.Add(xlWBATChart)`, `Charts.Add`, `ChartObjects.Add`가 이후 생성하는 native chart sheet와 embedded chart에 동일한 기본 type을 적용하도록 구현; 기존 chart와 workbook dirty 상태는 바꾸지 않아 read-only chart에서도 호출할 수 있고, custom template 이름과 미지원 숫자 상수는 기존 default를 유지한 채 명시적으로 거절하며, pie/doughnut의 no-axis 및 scatter/bubble의 paired value-axis 초기화와 save/reopen 회귀를 고정
+  - `Step 7.186 DONE` codec-owned lossless chart XML encoder
+  - 범위: runtime에 있던 약 1.1만 줄의 loaded chart patch-first/fallback serializer와 topology/convergence preflight를 `excel-xlsx::encode_chart_model_xml` 단일 writer로 이전하고 `XlsxCodec::save`가 loaded dirty `ChartModel`을 직접 encoding하도록 저장 책임을 codec으로 통합; runtime의 preflight, 신규 embedded/chart-sheet part 생성, 최종 save도 같은 encoder를 재사용하며 encoder 결과 chart type 검증, title-only direct codec save에서 unknown extension과 drawing/drawing rels 원형 보존, save/reopen 회귀를 고정하고 state-only chart graph materialization만 후속 단계로 유지
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.
