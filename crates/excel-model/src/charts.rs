@@ -514,6 +514,10 @@ pub enum DrawingObjectModel {
     UnsupportedRaw {
         id: DrawingObjectId,
         raw_part_uri: Option<String>,
+        raw_anchor_xml: String,
+        root_namespace_attrs: BTreeMap<String, String>,
+        relationship_ids: Vec<String>,
+        non_visual_id: Option<u32>,
     },
 }
 

@@ -134,6 +134,7 @@ fn validate_state_only_chart_graphs(workbook: &LoadedXlsxWorkbook) -> OmResult<(
         .collect::<BTreeMap<_, _>>();
     let mut chart_hosts = BTreeMap::new();
     let mut chart_object_ids = BTreeSet::new();
+    let mut opaque_object_ids = BTreeSet::new();
 
     for sheet in &workbook.state.worksheets {
         if sheet.workbook_id != workbook_id {
@@ -234,17 +235,6 @@ fn validate_state_only_chart_graphs(workbook: &LoadedXlsxWorkbook) -> OmResult<(
             .or_insert_with(Vec::new)
             .push((*drawing_id, drawing.raw_part_uri.is_some()));
 
-        if drawing.raw_part_uri.is_none()
-            && drawing
-                .objects
-                .iter()
-                .any(|object| matches!(object, DrawingObjectModel::UnsupportedRaw { .. }))
-        {
-            return Err(OmError::unsupported(format!(
-                "state-only drawing {} contains an unsupported raw object",
-                drawing_id.0
-            )));
-        }
         if let Some(part_uri) = drawing.raw_part_uri.as_deref()
             && !workbook.package.contains(part_uri)
         {
@@ -257,8 +247,38 @@ fn validate_state_only_chart_graphs(workbook: &LoadedXlsxWorkbook) -> OmResult<(
         let mut drawing_chart_ids = BTreeSet::new();
         let mut materialized_non_visual_ids = BTreeSet::new();
         for object in &drawing.objects {
-            let DrawingObjectModel::ChartFrame(chart_object) = object else {
-                continue;
+            let chart_object = match object {
+                DrawingObjectModel::ChartFrame(chart_object) => chart_object,
+                DrawingObjectModel::UnsupportedRaw {
+                    id,
+                    raw_anchor_xml,
+                    relationship_ids,
+                    non_visual_id,
+                    ..
+                } => {
+                    if !opaque_object_ids.insert(*id) {
+                        return Err(OmError::invalid_state(format!(
+                            "opaque drawing object id {} is duplicated",
+                            id.0
+                        )));
+                    }
+                    validate_opaque_anchor_xml(raw_anchor_xml)?;
+                    if drawing.raw_part_uri.is_none() && !relationship_ids.is_empty() {
+                        return Err(OmError::unsupported(format!(
+                            "state-only opaque drawing object {} requires relationship copying",
+                            id.0
+                        )));
+                    }
+                    if let Some(non_visual_id) = non_visual_id
+                        && !materialized_non_visual_ids.insert(*non_visual_id)
+                    {
+                        return Err(OmError::invalid_state(format!(
+                            "drawing {} contains duplicate materialized non-visual id {}",
+                            drawing_id.0, non_visual_id
+                        )));
+                    }
+                    continue;
+                }
             };
             if !chart_object_ids.insert(chart_object.id) {
                 return Err(OmError::invalid_state(format!(
@@ -450,6 +470,7 @@ fn normalize_state_only_non_visual_ids(workbook: &mut LoadedXlsxWorkbook) -> OmR
                         .non_visual_id
                         .or_else(|| u32::try_from(chart_object.id.0).ok())
                 }
+                DrawingObjectModel::UnsupportedRaw { non_visual_id, .. } => *non_visual_id,
                 _ => None,
             })
             .collect::<BTreeSet<_>>();
@@ -666,7 +687,7 @@ fn materialize_new_drawings(
         .collect::<Vec<_>>();
 
     for drawing_id in drawing_ids {
-        let (host_sheet_id, chart_objects) = {
+        let (host_sheet_id, objects, chart_objects) = {
             let drawing = workbook
                 .state
                 .drawings
@@ -674,6 +695,7 @@ fn materialize_new_drawings(
                 .expect("state-only drawing id collected above");
             (
                 drawing.host_sheet_id,
+                drawing.objects.clone(),
                 drawing
                     .objects
                     .iter()
@@ -684,9 +706,9 @@ fn materialize_new_drawings(
                     .collect::<Vec<_>>(),
             )
         };
-        if chart_objects.is_empty() {
+        if objects.is_empty() {
             return Err(OmError::invalid_state(format!(
-                "state-only drawing {} has no chart frames",
+                "state-only drawing {} has no drawing objects",
                 drawing_id.0
             )));
         }
@@ -732,7 +754,7 @@ fn materialize_new_drawings(
                 relative_relationship_target(&drawing_part_uri, chart_part_uri),
             )
         }));
-        let drawing_xml = drawing_xml(&chart_objects, &relationship_ids)?;
+        let drawing_xml = drawing_xml(&objects, &relationship_ids)?;
 
         for (chart_id, chart_part_uri) in &chart_part_uris {
             let chart = workbook
@@ -778,7 +800,7 @@ fn materialize_new_drawings(
             .get_mut(&drawing_id)
             .expect("state-only drawing id collected above");
         drawing.raw_part_uri = Some(drawing_part_uri.clone());
-        for object in &mut drawing.objects {
+        for (object_index, object) in drawing.objects.iter_mut().enumerate() {
             let DrawingObjectModel::ChartFrame(chart_object) = object else {
                 continue;
             };
@@ -786,6 +808,7 @@ fn materialize_new_drawings(
                 .get(&chart_object.id)
                 .expect("relationship id allocated above");
             chart_object.raw_binding = Some(format!("{drawing_part_uri}#{relationship_id}"));
+            chart_object.z_order = u32::try_from(object_index).ok();
         }
     }
     Ok(())
@@ -987,22 +1010,140 @@ fn attach_drawing_to_host(
 }
 
 fn drawing_xml(
-    chart_objects: &[excel_model::ChartObjectModel],
+    objects: &[DrawingObjectModel],
     relationship_ids: &BTreeMap<office_common::ChartObjectId, String>,
 ) -> OmResult<Vec<u8>> {
+    let mut root_namespace_attrs = BTreeMap::from([
+        (
+            "xmlns:xdr".to_string(),
+            SPREADSHEET_DRAWING_NAMESPACE.to_string(),
+        ),
+        ("xmlns:a".to_string(), DRAWING_MAIN_NAMESPACE.to_string()),
+        ("xmlns:c".to_string(), CHART_NAMESPACE.to_string()),
+        (
+            "xmlns:r".to_string(),
+            OFFICE_RELATIONSHIPS_NAMESPACE.to_string(),
+        ),
+    ]);
+    for object in objects {
+        let DrawingObjectModel::UnsupportedRaw {
+            root_namespace_attrs: object_namespace_attrs,
+            ..
+        } = object
+        else {
+            continue;
+        };
+        for (name, value) in object_namespace_attrs {
+            if name != "xmlns" && !name.starts_with("xmlns:") {
+                return Err(OmError::invalid_state(format!(
+                    "opaque drawing root attribute is not a namespace declaration: {name}"
+                )));
+            }
+            if let Some(existing) = root_namespace_attrs.get(name)
+                && existing != value
+            {
+                return Err(OmError::invalid_state(format!(
+                    "opaque drawing namespace {name} conflicts with the materialized drawing root"
+                )));
+            }
+            root_namespace_attrs.insert(name.clone(), value.clone());
+        }
+    }
+
     let mut xml = br#"<?xml version="1.0" encoding="UTF-8"?>
-<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
-"#
-    .to_vec();
-    for chart_object in chart_objects {
-        let relationship_id = relationship_ids
-            .get(&chart_object.id)
-            .expect("relationship id allocated above");
-        xml.extend_from_slice(chart_object_anchor_xml(chart_object, relationship_id)?.as_slice());
+<xdr:wsDr"#
+        .to_vec();
+    for (name, value) in root_namespace_attrs {
+        xml.extend_from_slice(format!(r#" {name}="{}""#, escape(&value)).as_bytes());
+    }
+    xml.extend_from_slice(b">\n");
+    for object in objects {
+        match object {
+            DrawingObjectModel::ChartFrame(chart_object) => {
+                let relationship_id = relationship_ids
+                    .get(&chart_object.id)
+                    .expect("relationship id allocated above");
+                xml.extend_from_slice(
+                    chart_object_anchor_xml(chart_object, relationship_id)?.as_slice(),
+                );
+            }
+            DrawingObjectModel::UnsupportedRaw { raw_anchor_xml, .. } => {
+                validate_opaque_anchor_xml(raw_anchor_xml)?;
+                xml.extend_from_slice(raw_anchor_xml.as_bytes());
+            }
+        }
         xml.push(b'\n');
     }
     xml.extend_from_slice(b"</xdr:wsDr>");
     Ok(xml)
+}
+
+fn validate_opaque_anchor_xml(raw_anchor_xml: &str) -> OmResult<()> {
+    if raw_anchor_xml.trim().is_empty() {
+        return Err(OmError::invalid_state(
+            "opaque drawing anchor XML must not be empty",
+        ));
+    }
+    let mut reader = Reader::from_reader(Cursor::new(raw_anchor_xml.as_bytes()));
+    reader.config_mut().trim_text(true);
+    let mut buffer = Vec::new();
+    let mut root_seen = false;
+    let mut depth = 0usize;
+    loop {
+        match reader.read_event_into(&mut buffer) {
+            Ok(Event::Start(element)) => {
+                if depth == 0 {
+                    if root_seen
+                        || !matches!(
+                            xml_local_name(element.name().as_ref()),
+                            b"twoCellAnchor" | b"oneCellAnchor" | b"absoluteAnchor"
+                        )
+                    {
+                        return Err(OmError::invalid_state(
+                            "opaque drawing object must contain exactly one DrawingML anchor",
+                        ));
+                    }
+                    root_seen = true;
+                }
+                depth += 1;
+            }
+            Ok(Event::Empty(element)) if depth == 0 => {
+                if root_seen
+                    || !matches!(
+                        xml_local_name(element.name().as_ref()),
+                        b"twoCellAnchor" | b"oneCellAnchor" | b"absoluteAnchor"
+                    )
+                {
+                    return Err(OmError::invalid_state(
+                        "opaque drawing object must contain exactly one DrawingML anchor",
+                    ));
+                }
+                root_seen = true;
+            }
+            Ok(Event::End(_)) => {
+                depth = depth.checked_sub(1).ok_or_else(|| {
+                    OmError::invalid_state("opaque drawing anchor XML is unbalanced")
+                })?;
+            }
+            Ok(Event::Text(text))
+                if depth == 0 && !text.xml_content().map_err(xml_error)?.trim().is_empty() =>
+            {
+                return Err(OmError::invalid_state(
+                    "opaque drawing anchor XML contains text outside the root anchor",
+                ));
+            }
+            Ok(Event::Eof) => break,
+            Ok(_) => {}
+            Err(error) => return Err(xml_error(error)),
+        }
+        buffer.clear();
+    }
+    if !root_seen || depth != 0 {
+        return Err(OmError::invalid_state(
+            "opaque drawing object must contain one complete DrawingML anchor",
+        ));
+    }
+    Ok(())
 }
 
 fn append_chart_anchors(
@@ -2125,9 +2266,9 @@ mod tests {
         DrawingObjectModel, WorkbookState, WorksheetData,
     };
     use office_common::{
-        AbsoluteAnchor, ChartId, ChartObjectId, DrawingAnchor, DrawingId, FileFormat, LoadOptions,
-        ObjectPlacement, OmErrorCode, PointEmu, SaveOptions, SheetId, SheetKind, SheetVisibility,
-        SizeEmu, WorkbookId, WorkbookModel, WorksheetModel,
+        AbsoluteAnchor, ChartId, ChartObjectId, DrawingAnchor, DrawingId, DrawingObjectId,
+        FileFormat, LoadOptions, ObjectPlacement, OmErrorCode, PointEmu, SaveOptions, SheetId,
+        SheetKind, SheetVisibility, SizeEmu, WorkbookId, WorkbookModel, WorksheetModel,
     };
     use office_opc::{CompressionMethod, OpcPackage, OpcPart};
 
@@ -2378,6 +2519,141 @@ mod tests {
             reopened.state.drawings[&drawing_id].raw_part_uri.as_deref(),
             Some("xl/drawings/drawing1.xml")
         );
+    }
+
+    #[test]
+    fn direct_save_materializes_mixed_drawing_with_opaque_anchor_in_order() {
+        let mut workbook = base_workbook();
+        let chart_id = ChartId(1);
+        let drawing_id = DrawingId(1);
+        workbook
+            .state
+            .charts
+            .insert(chart_id, state_only_chart(chart_id));
+        let raw_anchor_xml = r#"<xdr:oneCellAnchor><xdr:from><xdr:col>5</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>1</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:ext cx="914400" cy="457200"/><xdr:sp><xdr:nvSpPr><xdr:cNvPr id="2" name="Preserved Shape"/><xdr:cNvSpPr/></xdr:nvSpPr><xdr:spPr><foo:meta/></xdr:spPr><xdr:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>Keep me</a:t></a:r></a:p></xdr:txBody></xdr:sp><xdr:clientData/></xdr:oneCellAnchor>"#.to_string();
+        workbook.state.drawings.insert(
+            drawing_id,
+            DrawingModel {
+                id: drawing_id,
+                workbook_id: WorkbookId(7),
+                host_sheet_id: SheetId(1),
+                objects: vec![
+                    DrawingObjectModel::UnsupportedRaw {
+                        id: DrawingObjectId(9),
+                        raw_part_uri: None,
+                        raw_anchor_xml: raw_anchor_xml.clone(),
+                        root_namespace_attrs: BTreeMap::from([(
+                            "xmlns:foo".to_string(),
+                            "urn:opaque-shape".to_string(),
+                        )]),
+                        relationship_ids: Vec::new(),
+                        non_visual_id: Some(2),
+                    },
+                    DrawingObjectModel::ChartFrame(state_only_chart_object(
+                        ChartObjectId(1),
+                        chart_id,
+                        SheetId(1),
+                    )),
+                ],
+                raw_part_uri: None,
+                dirty: true,
+            },
+        );
+
+        let bytes = XlsxCodec
+            .save(&workbook, SaveOptions::default())
+            .expect("mixed state-only drawing should materialize");
+        let package = OpcPackage::from_bytes(&bytes).expect("saved package");
+        let drawing_xml = String::from_utf8(
+            package
+                .part("xl/drawings/drawing1.xml")
+                .expect("drawing part")
+                .bytes
+                .clone(),
+        )
+        .expect("drawing XML");
+        assert!(drawing_xml.contains(r#"xmlns:foo="urn:opaque-shape""#));
+        assert!(drawing_xml.contains(&raw_anchor_xml), "{drawing_xml}");
+        assert!(
+            drawing_xml.find("Preserved Shape").expect("raw shape")
+                < drawing_xml.find("Chart 1").expect("chart frame")
+        );
+
+        let reopened = XlsxCodec
+            .load(&bytes, LoadOptions::default())
+            .expect("reopen mixed drawing");
+        let drawing = reopened
+            .state
+            .drawings
+            .values()
+            .next()
+            .expect("reopened drawing");
+        assert!(matches!(
+            drawing.objects.as_slice(),
+            [DrawingObjectModel::UnsupportedRaw { relationship_ids, .. }, DrawingObjectModel::ChartFrame(_)]
+                if relationship_ids.is_empty()
+        ));
+        let saved_again = XlsxCodec
+            .save(&reopened, SaveOptions::default())
+            .expect("save reopened mixed drawing");
+        let saved_again_package =
+            OpcPackage::from_bytes(&saved_again).expect("second saved package");
+        assert_eq!(
+            saved_again_package
+                .part("xl/drawings/drawing1.xml")
+                .expect("second drawing part")
+                .bytes,
+            package
+                .part("xl/drawings/drawing1.xml")
+                .expect("first drawing part")
+                .bytes
+        );
+    }
+
+    #[test]
+    fn direct_save_rejects_relationship_backed_opaque_anchor_before_materializing() {
+        let mut workbook = base_workbook();
+        let drawing_id = DrawingId(1);
+        workbook.state.drawings.insert(
+            drawing_id,
+            DrawingModel {
+                id: drawing_id,
+                workbook_id: WorkbookId(7),
+                host_sheet_id: SheetId(1),
+                objects: vec![DrawingObjectModel::UnsupportedRaw {
+                    id: DrawingObjectId(9),
+                    raw_part_uri: None,
+                    raw_anchor_xml: r#"<xdr:oneCellAnchor><xdr:from/><xdr:ext cx="1" cy="1"/><xdr:pic><xdr:blipFill><a:blip r:embed="rIdImage1"/></xdr:blipFill></xdr:pic><xdr:clientData/></xdr:oneCellAnchor>"#.to_string(),
+                    root_namespace_attrs: BTreeMap::new(),
+                    relationship_ids: vec!["rIdImage1".to_string()],
+                    non_visual_id: Some(2),
+                }],
+                raw_part_uri: None,
+                dirty: true,
+            },
+        );
+        let package_part_names = workbook
+            .package
+            .parts()
+            .iter()
+            .map(|part| part.name.clone())
+            .collect::<Vec<_>>();
+
+        let error = XlsxCodec
+            .save(&workbook, SaveOptions::default())
+            .expect_err("relationship-backed raw anchor should require graph copying");
+        assert_eq!(error.code, OmErrorCode::Unsupported);
+        assert!(error.message.contains("requires relationship copying"));
+        assert_eq!(
+            workbook
+                .package
+                .parts()
+                .iter()
+                .map(|part| part.name.clone())
+                .collect::<Vec<_>>(),
+            package_part_names
+        );
+        assert!(workbook.state.drawings[&drawing_id].raw_part_uri.is_none());
     }
 
     #[test]

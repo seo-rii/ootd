@@ -863,6 +863,7 @@ impl SheetDrawingSupportParts {
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct DrawingPartSummary {
+    pub root_namespace_attrs: BTreeMap<String, String>,
     pub anchors: Vec<DrawingAnchorSummary>,
     pub chart_relationship_ids: Vec<String>,
     pub chart_relationships: Vec<WorksheetRelationshipBinding>,
@@ -879,6 +880,8 @@ pub struct DrawingOpaqueRelationshipSummary {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DrawingAnchorSummary {
+    pub raw_xml: String,
+    pub relationship_ids: Vec<String>,
     pub kind: DrawingAnchorKind,
     pub edit_as: Option<String>,
     pub anchor_attrs: BTreeMap<String, String>,
@@ -4507,6 +4510,10 @@ fn build_chart_model_overlay(
                     objects.push(DrawingObjectModel::UnsupportedRaw {
                         id: DrawingObjectId(next_drawing_object_id),
                         raw_part_uri: Some(drawing_part_uri.clone()),
+                        raw_anchor_xml: anchor_summary.raw_xml.clone(),
+                        root_namespace_attrs: drawing_summary.root_namespace_attrs.clone(),
+                        relationship_ids: anchor_summary.relationship_ids.clone(),
+                        non_visual_id: anchor_summary.non_visual_id,
                     });
                     next_drawing_object_id += 1;
                     continue;
@@ -20694,8 +20701,10 @@ fn parse_drawing_part_summary(
     reader.config_mut().trim_text(true);
     let mut buffer = Vec::new();
     let mut anchors = Vec::new();
+    let mut root_namespace_attrs = BTreeMap::new();
     let mut chart_relationship_ids = Vec::new();
     let mut active_anchor = None::<DrawingAnchorSummary>;
+    let mut active_anchor_raw_start = None::<usize>;
     let mut active_anchor_depth = 0usize;
     let mut active_marker = None::<MarkerSlot>;
     let mut active_marker_field = None::<MarkerField>;
@@ -20901,13 +20910,27 @@ fn parse_drawing_part_summary(
     };
 
     loop {
+        let event_start = usize::try_from(reader.buffer_position()).map_err(|_| {
+            OmError::new(
+                OmErrorCode::InvalidState,
+                "drawing XML position exceeds the platform address space",
+            )
+        })?;
         match reader.read_event_into(&mut buffer) {
             Ok(Event::Start(element)) => {
                 let element_name = element.name();
                 let local_name = xml_local_name(element_name.as_ref());
                 if active_anchor.is_none() {
+                    if local_name == b"wsDr" && root_namespace_attrs.is_empty() {
+                        root_namespace_attrs = decode_attrs(&element, &reader)?
+                            .into_iter()
+                            .filter(|(name, _)| name == "xmlns" || name.starts_with("xmlns:"))
+                            .collect();
+                    }
                     if let Some(kind) = anchor_kind_for(local_name) {
                         active_anchor = Some(DrawingAnchorSummary {
+                            raw_xml: String::new(),
+                            relationship_ids: Vec::new(),
                             kind,
                             edit_as: decode_attr(&element, b"editAs", &reader)?,
                             anchor_attrs: decode_attrs(&element, &reader)?
@@ -20937,6 +20960,7 @@ fn parse_drawing_part_summary(
                             extents: None,
                             chart_relationship_ids: Vec::new(),
                         });
+                        active_anchor_raw_start = Some(event_start);
                         active_anchor_depth = 1;
                     } else if local_name == b"chart" {
                         collect_chart_relationship_id(
@@ -21177,8 +21201,25 @@ fn parse_drawing_part_summary(
                 let element_name = element.name();
                 let local_name = xml_local_name(element_name.as_ref());
                 if active_anchor.is_none() {
+                    if local_name == b"wsDr" && root_namespace_attrs.is_empty() {
+                        root_namespace_attrs = decode_attrs(&element, &reader)?
+                            .into_iter()
+                            .filter(|(name, _)| name == "xmlns" || name.starts_with("xmlns:"))
+                            .collect();
+                    }
                     if let Some(kind) = anchor_kind_for(local_name) {
+                        let event_end = usize::try_from(reader.buffer_position()).map_err(|_| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "drawing XML position exceeds the platform address space",
+                            )
+                        })?;
                         anchors.push(DrawingAnchorSummary {
+                            raw_xml: String::from_utf8(
+                                drawing_xml[event_start..event_end].to_vec(),
+                            )
+                            .map_err(xml_error)?,
+                            relationship_ids: Vec::new(),
                             kind,
                             edit_as: decode_attr(&element, b"editAs", &reader)?,
                             anchor_attrs: decode_attrs(&element, &reader)?
@@ -21443,7 +21484,23 @@ fn parse_drawing_part_summary(
                 }
                 if active_anchor.is_some() {
                     if anchor_kind_for(local_name).is_some() && active_anchor_depth == 1 {
-                        if let Some(anchor) = active_anchor.take() {
+                        if let Some(mut anchor) = active_anchor.take() {
+                            let raw_start = active_anchor_raw_start.take().ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "drawing anchor raw XML start is missing",
+                                )
+                            })?;
+                            let raw_end = usize::try_from(reader.buffer_position()).map_err(|_| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "drawing XML position exceeds the platform address space",
+                                )
+                            })?;
+                            anchor.raw_xml = String::from_utf8(
+                                drawing_xml[raw_start..raw_end].to_vec(),
+                            )
+                            .map_err(xml_error)?;
                             anchors.push(anchor);
                         }
                         active_marker = None;
@@ -21459,6 +21516,41 @@ fn parse_drawing_part_summary(
             Err(error) => return Err(xml_error(error)),
         }
         buffer.clear();
+    }
+
+    let relationship_ids = relationship_entries
+        .iter()
+        .map(|relationship| relationship.id.as_str())
+        .collect::<BTreeSet<_>>();
+    for anchor in &mut anchors {
+        let mut anchor_reader = Reader::from_reader(Cursor::new(anchor.raw_xml.as_bytes()));
+        anchor_reader.config_mut().trim_text(false);
+        let mut anchor_buffer = Vec::new();
+        loop {
+            match anchor_reader.read_event_into(&mut anchor_buffer) {
+                Ok(Event::Start(element)) | Ok(Event::Empty(element)) => {
+                    for attr in element.attributes() {
+                        let attr = attr.map_err(xml_error)?;
+                        let value = attr
+                            .decode_and_unescape_value(anchor_reader.decoder())
+                            .map_err(xml_error)?
+                            .into_owned();
+                        if relationship_ids.contains(value.as_str())
+                            && anchor
+                                .relationship_ids
+                                .iter()
+                                .all(|existing| existing != &value)
+                        {
+                            anchor.relationship_ids.push(value);
+                        }
+                    }
+                }
+                Ok(Event::Eof) => break,
+                Ok(_) => {}
+                Err(error) => return Err(xml_error(error)),
+            }
+            anchor_buffer.clear();
+        }
     }
 
     let mut chart_relationships = Vec::new();
@@ -21492,6 +21584,7 @@ fn parse_drawing_part_summary(
         .collect();
 
     Ok(DrawingPartSummary {
+        root_namespace_attrs,
         anchors,
         chart_relationship_ids,
         chart_relationships,
@@ -29200,6 +29293,8 @@ mod tests {
         assert_eq!(
             drawing_summary.anchors,
             vec![DrawingAnchorSummary {
+                raw_xml: drawing_summary.anchors[0].raw_xml.clone(),
+                relationship_ids: vec!["rIdChart2".to_string()],
                 kind: DrawingAnchorKind::Absolute,
                 edit_as: None,
                 anchor_attrs: BTreeMap::new(),
@@ -30095,6 +30190,18 @@ mod tests {
                 ..
             }
         ));
+        let DrawingObjectModel::UnsupportedRaw {
+            relationship_ids,
+            non_visual_id,
+            raw_anchor_xml,
+            ..
+        } = &drawing.objects[1]
+        else {
+            unreachable!("chart sheet picture should be opaque")
+        };
+        assert_eq!(relationship_ids, &["rIdImage2".to_string()]);
+        assert_eq!(*non_visual_id, Some(3));
+        assert!(raw_anchor_xml.contains("Chart Sheet Picture"));
 
         let saved = codec
             .save(&loaded, office_common::SaveOptions::default())
@@ -31226,6 +31333,14 @@ mod tests {
                 .expect("drawing summary")
                 .anchors,
             vec![DrawingAnchorSummary {
+                raw_xml: drawing_support
+                    .drawing_summaries
+                    .get("xl/drawings/drawing1.xml")
+                    .expect("drawing summary")
+                    .anchors[0]
+                    .raw_xml
+                    .clone(),
+                relationship_ids: vec!["rIdChart1".to_string()],
                 kind: DrawingAnchorKind::TwoCell,
                 edit_as: None,
                 anchor_attrs: BTreeMap::from([
@@ -32288,6 +32403,17 @@ mod tests {
             vec!["rIdChart1"]
         );
         assert!(drawing_summary.anchors[1].chart_relationship_ids.is_empty());
+        assert!(drawing_summary.anchors[1].relationship_ids.is_empty());
+        assert_eq!(drawing_summary.anchors[1].non_visual_id, Some(3));
+        assert!(drawing_summary.anchors[1].raw_xml.contains("Preserved Shape"));
+        assert!(drawing_summary.anchors[1].raw_xml.contains("Keep me"));
+        assert_eq!(
+            drawing_summary
+                .root_namespace_attrs
+                .get("xmlns:xdr")
+                .map(String::as_str),
+            Some("http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing")
+        );
 
         let drawing = loaded
             .state
@@ -32307,6 +32433,18 @@ mod tests {
                 ..
             }
         ));
+        let DrawingObjectModel::UnsupportedRaw {
+            raw_anchor_xml,
+            relationship_ids,
+            non_visual_id,
+            ..
+        } = &drawing.objects[1]
+        else {
+            unreachable!("second drawing object should be opaque")
+        };
+        assert!(raw_anchor_xml.contains("Preserved Shape"));
+        assert!(relationship_ids.is_empty());
+        assert_eq!(*non_visual_id, Some(3));
 
         let saved = codec
             .save(&loaded, office_common::SaveOptions::default())
