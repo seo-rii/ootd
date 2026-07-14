@@ -1251,6 +1251,7 @@ pub struct ExcelRuntime {
     root_application: ObjectHandle,
     display_alerts: bool,
     calculation: i32,
+    default_chart_type: ChartType,
     screen_updating: bool,
     enable_events: bool,
     user_name: String,
@@ -1298,6 +1299,7 @@ impl ExcelRuntime {
             root_application: ObjectHandle(ROOT_APPLICATION_HANDLE_VALUE),
             display_alerts: true,
             calculation: XL_CALCULATION_AUTOMATIC,
+            default_chart_type: ChartType::Bar,
             screen_updating: true,
             enable_events: true,
             user_name: String::new(),
@@ -8858,86 +8860,7 @@ impl ExcelRuntime {
                                 "Chart.ChartType expects an integral XlChartType value",
                             ));
                         }
-                        let chart_type = match number as i32 {
-                            XL_AREA => ChartType::Area,
-                            XL_3D_AREA => ChartType::Area3D,
-                            XL_AREA_STACKED => ChartType::AreaStacked,
-                            XL_3D_AREA_STACKED => ChartType::Area3DStacked,
-                            XL_AREA_STACKED_100 => ChartType::AreaStacked100,
-                            XL_3D_AREA_STACKED_100 => ChartType::Area3DStacked100,
-                            XL_BAR_CLUSTERED => ChartType::Bar,
-                            XL_3D_BAR_CLUSTERED => ChartType::Bar3DClustered,
-                            XL_BAR_STACKED => ChartType::BarStacked,
-                            XL_3D_BAR_STACKED => ChartType::Bar3DStacked,
-                            XL_BAR_STACKED_100 => ChartType::BarStacked100,
-                            XL_3D_BAR_STACKED_100 => ChartType::Bar3DStacked100,
-                            XL_COLUMN_CLUSTERED => ChartType::Column,
-                            XL_3D_COLUMN => ChartType::Column3D,
-                            XL_3D_COLUMN_CLUSTERED => ChartType::Column3DClustered,
-                            XL_COLUMN_STACKED => ChartType::ColumnStacked,
-                            XL_3D_COLUMN_STACKED => ChartType::Column3DStacked,
-                            XL_COLUMN_STACKED_100 => ChartType::ColumnStacked100,
-                            XL_3D_COLUMN_STACKED_100 => ChartType::Column3DStacked100,
-                            XL_LINE => ChartType::Line,
-                            XL_3D_LINE => ChartType::Line3D,
-                            XL_LINE_MARKERS => ChartType::LineMarkers,
-                            XL_LINE_MARKERS_STACKED => ChartType::LineMarkersStacked,
-                            XL_LINE_MARKERS_STACKED_100 => ChartType::LineMarkersStacked100,
-                            XL_LINE_STACKED => ChartType::LineStacked,
-                            XL_LINE_STACKED_100 => ChartType::LineStacked100,
-                            XL_XY_SCATTER => ChartType::Scatter,
-                            XL_XY_SCATTER_LINES => ChartType::ScatterLines,
-                            XL_XY_SCATTER_LINES_NO_MARKERS => ChartType::ScatterLinesNoMarkers,
-                            XL_XY_SCATTER_SMOOTH => ChartType::ScatterSmooth,
-                            XL_XY_SCATTER_SMOOTH_NO_MARKERS => ChartType::ScatterSmoothNoMarkers,
-                            XL_BUBBLE => ChartType::Bubble,
-                            XL_BUBBLE_3D_EFFECT => ChartType::Bubble3DEffect,
-                            XL_DOUGHNUT => ChartType::Doughnut,
-                            XL_DOUGHNUT_EXPLODED => ChartType::DoughnutExploded,
-                            XL_PIE => ChartType::Pie,
-                            XL_3D_PIE => ChartType::Pie3D,
-                            XL_PIE_EXPLODED => ChartType::PieExploded,
-                            XL_3D_PIE_EXPLODED => ChartType::Pie3DExploded,
-                            XL_PIE_OF_PIE => ChartType::PieOfPie,
-                            XL_BAR_OF_PIE => ChartType::BarOfPie,
-                            XL_RADAR => ChartType::Radar,
-                            XL_RADAR_MARKERS => ChartType::RadarMarkers,
-                            XL_RADAR_FILLED => ChartType::RadarFilled,
-                            XL_STOCK_HLC => ChartType::StockHLC,
-                            XL_STOCK_OHLC => ChartType::StockOHLC,
-                            XL_STOCK_VHLC => ChartType::StockVHLC,
-                            XL_STOCK_VOHLC => ChartType::StockVOHLC,
-                            XL_SURFACE => ChartType::Surface,
-                            XL_SURFACE_WIREFRAME => ChartType::SurfaceWireframe,
-                            XL_SURFACE_TOP_VIEW => ChartType::SurfaceTopView,
-                            XL_SURFACE_TOP_VIEW_WIREFRAME => ChartType::SurfaceTopViewWireframe,
-                            XL_CYLINDER_COL => ChartType::CylinderColumn,
-                            XL_CYLINDER_COL_CLUSTERED => ChartType::CylinderColumnClustered,
-                            XL_CYLINDER_COL_STACKED => ChartType::CylinderColumnStacked,
-                            XL_CYLINDER_COL_STACKED_100 => ChartType::CylinderColumnStacked100,
-                            XL_CYLINDER_BAR_CLUSTERED => ChartType::CylinderBarClustered,
-                            XL_CYLINDER_BAR_STACKED => ChartType::CylinderBarStacked,
-                            XL_CYLINDER_BAR_STACKED_100 => ChartType::CylinderBarStacked100,
-                            XL_CONE_COL => ChartType::ConeColumn,
-                            XL_CONE_COL_CLUSTERED => ChartType::ConeColumnClustered,
-                            XL_CONE_COL_STACKED => ChartType::ConeColumnStacked,
-                            XL_CONE_COL_STACKED_100 => ChartType::ConeColumnStacked100,
-                            XL_CONE_BAR_CLUSTERED => ChartType::ConeBarClustered,
-                            XL_CONE_BAR_STACKED => ChartType::ConeBarStacked,
-                            XL_CONE_BAR_STACKED_100 => ChartType::ConeBarStacked100,
-                            XL_PYRAMID_COL => ChartType::PyramidColumn,
-                            XL_PYRAMID_COL_CLUSTERED => ChartType::PyramidColumnClustered,
-                            XL_PYRAMID_COL_STACKED => ChartType::PyramidColumnStacked,
-                            XL_PYRAMID_COL_STACKED_100 => ChartType::PyramidColumnStacked100,
-                            XL_PYRAMID_BAR_CLUSTERED => ChartType::PyramidBarClustered,
-                            XL_PYRAMID_BAR_STACKED => ChartType::PyramidBarStacked,
-                            XL_PYRAMID_BAR_STACKED_100 => ChartType::PyramidBarStacked100,
-                            _ => {
-                                return Err(OmError::unsupported(
-                                    "Chart.ChartType supports area, bar, column, line, scatter, bubble, doughnut, pie, radar, stock, surface, and shaped 3D chart types",
-                                ));
-                            }
-                        };
+                        let chart_type = chart_type_from_excel_value(number as i32)?;
                         let mut stale_axis_handles = false;
                         let mut stale_line_handles = Vec::new();
                         {
@@ -16170,6 +16093,9 @@ impl ExcelRuntime {
                                     "Chart.SetDefaultChart Name must not be empty",
                                 ));
                             }
+                            return Err(OmError::unsupported(
+                                "Chart.SetDefaultChart custom chart templates are not supported",
+                            ));
                         }
                         OmValue::Number(number) => {
                             if !number.is_finite()
@@ -16181,6 +16107,8 @@ impl ExcelRuntime {
                                     "Chart.SetDefaultChart Name numeric value must be an integer Excel constant",
                                 ));
                             }
+                            self.default_chart_type =
+                                chart_type_from_excel_value(*number as i32)?;
                         }
                         OmValue::Missing | OmValue::Empty | OmValue::Null => {
                             return Err(OmError::invalid_argument(
@@ -23424,6 +23352,8 @@ impl ExcelRuntime {
                     }
                     geometry.push(office_common::Points(*number).to_emu());
                 }
+                let default_chart_type = self.default_chart_type.clone();
+                let default_chart_axes = default_chart_axes_for_type(&default_chart_type);
 
                 let chart_object_id = {
                     let runtime = self.runtime_workbook_mut(workbook)?;
@@ -23541,12 +23471,12 @@ impl ExcelRuntime {
                         ChartModel {
                             id: chart_id,
                             workbook_id,
-                            chart_type: ChartType::Bar,
+                            chart_type: default_chart_type,
                             style: None,
                             series: Vec::new(),
                             title: None,
                             legend: None,
-                            axes: default_chart_axes(),
+                            axes: default_chart_axes,
                             groups: Vec::new(),
                             vary_by_categories: None,
                             gap_width: None,
@@ -31518,6 +31448,8 @@ impl ExcelRuntime {
             };
         }
 
+        let default_chart_type = self.default_chart_type.clone();
+        let default_chart_axes = default_chart_axes_for_type(&default_chart_type);
         let mut last_sheet_id = None;
         for offset in 0..count {
             let insertion_index = base_insertion_index
@@ -31748,12 +31680,12 @@ impl ExcelRuntime {
                     let chart = ChartModel {
                         id: chart_id,
                         workbook_id: runtime.loaded.state.model.id,
-                        chart_type: ChartType::Bar,
+                        chart_type: default_chart_type.clone(),
                         style: None,
                         series: Vec::new(),
                         title: None,
                         legend: None,
-                        axes: default_chart_axes(),
+                        axes: default_chart_axes.clone(),
                         groups: Vec::new(),
                         vary_by_categories: None,
                         gap_width: None,
@@ -53505,6 +53437,87 @@ fn serialize_chart_model_xml(chart: &ChartModel) -> OmResult<Vec<u8>> {
     .into_bytes())
 }
 
+fn chart_type_from_excel_value(value: i32) -> OmResult<ChartType> {
+    match value {
+        XL_AREA => Ok(ChartType::Area),
+        XL_3D_AREA => Ok(ChartType::Area3D),
+        XL_AREA_STACKED => Ok(ChartType::AreaStacked),
+        XL_3D_AREA_STACKED => Ok(ChartType::Area3DStacked),
+        XL_AREA_STACKED_100 => Ok(ChartType::AreaStacked100),
+        XL_3D_AREA_STACKED_100 => Ok(ChartType::Area3DStacked100),
+        XL_BAR_CLUSTERED => Ok(ChartType::Bar),
+        XL_3D_BAR_CLUSTERED => Ok(ChartType::Bar3DClustered),
+        XL_BAR_STACKED => Ok(ChartType::BarStacked),
+        XL_3D_BAR_STACKED => Ok(ChartType::Bar3DStacked),
+        XL_BAR_STACKED_100 => Ok(ChartType::BarStacked100),
+        XL_3D_BAR_STACKED_100 => Ok(ChartType::Bar3DStacked100),
+        XL_COLUMN_CLUSTERED => Ok(ChartType::Column),
+        XL_3D_COLUMN => Ok(ChartType::Column3D),
+        XL_3D_COLUMN_CLUSTERED => Ok(ChartType::Column3DClustered),
+        XL_COLUMN_STACKED => Ok(ChartType::ColumnStacked),
+        XL_3D_COLUMN_STACKED => Ok(ChartType::Column3DStacked),
+        XL_COLUMN_STACKED_100 => Ok(ChartType::ColumnStacked100),
+        XL_3D_COLUMN_STACKED_100 => Ok(ChartType::Column3DStacked100),
+        XL_LINE => Ok(ChartType::Line),
+        XL_3D_LINE => Ok(ChartType::Line3D),
+        XL_LINE_MARKERS => Ok(ChartType::LineMarkers),
+        XL_LINE_MARKERS_STACKED => Ok(ChartType::LineMarkersStacked),
+        XL_LINE_MARKERS_STACKED_100 => Ok(ChartType::LineMarkersStacked100),
+        XL_LINE_STACKED => Ok(ChartType::LineStacked),
+        XL_LINE_STACKED_100 => Ok(ChartType::LineStacked100),
+        XL_XY_SCATTER => Ok(ChartType::Scatter),
+        XL_XY_SCATTER_LINES => Ok(ChartType::ScatterLines),
+        XL_XY_SCATTER_LINES_NO_MARKERS => Ok(ChartType::ScatterLinesNoMarkers),
+        XL_XY_SCATTER_SMOOTH => Ok(ChartType::ScatterSmooth),
+        XL_XY_SCATTER_SMOOTH_NO_MARKERS => Ok(ChartType::ScatterSmoothNoMarkers),
+        XL_BUBBLE => Ok(ChartType::Bubble),
+        XL_BUBBLE_3D_EFFECT => Ok(ChartType::Bubble3DEffect),
+        XL_DOUGHNUT => Ok(ChartType::Doughnut),
+        XL_DOUGHNUT_EXPLODED => Ok(ChartType::DoughnutExploded),
+        XL_PIE => Ok(ChartType::Pie),
+        XL_3D_PIE => Ok(ChartType::Pie3D),
+        XL_PIE_EXPLODED => Ok(ChartType::PieExploded),
+        XL_3D_PIE_EXPLODED => Ok(ChartType::Pie3DExploded),
+        XL_PIE_OF_PIE => Ok(ChartType::PieOfPie),
+        XL_BAR_OF_PIE => Ok(ChartType::BarOfPie),
+        XL_RADAR => Ok(ChartType::Radar),
+        XL_RADAR_MARKERS => Ok(ChartType::RadarMarkers),
+        XL_RADAR_FILLED => Ok(ChartType::RadarFilled),
+        XL_STOCK_HLC => Ok(ChartType::StockHLC),
+        XL_STOCK_OHLC => Ok(ChartType::StockOHLC),
+        XL_STOCK_VHLC => Ok(ChartType::StockVHLC),
+        XL_STOCK_VOHLC => Ok(ChartType::StockVOHLC),
+        XL_SURFACE => Ok(ChartType::Surface),
+        XL_SURFACE_WIREFRAME => Ok(ChartType::SurfaceWireframe),
+        XL_SURFACE_TOP_VIEW => Ok(ChartType::SurfaceTopView),
+        XL_SURFACE_TOP_VIEW_WIREFRAME => Ok(ChartType::SurfaceTopViewWireframe),
+        XL_CYLINDER_COL => Ok(ChartType::CylinderColumn),
+        XL_CYLINDER_COL_CLUSTERED => Ok(ChartType::CylinderColumnClustered),
+        XL_CYLINDER_COL_STACKED => Ok(ChartType::CylinderColumnStacked),
+        XL_CYLINDER_COL_STACKED_100 => Ok(ChartType::CylinderColumnStacked100),
+        XL_CYLINDER_BAR_CLUSTERED => Ok(ChartType::CylinderBarClustered),
+        XL_CYLINDER_BAR_STACKED => Ok(ChartType::CylinderBarStacked),
+        XL_CYLINDER_BAR_STACKED_100 => Ok(ChartType::CylinderBarStacked100),
+        XL_CONE_COL => Ok(ChartType::ConeColumn),
+        XL_CONE_COL_CLUSTERED => Ok(ChartType::ConeColumnClustered),
+        XL_CONE_COL_STACKED => Ok(ChartType::ConeColumnStacked),
+        XL_CONE_COL_STACKED_100 => Ok(ChartType::ConeColumnStacked100),
+        XL_CONE_BAR_CLUSTERED => Ok(ChartType::ConeBarClustered),
+        XL_CONE_BAR_STACKED => Ok(ChartType::ConeBarStacked),
+        XL_CONE_BAR_STACKED_100 => Ok(ChartType::ConeBarStacked100),
+        XL_PYRAMID_COL => Ok(ChartType::PyramidColumn),
+        XL_PYRAMID_COL_CLUSTERED => Ok(ChartType::PyramidColumnClustered),
+        XL_PYRAMID_COL_STACKED => Ok(ChartType::PyramidColumnStacked),
+        XL_PYRAMID_COL_STACKED_100 => Ok(ChartType::PyramidColumnStacked100),
+        XL_PYRAMID_BAR_CLUSTERED => Ok(ChartType::PyramidBarClustered),
+        XL_PYRAMID_BAR_STACKED => Ok(ChartType::PyramidBarStacked),
+        XL_PYRAMID_BAR_STACKED_100 => Ok(ChartType::PyramidBarStacked100),
+        _ => Err(OmError::unsupported(
+            "XlChartType supports area, bar, column, line, scatter, bubble, doughnut, pie, radar, stock, surface, and shaped 3D chart types",
+        )),
+    }
+}
+
 fn chart_type_to_excel_value(chart_type: &ChartType) -> OmResult<i32> {
     match chart_type {
         ChartType::Area => Ok(XL_AREA),
@@ -53596,6 +53609,31 @@ fn default_chart_axes() -> Vec<AxisModel> {
     ];
     reconcile_chart_axis_crossings(&mut axes);
     axes
+}
+
+fn default_chart_axes_for_type(chart_type: &ChartType) -> Vec<AxisModel> {
+    if !chart_type_has_axes(chart_type) {
+        return Vec::new();
+    }
+    if matches!(
+        chart_type,
+        ChartType::Scatter
+            | ChartType::ScatterLines
+            | ChartType::ScatterLinesNoMarkers
+            | ChartType::ScatterSmooth
+            | ChartType::ScatterSmoothNoMarkers
+            | ChartType::Bubble
+            | ChartType::Bubble3DEffect
+    ) {
+        let mut axes = vec![
+            default_chart_axis(Some("10".to_string()), ChartAxisKind::Value),
+            default_chart_axis(Some("20".to_string()), ChartAxisKind::Value),
+        ];
+        axes[0].cross_axis_raw_id = Some("20".to_string());
+        axes[1].cross_axis_raw_id = Some("10".to_string());
+        return axes;
+    }
+    default_chart_axes()
 }
 
 fn default_chart_axis(raw_id: Option<String>, kind: ChartAxisKind) -> AxisModel {
@@ -76483,7 +76521,7 @@ mod tests {
         XL_UPPER_CASE_COLUMN_LETTER, XL_UPPER_CASE_ROW_LETTER, blank_workbook_bytes,
         formula_complex_from_text, supports_format, worksheet_relationships_part_uri_for,
     };
-    use excel_model::{ChartDataLabelPosition, ChartSheetBinding, DrawingObjectModel};
+    use excel_model::{ChartDataLabelPosition, ChartSheetBinding, ChartType, DrawingObjectModel};
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -161079,7 +161117,7 @@ mod tests {
     }
 
     #[test]
-    fn chart_template_noops_allow_read_only_workbook() {
+    fn chart_template_nonmutating_methods_allow_read_only_workbook() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
             .open_workbook(OpenWorkbookSpec {
@@ -161121,10 +161159,6 @@ mod tests {
                 "SaveChartTemplate",
                 OmValue::Text("presentation chart.crtx".to_string()),
             ),
-            (
-                "SetDefaultChart",
-                OmValue::Text("Monthly Sales".to_string()),
-            ),
             ("SetDefaultChart", OmValue::Number(-4102.0)),
         ] {
             assert_eq!(
@@ -161142,6 +161176,255 @@ mod tests {
                 .expect("Workbook.Saved after read-only template no-ops"),
             OmValue::Bool(true)
         );
+    }
+
+    #[test]
+    fn chart_set_default_chart_controls_new_embedded_and_chart_sheet_types() {
+        let mut runtime = ExcelRuntime::new();
+        let source_workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: true,
+            })
+            .expect("open read-only source chart");
+        let source_worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(
+                    source_workbook.0,
+                    "Worksheets",
+                    &[OmValue::Number(1.0)],
+                )
+                .expect("source Workbook.Worksheets(1)"),
+        );
+        let source_chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(source_worksheet, "ChartObjects", &[])
+                .expect("source Worksheet.ChartObjects"),
+        );
+        let source_chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    source_chart_objects,
+                    "Item",
+                    &[OmValue::Number(1.0)],
+                )
+                .expect("source ChartObjects.Item(1)"),
+        );
+        let source_chart = expect_object_handle(
+            runtime
+                .dispatch_get(source_chart_object, "Chart", &[])
+                .expect("source ChartObject.Chart"),
+        );
+        let original_chart_type = expect_number(
+            runtime
+                .dispatch_get(source_chart, "ChartType", &[])
+                .expect("source Chart.ChartType"),
+        );
+
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    source_chart,
+                    "SetDefaultChart",
+                    &[OmValue::Number(f64::from(super::XL_LINE))],
+                )
+                .expect("Chart.SetDefaultChart xlLine"),
+            OmValue::Empty
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    source_chart,
+                    "SetDefaultChart",
+                    &[OmValue::Text("Monthly Sales".to_string())],
+                )
+                .expect_err("custom default chart templates are unavailable")
+                .code,
+            OmErrorCode::Unsupported
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    source_chart,
+                    "SetDefaultChart",
+                    &[OmValue::Number(99_999.0)],
+                )
+                .expect_err("unknown default chart type should fail")
+                .code,
+            OmErrorCode::Unsupported
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(source_chart, "ChartType", &[])
+                    .expect("existing chart type after SetDefaultChart")
+            ),
+            original_chart_type
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(source_workbook.0, "Saved", &[])
+                .expect("read-only source remains saved"),
+            OmValue::Bool(true)
+        );
+
+        let application = runtime.root_application();
+        let workbooks = expect_object_handle(
+            runtime
+                .dispatch_get(application, "Workbooks", &[])
+                .expect("Application.Workbooks"),
+        );
+        let chart_workbook_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    workbooks,
+                    "Add",
+                    &[OmValue::Number(f64::from(super::XL_WBA_TEMPLATE_CHART))],
+                )
+                .expect("Workbooks.Add xlWBATChart after SetDefaultChart"),
+        );
+        let active_chart = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveChart", &[])
+                .expect("ActiveChart after Workbooks.Add xlWBATChart"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(active_chart, "ChartType", &[])
+                    .expect("new chart workbook ChartType")
+            ),
+            f64::from(super::XL_LINE)
+        );
+        let chart_workbook = office_common::WorkbookHandle(chart_workbook_object);
+        let saved_chart_workbook = runtime
+            .save_workbook(
+                chart_workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save default line chart workbook");
+        let reopened_chart_workbook = runtime
+            .codec
+            .load(&saved_chart_workbook, LoadOptions::default())
+            .expect("reopen default line chart workbook");
+        assert!(
+            reopened_chart_workbook
+                .state
+                .charts
+                .values()
+                .all(|chart| chart.chart_type == ChartType::Line)
+        );
+
+        let mixed_workbook = runtime.create_workbook().expect("create mixed chart workbook");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(
+                    mixed_workbook.0,
+                    "Worksheets",
+                    &[OmValue::Number(1.0)],
+                )
+                .expect("mixed Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("mixed Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    chart_objects,
+                    "Add",
+                    &[
+                        OmValue::Number(12.0),
+                        OmValue::Number(18.0),
+                        OmValue::Number(240.0),
+                        OmValue::Number(160.0),
+                    ],
+                )
+                .expect("ChartObjects.Add after SetDefaultChart"),
+        );
+        let embedded_chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("new embedded ChartObject.Chart"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(embedded_chart, "ChartType", &[])
+                    .expect("new embedded ChartType")
+            ),
+            f64::from(super::XL_LINE)
+        );
+
+        let charts = expect_object_handle(
+            runtime
+                .dispatch_get(mixed_workbook.0, "Charts", &[])
+                .expect("mixed Workbook.Charts"),
+        );
+        let chart_sheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(charts, "Add", &[])
+                .expect("Charts.Add after SetDefaultChart"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_sheet, "ChartType", &[])
+                    .expect("new chart sheet ChartType")
+            ),
+            f64::from(super::XL_LINE)
+        );
+
+        let saved_mixed_workbook = runtime
+            .save_workbook(
+                mixed_workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save embedded and chart-sheet defaults");
+        let reopened_mixed_workbook = runtime
+            .codec
+            .load(&saved_mixed_workbook, LoadOptions::default())
+            .expect("reopen embedded and chart-sheet defaults");
+        assert_eq!(reopened_mixed_workbook.state.charts.len(), 2);
+        assert!(
+            reopened_mixed_workbook
+                .state
+                .charts
+                .values()
+                .all(|chart| chart.chart_type == ChartType::Line)
+        );
+    }
+
+    #[test]
+    fn chart_default_axes_follow_default_chart_family() {
+        assert!(super::default_chart_axes_for_type(&ChartType::Pie).is_empty());
+
+        let scatter_axes = super::default_chart_axes_for_type(&ChartType::Scatter);
+        assert_eq!(scatter_axes.len(), 2);
+        assert!(
+            scatter_axes
+                .iter()
+                .all(|axis| axis.kind == excel_model::ChartAxisKind::Value)
+        );
+        assert_eq!(scatter_axes[0].cross_axis_raw_id.as_deref(), Some("20"));
+        assert_eq!(scatter_axes[1].cross_axis_raw_id.as_deref(), Some("10"));
+
+        let line_axes = super::default_chart_axes_for_type(&ChartType::Line);
+        assert_eq!(line_axes.len(), 2);
+        assert_eq!(line_axes[0].kind, excel_model::ChartAxisKind::Category);
+        assert_eq!(line_axes[1].kind, excel_model::ChartAxisKind::Value);
     }
 
     #[test]
@@ -161840,8 +162123,9 @@ mod tests {
                     "SetDefaultChart",
                     &[OmValue::Text("Monthly Sales".to_string())],
                 )
-                .expect("Chart.SetDefaultChart text"),
-            OmValue::Empty
+                .expect_err("Chart.SetDefaultChart rejects unavailable custom templates")
+                .code,
+            OmErrorCode::Unsupported
         );
         assert_eq!(
             runtime

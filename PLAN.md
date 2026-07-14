@@ -5013,6 +5013,8 @@
   - 범위: `Axis.Delete`와 `Chart.HasAxis` visibility setter를 cloned `ChartModel` 후보에 먼저 적용하고 실제 loaded chart part의 lossless patch/fallback serialization 및 XML 재파싱이 성공한 뒤에만 live model과 dirty/stale/global state를 교체하도록 transaction 경계를 추가; chart namespace URI와 direct-child depth를 기준으로 누락·중복 `axId`, axis 간 중복 identity, 중복 `c:delete`를 mutation 시점에 검증하고 generic patch 뒤 visibility rewrite의 semantic convergence를 보장하며, alias/rebound namespace, expanded `axId`, foreign `val` attribute 충돌을 원형 보존; 실패 시 saved state, axis/collection/deep-child handle, Find/Copy 상태와 원본 chart bytes를 유지하고 malformed chart의 동일값 대입은 preflight 없는 exact-byte no-op으로 남기는 회귀를 고정
   - `Step 7.184 DONE` drawing-less chart sheet host preservation validation
   - 범위: chart sheet가 `<drawing>` relationship을 갖지 않아도 host chartsheet part URI와 원본 bytes를 drawing preservation inventory에 유지해 clean save에서 exact bytes를 보존하고, package graph에서 host part가 삭제되거나 원본과 다르게 변조되면 기존 drawing host validation이 save 전에 `InvalidState`로 차단하도록 loader 경계를 보강; 일반 worksheet의 empty drawing inventory 생략 동작은 유지하고 load/classification, clean-save, missing/drift 회귀를 고정
+  - `Step 7.185 DONE` application default chart type creation semantics
+  - 범위: 성공만 반환하던 `Chart.SetDefaultChart`의 built-in numeric `XlChartType` 경로를 application-level default chart state에 연결하고 `Workbooks.Add(xlWBATChart)`, `Charts.Add`, `ChartObjects.Add`가 이후 생성하는 native chart sheet와 embedded chart에 동일한 기본 type을 적용하도록 구현; 기존 chart와 workbook dirty 상태는 바꾸지 않아 read-only chart에서도 호출할 수 있고, custom template 이름과 미지원 숫자 상수는 기존 default를 유지한 채 명시적으로 거절하며, pie/doughnut의 no-axis 및 scatter/bubble의 paired value-axis 초기화와 save/reopen 회귀를 고정
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.
