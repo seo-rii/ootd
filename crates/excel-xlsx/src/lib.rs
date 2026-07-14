@@ -27,8 +27,10 @@ use quick_xml::name::ResolveResult;
 use quick_xml::{NsReader, Reader, Writer};
 
 mod chart_encoder;
+mod chart_graph;
 
 pub use chart_encoder::encode_chart_model_xml;
+pub use chart_graph::materialize_state_only_chart_graphs;
 
 const CALC_CHAIN_PART_NAME: &str = "xl/calcChain.xml";
 const CALC_CHAIN_RELATIONSHIP_TYPE: &str =
@@ -1320,9 +1322,22 @@ impl XlsxCodec {
     }
 
     pub fn save(&self, workbook: &LoadedXlsxWorkbook, _options: SaveOptions) -> OmResult<Vec<u8>> {
-        let mut package = workbook.package.clone();
-        ensure_support_parts_present(&package, &workbook.support_parts)?;
+        ensure_support_parts_present(&workbook.package, &workbook.support_parts)?;
         ensure_workbook_style_ids_are_valid(&workbook.state, &workbook.support_parts)?;
+        let mut materialized_workbook = if chart_graph::has_state_only_chart_graphs(workbook) {
+            let mut materialized = workbook.clone();
+            chart_graph::materialize_state_only_chart_graphs_in_place(&mut materialized)?;
+            Some(materialized)
+        } else {
+            None
+        };
+        let (workbook, mut package) = match materialized_workbook.as_mut() {
+            Some(materialized) => {
+                let package = std::mem::take(&mut materialized.package);
+                (&*materialized, package)
+            }
+            None => (workbook, workbook.package.clone()),
+        };
         let workbook_xml = package
             .part("xl/workbook.xml")
             .ok_or_else(|| {

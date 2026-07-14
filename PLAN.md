@@ -5017,6 +5017,8 @@
   - 범위: 성공만 반환하던 `Chart.SetDefaultChart`의 built-in numeric `XlChartType` 경로를 application-level default chart state에 연결하고 `Workbooks.Add(xlWBATChart)`, `Charts.Add`, `ChartObjects.Add`가 이후 생성하는 native chart sheet와 embedded chart에 동일한 기본 type을 적용하도록 구현; 기존 chart와 workbook dirty 상태는 바꾸지 않아 read-only chart에서도 호출할 수 있고, custom template 이름과 미지원 숫자 상수는 기존 default를 유지한 채 명시적으로 거절하며, pie/doughnut의 no-axis 및 scatter/bubble의 paired value-axis 초기화와 save/reopen 회귀를 고정
   - `Step 7.186 DONE` codec-owned lossless chart XML encoder
   - 범위: runtime에 있던 약 1.1만 줄의 loaded chart patch-first/fallback serializer와 topology/convergence preflight를 `excel-xlsx::encode_chart_model_xml` 단일 writer로 이전하고 `XlsxCodec::save`가 loaded dirty `ChartModel`을 직접 encoding하도록 저장 책임을 codec으로 통합; runtime의 preflight, 신규 embedded/chart-sheet part 생성, 최종 save도 같은 encoder를 재사용하며 encoder 결과 chart type 검증, title-only direct codec save에서 unknown extension과 drawing/drawing rels 원형 보존, save/reopen 회귀를 고정하고 state-only chart graph materialization만 후속 단계로 유지
+  - `Step 7.187 DONE` codec-owned state-only chart package graph materialization
+  - 범위: `raw_part_uri`가 없는 embedded/chart-sheet chart, drawing, host sheet를 `excel-xlsx`가 package part, relationship, content type, workbook sheet order까지 결정적으로 materialize하도록 통합하고 runtime의 중복 graph allocator 약 800줄을 제거; existing drawing append와 worksheet copy/move의 stale `<drawing>` placeholder 재바인딩, live relationship 충돌·partial graph·mixed binding 거부, prefixed namespace/root-depth XML 삽입, stale content-type URI 예약, materialized relationship target 검증, state-only non-visual ID 충돌 재할당, 원자적 public materializer와 save-twice/reopen 회귀를 고정
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.
