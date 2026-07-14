@@ -10,7 +10,8 @@ use excel_model::{
     resolve_chart_source_reference_with_names,
 };
 use excel_xlsx::{
-    ChartSupportRelationshipBinding, LoadedXlsxWorkbook, SheetDrawingSupportParts,
+    ChartSupportRelationshipBinding, LoadedXlsxWorkbook, PendingDrawingRelationshipGraph,
+    PendingPackagePart, PendingPackageRelationship, SheetDrawingSupportParts,
     WorksheetSupportParts, XlsxCodec, encode_chart_model_xml, materialize_state_only_chart_graphs,
 };
 use office_codegen::{OmFocusSurfaceRegistry, build_focus_surface_registry_from_json};
@@ -31756,6 +31757,24 @@ impl ExcelRuntime {
             self.dispatch_set(added_sheet.0, "Name", OmValue::Text(copied_name), &[])?;
             return Ok(added_sheet);
         }
+        let source_pending_drawing_relationship_graphs = self
+            .runtime_workbook(workbook)?
+            .loaded
+            .state
+            .drawings
+            .values()
+            .filter(|drawing| drawing.host_sheet_id == sheet_id)
+            .cloned()
+            .collect::<Vec<_>>()
+            .iter()
+            .map(|drawing| {
+                self.pending_drawing_relationship_graph_for_drawing(workbook, sheet_id, drawing)
+            })
+            .collect::<OmResult<Vec<_>>>()?
+            .into_iter()
+            .flatten()
+            .map(|graph| (graph.source_drawing_part_uri.clone(), graph))
+            .collect::<BTreeMap<_, _>>();
         let snapshot = self.spawn_single_sheet_workbook_from_source(
             workbook,
             sheet_id,
@@ -31970,7 +31989,6 @@ impl ExcelRuntime {
                 let DrawingObjectModel::UnsupportedRaw {
                     id,
                     raw_anchor_xml,
-                    relationship_ids,
                     ..
                 } = object
                 else {
@@ -31981,12 +31999,6 @@ impl ExcelRuntime {
                         OmErrorCode::InvalidState,
                         format!("opaque drawing object {} has no anchor XML", id.0),
                     ));
-                }
-                if !relationship_ids.is_empty() {
-                    return Err(OmError::unsupported(format!(
-                        "copying opaque drawing object {} requires relationship copying",
-                        id.0
-                    )));
                 }
             }
 
@@ -32482,6 +32494,18 @@ impl ExcelRuntime {
                                 .state
                                 .drawings
                                 .insert(drawing_id, copied_drawing);
+                            if let Some(graph) = source_drawing
+                                .raw_part_uri
+                                .as_ref()
+                                .and_then(|part_uri| {
+                                    source_pending_drawing_relationship_graphs.get(part_uri)
+                                })
+                            {
+                                runtime
+                                    .loaded
+                                    .pending_drawing_relationship_graphs
+                                    .insert(drawing_id, graph.clone());
+                            }
                         }
                     }
                 }
@@ -33167,6 +33191,10 @@ impl ExcelRuntime {
             let mut removed_chart_ids = BTreeSet::new();
             let mut drawing_chart_part_uris_to_remove = BTreeSet::<String>::new();
             for drawing_id in removed_drawing_ids {
+                runtime
+                    .loaded
+                    .pending_drawing_relationship_graphs
+                    .remove(&drawing_id);
                 if let Some(drawing) = runtime.loaded.state.drawings.remove(&drawing_id) {
                     if let Some(part_uri) = drawing.raw_part_uri {
                         drawing_chart_part_uris_to_remove
@@ -34188,6 +34216,155 @@ impl ExcelRuntime {
             ));
         }
         Ok(())
+    }
+
+    fn pending_drawing_relationship_graph_for_drawing(
+        &self,
+        workbook: WorkbookHandle,
+        sheet_id: SheetId,
+        drawing: &DrawingModel,
+    ) -> OmResult<Option<PendingDrawingRelationshipGraph>> {
+        let Some(source_drawing_part_uri) = drawing.raw_part_uri.as_deref() else {
+            if drawing.objects.iter().any(|object| {
+                matches!(
+                    object,
+                    DrawingObjectModel::UnsupportedRaw {
+                        relationship_ids,
+                        ..
+                    } if !relationship_ids.is_empty()
+                )
+            }) {
+                return Err(OmError::new(
+                    OmErrorCode::InvalidState,
+                    format!(
+                        "drawing {} has relationship-backed objects without a source part",
+                        drawing.id.0
+                    ),
+                ));
+            }
+            return Ok(None);
+        };
+        let runtime = self.runtime_workbook(workbook)?;
+        let Some(support_parts) = runtime.loaded.sheet_drawing_support_parts.get(&sheet_id) else {
+            return Ok(None);
+        };
+        let Some(summary) = support_parts.drawing_summaries.get(source_drawing_part_uri) else {
+            if drawing.objects.iter().any(|object| {
+                matches!(
+                    object,
+                    DrawingObjectModel::UnsupportedRaw {
+                        relationship_ids,
+                        ..
+                    } if !relationship_ids.is_empty()
+                )
+            }) {
+                return Err(OmError::new(
+                    OmErrorCode::InvalidState,
+                    format!(
+                        "drawing {} relationship summary is missing",
+                        drawing.id.0
+                    ),
+                ));
+            }
+            return Ok(None);
+        };
+        if summary.opaque_relationships.is_empty() {
+            if drawing.objects.iter().any(|object| {
+                matches!(
+                    object,
+                    DrawingObjectModel::UnsupportedRaw {
+                        relationship_ids,
+                        ..
+                    } if !relationship_ids.is_empty()
+                )
+            }) {
+                return Err(OmError::new(
+                    OmErrorCode::InvalidState,
+                    format!(
+                        "drawing {} has opaque relationship ids missing from its package inventory",
+                        drawing.id.0
+                    ),
+                ));
+            }
+            return Ok(None);
+        }
+        let root_relationships_part_uri =
+            worksheet_relationships_part_uri_for(source_drawing_part_uri);
+        let root_relationships_part = runtime
+            .loaded
+            .package
+            .part(&root_relationships_part_uri)
+            .ok_or_else(|| {
+                OmError::new(
+                    OmErrorCode::InvalidState,
+                    format!(
+                        "drawing {} relationship part is missing: {}",
+                        drawing.id.0, root_relationships_part_uri
+                    ),
+                )
+            })?;
+        let root_relationships_part_source_bytes = support_parts
+            .drawing_relationships_part_source_bytes
+            .get(&root_relationships_part_uri)
+            .cloned()
+            .unwrap_or_else(|| root_relationships_part.bytes.clone());
+        let root_relationships = summary
+            .opaque_relationships
+            .iter()
+            .map(|relationship| PendingPackageRelationship {
+                relationship_id: relationship.relationship_id.clone(),
+                relationship_type: relationship.relationship_type.clone(),
+                target: relationship.target.clone(),
+                target_mode: relationship.target_mode.clone(),
+            })
+            .collect::<Vec<_>>();
+        for relationship in &root_relationships {
+            validate_pending_runtime_relationship(relationship)?;
+        }
+        let expected_relationship_ids = drawing
+            .objects
+            .iter()
+            .filter_map(|object| match object {
+                DrawingObjectModel::UnsupportedRaw {
+                    relationship_ids,
+                    ..
+                } => Some(relationship_ids),
+                DrawingObjectModel::ChartFrame(_) => None,
+            })
+            .flatten()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        let inventoried_relationship_ids = root_relationships
+            .iter()
+            .map(|relationship| relationship.relationship_id.as_str())
+            .collect::<BTreeSet<_>>();
+        if !expected_relationship_ids.is_subset(&inventoried_relationship_ids) {
+            return Err(OmError::new(
+                OmErrorCode::InvalidState,
+                format!(
+                    "drawing {} has opaque relationship ids missing from its package inventory",
+                    drawing.id.0
+                ),
+            ));
+        }
+
+        let mut parts = BTreeMap::new();
+        for relationship in &root_relationships {
+            if !pending_package_relationship_is_external(relationship) {
+                collect_pending_package_part_graph(
+                    &runtime.loaded.package,
+                    &relationship.target,
+                    &mut parts,
+                )?;
+            }
+        }
+        Ok(Some(PendingDrawingRelationshipGraph {
+            source_drawing_part_uri: source_drawing_part_uri.to_string(),
+            root_relationships_part_source_bytes,
+            root_relationships_part_compression: root_relationships_part.compression,
+            root_relationships,
+            parts,
+        }))
     }
 
     fn chart_support_part_sources_for_chart(
@@ -39239,6 +39416,195 @@ fn append_empty_xml_child_before_container_end(
     }
 
     Ok(writer.into_inner().into_inner())
+}
+
+fn pending_package_relationship_is_external(relationship: &PendingPackageRelationship) -> bool {
+    relationship
+        .target_mode
+        .as_deref()
+        .is_some_and(|target_mode| target_mode.eq_ignore_ascii_case("External"))
+}
+
+fn validate_pending_runtime_relationship(
+    relationship: &PendingPackageRelationship,
+) -> OmResult<()> {
+    if relationship.relationship_id.trim().is_empty()
+        || relationship.relationship_type.trim().is_empty()
+        || relationship.target.trim().is_empty()
+    {
+        return Err(OmError::new(
+            OmErrorCode::InvalidState,
+            "opaque package relationship requires an id, type, and target",
+        ));
+    }
+    if relationship
+        .target_mode
+        .as_deref()
+        .is_some_and(|mode| {
+            !mode.eq_ignore_ascii_case("External") && !mode.eq_ignore_ascii_case("Internal")
+        })
+    {
+        return Err(OmError::new(
+            OmErrorCode::InvalidState,
+            format!(
+                "opaque package relationship {} has unsupported TargetMode",
+                relationship.relationship_id
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn collect_pending_package_part_graph(
+    package: &OpcPackage,
+    source_part_uri: &str,
+    parts: &mut BTreeMap<String, PendingPackagePart>,
+) -> OmResult<()> {
+    if parts.contains_key(source_part_uri) {
+        return Ok(());
+    }
+    let source_part = package.part(source_part_uri).ok_or_else(|| {
+        OmError::new(
+            OmErrorCode::InvalidState,
+            format!("opaque drawing target part is missing: {source_part_uri}"),
+        )
+    })?;
+    let relationships_part_uri = worksheet_relationships_part_uri_for(source_part_uri);
+    let relationships_part = package.part(&relationships_part_uri);
+    let relationships = relationships_part
+        .map(|part| {
+            parse_pending_package_relationships(part.bytes.as_slice(), source_part_uri)
+        })
+        .transpose()?
+        .unwrap_or_default();
+    parts.insert(
+        source_part_uri.to_string(),
+        PendingPackagePart {
+            source_part_uri: source_part_uri.to_string(),
+            bytes: source_part.bytes.clone(),
+            content_type: source_part.content_type.clone(),
+            compression: source_part.compression,
+            relationships_part_source_bytes: relationships_part.map(|part| part.bytes.clone()),
+            relationships_part_compression: relationships_part.map(|part| part.compression),
+            relationships: relationships.clone(),
+        },
+    );
+    for relationship in relationships {
+        if !pending_package_relationship_is_external(&relationship) {
+            collect_pending_package_part_graph(package, &relationship.target, parts)?;
+        }
+    }
+    Ok(())
+}
+
+fn parse_pending_package_relationships(
+    relationships_xml: &[u8],
+    source_part_uri: &str,
+) -> OmResult<Vec<PendingPackageRelationship>> {
+    let mut reader = Reader::from_reader(Cursor::new(relationships_xml));
+    reader.config_mut().trim_text(true);
+    let mut buffer = Vec::new();
+    let mut relationships = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buffer) {
+            Ok(Event::Start(element)) | Ok(Event::Empty(element))
+                if xml_local_name(element.name().as_ref()) == b"Relationship" =>
+            {
+                let mut relationship_id = None;
+                let mut relationship_type = None;
+                let mut target = None;
+                let mut target_mode = None;
+                for attr in element.attributes() {
+                    let attr = attr.map_err(runtime_xml_error)?;
+                    let value = attr
+                        .decode_and_unescape_value(reader.decoder())
+                        .map_err(runtime_xml_error)?
+                        .into_owned();
+                    match attr.key.as_ref() {
+                        b"Id" => relationship_id = Some(value),
+                        b"Type" => relationship_type = Some(value),
+                        b"Target" => target = Some(value),
+                        b"TargetMode" => target_mode = Some(value),
+                        _ => {}
+                    }
+                }
+                let relationship_id = relationship_id.ok_or_else(|| {
+                    OmError::new(
+                        OmErrorCode::InvalidState,
+                        format!(
+                            "relationship in {} has no Id",
+                            worksheet_relationships_part_uri_for(source_part_uri)
+                        ),
+                    )
+                })?;
+                let relationship_type = relationship_type.ok_or_else(|| {
+                    OmError::new(
+                        OmErrorCode::InvalidState,
+                        format!("relationship {relationship_id} has no Type"),
+                    )
+                })?;
+                let target = target.ok_or_else(|| {
+                    OmError::new(
+                        OmErrorCode::InvalidState,
+                        format!("relationship {relationship_id} has no Target"),
+                    )
+                })?;
+                let external = target_mode
+                    .as_deref()
+                    .is_some_and(|mode| mode.eq_ignore_ascii_case("External"));
+                let target = if external {
+                    target
+                } else {
+                    normalize_pending_package_target(&target, source_part_uri).ok_or_else(|| {
+                        OmError::new(
+                            OmErrorCode::InvalidState,
+                            format!(
+                                "relationship {relationship_id} has an invalid internal Target"
+                            ),
+                        )
+                    })?
+                };
+                relationships.push(PendingPackageRelationship {
+                    relationship_id,
+                    relationship_type,
+                    target,
+                    target_mode,
+                });
+                validate_pending_runtime_relationship(
+                    relationships.last().expect("relationship pushed above"),
+                )?;
+            }
+            Ok(Event::Eof) => break,
+            Ok(_) => {}
+            Err(error) => return Err(runtime_xml_error(error)),
+        }
+        buffer.clear();
+    }
+    Ok(relationships)
+}
+
+fn normalize_pending_package_target(target: &str, source_part_uri: &str) -> Option<String> {
+    let mut segments = if target.starts_with('/') {
+        Vec::new()
+    } else {
+        source_part_uri
+            .rsplit_once('/')
+            .map_or("", |(parent, _)| parent)
+            .split('/')
+            .filter(|segment| !segment.is_empty())
+            .map(str::to_string)
+            .collect::<Vec<_>>()
+    };
+    for segment in target.split('/') {
+        match segment {
+            "" | "." => {}
+            ".." => {
+                segments.pop();
+            }
+            _ => segments.push(segment.to_string()),
+        }
+    }
+    (!segments.is_empty()).then(|| segments.join("/"))
 }
 
 fn worksheet_relationships_part_uri_for(worksheet_part_uri: &str) -> String {
@@ -179739,11 +180105,92 @@ mod tests {
     }
 
     #[test]
-    fn worksheet_cross_workbook_move_preserves_relationship_free_opaque_drawing_anchor() {
+    fn worksheet_copy_reallocates_internal_image_part_for_opaque_anchor() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_internal_image_backed_raw_shape_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open chart and image-backed shape workbook");
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let source_sheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("source worksheet"),
+        );
+        runtime
+            .dispatch_invoke(
+                source_sheet,
+                "Copy",
+                &[OmValue::Missing, OmValue::Number(1.0)],
+            )
+            .expect("copy image-backed worksheet after source");
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save copied image-backed worksheet");
+        let package = OpcPackage::from_bytes(&saved).expect("saved package");
+        assert_eq!(
+            package
+                .part("xl/media/image1.png")
+                .expect("source image part")
+                .bytes,
+            vec![1, 2, 3, 4]
+        );
+        assert_eq!(
+            package
+                .part("xl/media/image2.png")
+                .expect("copied image part")
+                .bytes,
+            vec![1, 2, 3, 4]
+        );
+        let copied_relationships = String::from_utf8(
+            package
+                .part("xl/drawings/_rels/drawing2.xml.rels")
+                .expect("copied drawing relationships")
+                .bytes
+                .clone(),
+        )
+        .expect("copied drawing relationships XML");
+        assert!(copied_relationships.contains(r#"Id="rIdShapeImage""#));
+        assert!(copied_relationships.contains(r#"Target="../media/image2.png""#));
+        assert!(copied_relationships.contains(r#"keep:edge="image""#));
+
+        let saved_again = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save copied image-backed worksheet twice");
+        let saved_again_package = OpcPackage::from_bytes(&saved_again).expect("second package");
+        assert!(saved_again_package.contains("xl/media/image2.png"));
+        assert!(!saved_again_package.contains("xl/media/image3.png"));
+    }
+
+    #[test]
+    fn worksheet_cross_workbook_move_preserves_internal_image_backed_opaque_anchor() {
         let mut runtime = ExcelRuntime::new();
         let source_workbook = runtime
             .open_workbook(OpenWorkbookSpec {
-                bytes: synthetic_workbook_with_embedded_chart_and_raw_shape_bytes(),
+                bytes: synthetic_workbook_with_internal_image_backed_raw_shape_bytes(),
                 format_hint: Some(FileFormat::Xlsx),
                 profile: ExcelProfile::Excel365,
                 read_only: false,
@@ -179803,6 +180250,24 @@ mod tests {
             .expect("moved raw shape drawing");
         assert!(copied_drawing.contains("Keep me"));
         assert!(copied_drawing.contains("Embedded Revenue Chart"));
+        assert_eq!(
+            package
+                .part("xl/media/image1.png")
+                .expect("moved image part")
+                .bytes,
+            vec![1, 2, 3, 4]
+        );
+        let copied_drawing_relationships = package
+            .parts()
+            .iter()
+            .filter(|part| {
+                part.name.starts_with("xl/drawings/_rels/drawing")
+                    && part.name.ends_with(".xml.rels")
+            })
+            .map(|part| String::from_utf8_lossy(&part.bytes))
+            .find(|xml| xml.contains("rIdShapeImage"))
+            .expect("moved image relationship");
+        assert!(copied_drawing_relationships.contains("../media/image1.png"));
 
         let reopened = ExcelRuntime::new()
             .codec
@@ -179822,7 +180287,7 @@ mod tests {
     }
 
     #[test]
-    fn worksheet_copy_rejects_relationship_backed_opaque_anchor_atomically() {
+    fn worksheet_copy_preserves_external_hyperlink_backed_opaque_anchor() {
         let mut runtime = ExcelRuntime::new();
         let source_workbook = runtime
             .open_workbook(OpenWorkbookSpec {
@@ -179873,15 +180338,120 @@ mod tests {
             .id;
         let target_sheet = runtime.register_worksheet_handle(target_workbook, target_sheet_id);
 
+        runtime
+            .dispatch_invoke(
+                source_sheet.0,
+                "Copy",
+                &[OmValue::Object(target_sheet.0)],
+            )
+            .expect("copy external hyperlink-backed raw anchor");
+        let saved = runtime
+            .save_workbook(
+                target_workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save external hyperlink-backed raw anchor copy");
+        let package = OpcPackage::from_bytes(&saved).expect("saved target package");
+        let drawing_relationships = package
+            .parts()
+            .iter()
+            .filter(|part| {
+                part.name.starts_with("xl/drawings/_rels/drawing")
+                    && part.name.ends_with(".xml.rels")
+            })
+            .map(|part| String::from_utf8_lossy(&part.bytes))
+            .find(|xml| xml.contains("rIdShapeLink"))
+            .expect("copied drawing hyperlink relationship");
+        assert!(drawing_relationships.contains("https://example.com/shape"));
+        assert!(drawing_relationships.contains(r#"TargetMode="External""#));
+        assert_eq!(
+            runtime
+                .runtime_workbook(target_workbook)
+                .expect("target workbook state")
+                .loaded
+                .state
+                .worksheets
+                .len(),
+            2
+        );
+        assert_eq!(
+            runtime
+                .runtime_workbook(source_workbook)
+                .expect("source workbook state")
+                .loaded
+                .state
+                .worksheets
+                .len(),
+            1
+        );
+        assert!(!runtime.runtime_workbook(source_workbook).unwrap().dirty);
+        let reopened = ExcelRuntime::new()
+            .codec
+            .load(&saved, LoadOptions::default())
+            .expect("reopen hyperlink-backed raw anchor copy");
+        assert!(reopened
+            .state
+            .drawings
+            .values()
+            .flat_map(|drawing| drawing.objects.iter())
+            .any(|object| matches!(
+                object,
+                DrawingObjectModel::UnsupportedRaw {
+                    relationship_ids,
+                    ..
+                } if relationship_ids == &["rIdShapeLink".to_string()]
+            )));
+    }
+
+    #[test]
+    fn worksheet_copy_rejects_dangling_opaque_relationship_atomically() {
+        let mut runtime = ExcelRuntime::new();
+        let source_workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_dangling_image_backed_raw_shape_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open dangling image-backed shape source workbook");
+        let source_sheet_id = runtime
+            .runtime_workbook(source_workbook)
+            .expect("source workbook state")
+            .loaded
+            .state
+            .worksheets[0]
+            .id;
+        let source_sheet = runtime.register_worksheet_handle(source_workbook, source_sheet_id);
+        let target_workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open target workbook");
+        let target_sheet_id = runtime
+            .runtime_workbook(target_workbook)
+            .expect("target workbook state")
+            .loaded
+            .state
+            .worksheets[0]
+            .id;
+        let target_sheet = runtime.register_worksheet_handle(target_workbook, target_sheet_id);
+
         let error = runtime
             .dispatch_invoke(
                 source_sheet.0,
                 "Copy",
                 &[OmValue::Object(target_sheet.0)],
             )
-            .expect_err("relationship-backed raw anchor copy should be rejected");
-        assert_eq!(error.code, OmErrorCode::Unsupported);
-        assert!(error.message.contains("requires relationship copying"));
+            .expect_err("dangling opaque relationship should fail before target mutation");
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("opaque drawing target part is missing"));
         assert_eq!(
             runtime
                 .runtime_workbook(target_workbook)
@@ -184478,6 +185048,85 @@ mod tests {
         package
             .to_bytes()
             .expect("relationship-backed chart and shape package bytes")
+    }
+
+    fn synthetic_workbook_with_internal_image_backed_raw_shape_bytes() -> Vec<u8> {
+        let mut package = OpcPackage::from_bytes(
+            &synthetic_workbook_with_embedded_chart_and_raw_shape_bytes(),
+        )
+        .expect("chart and shape package");
+        let drawing_xml = String::from_utf8(
+            package
+                .part("xl/drawings/drawing1.xml")
+                .expect("drawing part")
+                .bytes
+                .clone(),
+        )
+        .expect("drawing XML")
+        .replace(
+            "<xdr:spPr><a:prstGeom",
+            r#"<xdr:spPr><a:blip r:embed="rIdShapeImage"/><a:prstGeom"#,
+        );
+        package
+            .replace_part_bytes("xl/drawings/drawing1.xml", drawing_xml.into_bytes())
+            .expect("replace drawing XML");
+        let drawing_rels_xml = String::from_utf8(
+            package
+                .part("xl/drawings/_rels/drawing1.xml.rels")
+                .expect("drawing relationships part")
+                .bytes
+                .clone(),
+        )
+        .expect("drawing relationships XML")
+        .replace(
+            "</Relationships>",
+            r#"  <Relationship Id="rIdShapeImage" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image1.png" keep:edge="image" xmlns:keep="urn:keep"/>
+</Relationships>"#,
+        );
+        package
+            .replace_part_bytes(
+                "xl/drawings/_rels/drawing1.xml.rels",
+                drawing_rels_xml.into_bytes(),
+            )
+            .expect("replace drawing relationships XML");
+        let content_types_xml = String::from_utf8(
+            package
+                .part("[Content_Types].xml")
+                .expect("content types part")
+                .bytes
+                .clone(),
+        )
+        .expect("content types XML")
+        .replace(
+            "</Types>",
+            r#"  <Default Extension="png" ContentType="image/png"/>
+</Types>"#,
+        );
+        package
+            .replace_part_bytes("[Content_Types].xml", content_types_xml.into_bytes())
+            .expect("replace content types XML");
+        package
+            .add_part(OpcPart {
+                name: "xl/media/image1.png".to_string(),
+                content_type: Some("image/png".to_string()),
+                compression: CompressionMethod::Stored,
+                bytes: vec![1, 2, 3, 4],
+            })
+            .expect("add image part");
+        package
+            .to_bytes()
+            .expect("internal image-backed chart and shape package bytes")
+    }
+
+    fn synthetic_workbook_with_dangling_image_backed_raw_shape_bytes() -> Vec<u8> {
+        let mut package = OpcPackage::from_bytes(
+            &synthetic_workbook_with_internal_image_backed_raw_shape_bytes(),
+        )
+        .expect("internal image-backed package");
+        package.remove_part("xl/media/image1.png");
+        package
+            .to_bytes()
+            .expect("dangling image-backed chart and shape package bytes")
     }
 
     fn synthetic_workbook_with_filtered_chart_categories_bytes() -> Vec<u8> {

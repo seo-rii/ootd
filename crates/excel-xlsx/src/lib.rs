@@ -20,7 +20,7 @@ use office_common::{
     OmResult, OmValue, OpaquePart, PointEmu, ReferenceTarget, SaveOptions, SheetId, SheetKind,
     SheetVisibility, SizeEmu, StyleId, TwoCellAnchor, WorkbookId, WorkbookModel, WorksheetModel,
 };
-use office_opc::OpcPackage;
+use office_opc::{CompressionMethod, OpcPackage};
 use quick_xml::escape::partial_escape;
 use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::name::ResolveResult;
@@ -75,6 +75,35 @@ pub struct LoadedXlsxWorkbook {
     pub support_parts: WorkbookSupportParts,
     pub worksheet_support_parts: BTreeMap<SheetId, WorksheetSupportParts>,
     pub sheet_drawing_support_parts: BTreeMap<SheetId, SheetDrawingSupportParts>,
+    pub pending_drawing_relationship_graphs: BTreeMap<DrawingId, PendingDrawingRelationshipGraph>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingDrawingRelationshipGraph {
+    pub source_drawing_part_uri: String,
+    pub root_relationships_part_source_bytes: Vec<u8>,
+    pub root_relationships_part_compression: CompressionMethod,
+    pub root_relationships: Vec<PendingPackageRelationship>,
+    pub parts: BTreeMap<String, PendingPackagePart>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingPackageRelationship {
+    pub relationship_id: String,
+    pub relationship_type: String,
+    pub target: String,
+    pub target_mode: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingPackagePart {
+    pub source_part_uri: String,
+    pub bytes: Vec<u8>,
+    pub content_type: Option<String>,
+    pub compression: CompressionMethod,
+    pub relationships_part_source_bytes: Option<Vec<u8>>,
+    pub relationships_part_compression: Option<CompressionMethod>,
+    pub relationships: Vec<PendingPackageRelationship>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -1321,6 +1350,7 @@ impl XlsxCodec {
             support_parts,
             worksheet_support_parts,
             sheet_drawing_support_parts,
+            pending_drawing_relationship_graphs: BTreeMap::new(),
         })
     }
 
@@ -3001,7 +3031,7 @@ fn parse_relationship_entries_with_options(
     loop {
         match reader.read_event_into(&mut buffer) {
             Ok(Event::Start(element)) | Ok(Event::Empty(element))
-                if element.name().as_ref() == b"Relationship" =>
+                if xml_local_name(element.name().as_ref()) == b"Relationship" =>
             {
                 let mut id = None;
                 let mut relationship_type = None;
