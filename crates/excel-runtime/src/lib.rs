@@ -31215,6 +31215,356 @@ impl ExcelRuntime {
         insertion_index: usize,
     ) -> OmResult<WorksheetHandle> {
         if self.worksheet_model(workbook, sheet_id)?.kind == SheetKind::ChartSheet {
+            let (source_drawing, source_primary_chart_id) = {
+                let runtime = self.runtime_workbook(workbook)?;
+                let chart_binding = runtime
+                    .loaded
+                    .state
+                    .chart_sheets
+                    .get(&sheet_id)
+                    .ok_or_else(|| {
+                        OmError::new(
+                            OmErrorCode::InvalidState,
+                            "chart sheet is missing a chart binding",
+                        )
+                    })?;
+                (
+                    chart_binding.drawing_id.and_then(|drawing_id| {
+                        runtime.loaded.state.drawings.get(&drawing_id).cloned()
+                    }),
+                    chart_binding.chart_id,
+                )
+            };
+            let source_pending_drawing_relationship_graph = source_drawing
+                .as_ref()
+                .map(|drawing| {
+                    self.pending_drawing_relationship_graph_for_drawing(
+                        workbook, sheet_id, drawing,
+                    )
+                })
+                .transpose()?
+                .flatten();
+            let requires_full_drawing_copy = source_drawing
+                .as_ref()
+                .is_some_and(|drawing| {
+                    !matches!(
+                        drawing.objects.as_slice(),
+                        [DrawingObjectModel::ChartFrame(chart_object)]
+                            if chart_object.chart_id == source_primary_chart_id
+                    )
+                })
+                || source_pending_drawing_relationship_graph.is_some();
+
+            if requires_full_drawing_copy {
+                let source_drawing = source_drawing.ok_or_else(|| {
+                    OmError::new(
+                        OmErrorCode::InvalidState,
+                        "chart sheet drawing inventory is missing",
+                    )
+                })?;
+                let (source_name, source_visibility, source_charts) = {
+                    let runtime = self.runtime_workbook(workbook)?;
+                    let worksheet = runtime
+                        .loaded
+                        .state
+                        .worksheets
+                        .iter()
+                        .find(|worksheet| worksheet.id == sheet_id)
+                        .ok_or_else(|| {
+                            OmError::new(OmErrorCode::NotFound, "unknown worksheet")
+                        })?;
+                    let chart_binding = runtime
+                        .loaded
+                        .state
+                        .chart_sheets
+                        .get(&sheet_id)
+                        .ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                "chart sheet is missing a chart binding",
+                            )
+                        })?;
+                    let mut chart_ids = BTreeSet::new();
+                    let mut primary_chart_count = 0usize;
+                    for object in &source_drawing.objects {
+                        match object {
+                            DrawingObjectModel::ChartFrame(chart_object) => {
+                                if !chart_ids.insert(chart_object.chart_id) {
+                                    return Err(OmError::unsupported(format!(
+                                        "chart sheet drawing binds chart {} more than once",
+                                        chart_object.chart_id.0
+                                    )));
+                                }
+                                if chart_object.chart_id == chart_binding.chart_id {
+                                    primary_chart_count += 1;
+                                }
+                            }
+                            DrawingObjectModel::UnsupportedRaw {
+                                id,
+                                raw_anchor_xml,
+                                ..
+                            } => {
+                                if raw_anchor_xml.trim().is_empty() {
+                                    return Err(OmError::new(
+                                        OmErrorCode::InvalidState,
+                                        format!(
+                                            "opaque drawing object {} has no anchor XML",
+                                            id.0
+                                        ),
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                    if primary_chart_count != 1 {
+                        return Err(OmError::new(
+                            OmErrorCode::InvalidState,
+                            "chart sheet drawing must contain exactly one primary chart frame",
+                        ));
+                    }
+                    let source_charts = chart_ids
+                        .into_iter()
+                        .map(|chart_id| {
+                            runtime
+                                .loaded
+                                .state
+                                .charts
+                                .get(&chart_id)
+                                .cloned()
+                                .map(|chart| (chart_id, chart))
+                                .ok_or_else(|| {
+                                    OmError::new(
+                                        OmErrorCode::InvalidState,
+                                        format!(
+                                            "chart sheet drawing references missing chart {}",
+                                            chart_id.0
+                                        ),
+                                    )
+                                })
+                        })
+                        .collect::<OmResult<BTreeMap<_, _>>>()?;
+                    (worksheet.name.clone(), worksheet.visibility, source_charts)
+                };
+                let source_chart_support_part_sources = source_charts
+                    .iter()
+                    .map(|(chart_id, chart)| {
+                        Ok((
+                            *chart_id,
+                            self.chart_support_part_sources_for_chart(
+                                workbook,
+                                sheet_id,
+                                chart.raw_part_uri.as_deref(),
+                            )?,
+                        ))
+                    })
+                    .collect::<OmResult<BTreeMap<_, _>>>()?;
+
+                let (
+                    target_workbook_id,
+                    copied_sheet_id,
+                    copied_drawing_id,
+                    mut next_chart_id,
+                    mut next_drawing_object_id,
+                    copied_name,
+                ) = {
+                    let runtime = self.runtime_workbook(target_workbook)?;
+                    if runtime.read_only {
+                        return Err(OmError::new(
+                            OmErrorCode::InvalidState,
+                            "cannot modify a read-only workbook",
+                        ));
+                    }
+                    let copied_name = if runtime.loaded.state.worksheets.iter().all(|worksheet| {
+                        !worksheet.name.eq_ignore_ascii_case(source_name.as_str())
+                    }) {
+                        source_name.clone()
+                    } else {
+                        let mut suffix = 2usize;
+                        loop {
+                            let suffix_text = format!(" ({suffix})");
+                            let base_len = 31usize.saturating_sub(suffix_text.chars().count());
+                            let base = source_name.chars().take(base_len).collect::<String>();
+                            let candidate = format!("{base}{suffix_text}");
+                            if runtime.loaded.state.worksheets.iter().all(|worksheet| {
+                                !worksheet.name.eq_ignore_ascii_case(candidate.as_str())
+                            }) {
+                                break candidate;
+                            }
+                            suffix += 1;
+                        }
+                    };
+                    (
+                        runtime.loaded.state.model.id,
+                        SheetId(
+                            runtime
+                                .loaded
+                                .state
+                                .worksheets
+                                .iter()
+                                .map(|worksheet| worksheet.id.0)
+                                .max()
+                                .unwrap_or_default()
+                                + 1,
+                        ),
+                        DrawingId(
+                            runtime
+                                .loaded
+                                .state
+                                .drawings
+                                .keys()
+                                .map(|drawing_id| drawing_id.0)
+                                .max()
+                                .unwrap_or_default()
+                                + 1,
+                        ),
+                        runtime
+                            .loaded
+                            .state
+                            .charts
+                            .keys()
+                            .map(|chart_id| chart_id.0)
+                            .max()
+                            .unwrap_or_default()
+                            + 1,
+                        runtime
+                            .loaded
+                            .state
+                            .drawings
+                            .values()
+                            .flat_map(|drawing| drawing.objects.iter())
+                            .map(|object| match object {
+                                DrawingObjectModel::ChartFrame(chart_object) => chart_object.id.0,
+                                DrawingObjectModel::UnsupportedRaw { id, .. } => id.0,
+                            })
+                            .max()
+                            .unwrap_or_default()
+                            + 1,
+                        copied_name,
+                    )
+                };
+
+                let mut chart_id_map = BTreeMap::new();
+                let mut copied_charts = BTreeMap::new();
+                let mut copied_chart_support_part_sources = BTreeMap::new();
+                let mut copied_objects = Vec::with_capacity(source_drawing.objects.len());
+                for source_object in &source_drawing.objects {
+                    match source_object {
+                        DrawingObjectModel::ChartFrame(source_chart_object) => {
+                            let copied_chart_id = ChartId(next_chart_id);
+                            next_chart_id += 1;
+                            chart_id_map.insert(source_chart_object.chart_id, copied_chart_id);
+                            let mut copied_chart = source_charts
+                                .get(&source_chart_object.chart_id)
+                                .expect("source chart inventory validated above")
+                                .clone();
+                            copied_chart.id = copied_chart_id;
+                            copied_chart.workbook_id = target_workbook_id;
+                            copied_chart.raw_part_uri = None;
+                            copied_chart.content_dirty = true;
+                            copied_chart.dirty = true;
+                            copied_charts.insert(copied_chart_id, copied_chart);
+                            if let Some(support_sources) = source_chart_support_part_sources
+                                .get(&source_chart_object.chart_id)
+                                && !support_sources.is_empty()
+                            {
+                                copied_chart_support_part_sources
+                                    .insert(copied_chart_id, support_sources.clone());
+                            }
+
+                            let mut copied_chart_object = source_chart_object.clone();
+                            copied_chart_object.id = ChartObjectId(next_drawing_object_id);
+                            next_drawing_object_id += 1;
+                            copied_chart_object.workbook_id = target_workbook_id;
+                            copied_chart_object.host_sheet_id = copied_sheet_id;
+                            copied_chart_object.chart_id = copied_chart_id;
+                            copied_chart_object.raw_binding = None;
+                            copied_chart_object.dirty = true;
+                            copied_objects
+                                .push(DrawingObjectModel::ChartFrame(copied_chart_object));
+                        }
+                        DrawingObjectModel::UnsupportedRaw { .. } => {
+                            let mut copied_object = source_object.clone();
+                            let DrawingObjectModel::UnsupportedRaw {
+                                id, raw_part_uri, ..
+                            } = &mut copied_object
+                            else {
+                                unreachable!("opaque drawing object clone")
+                            };
+                            *id = DrawingObjectId(next_drawing_object_id);
+                            next_drawing_object_id += 1;
+                            *raw_part_uri = None;
+                            copied_objects.push(copied_object);
+                        }
+                    }
+                }
+                let copied_primary_chart_id = *chart_id_map
+                    .get(&source_primary_chart_id)
+                    .expect("primary chart frame validated above");
+                let copied_drawing = DrawingModel {
+                    id: copied_drawing_id,
+                    workbook_id: target_workbook_id,
+                    host_sheet_id: copied_sheet_id,
+                    objects: copied_objects,
+                    raw_part_uri: None,
+                    dirty: true,
+                };
+
+                {
+                    let runtime = self.runtime_workbook_mut(target_workbook)?;
+                    runtime.loaded.state.worksheets.insert(
+                        insertion_index.min(runtime.loaded.state.worksheets.len()),
+                        WorksheetModel {
+                            id: copied_sheet_id,
+                            workbook_id: target_workbook_id,
+                            name: copied_name,
+                            kind: SheetKind::ChartSheet,
+                            visibility: source_visibility,
+                            relationship_id: None,
+                            part_uri: None,
+                        },
+                    );
+                    runtime
+                        .loaded
+                        .state
+                        .worksheet_data
+                        .insert(copied_sheet_id, WorksheetData::default());
+                    runtime.loaded.state.charts.extend(copied_charts);
+                    runtime
+                        .loaded
+                        .state
+                        .drawings
+                        .insert(copied_drawing_id, copied_drawing);
+                    runtime.loaded.state.chart_sheets.insert(
+                        copied_sheet_id,
+                        ChartSheetBinding {
+                            sheet_id: copied_sheet_id,
+                            chart_id: copied_primary_chart_id,
+                            drawing_id: Some(copied_drawing_id),
+                            raw_part_uri: None,
+                        },
+                    );
+                    if let Some(graph) = source_pending_drawing_relationship_graph {
+                        runtime
+                            .loaded
+                            .pending_drawing_relationship_graphs
+                            .insert(copied_drawing_id, graph);
+                    }
+                    runtime
+                        .chart_support_part_sources
+                        .extend(copied_chart_support_part_sources);
+                    runtime.dirty = true;
+                }
+                self.find_state = None;
+                self.cut_copy_mode = None;
+                self.clipboard = None;
+                self.set_selection(
+                    target_workbook,
+                    copied_sheet_id,
+                    Rect::single_cell(1, 1),
+                );
+                return Ok(self.register_worksheet_handle(target_workbook, copied_sheet_id));
+            }
+
             let result = (|| {
                 let (source_name, source_visibility, source_chart, source_chart_support_parts) = {
                     let runtime = self.runtime_workbook(workbook)?;
@@ -112675,6 +113025,12 @@ mod tests {
     <xdr:graphicFrame><xdr:nvGraphicFramePr><xdr:cNvPr id="2" name="Chart Sheet Chart"/></xdr:nvGraphicFramePr><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart r:id="rIdChart2"/></a:graphicData></a:graphic></xdr:graphicFrame>
     <xdr:clientData/>
   </xdr:absoluteAnchor>
+  <xdr:oneCellAnchor>
+    <xdr:from><xdr:col>5</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>1</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>
+    <xdr:ext cx="914400" cy="457200"/>
+    <xdr:sp><xdr:nvSpPr><xdr:cNvPr id="3" name="Chart Sheet Shape"/><xdr:cNvSpPr/></xdr:nvSpPr><xdr:spPr><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr></xdr:sp>
+    <xdr:clientData/>
+  </xdr:oneCellAnchor>
 </xdr:wsDr>"#
                     .to_vec(),
             })
@@ -180477,6 +180833,399 @@ mod tests {
     }
 
     #[test]
+    fn chart_sheet_copy_preserves_full_drawing_inventory_and_embedded_chart() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: convert_embedded_chart_workbook_to_chart_sheet(
+                    &synthetic_workbook_with_embedded_chart_and_raw_shape_bytes(),
+                ),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open chart sheet with raw shape");
+        let charts = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Charts", &[])
+                .expect("Workbook.Charts"),
+        );
+        let primary_chart = expect_object_handle(
+            runtime
+                .dispatch_invoke(charts, "Item", &[OmValue::Number(1.0)])
+                .expect("Charts.Item(1)"),
+        );
+        let embedded_chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(primary_chart, "ChartObjects", &[])
+                .expect("chart sheet ChartObjects"),
+        );
+        runtime
+            .dispatch_invoke(
+                embedded_chart_objects,
+                "Add",
+                &[
+                    OmValue::Number(12.0),
+                    OmValue::Number(18.0),
+                    OmValue::Number(240.0),
+                    OmValue::Number(160.0),
+                ],
+            )
+            .expect("add embedded chart before chart sheet copy");
+        let sheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Sheets", &[])
+                .expect("Workbook.Sheets"),
+        );
+        let source_chart_sheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(sheets, "Item", &[OmValue::Number(1.0)])
+                .expect("source chart sheet"),
+        );
+
+        runtime
+            .dispatch_invoke(
+                source_chart_sheet,
+                "Copy",
+                &[
+                    OmValue::Missing,
+                    OmValue::Object(source_chart_sheet),
+                ],
+            )
+            .expect("copy chart sheet with full drawing inventory");
+        let save_spec = SaveWorkbookSpec {
+            format: FileFormat::Xlsx,
+            profile: ExcelProfile::Excel365,
+            lossless: true,
+        };
+        let saved = runtime
+            .save_workbook(workbook, save_spec.clone())
+            .expect("save copied chart sheet");
+        let saved_again = runtime
+            .save_workbook(workbook, save_spec)
+            .expect("save copied chart sheet again");
+        let package = OpcPackage::from_bytes(&saved).expect("saved chart sheet package");
+        let package_again =
+            OpcPackage::from_bytes(&saved_again).expect("second saved chart sheet package");
+        let copied_drawing = String::from_utf8(
+            package
+                .part("xl/drawings/drawing2.xml")
+                .expect("copied chart sheet drawing")
+                .bytes
+                .clone(),
+        )
+        .expect("copied drawing XML");
+        let primary_position = copied_drawing
+            .find("Embedded Revenue Chart")
+            .expect("copied primary chart frame");
+        let shape_position = copied_drawing
+            .find("Preserved Shape")
+            .expect("copied raw shape");
+        let embedded_position = copied_drawing
+            .find("Chart 2")
+            .expect("copied embedded chart frame");
+        assert!(primary_position < shape_position && shape_position < embedded_position);
+        assert!(copied_drawing.contains("Keep me"));
+        assert_eq!(
+            copied_drawing.matches("<c:chart ").count(),
+            2,
+            "copied drawing should retain primary and embedded chart frames"
+        );
+        assert_eq!(
+            package
+                .part("xl/drawings/drawing2.xml")
+                .expect("copied drawing")
+                .bytes,
+            package_again
+                .part("xl/drawings/drawing2.xml")
+                .expect("copied drawing after second save")
+                .bytes
+        );
+        assert_eq!(
+            package
+                .parts()
+                .iter()
+                .filter(|part| {
+                    part.name.starts_with("xl/charts/chart") && part.name.ends_with(".xml")
+                })
+                .count(),
+            4
+        );
+
+        let reopened = ExcelRuntime::new()
+            .codec
+            .load(&saved, LoadOptions::default())
+            .expect("reopen copied chart sheet");
+        assert_eq!(
+            reopened
+                .state
+                .worksheets
+                .iter()
+                .filter(|sheet| sheet.kind == office_common::SheetKind::ChartSheet)
+                .count(),
+            2
+        );
+        let copied_sheet_id = reopened.state.worksheets[1].id;
+        let copied_drawing_model = reopened
+            .state
+            .drawings
+            .values()
+            .find(|drawing| drawing.host_sheet_id == copied_sheet_id)
+            .expect("reopened copied chart sheet drawing");
+        assert_eq!(copied_drawing_model.objects.len(), 3);
+        assert!(matches!(
+            copied_drawing_model.objects.as_slice(),
+            [
+                DrawingObjectModel::ChartFrame(_),
+                DrawingObjectModel::UnsupportedRaw { .. },
+                DrawingObjectModel::ChartFrame(_)
+            ]
+        ));
+    }
+
+    #[test]
+    fn chart_sheet_copy_preserves_external_hyperlink_backed_opaque_sibling() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: convert_embedded_chart_workbook_to_chart_sheet(
+                    &synthetic_workbook_with_relationship_backed_raw_shape_bytes(),
+                ),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open hyperlink-backed chart sheet");
+        let sheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Sheets", &[])
+                .expect("Workbook.Sheets"),
+        );
+        let source_chart_sheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(sheets, "Item", &[OmValue::Number(1.0)])
+                .expect("source chart sheet"),
+        );
+        runtime
+            .dispatch_invoke(
+                source_chart_sheet,
+                "Copy",
+                &[
+                    OmValue::Missing,
+                    OmValue::Object(source_chart_sheet),
+                ],
+            )
+            .expect("copy hyperlink-backed chart sheet");
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save hyperlink-backed chart sheet copy");
+        let package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let copied_relationships = String::from_utf8(
+            package
+                .part("xl/drawings/_rels/drawing2.xml.rels")
+                .expect("copied drawing relationships")
+                .bytes
+                .clone(),
+        )
+        .expect("copied drawing relationships XML");
+        assert!(copied_relationships.contains(r#"Id="rIdShapeLink""#));
+        assert!(copied_relationships.contains(r#"Target="https://example.com/shape""#));
+        assert!(copied_relationships.contains(r#"TargetMode="External""#));
+        assert!(copied_relationships.contains(super::CHART_RELATIONSHIP_TYPE));
+        let reopened = ExcelRuntime::new()
+            .codec
+            .load(&saved, LoadOptions::default())
+            .expect("reopen hyperlink-backed chart sheet copy");
+        assert!(reopened
+            .state
+            .drawings
+            .values()
+            .filter(|drawing| {
+                reopened
+                    .state
+                    .worksheets
+                    .iter()
+                    .find(|sheet| sheet.id == drawing.host_sheet_id)
+                    .is_some_and(|sheet| {
+                        sheet.kind == office_common::SheetKind::ChartSheet
+                    })
+            })
+            .flat_map(|drawing| drawing.objects.iter())
+            .filter(|object| matches!(object, DrawingObjectModel::UnsupportedRaw { .. }))
+            .count()
+            >= 2);
+    }
+
+    #[test]
+    fn chart_sheet_cross_workbook_move_preserves_internal_image_backed_opaque_sibling() {
+        let mut runtime = ExcelRuntime::new();
+        let source_workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: convert_embedded_chart_workbook_to_chart_sheet(
+                    &synthetic_workbook_with_internal_image_backed_raw_shape_bytes(),
+                ),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open image-backed chart sheet source");
+        let source_sheet_id = runtime
+            .runtime_workbook(source_workbook)
+            .expect("source workbook state")
+            .loaded
+            .state
+            .worksheets[0]
+            .id;
+        let source_chart_sheet =
+            runtime.register_worksheet_handle(source_workbook, source_sheet_id);
+        let target_workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open image-backed chart sheet target");
+        let target_sheet_id = runtime
+            .runtime_workbook(target_workbook)
+            .expect("target workbook state")
+            .loaded
+            .state
+            .worksheets[0]
+            .id;
+        let target_sheet = runtime.register_worksheet_handle(target_workbook, target_sheet_id);
+
+        runtime
+            .dispatch_invoke(
+                source_chart_sheet.0,
+                "Move",
+                &[OmValue::Missing, OmValue::Object(target_sheet.0)],
+            )
+            .expect("move image-backed chart sheet across workbooks");
+        assert!(runtime.runtime_workbook(source_workbook).is_err());
+        let saved = runtime
+            .save_workbook(
+                target_workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save moved image-backed chart sheet");
+        let package = OpcPackage::from_bytes(&saved).expect("saved target package");
+        assert_eq!(
+            package
+                .part("xl/media/image1.png")
+                .expect("copied image part")
+                .bytes,
+            vec![1, 2, 3, 4]
+        );
+        let drawing_xml = String::from_utf8(
+            package
+                .part("xl/drawings/drawing1.xml")
+                .expect("moved chart sheet drawing")
+                .bytes
+                .clone(),
+        )
+        .expect("moved drawing XML");
+        assert!(drawing_xml.contains("Preserved Shape"));
+        let drawing_relationships = String::from_utf8(
+            package
+                .part("xl/drawings/_rels/drawing1.xml.rels")
+                .expect("moved drawing relationships")
+                .bytes
+                .clone(),
+        )
+        .expect("moved drawing relationships XML");
+        assert!(drawing_relationships.contains(r#"Target="../media/image1.png""#));
+        assert!(drawing_relationships.contains(r#"keep:edge="image""#));
+        let reopened = ExcelRuntime::new()
+            .codec
+            .load(&saved, LoadOptions::default())
+            .expect("reopen moved image-backed chart sheet");
+        assert_eq!(
+            reopened
+                .state
+                .worksheets
+                .iter()
+                .filter(|sheet| sheet.kind == office_common::SheetKind::ChartSheet)
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn chart_sheet_copy_rejects_dangling_opaque_relationship_atomically() {
+        let mut runtime = ExcelRuntime::new();
+        let source_workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: convert_embedded_chart_workbook_to_chart_sheet(
+                    &synthetic_workbook_with_dangling_image_backed_raw_shape_bytes(),
+                ),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open dangling chart sheet source");
+        let source_sheet_id = runtime
+            .runtime_workbook(source_workbook)
+            .expect("source workbook state")
+            .loaded
+            .state
+            .worksheets[0]
+            .id;
+        let source_chart_sheet =
+            runtime.register_worksheet_handle(source_workbook, source_sheet_id);
+        let target_workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open dangling chart sheet target");
+        let target_sheet_id = runtime
+            .runtime_workbook(target_workbook)
+            .expect("target workbook state")
+            .loaded
+            .state
+            .worksheets[0]
+            .id;
+        let target_sheet = runtime.register_worksheet_handle(target_workbook, target_sheet_id);
+
+        let error = runtime
+            .dispatch_invoke(
+                source_chart_sheet.0,
+                "Copy",
+                &[OmValue::Object(target_sheet.0)],
+            )
+            .expect_err("dangling chart sheet relationship should fail atomically");
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("opaque drawing target part is missing"));
+        assert_eq!(
+            runtime
+                .runtime_workbook(target_workbook)
+                .expect("target workbook state")
+                .loaded
+                .state
+                .worksheets
+                .len(),
+            1
+        );
+        assert!(!runtime.runtime_workbook(target_workbook).unwrap().dirty);
+        assert!(!runtime.runtime_workbook(source_workbook).unwrap().dirty);
+    }
+
+    #[test]
     fn worksheet_copy_preserves_embedded_chart_support_parts_for_placement_copy() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
@@ -185127,6 +185876,70 @@ mod tests {
         package
             .to_bytes()
             .expect("dangling image-backed chart and shape package bytes")
+    }
+
+    fn convert_embedded_chart_workbook_to_chart_sheet(bytes: &[u8]) -> Vec<u8> {
+        let mut package = OpcPackage::from_bytes(bytes).expect("embedded chart package");
+        let content_types_xml = String::from_utf8(
+            package
+                .part("[Content_Types].xml")
+                .expect("content types part")
+                .bytes
+                .clone(),
+        )
+        .expect("content types XML")
+        .replace(
+            r#"<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>"#,
+            r#"<Override PartName="/xl/chartsheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.chartsheet+xml"/>"#,
+        );
+        package
+            .replace_part_bytes("[Content_Types].xml", content_types_xml.into_bytes())
+            .expect("replace chart sheet content type");
+        let workbook_relationships_xml = String::from_utf8(
+            package
+                .part("xl/_rels/workbook.xml.rels")
+                .expect("workbook relationships part")
+                .bytes
+                .clone(),
+        )
+        .expect("workbook relationships XML")
+        .replace(
+            r#"Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml""#,
+            r#"Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chartsheet" Target="chartsheets/sheet1.xml""#,
+        );
+        package
+            .replace_part_bytes(
+                "xl/_rels/workbook.xml.rels",
+                workbook_relationships_xml.into_bytes(),
+            )
+            .expect("replace workbook chart sheet relationship");
+        package.remove_part("xl/worksheets/sheet1.xml");
+        package.remove_part("xl/worksheets/_rels/sheet1.xml.rels");
+        package
+            .add_part(OpcPart {
+                name: "xl/chartsheets/sheet1.xml".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
+<chartsheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <drawing r:id="rIdChartDrawing"/>
+</chartsheet>"#
+                    .to_vec(),
+            })
+            .expect("add chart sheet part");
+        package
+            .add_part(OpcPart {
+                name: "xl/chartsheets/_rels/sheet1.xml.rels".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rIdChartDrawing" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/>
+</Relationships>"#
+                    .to_vec(),
+            })
+            .expect("add chart sheet relationships part");
+        package.to_bytes().expect("chart sheet package bytes")
     }
 
     fn synthetic_workbook_with_filtered_chart_categories_bytes() -> Vec<u8> {

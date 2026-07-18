@@ -436,7 +436,7 @@ fn validate_state_only_chart_graphs(workbook: &LoadedXlsxWorkbook) -> OmResult<(
                 .iter()
                 .filter(|chart_object| chart_object.chart_id == binding.chart_id)
                 .count();
-            if primary_chart_count != 1 || (host.part_uri.is_none() && chart_frames.len() != 1) {
+            if primary_chart_count != 1 {
                 return Err(OmError::invalid_state(format!(
                     "chart sheet {} must have one unambiguous primary chart frame",
                     host.name
