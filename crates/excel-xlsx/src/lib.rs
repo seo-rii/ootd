@@ -76,11 +76,23 @@ pub struct LoadedXlsxWorkbook {
     pub worksheet_support_parts: BTreeMap<SheetId, WorksheetSupportParts>,
     pub sheet_drawing_support_parts: BTreeMap<SheetId, SheetDrawingSupportParts>,
     pub pending_drawing_relationship_graphs: BTreeMap<DrawingId, PendingDrawingRelationshipGraph>,
+    pub pending_chart_relationship_graphs: BTreeMap<ChartId, PendingChartRelationshipGraph>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingDrawingRelationshipGraph {
     pub source_drawing_part_uri: String,
+    pub root_relationships_part_source_bytes: Vec<u8>,
+    pub root_relationships_part_compression: CompressionMethod,
+    pub root_relationships: Vec<PendingPackageRelationship>,
+    pub parts: BTreeMap<String, PendingPackagePart>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingChartRelationshipGraph {
+    pub source_chart_part_uri: String,
+    pub source_chart_part_bytes: Vec<u8>,
+    pub source_chart_part_compression: CompressionMethod,
     pub root_relationships_part_source_bytes: Vec<u8>,
     pub root_relationships_part_compression: CompressionMethod,
     pub root_relationships: Vec<PendingPackageRelationship>,
@@ -1351,6 +1363,7 @@ impl XlsxCodec {
             worksheet_support_parts,
             sheet_drawing_support_parts,
             pending_drawing_relationship_graphs: BTreeMap::new(),
+            pending_chart_relationship_graphs: BTreeMap::new(),
         })
     }
 

@@ -2,16 +2,16 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Cursor, Write};
 
 use excel_model::{DrawingObjectModel, WorksheetData};
-use office_common::{OmError, OmErrorCode, OmResult, SheetId, SheetKind, SheetVisibility};
+use office_common::{ChartId, OmError, OmErrorCode, OmResult, SheetId, SheetKind, SheetVisibility};
 use office_opc::{CompressionMethod, OpcPart};
 use quick_xml::escape::escape;
 use quick_xml::events::{BytesEnd, BytesStart, Event};
 use quick_xml::{Reader, Writer};
 
 use super::{
-    LoadedXlsxWorkbook, PendingDrawingRelationshipGraph, PendingPackagePart,
-    PendingPackageRelationship, chart_object_anchor_xml, encode_chart_model_xml,
-    normalize_relationship_target, xml_local_name,
+    LoadedXlsxWorkbook, PendingChartRelationshipGraph, PendingDrawingRelationshipGraph,
+    PendingPackagePart, PendingPackageRelationship, chart_object_anchor_xml,
+    encode_chart_model_xml, normalize_relationship_target, xml_local_name,
 };
 
 const CONTENT_TYPES_PART_NAME: &str = "[Content_Types].xml";
@@ -44,6 +44,7 @@ const CHART_NAMESPACE: &str = "http://schemas.openxmlformats.org/drawingml/2006/
 
 pub(crate) fn has_state_only_chart_graphs(workbook: &LoadedXlsxWorkbook) -> bool {
     !workbook.pending_drawing_relationship_graphs.is_empty()
+        || !workbook.pending_chart_relationship_graphs.is_empty()
         || workbook
             .state
             .worksheets
@@ -112,6 +113,11 @@ pub(crate) fn materialize_state_only_chart_graphs_in_place(
     used_part_names.extend(content_type_override_part_names(&content_types_xml)?);
 
     materialize_chart_sheet_shells(workbook, &mut used_part_names, &mut content_types_xml)?;
+    materialize_pending_existing_chart_relationship_graphs(
+        workbook,
+        &mut used_part_names,
+        &mut content_types_xml,
+    )?;
     materialize_new_drawings(workbook, &mut used_part_names, &mut content_types_xml)?;
     materialize_charts_in_existing_drawings(
         workbook,
@@ -467,6 +473,10 @@ fn validate_state_only_chart_graphs(workbook: &LoadedXlsxWorkbook) -> OmResult<(
                 chart_id.0
             )));
         }
+        let pending_relationship_graph = workbook.pending_chart_relationship_graphs.get(chart_id);
+        if let Some(pending_relationship_graph) = pending_relationship_graph {
+            validate_pending_chart_relationship_graph(*chart_id, pending_relationship_graph)?;
+        }
         let host_count = chart_hosts.get(chart_id).map_or(0, Vec::len);
         if chart.raw_part_uri.is_none() && host_count == 0 {
             return Err(OmError::invalid_state(format!(
@@ -496,34 +506,75 @@ fn validate_pending_drawing_relationship_graph(
             drawing_id.0
         )));
     }
-    if graph.root_relationships_part_source_bytes.is_empty() {
+    validate_pending_relationship_graph(
+        "drawing",
+        drawing_id.0,
+        &graph.root_relationships_part_source_bytes,
+        &graph.root_relationships,
+        &graph.parts,
+        expected_relationship_ids,
+    )
+}
+
+fn validate_pending_chart_relationship_graph(
+    chart_id: ChartId,
+    graph: &PendingChartRelationshipGraph,
+) -> OmResult<()> {
+    if graph.source_chart_part_uri.trim().is_empty() {
         return Err(OmError::invalid_state(format!(
-            "pending relationship graph for drawing {} has no source relationship XML",
-            drawing_id.0
+            "pending relationship graph for chart {} has no source chart part URI",
+            chart_id.0
+        )));
+    }
+    if graph.source_chart_part_bytes.is_empty() {
+        return Err(OmError::invalid_state(format!(
+            "pending relationship graph for chart {} has no source chart XML",
+            chart_id.0
+        )));
+    }
+    validate_pending_relationship_graph(
+        "chart",
+        chart_id.0,
+        &graph.root_relationships_part_source_bytes,
+        &graph.root_relationships,
+        &graph.parts,
+        &BTreeSet::new(),
+    )
+}
+
+fn validate_pending_relationship_graph(
+    owner_kind: &str,
+    owner_id: u64,
+    root_relationships_part_source_bytes: &[u8],
+    root_relationships: &[PendingPackageRelationship],
+    parts: &BTreeMap<String, PendingPackagePart>,
+    expected_relationship_ids: &BTreeSet<String>,
+) -> OmResult<()> {
+    if root_relationships_part_source_bytes.is_empty() {
+        return Err(OmError::invalid_state(format!(
+            "pending relationship graph for {owner_kind} {owner_id} has no source relationship XML"
         )));
     }
     let mut root_relationship_ids = BTreeSet::new();
-    for relationship in &graph.root_relationships {
+    for relationship in root_relationships {
         validate_pending_package_relationship(relationship)?;
         if !root_relationship_ids.insert(relationship.relationship_id.clone()) {
             return Err(OmError::invalid_state(format!(
-                "pending relationship graph for drawing {} contains duplicate root relationship {}",
-                drawing_id.0, relationship.relationship_id
+                "pending relationship graph for {owner_kind} {owner_id} contains duplicate root relationship {}",
+                relationship.relationship_id
             )));
         }
     }
     if !expected_relationship_ids.is_subset(&root_relationship_ids) {
         return Err(OmError::invalid_state(format!(
-            "pending relationship graph for drawing {} is missing opaque anchor relationship ids",
-            drawing_id.0
+            "pending relationship graph for {owner_kind} {owner_id} is missing required relationship ids"
         )));
     }
 
-    for (source_part_uri, part) in &graph.parts {
+    for (source_part_uri, part) in parts {
         if source_part_uri != &part.source_part_uri || source_part_uri.trim().is_empty() {
             return Err(OmError::invalid_state(format!(
-                "pending relationship graph for drawing {} contains a mismatched package part key",
-                drawing_id.0
+                "pending relationship graph for {owner_kind} {owner_id} contains a mismatched package part key"
             )));
         }
         let mut relationship_ids = BTreeSet::new();
@@ -552,8 +603,7 @@ fn validate_pending_drawing_relationship_graph(
         }
     }
 
-    let mut pending_targets = graph
-        .root_relationships
+    let mut pending_targets = root_relationships
         .iter()
         .filter(|relationship| !pending_relationship_is_external(relationship))
         .map(|relationship| relationship.target.clone())
@@ -563,10 +613,9 @@ fn validate_pending_drawing_relationship_graph(
         if !reachable_parts.insert(source_part_uri.clone()) {
             continue;
         }
-        let part = graph.parts.get(&source_part_uri).ok_or_else(|| {
+        let part = parts.get(&source_part_uri).ok_or_else(|| {
             OmError::invalid_state(format!(
-                "pending relationship graph for drawing {} is missing internal target {}",
-                drawing_id.0, source_part_uri
+                "pending relationship graph for {owner_kind} {owner_id} is missing internal target {source_part_uri}"
             ))
         })?;
         pending_targets.extend(
@@ -576,10 +625,9 @@ fn validate_pending_drawing_relationship_graph(
                 .map(|relationship| relationship.target.clone()),
         );
     }
-    if reachable_parts.len() != graph.parts.len() {
+    if reachable_parts.len() != parts.len() {
         return Err(OmError::invalid_state(format!(
-            "pending relationship graph for drawing {} contains unreachable package parts",
-            drawing_id.0
+            "pending relationship graph for {owner_kind} {owner_id} contains unreachable package parts"
         )));
     }
     Ok(())
@@ -836,6 +884,122 @@ fn materialize_chart_sheet_shells(
     Ok(())
 }
 
+fn materialize_pending_existing_chart_relationship_graphs(
+    workbook: &mut LoadedXlsxWorkbook,
+    used_part_names: &mut BTreeSet<String>,
+    content_types_xml: &mut Vec<u8>,
+) -> OmResult<()> {
+    let plans = workbook
+        .pending_chart_relationship_graphs
+        .keys()
+        .filter_map(|chart_id| {
+            workbook
+                .state
+                .charts
+                .get(chart_id)
+                .and_then(|chart| chart.raw_part_uri.clone())
+                .map(|part_uri| (*chart_id, part_uri))
+        })
+        .collect::<Vec<_>>();
+    for (chart_id, chart_part_uri) in plans {
+        materialize_chart_part(
+            workbook,
+            chart_id,
+            &chart_part_uri,
+            used_part_names,
+            content_types_xml,
+        )?;
+    }
+    Ok(())
+}
+
+fn materialize_chart_part(
+    workbook: &mut LoadedXlsxWorkbook,
+    chart_id: ChartId,
+    chart_part_uri: &str,
+    used_part_names: &mut BTreeSet<String>,
+    content_types_xml: &mut Vec<u8>,
+) -> OmResult<()> {
+    let pending_relationship_graph = workbook
+        .pending_chart_relationship_graphs
+        .get(&chart_id)
+        .cloned();
+    let copied_part_uris = if let Some(graph) = pending_relationship_graph.as_ref() {
+        materialize_pending_package_parts(
+            workbook,
+            &graph.parts,
+            used_part_names,
+            content_types_xml,
+        )?
+    } else {
+        BTreeMap::new()
+    };
+    let relationship_xml = pending_relationship_graph
+        .as_ref()
+        .map(|graph| {
+            let opaque_relationships = graph
+                .root_relationships
+                .iter()
+                .map(|relationship| {
+                    materialized_relationship_record(
+                        relationship,
+                        chart_part_uri,
+                        &copied_part_uris,
+                    )
+                })
+                .collect::<OmResult<Vec<_>>>()?;
+            rewrite_root_relationships(
+                graph.root_relationships_part_source_bytes.as_slice(),
+                &opaque_relationships,
+                &[],
+            )
+        })
+        .transpose()?;
+    let chart = workbook
+        .state
+        .charts
+        .get_mut(&chart_id)
+        .expect("chart graph validated above");
+    chart.raw_part_uri = Some(chart_part_uri.to_string());
+    let chart_xml = encode_chart_model_xml(
+        pending_relationship_graph
+            .as_ref()
+            .map(|graph| graph.source_chart_part_bytes.as_slice()),
+        chart,
+    )?;
+    workbook.package.remove_part(chart_part_uri);
+    workbook
+        .package
+        .remove_part(&relationships_part_uri_for(chart_part_uri));
+    workbook.package.add_part(OpcPart {
+        name: chart_part_uri.to_string(),
+        content_type: Some(CHART_PART_CONTENT_TYPE.to_string()),
+        compression: pending_relationship_graph
+            .as_ref()
+            .map_or(CompressionMethod::Stored, |graph| {
+                graph.source_chart_part_compression
+            }),
+        bytes: chart_xml,
+    })?;
+    if let (Some(graph), Some(relationship_xml)) =
+        (pending_relationship_graph.as_ref(), relationship_xml)
+    {
+        workbook.package.add_part(OpcPart {
+            name: relationships_part_uri_for(chart_part_uri),
+            content_type: Some(RELATIONSHIPS_PART_CONTENT_TYPE.to_string()),
+            compression: graph.root_relationships_part_compression,
+            bytes: relationship_xml,
+        })?;
+    }
+    *content_types_xml = append_content_type_override_if_missing(
+        content_types_xml.as_slice(),
+        chart_part_uri,
+        CHART_PART_CONTENT_TYPE,
+    )?;
+    workbook.pending_chart_relationship_graphs.remove(&chart_id);
+    Ok(())
+}
+
 fn materialize_new_drawings(
     workbook: &mut LoadedXlsxWorkbook,
     used_part_names: &mut BTreeSet<String>,
@@ -895,15 +1059,19 @@ fn materialize_new_drawings(
             .get(&drawing_id)
             .cloned();
         let copied_part_uris = if let Some(graph) = pending_relationship_graph.as_ref() {
-            materialize_pending_package_parts(workbook, graph, used_part_names, content_types_xml)?
+            materialize_pending_package_parts(
+                workbook,
+                &graph.parts,
+                used_part_names,
+                content_types_xml,
+            )?
         } else {
             BTreeMap::new()
         };
 
         let mut chart_part_uris = BTreeMap::new();
         for chart_object in &chart_objects {
-            let chart_part_uri =
-                next_available_sequential_part_uri(used_part_names, "xl/charts/chart", ".xml");
+            let chart_part_uri = next_available_chart_part_uri(used_part_names);
             chart_part_uris.insert(chart_object.chart_id, chart_part_uri);
         }
         let mut used_relationship_ids = pending_relationship_graph
@@ -948,7 +1116,7 @@ fn materialize_new_drawings(
             })
             .collect::<Vec<_>>();
         let drawing_rels_xml = if let Some(graph) = pending_relationship_graph.as_ref() {
-            rewrite_root_drawing_relationships(
+            rewrite_root_relationships(
                 graph.root_relationships_part_source_bytes.as_slice(),
                 &opaque_relationships,
                 &chart_relationships,
@@ -959,22 +1127,12 @@ fn materialize_new_drawings(
         let drawing_xml = drawing_xml(&objects, &relationship_ids)?;
 
         for (chart_id, chart_part_uri) in &chart_part_uris {
-            let chart = workbook
-                .state
-                .charts
-                .get_mut(chart_id)
-                .expect("chart graph validated above");
-            chart.raw_part_uri = Some(chart_part_uri.clone());
-            workbook.package.add_part(OpcPart {
-                name: chart_part_uri.clone(),
-                content_type: Some(CHART_PART_CONTENT_TYPE.to_string()),
-                compression: CompressionMethod::Stored,
-                bytes: encode_chart_model_xml(None, chart)?,
-            })?;
-            *content_types_xml = append_content_type_override_if_missing(
-                content_types_xml.as_slice(),
+            materialize_chart_part(
+                workbook,
+                *chart_id,
                 chart_part_uri,
-                CHART_PART_CONTENT_TYPE,
+                used_part_names,
+                content_types_xml,
             )?;
         }
         workbook.package.add_part(OpcPart {
@@ -1074,8 +1232,7 @@ fn materialize_charts_in_existing_drawings(
 
         for chart_object in &chart_objects {
             let relationship_id = next_relationship_id(&mut used_relationship_ids);
-            let chart_part_uri =
-                next_available_sequential_part_uri(used_part_names, "xl/charts/chart", ".xml");
+            let chart_part_uri = next_available_chart_part_uri(used_part_names);
             updated_rels = append_relationship(
                 updated_rels.as_slice(),
                 relationship_id.as_str(),
@@ -1100,22 +1257,12 @@ fn materialize_charts_in_existing_drawings(
         }
 
         for (chart_id, chart_part_uri) in &chart_part_uris {
-            let chart = workbook
-                .state
-                .charts
-                .get_mut(chart_id)
-                .expect("chart graph validated above");
-            chart.raw_part_uri = Some(chart_part_uri.clone());
-            workbook.package.add_part(OpcPart {
-                name: chart_part_uri.clone(),
-                content_type: Some(CHART_PART_CONTENT_TYPE.to_string()),
-                compression: CompressionMethod::Stored,
-                bytes: encode_chart_model_xml(None, chart)?,
-            })?;
-            *content_types_xml = append_content_type_override_if_missing(
-                content_types_xml.as_slice(),
+            materialize_chart_part(
+                workbook,
+                *chart_id,
                 chart_part_uri,
-                CHART_PART_CONTENT_TYPE,
+                used_part_names,
+                content_types_xml,
             )?;
         }
 
@@ -1733,12 +1880,12 @@ struct MaterializedRelationshipRecord {
 
 fn materialize_pending_package_parts(
     workbook: &mut LoadedXlsxWorkbook,
-    graph: &PendingDrawingRelationshipGraph,
+    parts: &BTreeMap<String, PendingPackagePart>,
     used_part_names: &mut BTreeSet<String>,
     content_types_xml: &mut Vec<u8>,
 ) -> OmResult<BTreeMap<String, String>> {
     let mut copied_part_uris = BTreeMap::new();
-    for part in graph.parts.values() {
+    for part in parts.values() {
         let target_part_uri = next_available_copied_part_uri(
             used_part_names,
             &part.source_part_uri,
@@ -1747,7 +1894,7 @@ fn materialize_pending_package_parts(
         copied_part_uris.insert(part.source_part_uri.clone(), target_part_uri);
     }
 
-    for part in graph.parts.values() {
+    for part in parts.values() {
         let target_part_uri = copied_part_uris
             .get(&part.source_part_uri)
             .expect("pending package part URI allocated above");
@@ -1940,7 +2087,7 @@ fn rewrite_pending_relationship_element(
     Ok(rewritten)
 }
 
-fn rewrite_root_drawing_relationships(
+fn rewrite_root_relationships(
     source_xml: &[u8],
     opaque_relationships: &[MaterializedRelationshipRecord],
     chart_relationships: &[MaterializedRelationshipRecord],
@@ -1964,7 +2111,7 @@ fn rewrite_root_drawing_relationships(
             Ok(Event::Empty(_)) if skipped_depth > 0 => {}
             Ok(Event::Eof) if skipped_depth > 0 => {
                 return Err(OmError::invalid_state(
-                    "drawing relationship XML ended inside a skipped relationship",
+                    "relationship XML ended inside a skipped relationship",
                 ));
             }
             Ok(Event::Start(element)) if depth == 0 => {
@@ -2002,7 +2149,7 @@ fn rewrite_root_drawing_relationships(
                 if let Some(relationship) = opaque_relationships.get(relationship_id.as_str()) {
                     if !seen_relationship_ids.insert(relationship_id.clone()) {
                         return Err(OmError::invalid_state(format!(
-                            "drawing relationship {} occurs more than once",
+                            "relationship {} occurs more than once",
                             relationship_id
                         )));
                     }
@@ -2025,7 +2172,7 @@ fn rewrite_root_drawing_relationships(
                 if let Some(relationship) = opaque_relationships.get(relationship_id.as_str()) {
                     if !seen_relationship_ids.insert(relationship_id.clone()) {
                         return Err(OmError::invalid_state(format!(
-                            "drawing relationship {} occurs more than once",
+                            "relationship {} occurs more than once",
                             relationship_id
                         )));
                     }
@@ -2046,7 +2193,7 @@ fn rewrite_root_drawing_relationships(
             }
             Ok(Event::End(element)) if depth == 1 => {
                 let qualified_root_name = root_name.as_deref().ok_or_else(|| {
-                    OmError::invalid_state("drawing relationship XML has no root element")
+                    OmError::invalid_state("relationship XML has no root element")
                 })?;
                 write_materialized_relationships(
                     &mut writer,
@@ -2072,7 +2219,7 @@ fn rewrite_root_drawing_relationships(
     }
     if root_name.is_none() || seen_relationship_ids.len() != opaque_relationships.len() {
         return Err(OmError::invalid_state(
-            "drawing relationship summary does not match source XML",
+            "relationship summary does not match source XML",
         ));
     }
     Ok(writer.into_inner().into_inner())
@@ -2091,9 +2238,7 @@ fn relationship_element_id(
                 .map_err(xml_error);
         }
     }
-    Err(OmError::invalid_state(
-        "drawing Relationship element has no Id",
-    ))
+    Err(OmError::invalid_state("Relationship element has no Id"))
 }
 
 fn rewrite_materialized_relationship_element(
@@ -2309,6 +2454,16 @@ fn next_available_sequential_part_uri(
         .map(|index| format!("{prefix}{index}{suffix}"))
         .find(|candidate| used_part_names.insert(candidate.clone()))
         .expect("part uri search is unbounded")
+}
+
+fn next_available_chart_part_uri(used_part_names: &mut BTreeSet<String>) -> String {
+    loop {
+        let candidate =
+            next_available_sequential_part_uri(used_part_names, "xl/charts/chart", ".xml");
+        if used_part_names.insert(relationships_part_uri_for(&candidate)) {
+            return candidate;
+        }
+    }
 }
 
 fn next_available_copied_part_uri(
@@ -2943,6 +3098,12 @@ fn ensure_all_state_only_charts_materialized(workbook: &LoadedXlsxWorkbook) -> O
             drawing_id.0
         )));
     }
+    if let Some(chart_id) = workbook.pending_chart_relationship_graphs.keys().next() {
+        return Err(OmError::invalid_state(format!(
+            "pending relationship graph for chart {} was not materialized",
+            chart_id.0
+        )));
+    }
     if let Some(chart) = workbook
         .state
         .charts
@@ -2988,8 +3149,8 @@ mod tests {
     use office_opc::{CompressionMethod, OpcPackage, OpcPart};
 
     use super::super::{
-        LoadedXlsxWorkbook, PendingDrawingRelationshipGraph, PendingPackagePart,
-        PendingPackageRelationship, XlsxCodec,
+        LoadedXlsxWorkbook, PendingChartRelationshipGraph, PendingDrawingRelationshipGraph,
+        PendingPackagePart, PendingPackageRelationship, XlsxCodec,
     };
     use super::{
         CHART_PART_CONTENT_TYPE, DRAWING_RELATIONSHIP_TYPE, append_chart_anchors,
@@ -3088,6 +3249,7 @@ mod tests {
             worksheet_support_parts: BTreeMap::new(),
             sheet_drawing_support_parts: BTreeMap::new(),
             pending_drawing_relationship_graphs: BTreeMap::new(),
+            pending_chart_relationship_graphs: BTreeMap::new(),
         }
     }
 
@@ -3545,6 +3707,180 @@ mod tests {
             package
                 .part("xl/embeddings/_rels/oleObject1.bin.rels")
                 .expect("first copied package relationships")
+                .bytes
+        );
+    }
+
+    #[test]
+    fn direct_save_materializes_transitive_opaque_chart_relationship_graph() {
+        let mut workbook = base_workbook();
+        let chart_id = ChartId(1);
+        let drawing_id = DrawingId(1);
+        workbook
+            .state
+            .charts
+            .insert(chart_id, state_only_chart(chart_id));
+        workbook.state.drawings.insert(
+            drawing_id,
+            DrawingModel {
+                id: drawing_id,
+                workbook_id: WorkbookId(7),
+                host_sheet_id: SheetId(1),
+                objects: vec![DrawingObjectModel::ChartFrame(state_only_chart_object(
+                    ChartObjectId(1),
+                    chart_id,
+                    SheetId(1),
+                ))],
+                raw_part_uri: None,
+                dirty: true,
+            },
+        );
+        workbook.pending_chart_relationship_graphs.insert(
+            chart_id,
+            PendingChartRelationshipGraph {
+                source_chart_part_uri: "xl/charts/chart7.xml".to_string(),
+                source_chart_part_bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
+<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:keep="urn:keep" keep:root="chart">
+  <c:chart><c:plotArea><c:barChart><c:barDir val="col"/><c:grouping val="clustered"/></c:barChart></c:plotArea></c:chart>
+  <c:userShapes r:id="rIdUserShapes" keep:edge="shape"/>
+  <c:externalData r:id="rIdExternal" keep:edge="external"/>
+  <c:extLst><c:ext uri="urn:opaque"><keep:payload value="preserve"/></c:ext></c:extLst>
+</c:chartSpace>"#
+                    .to_vec(),
+                source_chart_part_compression: CompressionMethod::Stored,
+                root_relationships_part_source_bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
+<pr:Relationships xmlns:pr="http://schemas.openxmlformats.org/package/2006/relationships" xmlns:keep="urn:keep" keep:root="chart-rels">
+  <pr:Relationship Id="rIdUserShapes" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chartUserShapes" Target="../drawings/userShapes7.xml" TargetMode="Internal" keep:edge="shape"/>
+  <pr:Relationship Id="rIdExternal" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/externalLink" Target="https://example.test/data.xlsx" TargetMode="External" keep:edge="external"/>
+  <pr:Relationship Id="rIdStyleIgnored" Type="http://schemas.microsoft.com/office/2011/relationships/chartStyle" Target="style7.xml"/>
+</pr:Relationships>"#
+                    .to_vec(),
+                root_relationships_part_compression: CompressionMethod::Stored,
+                root_relationships: vec![
+                    PendingPackageRelationship {
+                        relationship_id: "rIdUserShapes".to_string(),
+                        relationship_type: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chartUserShapes".to_string(),
+                        target: "xl/drawings/userShapes7.xml".to_string(),
+                        target_mode: Some("Internal".to_string()),
+                    },
+                    PendingPackageRelationship {
+                        relationship_id: "rIdExternal".to_string(),
+                        relationship_type: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/externalLink".to_string(),
+                        target: "https://example.test/data.xlsx".to_string(),
+                        target_mode: Some("External".to_string()),
+                    },
+                ],
+                parts: BTreeMap::from([
+                    (
+                        "xl/drawings/userShapes7.xml".to_string(),
+                        PendingPackagePart {
+                            source_part_uri: "xl/drawings/userShapes7.xml".to_string(),
+                            bytes: br#"<c:userShapes xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" keep="yes"/>"#.to_vec(),
+                            content_type: Some("application/vnd.openxmlformats-officedocument.drawingml.chartshapes+xml".to_string()),
+                            compression: CompressionMethod::Stored,
+                            relationships_part_source_bytes: Some(br#"<pr:Relationships xmlns:pr="http://schemas.openxmlformats.org/package/2006/relationships" xmlns:keep="urn:keep" keep:root="child"><pr:Relationship Id="rIdImage" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image7.png" keep:edge="image"/></pr:Relationships>"#.to_vec()),
+                            relationships_part_compression: Some(CompressionMethod::Stored),
+                            relationships: vec![PendingPackageRelationship {
+                                relationship_id: "rIdImage".to_string(),
+                                relationship_type: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image".to_string(),
+                                target: "xl/media/image7.png".to_string(),
+                                target_mode: None,
+                            }],
+                        },
+                    ),
+                    (
+                        "xl/media/image7.png".to_string(),
+                        PendingPackagePart {
+                            source_part_uri: "xl/media/image7.png".to_string(),
+                            bytes: vec![7, 8, 9],
+                            content_type: Some("image/png".to_string()),
+                            compression: CompressionMethod::Stored,
+                            relationships_part_source_bytes: None,
+                            relationships_part_compression: None,
+                            relationships: Vec::new(),
+                        },
+                    ),
+                ]),
+            },
+        );
+
+        let bytes = XlsxCodec
+            .save(&workbook, SaveOptions::default())
+            .expect("opaque chart relationship graph should materialize");
+        let package = OpcPackage::from_bytes(&bytes).expect("saved package");
+        let chart_xml = String::from_utf8(
+            package
+                .part("xl/charts/chart1.xml")
+                .expect("materialized chart")
+                .bytes
+                .clone(),
+        )
+        .expect("chart XML");
+        assert!(chart_xml.contains(r#"keep:root="chart""#));
+        assert!(chart_xml.contains(r#"r:id="rIdUserShapes""#));
+        assert!(chart_xml.contains(r#"r:id="rIdExternal""#));
+        assert!(chart_xml.contains(r#"<keep:payload value="preserve""#));
+
+        let chart_relationships = String::from_utf8(
+            package
+                .part("xl/charts/_rels/chart1.xml.rels")
+                .expect("materialized chart relationships")
+                .bytes
+                .clone(),
+        )
+        .expect("chart relationships XML");
+        assert!(chart_relationships.contains(r#"<pr:Relationships"#));
+        assert!(chart_relationships.contains(r#"keep:root="chart-rels""#));
+        assert!(chart_relationships.contains(r#"keep:edge="shape""#));
+        assert!(chart_relationships.contains(r#"Target="../drawings/userShapes7.xml""#));
+        assert!(chart_relationships.contains(r#"Target="https://example.test/data.xlsx""#));
+        assert!(chart_relationships.contains(r#"TargetMode="External""#));
+        assert!(!chart_relationships.contains("rIdStyleIgnored"));
+
+        assert_eq!(
+            package
+                .part("xl/media/image7.png")
+                .expect("recursive image target")
+                .bytes,
+            vec![7, 8, 9]
+        );
+        let child_relationships = String::from_utf8(
+            package
+                .part("xl/drawings/_rels/userShapes7.xml.rels")
+                .expect("user shapes relationships")
+                .bytes
+                .clone(),
+        )
+        .expect("user shapes relationships XML");
+        assert!(child_relationships.contains(r#"keep:root="child""#));
+        assert!(child_relationships.contains(r#"keep:edge="image""#));
+        assert!(child_relationships.contains(r#"Target="../media/image7.png""#));
+
+        let reopened = XlsxCodec
+            .load(&bytes, LoadOptions::default())
+            .expect("reopen chart relationship graph");
+        let saved_again = XlsxCodec
+            .save(&reopened, SaveOptions::default())
+            .expect("save chart relationship graph twice");
+        let saved_again_package = OpcPackage::from_bytes(&saved_again).expect("second package");
+        assert_eq!(
+            saved_again_package
+                .part("xl/charts/_rels/chart1.xml.rels")
+                .expect("second chart relationships")
+                .bytes,
+            package
+                .part("xl/charts/_rels/chart1.xml.rels")
+                .expect("first chart relationships")
+                .bytes
+        );
+        assert_eq!(
+            saved_again_package
+                .part("xl/drawings/_rels/userShapes7.xml.rels")
+                .expect("second user shapes relationships")
+                .bytes,
+            package
+                .part("xl/drawings/_rels/userShapes7.xml.rels")
+                .expect("first user shapes relationships")
                 .bytes
         );
     }
