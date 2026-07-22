@@ -620,7 +620,13 @@ struct RuntimeWorkbook {
 struct RuntimeChartSupportPartSource {
     relationship_id: String,
     relationship_type: String,
-    source_part_uri: String,
+    target: String,
+    target_mode: Option<String>,
+    part: Option<RuntimeChartSupportPart>,
+}
+
+#[derive(Debug, Clone)]
+struct RuntimeChartSupportPart {
     bytes: Vec<u8>,
     content_type: Option<String>,
     compression: CompressionMethod,
@@ -1543,7 +1549,7 @@ impl ExcelRuntime {
                     worksheet_relationships_part_uri_for(chart_part_uri.as_str());
                 used_part_names.insert(chart_rels_part_uri.clone());
                 let existing_relationships_part = loaded.package.part(&chart_rels_part_uri);
-                let mut relationship_bytes = existing_relationships_part
+                let relationship_bytes = existing_relationships_part
                     .map(|part| part.bytes.clone())
                     .unwrap_or_else(|| {
                         br#"<?xml version="1.0" encoding="UTF-8"?>
@@ -1551,80 +1557,23 @@ impl ExcelRuntime {
 </Relationships>"#
                             .to_vec()
                     });
-                let mut used_relationship_ids = parse_pending_package_relationships(
-                    relationship_bytes.as_slice(),
-                    chart_part_uri.as_str(),
-                )?
-                .into_iter()
-                .map(|relationship| relationship.relationship_id)
-                .collect::<BTreeSet<_>>();
-                let mut target_support_relationships = Vec::new();
-                let mut target_support_part_bytes = BTreeMap::new();
-                for source in support_sources {
-                    if !used_relationship_ids.insert(source.relationship_id.clone()) {
-                        return Err(OmError::new(
-                            OmErrorCode::InvalidState,
-                            format!(
-                                "chart relationship id is duplicated while copying support parts: {}",
-                                source.relationship_id
-                            ),
-                        ));
-                    }
-                    let file_name = source
-                        .source_part_uri
-                        .rsplit('/')
-                        .next()
-                        .unwrap_or(source.source_part_uri.as_str());
-                    let target_part_uri = if source.relationship_type
-                        == CHART_COLOR_STYLE_RELATIONSHIP_TYPE
-                        || file_name.starts_with("colors")
-                    {
-                        next_available_sequential_part_uri(
-                            &mut used_part_names,
-                            "xl/charts/colors",
-                            ".xml",
-                        )
-                    } else {
-                        next_available_sequential_part_uri(
-                            &mut used_part_names,
-                            "xl/charts/style",
-                            ".xml",
-                        )
-                    };
-                    loaded.package.add_part(OpcPart {
-                        name: target_part_uri.clone(),
-                        content_type: source.content_type.clone(),
-                        compression: source.compression,
-                        bytes: source.bytes.clone(),
-                    })?;
-                    if let Some(content_type) = source.content_type.as_deref() {
-                        content_types_xml = append_content_type_override_if_missing(
-                            content_types_xml.as_slice(),
-                            target_part_uri.as_str(),
-                            content_type,
-                        )?;
-                        content_types_dirty = true;
-                    }
-
-                    let relationship_target =
-                        relative_relationship_target(chart_part_uri.as_str(), &target_part_uri);
-                    let mut relationship = BytesStart::new("Relationship");
-                    relationship.push_attribute(("Id", source.relationship_id.as_str()));
-                    relationship.push_attribute(("Type", source.relationship_type.as_str()));
-                    relationship.push_attribute(("Target", relationship_target.as_str()));
-                    relationship_bytes = append_empty_xml_child_before_container_end(
-                        relationship_bytes.as_slice(),
-                        b"Relationships",
-                        relationship,
+                let (materialized, updated_content_types_xml) =
+                    materialize_chart_support_relationships(
+                        &mut loaded.package,
+                        chart_part_uri.as_str(),
+                        relationship_bytes,
+                        content_types_xml,
+                        &mut used_part_names,
+                        support_sources,
                     )?;
-                    target_support_relationships.push(ChartSupportRelationshipBinding {
-                        relationship_id: source.relationship_id.clone(),
-                        relationship_type: source.relationship_type.clone(),
-                        target: target_part_uri.clone(),
-                        target_mode: None,
-                    });
-                    target_support_part_bytes.insert(target_part_uri, source.bytes.clone());
-                }
+                content_types_xml = updated_content_types_xml;
+                content_types_dirty |= materialized.content_types_dirty;
+                let MaterializedChartSupportRelationships {
+                    relationship_bytes,
+                    relationships: target_support_relationships,
+                    part_bytes: target_support_part_bytes,
+                    ..
+                } = materialized;
                 if loaded.package.contains(&chart_rels_part_uri) {
                     loaded
                         .package
@@ -31645,7 +31594,7 @@ impl ExcelRuntime {
             }
 
             let result = (|| {
-                let (source_name, source_visibility, source_chart, source_chart_support_parts) = {
+                let (source_name, source_visibility, source_chart) = {
                     let runtime = self.runtime_workbook(workbook)?;
                     let worksheet = runtime
                         .loaded
@@ -31687,56 +31636,13 @@ impl ExcelRuntime {
                             "copying a chart sheet with opaque drawing objects is not yet supported",
                         ));
                     }
-                    let source_chart_support_parts = chart
-                        .raw_part_uri
-                        .as_deref()
-                        .and_then(|chart_part_uri| {
-                            runtime
-                                .loaded
-                                .sheet_drawing_support_parts
-                                .get(&sheet_id)
-                                .and_then(|support_parts| {
-                                    support_parts.chart_summaries.get(chart_part_uri)
-                                })
-                        })
-                        .map(|summary| {
-                            summary
-                                .support_relationships
-                                .iter()
-                                .map(|relationship| {
-                                    let support_part = runtime
-                                        .loaded
-                                        .package
-                                        .part(&relationship.target)
-                                        .ok_or_else(|| {
-                                            OmError::new(
-                                                OmErrorCode::InvalidState,
-                                                format!(
-                                                    "chart support part is missing: {}",
-                                                    relationship.target
-                                                ),
-                                            )
-                                        })?;
-                                    Ok((
-                                        relationship.relationship_id.clone(),
-                                        relationship.relationship_type.clone(),
-                                        relationship.target.clone(),
-                                        support_part.bytes.clone(),
-                                        support_part.content_type.clone(),
-                                        support_part.compression,
-                                    ))
-                                })
-                                .collect::<OmResult<Vec<_>>>()
-                        })
-                        .transpose()?
-                        .unwrap_or_default();
-                    (
-                        worksheet.name.clone(),
-                        worksheet.visibility,
-                        chart,
-                        source_chart_support_parts,
-                    )
+                    (worksheet.name.clone(), worksheet.visibility, chart)
                 };
+                let source_chart_support_parts = self.chart_support_part_sources_for_chart(
+                    workbook,
+                    sheet_id,
+                    &source_chart,
+                )?;
 
                 let placement_args = {
                     let worksheets = &self
@@ -31822,7 +31728,7 @@ impl ExcelRuntime {
                             .map(|part| part.name.clone())
                             .collect::<BTreeSet<_>>();
                         used_part_names.insert(chart_rels_part_uri.clone());
-                        let mut content_types_xml = runtime
+                        let content_types_xml = runtime
                             .loaded
                             .package
                             .part(CONTENT_TYPES_PART_NAME)
@@ -31836,81 +31742,24 @@ impl ExcelRuntime {
                             })?
                             .bytes
                             .clone();
-                        let mut content_types_dirty = false;
-                        let mut relationship_xml = String::from(
-                            r#"<?xml version="1.0" encoding="UTF-8"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">"#,
-                        );
-                        let mut target_support_relationships = Vec::new();
-                        let mut target_support_part_bytes = BTreeMap::new();
-                        for (
-                            relationship_id,
-                            relationship_type,
-                            source_part_uri,
-                            source_bytes,
-                            source_content_type,
-                            source_compression,
-                        ) in &source_chart_support_parts
-                        {
-                            let file_name = source_part_uri
-                                .rsplit('/')
-                                .next()
-                                .unwrap_or(source_part_uri.as_str());
-                            let target_part_uri = if relationship_type
-                                == "http://schemas.microsoft.com/office/2011/relationships/chartColorStyle"
-                                || file_name.starts_with("colors")
-                            {
-                                next_available_sequential_part_uri(
-                                    &mut used_part_names,
-                                    "xl/charts/colors",
-                                    ".xml",
-                                )
-                            } else {
-                                next_available_sequential_part_uri(
-                                    &mut used_part_names,
-                                    "xl/charts/style",
-                                    ".xml",
-                                )
-                            };
-                            runtime.loaded.package.add_part(OpcPart {
-                                name: target_part_uri.clone(),
-                                content_type: source_content_type.clone(),
-                                compression: *source_compression,
-                                bytes: source_bytes.clone(),
-                            })?;
-                            if let Some(content_type) = source_content_type.as_deref() {
-                                content_types_xml = append_content_type_override_if_missing(
-                                    content_types_xml.as_slice(),
-                                    target_part_uri.as_str(),
-                                    content_type,
-                                )?;
-                                content_types_dirty = true;
-                            }
-                            let relationship_target = relative_relationship_target(
+                        let (materialized, content_types_xml) =
+                            materialize_chart_support_relationships(
+                                &mut runtime.loaded.package,
                                 target_chart_part_uri,
-                                &target_part_uri,
-                            );
-                            let escaped_relationship_id =
-                                partial_escape(relationship_id.as_str()).to_string();
-                            let escaped_relationship_type =
-                                partial_escape(relationship_type.as_str()).to_string();
-                            let escaped_relationship_target =
-                                partial_escape(relationship_target.as_str()).to_string();
-                            relationship_xml.push_str(&format!(
-                                r#"
-  <Relationship Id="{escaped_relationship_id}" Type="{escaped_relationship_type}" Target="{escaped_relationship_target}"/>"#
-                            ));
-                            target_support_relationships.push(ChartSupportRelationshipBinding {
-                                relationship_id: relationship_id.clone(),
-                                relationship_type: relationship_type.clone(),
-                                target: target_part_uri.clone(),
-                                target_mode: None,
-                            });
-                            target_support_part_bytes
-                                .insert(target_part_uri.clone(), source_bytes.clone());
-                        }
-                        relationship_xml.push_str("\n</Relationships>");
-                        let relationship_bytes = relationship_xml.into_bytes();
+                                br#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+</Relationships>"#
+                                    .to_vec(),
+                                content_types_xml,
+                                &mut used_part_names,
+                                &source_chart_support_parts,
+                            )?;
+                        let MaterializedChartSupportRelationships {
+                            relationship_bytes,
+                            relationships: target_support_relationships,
+                            part_bytes: target_support_part_bytes,
+                            content_types_dirty,
+                        } = materialized;
                         if runtime.loaded.package.contains(&chart_rels_part_uri) {
                             runtime.loaded.package.replace_part_bytes(
                                 &chart_rels_part_uri,
@@ -34958,23 +34807,35 @@ impl ExcelRuntime {
             .support_relationships
             .iter()
             .map(|relationship| {
-                let support_part = runtime
-                    .loaded
-                    .package
-                    .part(&relationship.target)
-                    .ok_or_else(|| {
-                        OmError::new(
-                            OmErrorCode::InvalidState,
-                            format!("chart support part is missing: {}", relationship.target),
-                        )
-                    })?;
+                let external = relationship
+                    .target_mode
+                    .as_deref()
+                    .is_some_and(|target_mode| target_mode.eq_ignore_ascii_case("External"));
+                let part = if external {
+                    None
+                } else {
+                    let support_part = runtime
+                        .loaded
+                        .package
+                        .part(&relationship.target)
+                        .ok_or_else(|| {
+                            OmError::new(
+                                OmErrorCode::InvalidState,
+                                format!("chart support part is missing: {}", relationship.target),
+                            )
+                        })?;
+                    Some(RuntimeChartSupportPart {
+                        bytes: support_part.bytes.clone(),
+                        content_type: support_part.content_type.clone(),
+                        compression: support_part.compression,
+                    })
+                };
                 Ok(RuntimeChartSupportPartSource {
                     relationship_id: relationship.relationship_id.clone(),
                     relationship_type: relationship.relationship_type.clone(),
-                    source_part_uri: relationship.target.clone(),
-                    bytes: support_part.bytes.clone(),
-                    content_type: support_part.content_type.clone(),
-                    compression: support_part.compression,
+                    target: relationship.target.clone(),
+                    target_mode: relationship.target_mode.clone(),
+                    part,
                 })
             })
             .collect()
@@ -40030,6 +39891,135 @@ fn append_empty_xml_child_before_container_end(
     }
 
     Ok(writer.into_inner().into_inner())
+}
+
+struct MaterializedChartSupportRelationships {
+    relationship_bytes: Vec<u8>,
+    relationships: Vec<ChartSupportRelationshipBinding>,
+    part_bytes: BTreeMap<String, Vec<u8>>,
+    content_types_dirty: bool,
+}
+
+fn materialize_chart_support_relationships(
+    package: &mut OpcPackage,
+    chart_part_uri: &str,
+    mut relationship_bytes: Vec<u8>,
+    mut content_types_xml: Vec<u8>,
+    used_part_names: &mut BTreeSet<String>,
+    sources: &[RuntimeChartSupportPartSource],
+) -> OmResult<(MaterializedChartSupportRelationships, Vec<u8>)> {
+    let mut used_relationship_ids = parse_pending_package_relationships(
+        relationship_bytes.as_slice(),
+        chart_part_uri,
+    )?
+    .into_iter()
+    .map(|relationship| relationship.relationship_id)
+    .collect::<BTreeSet<_>>();
+    let mut relationships = Vec::with_capacity(sources.len());
+    let mut part_bytes = BTreeMap::new();
+    let mut content_types_dirty = false;
+
+    for source in sources {
+        if !used_relationship_ids.insert(source.relationship_id.clone()) {
+            return Err(OmError::new(
+                OmErrorCode::InvalidState,
+                format!(
+                    "chart relationship id is duplicated while copying support parts: {}",
+                    source.relationship_id
+                ),
+            ));
+        }
+        let external = source
+            .target_mode
+            .as_deref()
+            .is_some_and(|target_mode| target_mode.eq_ignore_ascii_case("External"));
+        let (relationship_target, materialized_target) = match (&source.part, external) {
+            (None, true) => (source.target.clone(), source.target.clone()),
+            (Some(_), true) => {
+                return Err(OmError::new(
+                    OmErrorCode::InvalidState,
+                    "external chart support relationship unexpectedly owns a package part",
+                ));
+            }
+            (None, false) => {
+                return Err(OmError::new(
+                    OmErrorCode::InvalidState,
+                    format!("chart support part is missing: {}", source.target),
+                ));
+            }
+            (Some(part), false) => {
+                let file_name = source
+                    .target
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or(source.target.as_str());
+                let target_part_uri = if source.relationship_type
+                    == CHART_COLOR_STYLE_RELATIONSHIP_TYPE
+                    || file_name.starts_with("colors")
+                {
+                    next_available_sequential_part_uri(
+                        used_part_names,
+                        "xl/charts/colors",
+                        ".xml",
+                    )
+                } else {
+                    next_available_sequential_part_uri(
+                        used_part_names,
+                        "xl/charts/style",
+                        ".xml",
+                    )
+                };
+                package.add_part(OpcPart {
+                    name: target_part_uri.clone(),
+                    content_type: part.content_type.clone(),
+                    compression: part.compression,
+                    bytes: part.bytes.clone(),
+                })?;
+                if let Some(content_type) = part.content_type.as_deref() {
+                    content_types_xml = append_content_type_override_if_missing(
+                        content_types_xml.as_slice(),
+                        target_part_uri.as_str(),
+                        content_type,
+                    )?;
+                    content_types_dirty = true;
+                }
+                part_bytes.insert(target_part_uri.clone(), part.bytes.clone());
+                (
+                    relative_relationship_target(chart_part_uri, &target_part_uri),
+                    target_part_uri,
+                )
+            }
+        };
+
+        let mut relationship = BytesStart::new("Relationship");
+        relationship.push_attribute(("Id", source.relationship_id.as_str()));
+        relationship.push_attribute(("Type", source.relationship_type.as_str()));
+        relationship.push_attribute(("Target", relationship_target.as_str()));
+        if let Some(target_mode) = source.target_mode.as_deref() {
+            relationship.push_attribute(("TargetMode", target_mode));
+        }
+        relationship_bytes = append_empty_xml_child_before_container_end(
+            relationship_bytes.as_slice(),
+            b"Relationships",
+            relationship,
+        )?;
+        relationships.push(ChartSupportRelationshipBinding {
+            relationship_id: source.relationship_id.clone(),
+            relationship_type: source.relationship_type.clone(),
+            target: materialized_target,
+            target_mode: source.target_mode.clone(),
+        });
+    }
+
+    Ok((
+        MaterializedChartSupportRelationships {
+            relationship_bytes,
+            relationships,
+            part_bytes,
+            content_types_dirty,
+        },
+        content_types_xml,
+    ))
 }
 
 fn pending_package_relationship_is_external(relationship: &PendingPackageRelationship) -> bool {
@@ -114724,6 +114714,101 @@ mod tests {
     }
 
     #[test]
+    fn chart_copy_preserves_external_chart_sheet_support_relationships() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_external_support_relationships_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with external chart support relationships");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        runtime
+            .dispatch_invoke(
+                chart,
+                "Move",
+                &[OmValue::Missing, OmValue::Object(worksheet)],
+            )
+            .expect("move embedded chart with external support relationships");
+        let moved_saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save moved external chart support relationships");
+        assert_external_chart_support_relationships(
+            &OpcPackage::from_bytes(&moved_saved).expect("moved chart package"),
+        );
+
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: moved_saved,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen moved chart sheet");
+        let application = runtime.root_application();
+        let charts = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Charts", &[])
+                .expect("Workbook.Charts"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(charts, "Item", &[OmValue::Number(1.0)])
+                .expect("Charts.Item(1)"),
+        );
+        runtime
+            .dispatch_invoke(chart, "Copy", &[])
+            .expect("copy chart sheet with external support relationships");
+        let copied_workbook = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveWorkbook", &[])
+                .expect("ActiveWorkbook after Chart.Copy"),
+        );
+        let copied_saved = runtime
+            .save_workbook(
+                super::WorkbookHandle(copied_workbook),
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save copied external chart support relationships");
+        assert_external_chart_support_relationships(
+            &OpcPackage::from_bytes(&copied_saved).expect("copied chart package"),
+        );
+    }
+
+    #[test]
     fn chart_sheet_chart_handle_activate_and_delete() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
@@ -148602,6 +148687,51 @@ mod tests {
                 .unwrap_or(false),
             "duplicated chart color support part should be copied"
         );
+    }
+
+    #[test]
+    fn chartobject_duplicate_preserves_external_chart_support_relationships() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_external_support_relationships_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with external chart support relationships");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+
+        runtime
+            .dispatch_invoke(chart_object, "Duplicate", &[])
+            .expect("ChartObject.Duplicate with external support relationships");
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save duplicated external chart support relationships");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved duplicate package");
+        assert_external_chart_support_relationships(&saved_package);
     }
 
     #[test]
@@ -186647,6 +186777,48 @@ mod tests {
             .expect("add chart colors");
 
         package.to_bytes().expect("package bytes")
+    }
+
+    fn synthetic_workbook_with_embedded_chart_external_support_relationships_bytes() -> Vec<u8> {
+        let mut package = OpcPackage::from_bytes(&synthetic_workbook_with_embedded_chart_bytes())
+            .expect("embedded chart package");
+        package
+            .add_part(OpcPart {
+                name: "xl/charts/_rels/chart1.xml.rels".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rIdStyle1" Type="http://schemas.microsoft.com/office/2011/relationships/chartStyle" Target="https://example.test/chart-style.xml" TargetMode="ExTeRnAl"/>
+  <Relationship Id="rIdColors1" Type="http://schemas.microsoft.com/office/2011/relationships/chartColorStyle" Target="https://example.test/chart-colors.xml" TargetMode="external"/>
+</Relationships>"#
+                    .to_vec(),
+            })
+            .expect("add external chart support relationships");
+        package.to_bytes().expect("package bytes")
+    }
+
+    fn assert_external_chart_support_relationships(package: &OpcPackage) {
+        let relationships_xml = package
+            .parts()
+            .iter()
+            .filter(|part| {
+                part.name.starts_with("xl/charts/_rels/chart")
+                    && part.name.ends_with(".xml.rels")
+            })
+            .map(|part| String::from_utf8_lossy(&part.bytes).into_owned())
+            .find(|xml| xml.contains("https://example.test/chart-style.xml"))
+            .expect("external chart support relationships");
+        assert!(relationships_xml.contains(
+            r#"Target="https://example.test/chart-style.xml" TargetMode="ExTeRnAl""#
+        ));
+        assert!(relationships_xml.contains(
+            r#"Target="https://example.test/chart-colors.xml" TargetMode="external""#
+        ));
+        assert!(!package.parts().iter().any(|part| {
+            part.name.starts_with("xl/charts/style")
+                || part.name.starts_with("xl/charts/colors")
+        }));
     }
 
     fn synthetic_workbook_with_embedded_chart_relationship_graph_bytes() -> Vec<u8> {
