@@ -33475,10 +33475,16 @@ impl ExcelRuntime {
                 })
                 .expect("replacement worksheet should exist")
         };
-        let removed_chart_graph_part_uris = {
-            let (charts, mut removed_owner_part_uris) = {
+        let removed_package_graph_part_uris = {
+            let (charts, drawings, mut removed_owner_part_uris) = {
                 let runtime = self.runtime_workbook(workbook)?;
                 let state = &runtime.loaded.state;
+                let drawings = state
+                    .drawings
+                    .values()
+                    .filter(|drawing| drawing.host_sheet_id == sheet_id)
+                    .cloned()
+                    .collect::<Vec<_>>();
                 let mut hosted_chart_ids = state
                     .drawings
                     .values()
@@ -33525,9 +33531,9 @@ impl ExcelRuntime {
                         .filter(|drawing| drawing.host_sheet_id == sheet_id)
                         .filter_map(|drawing| drawing.raw_part_uri.clone()),
                 );
-                (charts, removed_owner_part_uris)
+                (charts, drawings, removed_owner_part_uris)
             };
-            let mut graphs = Vec::new();
+            let mut chart_graphs = Vec::new();
             for chart in charts {
                 let Some(chart_part_uri) = chart.raw_part_uri.as_ref() else {
                     continue;
@@ -33538,13 +33544,28 @@ impl ExcelRuntime {
                     sheet_id,
                     &chart,
                 )? {
-                    graphs.push(graph);
+                    chart_graphs.push(graph);
                 }
             }
-            exclusively_owned_chart_graph_part_uris(
+            let mut drawing_graphs = Vec::new();
+            for drawing in drawings {
+                if let Some(graph) = self.pending_drawing_relationship_graph_for_drawing(
+                    workbook,
+                    sheet_id,
+                    &drawing,
+                )? {
+                    drawing_graphs.push(graph);
+                }
+            }
+            let part_graphs = chart_graphs
+                .iter()
+                .map(|graph| &graph.parts)
+                .chain(drawing_graphs.iter().map(|graph| &graph.parts))
+                .collect::<Vec<_>>();
+            exclusively_owned_package_graph_part_uris(
                 &self.runtime_workbook(workbook)?.loaded.package,
                 &removed_owner_part_uris,
-                &graphs,
+                &part_graphs,
             )?
         };
 
@@ -33718,7 +33739,7 @@ impl ExcelRuntime {
                 package_parts_to_remove.insert(part_uri.clone());
                 content_type_overrides_to_strip.push(part_uri);
             }
-            for part_uri in removed_chart_graph_part_uris {
+            for part_uri in removed_package_graph_part_uris {
                 package_parts_to_remove.insert(
                     worksheet_relationships_part_uri_for(part_uri.as_str()),
                 );
@@ -35001,10 +35022,10 @@ impl ExcelRuntime {
                     &chart,
                 )?
             {
-                exclusively_owned_chart_graph_part_uris(
+                exclusively_owned_package_graph_part_uris(
                     &self.runtime_workbook(workbook)?.loaded.package,
                     &BTreeSet::from([chart_part_uri.clone()]),
-                    &[graph],
+                    &[&graph.parts],
                 )?
             } else {
                 BTreeSet::new()
@@ -40230,14 +40251,14 @@ fn collect_pending_package_part_graph(
     Ok(())
 }
 
-fn exclusively_owned_chart_graph_part_uris(
+fn exclusively_owned_package_graph_part_uris(
     package: &OpcPackage,
     removed_owner_part_uris: &BTreeSet<String>,
-    graphs: &[PendingChartRelationshipGraph],
+    part_graphs: &[&BTreeMap<String, PendingPackagePart>],
 ) -> OmResult<BTreeSet<String>> {
     let mut candidate_parts = BTreeMap::<String, &PendingPackagePart>::new();
-    for graph in graphs {
-        for (part_uri, part) in &graph.parts {
+    for graph in part_graphs {
+        for (part_uri, part) in *graph {
             candidate_parts.entry(part_uri.clone()).or_insert(part);
         }
     }
@@ -149750,6 +149771,64 @@ mod tests {
     }
 
     #[test]
+    fn chart_sheet_delete_removes_exclusive_drawing_owned_relationship_graph() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: convert_embedded_chart_workbook_to_chart_sheet(
+                    &synthetic_workbook_with_internal_image_backed_raw_shape_bytes(),
+                ),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open chart sheet with image-backed drawing object");
+        let charts = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Charts", &[])
+                .expect("Workbook.Charts"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(charts, "Item", &[OmValue::Number(1.0)])
+                .expect("Charts.Item(1)"),
+        );
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        runtime
+            .dispatch_invoke(worksheets, "Add", &[])
+            .expect("add replacement worksheet");
+        runtime
+            .dispatch_set(
+                runtime.root_application(),
+                "DisplayAlerts",
+                OmValue::Bool(false),
+                &[],
+            )
+            .expect("disable DisplayAlerts");
+
+        runtime
+            .dispatch_invoke(chart, "Delete", &[])
+            .expect("chart sheet Chart.Delete");
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after chart sheet drawing deletion");
+        assert_drawing_owned_relationship_graph_removed(
+            &OpcPackage::from_bytes(&saved).expect("saved chart sheet deletion package"),
+        );
+    }
+
+    #[test]
     fn chartobjects_duplicate_duplicates_single_collection_member() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
@@ -171851,6 +171930,244 @@ mod tests {
     }
 
     #[test]
+    fn worksheet_delete_removes_exclusive_drawing_owned_relationship_graph() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_internal_image_backed_raw_shape_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with image-backed drawing object");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        runtime
+            .dispatch_invoke(worksheets, "Add", &[])
+            .expect("add replacement worksheet");
+        runtime
+            .dispatch_set(
+                runtime.root_application(),
+                "DisplayAlerts",
+                OmValue::Bool(false),
+                &[],
+            )
+            .expect("disable DisplayAlerts");
+
+        runtime
+            .dispatch_invoke(worksheet, "Delete", &[])
+            .expect("Worksheet.Delete");
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after drawing graph deletion");
+        assert_drawing_owned_relationship_graph_removed(
+            &OpcPackage::from_bytes(&saved).expect("saved worksheet deletion package"),
+        );
+    }
+
+    #[test]
+    fn worksheet_delete_removes_recursive_drawing_owned_relationship_graph() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_recursive_drawing_relationship_graph_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with recursive drawing relationship graph");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        runtime
+            .dispatch_invoke(worksheets, "Add", &[])
+            .expect("add replacement worksheet");
+        runtime
+            .dispatch_set(
+                runtime.root_application(),
+                "DisplayAlerts",
+                OmValue::Bool(false),
+                &[],
+            )
+            .expect("disable DisplayAlerts");
+
+        runtime
+            .dispatch_invoke(worksheet, "Delete", &[])
+            .expect("Worksheet.Delete");
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after recursive drawing graph deletion");
+        let saved_package =
+            OpcPackage::from_bytes(&saved).expect("saved recursive drawing deletion package");
+        assert_drawing_owned_relationship_graph_removed(&saved_package);
+        assert!(!saved_package.contains("xl/media/_rels/image1.png.rels"));
+        assert!(!saved_package.contains("xl/embeddings/drawing-child.bin"));
+        let content_types = String::from_utf8_lossy(
+            &saved_package
+                .part("[Content_Types].xml")
+                .expect("content types")
+                .bytes,
+        );
+        assert!(!content_types.contains("/xl/embeddings/drawing-child.bin"));
+    }
+
+    #[test]
+    fn worksheet_delete_preserves_shared_drawing_owned_relationship_graph() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_shared_drawing_relationship_graph_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with shared drawing relationship graph");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        runtime
+            .dispatch_invoke(worksheets, "Add", &[])
+            .expect("add replacement worksheet");
+        runtime
+            .dispatch_set(
+                runtime.root_application(),
+                "DisplayAlerts",
+                OmValue::Bool(false),
+                &[],
+            )
+            .expect("disable DisplayAlerts");
+
+        runtime
+            .dispatch_invoke(worksheet, "Delete", &[])
+            .expect("Worksheet.Delete");
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save workbook after shared drawing deletion");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved shared image package");
+        assert!(saved_package.contains("xl/media/image1.png"));
+        let package_relationships = String::from_utf8_lossy(
+            &saved_package
+                .part("_rels/.rels")
+                .expect("package relationships")
+                .bytes,
+        );
+        assert!(package_relationships.contains("rIdSharedDrawingImage"));
+    }
+
+    #[test]
+    fn worksheet_delete_rejects_dangling_drawing_relationship_graph_atomically() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_dangling_image_backed_raw_shape_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with dangling drawing relationship graph");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        runtime
+            .dispatch_invoke(worksheets, "Add", &[])
+            .expect("add replacement worksheet");
+        runtime
+            .dispatch_set(
+                runtime.root_application(),
+                "DisplayAlerts",
+                OmValue::Bool(false),
+                &[],
+            )
+            .expect("disable DisplayAlerts");
+        let worksheet_count_before = runtime
+            .runtime_workbook(workbook)
+            .expect("runtime workbook before delete")
+            .loaded
+            .state
+            .worksheets
+            .len();
+
+        let error = runtime
+            .dispatch_invoke(worksheet, "Delete", &[])
+            .expect_err("dangling drawing graph should reject worksheet deletion");
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("opaque relationship target part is missing"));
+        assert_eq!(
+            runtime
+                .runtime_workbook(workbook)
+                .expect("runtime workbook after rejected delete")
+                .loaded
+                .state
+                .worksheets
+                .len(),
+            worksheet_count_before
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(chart_objects, "Count", &[])
+                    .expect("ChartObjects.Count after rejected worksheet delete")
+            ),
+            1.0
+        );
+    }
+
+    #[test]
     fn worksheet_delete_preserves_chart_part_when_chart_is_still_referenced() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
@@ -187083,6 +187400,82 @@ mod tests {
         package
             .to_bytes()
             .expect("internal image-backed chart and shape package bytes")
+    }
+
+    fn synthetic_workbook_with_shared_drawing_relationship_graph_bytes() -> Vec<u8> {
+        let mut package = OpcPackage::from_bytes(
+            &synthetic_workbook_with_internal_image_backed_raw_shape_bytes(),
+        )
+        .expect("image-backed drawing package");
+        let package_relationships = String::from_utf8(
+            package
+                .part("_rels/.rels")
+                .expect("package relationships")
+                .bytes
+                .clone(),
+        )
+        .expect("package relationships utf8")
+        .replace(
+            "</Relationships>",
+            r#"  <Relationship Id="rIdSharedDrawingImage" Type="urn:shared-drawing-image" Target="xl/media/image1.png"/>
+</Relationships>"#,
+        );
+        package
+            .replace_part_bytes("_rels/.rels", package_relationships.into_bytes())
+            .expect("add shared drawing image root");
+        package
+            .to_bytes()
+            .expect("shared drawing relationship graph package bytes")
+    }
+
+    fn synthetic_workbook_with_recursive_drawing_relationship_graph_bytes() -> Vec<u8> {
+        let mut package = OpcPackage::from_bytes(
+            &synthetic_workbook_with_internal_image_backed_raw_shape_bytes(),
+        )
+        .expect("image-backed drawing package");
+        let content_types_xml = String::from_utf8(
+            package
+                .part("[Content_Types].xml")
+                .expect("content types")
+                .bytes
+                .clone(),
+        )
+        .expect("content types utf8")
+        .replace(
+            "</Types>",
+            r#"  <Override PartName="/xl/embeddings/drawing-child.bin" ContentType="application/octet-stream"/>
+</Types>"#,
+        );
+        package
+            .replace_part_bytes("[Content_Types].xml", content_types_xml.into_bytes())
+            .expect("replace content types");
+        package
+            .add_part(OpcPart {
+                name: "xl/media/_rels/image1.png.rels".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rIdDrawingChild" Type="urn:drawing-child" Target="../embeddings/drawing-child.bin"/>
+</Relationships>"#
+                    .to_vec(),
+            })
+            .expect("add recursive image relationships");
+        package
+            .add_part(OpcPart {
+                name: "xl/embeddings/drawing-child.bin".to_string(),
+                content_type: Some("application/octet-stream".to_string()),
+                compression: CompressionMethod::Stored,
+                bytes: vec![9, 8, 7, 6],
+            })
+            .expect("add recursive drawing child");
+        package
+            .to_bytes()
+            .expect("recursive drawing relationship graph package bytes")
+    }
+
+    fn assert_drawing_owned_relationship_graph_removed(package: &OpcPackage) {
+        assert!(!package.contains("xl/media/image1.png"));
     }
 
     fn synthetic_workbook_with_dangling_image_backed_raw_shape_bytes() -> Vec<u8> {

@@ -5031,6 +5031,8 @@
   - 범위: `chartStyle`/`chartColorStyle` 지원 관계 소스를 internal package part와 external URI target으로 구분하고, external 관계는 존재하지 않는 ZIP part를 조회하거나 새 style/color part를 할당하지 않은 채 원 URI와 대소문자를 포함한 explicit `TargetMode`를 보존하도록 공통 materializer를 도입; loaded embedded `ChartObject.Duplicate`, embedded-to-chart-sheet `Chart.Move`, chart-sheet `Chart.Copy`와 same/cross-workbook placement 경로가 내부 지원 파트 복제와 외부 지원 관계 복사를 동일하게 처리하고 반복 save/reopen에서도 안정적으로 유지되는 회귀를 고정
   - `Step 7.193 DONE` ownership-aware chart relationship graph deletion
   - 범위: persisted chart 삭제 전에 chart-owned opaque internal relationship closure를 수집하고, 삭제 대상 chart/worksheet/drawing owner 밖의 package `.rels`에서 후보 파트로 들어오는 참조를 root로 삼아 shared descendant closure는 보존하고 나머지 part, child `.rels`, content type override와 preservation inventory만 제거하도록 구현; embedded `ChartObject.Delete`, host `Worksheet.Delete`, promoted chart-sheet `Chart.Delete`, package-root shared `userShapes → image` 보존과 dangling internal target의 mutation 전 원자적 거절 회귀를 고정
+  - `Step 7.194 DONE` ownership-aware drawing relationship graph deletion
+  - 범위: worksheet 또는 chart-sheet 삭제 전에 opaque drawing sibling이 소유한 internal relationship closure를 chart-owned graph와 함께 공통 package ownership 분석에 넣고, 삭제 대상 owner 밖의 incoming relationship이 있는 shared root와 descendant는 보존하면서 전용 image/OLE 계열 part, recursive child `.rels`와 content type override를 제거하도록 구현; worksheet/chart-sheet exclusive graph, package-root shared image, recursive child part 및 dangling target의 mutation 전 원자적 거절 회귀를 고정
 - 목표
   - 실제 Excel desktop을 oracle로 쓰는 differential validation 경로를 만든다.
   - pinned OM dataset과 runtime facade를 corpus로 검증한다.
