@@ -54457,107 +54457,649 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         let Some(identifier) = self.parse_identifier() else {
             return Err(FormulaEvalError::Unsupported);
         };
-        if !identifier.eq_ignore_ascii_case("FILTER") {
+        if ![
+            "FILTER",
+            "SORT",
+            "SORTBY",
+            "UNIQUE",
+            "TAKE",
+            "DROP",
+            "CHOOSECOLS",
+            "CHOOSEROWS",
+            "TRANSPOSE",
+            "SEQUENCE",
+        ]
+        .iter()
+        .any(|name| identifier.eq_ignore_ascii_case(name))
+        {
             return Err(FormulaEvalError::Unsupported);
         }
         self.skip_whitespace();
         if !self.consume_char('(') {
             return Err(FormulaEvalError::Unsupported);
         }
-        let (source_sheet_id, source_rect) = self.parse_reference_argument()?;
-        self.skip_whitespace();
-        if !self.consume_char(',') {
-            return Err(FormulaEvalError::Unsupported);
+
+        if identifier.eq_ignore_ascii_case("SEQUENCE") {
+            let rows = formula_integer_argument(self.parse_comparison()?)?;
+            if rows < 1 {
+                return Err(FormulaEvalError::Value);
+            }
+            let mut cols = 1_i64;
+            let mut start = 1.0_f64;
+            let mut step = 1.0_f64;
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                if !self.consume_char(',') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+                self.skip_whitespace();
+                if !self.peek_char().is_some_and(|ch| matches!(ch, ',' | ')')) {
+                    cols = formula_integer_argument(self.parse_comparison()?)?;
+                    if cols < 1 {
+                        return Err(FormulaEvalError::Value);
+                    }
+                }
+                self.skip_whitespace();
+                if !self.consume_char(')') {
+                    if !self.consume_char(',') {
+                        return Err(FormulaEvalError::Unsupported);
+                    }
+                    self.skip_whitespace();
+                    if !self.peek_char().is_some_and(|ch| matches!(ch, ',' | ')')) {
+                        start = self.parse_comparison()?;
+                    }
+                    self.skip_whitespace();
+                    if !self.consume_char(')') {
+                        if !self.consume_char(',') {
+                            return Err(FormulaEvalError::Unsupported);
+                        }
+                        step = self.parse_comparison()?;
+                        self.skip_whitespace();
+                        if !self.consume_char(')') {
+                            return Err(FormulaEvalError::Unsupported);
+                        }
+                    }
+                }
+            }
+            self.skip_whitespace();
+            if self.index != self.input.len() || !start.is_finite() || !step.is_finite() {
+                return Err(FormulaEvalError::Value);
+            }
+            let rows = usize::try_from(rows).map_err(|_| FormulaEvalError::Value)?;
+            let cols = usize::try_from(cols).map_err(|_| FormulaEvalError::Value)?;
+            let len = rows.checked_mul(cols).ok_or(FormulaEvalError::Num)?;
+            let values = (0..len)
+                .map(|index| {
+                    formula_checked_numeric_result(start + step * index as f64)
+                        .map(CellValue::Number)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            return Ok(FormulaArrayResult { rows, cols, values });
         }
-        let (include_sheet_id, include_rect) = self.parse_reference_argument()?;
-        self.skip_whitespace();
-        let if_empty = if self.consume_char(')') {
-            None
-        } else {
+
+        let (source_sheet_id, source_rect) = self.parse_reference_argument()?;
+        let source_rows = source_rect.height() as usize;
+        let source_cols = source_rect.width() as usize;
+        let mut source_values = Vec::with_capacity(source_rows * source_cols);
+        for row in source_rect.row_first..=source_rect.row_last {
+            for col in source_rect.col_first..=source_rect.col_last {
+                source_values.push(
+                    self.evaluator
+                        .cell_value_or_blank(source_sheet_id, row, col)?,
+                );
+            }
+        }
+
+        if identifier.eq_ignore_ascii_case("FILTER") {
+            self.skip_whitespace();
             if !self.consume_char(',') {
                 return Err(FormulaEvalError::Unsupported);
             }
-            let value = self.parse_value_probe_argument()?;
+            let (include_sheet_id, include_rect) = self.parse_reference_argument()?;
+            self.skip_whitespace();
+            let if_empty = if self.consume_char(')') {
+                None
+            } else {
+                if !self.consume_char(',') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+                let value = self.parse_value_probe_argument()?;
+                self.skip_whitespace();
+                if !self.consume_char(')') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+                Some(value)
+            };
+            self.skip_whitespace();
+            if self.index != self.input.len() {
+                return Err(FormulaEvalError::Unsupported);
+            }
+
+            let include_value = |value: CellValue| -> Result<bool, FormulaEvalError> {
+                match value {
+                    CellValue::Blank => Ok(false),
+                    CellValue::Bool(value) => Ok(value),
+                    CellValue::Number(value) => Ok(value != 0.0),
+                    CellValue::Text(_) => Err(FormulaEvalError::Value),
+                    CellValue::Error(error) => Err(formula_eval_error_from_cell_error(error)),
+                }
+            };
+            let mut values = Vec::new();
+            let (rows, cols) = if include_rect.height() == source_rect.height()
+                && include_rect.width() == 1
+            {
+                let mut selected_rows = 0_usize;
+                for row_offset in 0..source_rect.height() {
+                    let include = self.evaluator.cell_value_or_blank(
+                        include_sheet_id,
+                        include_rect.row_first + row_offset,
+                        include_rect.col_first,
+                    )?;
+                    if include_value(include)? {
+                        selected_rows += 1;
+                        let source_start = row_offset as usize * source_cols;
+                        values.extend_from_slice(
+                            &source_values[source_start..source_start + source_cols],
+                        );
+                    }
+                }
+                (selected_rows, source_cols)
+            } else if include_rect.width() == source_rect.width() && include_rect.height() == 1 {
+                let selected_columns = (0..source_rect.width())
+                    .map(|col_offset| {
+                        self.evaluator
+                            .cell_value_or_blank(
+                                include_sheet_id,
+                                include_rect.row_first,
+                                include_rect.col_first + col_offset,
+                            )
+                            .and_then(&include_value)
+                            .map(|include| (col_offset as usize, include))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?
+                    .into_iter()
+                    .filter_map(|(col_offset, include)| include.then_some(col_offset))
+                    .collect::<Vec<_>>();
+                for row_offset in 0..source_rows {
+                    for &col_offset in &selected_columns {
+                        values.push(source_values[row_offset * source_cols + col_offset].clone());
+                    }
+                }
+                (source_rows, selected_columns.len())
+            } else {
+                return Err(FormulaEvalError::Value);
+            };
+
+            if rows == 0 || cols == 0 {
+                return if_empty
+                    .and_then(formula_cell_value_from_probe)
+                    .map(FormulaArrayResult::single)
+                    .ok_or(FormulaEvalError::Calc);
+            }
+            return Ok(FormulaArrayResult { rows, cols, values });
+        }
+
+        if identifier.eq_ignore_ascii_case("SORT") || identifier.eq_ignore_ascii_case("SORTBY") {
+            let compare_values = |left: &CellValue,
+                                  right: &CellValue|
+             -> Result<Ordering, FormulaEvalError> {
+                let left = formula_value_probe_from_cell_value(left.clone());
+                let right = formula_value_probe_from_cell_value(right.clone());
+                if let FormulaValueProbe::Error(error) = left {
+                    return Err(error);
+                }
+                if let FormulaValueProbe::Error(error) = right {
+                    return Err(error);
+                }
+                if let Some(ordering) = formula_value_probe_ordering(&left, &right)? {
+                    return Ok(ordering);
+                }
+                let rank = |value: &FormulaValueProbe| match value {
+                    FormulaValueProbe::Blank => 0,
+                    FormulaValueProbe::Number(_) => 1,
+                    FormulaValueProbe::Text(_) => 2,
+                    FormulaValueProbe::Bool(_) => 3,
+                    FormulaValueProbe::Error(_) => 4,
+                    FormulaValueProbe::Omitted | FormulaValueProbe::Lambda { .. } => 5,
+                };
+                Ok(rank(&left).cmp(&rank(&right)))
+            };
+            let mut key_sets = Vec::<(Vec<CellValue>, bool)>::new();
+            let by_column;
+            if identifier.eq_ignore_ascii_case("SORT") {
+                let mut sort_index = 1_i64;
+                let mut sort_order = 1_i64;
+                let mut sort_by_column = false;
+                self.skip_whitespace();
+                if !self.consume_char(')') {
+                    if !self.consume_char(',') {
+                        return Err(FormulaEvalError::Unsupported);
+                    }
+                    self.skip_whitespace();
+                    if !self.peek_char().is_some_and(|ch| matches!(ch, ',' | ')')) {
+                        sort_index = formula_integer_argument(self.parse_comparison()?)?;
+                    }
+                    self.skip_whitespace();
+                    if !self.consume_char(')') {
+                        if !self.consume_char(',') {
+                            return Err(FormulaEvalError::Unsupported);
+                        }
+                        self.skip_whitespace();
+                        if !self.peek_char().is_some_and(|ch| matches!(ch, ',' | ')')) {
+                            sort_order = formula_integer_argument(self.parse_comparison()?)?;
+                        }
+                        self.skip_whitespace();
+                        if !self.consume_char(')') {
+                            if !self.consume_char(',') {
+                                return Err(FormulaEvalError::Unsupported);
+                            }
+                            self.skip_whitespace();
+                            if !self.peek_char().is_some_and(|ch| matches!(ch, ',' | ')')) {
+                                sort_by_column = self.parse_comparison()? != 0.0;
+                            }
+                            self.skip_whitespace();
+                            if !self.consume_char(')') {
+                                return Err(FormulaEvalError::Unsupported);
+                            }
+                        }
+                    }
+                }
+                if sort_index < 1 || !matches!(sort_order, -1 | 1) {
+                    return Err(FormulaEvalError::Value);
+                }
+                by_column = sort_by_column;
+                let sort_index = usize::try_from(sort_index - 1)
+                    .map_err(|_| FormulaEvalError::Value)?;
+                let keys = if by_column {
+                    if sort_index >= source_rows {
+                        return Err(FormulaEvalError::Value);
+                    }
+                    (0..source_cols)
+                        .map(|col| source_values[sort_index * source_cols + col].clone())
+                        .collect()
+                } else {
+                    if sort_index >= source_cols {
+                        return Err(FormulaEvalError::Value);
+                    }
+                    (0..source_rows)
+                        .map(|row| source_values[row * source_cols + sort_index].clone())
+                        .collect()
+                };
+                key_sets.push((keys, sort_order == -1));
+            } else {
+                self.skip_whitespace();
+                if !self.consume_char(',') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+                let mut orientation = None;
+                loop {
+                    let (key_sheet_id, key_rect) = self.parse_reference_argument()?;
+                    let current_by_column = if key_rect.height() as usize == source_rows
+                        && key_rect.width() == 1
+                    {
+                        false
+                    } else if key_rect.width() as usize == source_cols && key_rect.height() == 1 {
+                        true
+                    } else {
+                        return Err(FormulaEvalError::Value);
+                    };
+                    if orientation.is_some_and(|value| value != current_by_column) {
+                        return Err(FormulaEvalError::Value);
+                    }
+                    orientation = Some(current_by_column);
+                    let keys = if current_by_column {
+                        (key_rect.col_first..=key_rect.col_last)
+                            .map(|col| {
+                                self.evaluator.cell_value_or_blank(
+                                    key_sheet_id,
+                                    key_rect.row_first,
+                                    col,
+                                )
+                            })
+                            .collect::<Result<Vec<_>, _>>()?
+                    } else {
+                        (key_rect.row_first..=key_rect.row_last)
+                            .map(|row| {
+                                self.evaluator.cell_value_or_blank(
+                                    key_sheet_id,
+                                    row,
+                                    key_rect.col_first,
+                                )
+                            })
+                            .collect::<Result<Vec<_>, _>>()?
+                    };
+                    self.skip_whitespace();
+                    let sort_order = if self.consume_char(')') {
+                        key_sets.push((keys, false));
+                        break;
+                    } else {
+                        if !self.consume_char(',') {
+                            return Err(FormulaEvalError::Unsupported);
+                        }
+                        self.skip_whitespace();
+                        if self.peek_char().is_some_and(|ch| matches!(ch, ',' | ')')) {
+                            1
+                        } else {
+                            formula_integer_argument(self.parse_comparison()?)?
+                        }
+                    };
+                    if !matches!(sort_order, -1 | 1) {
+                        return Err(FormulaEvalError::Value);
+                    }
+                    key_sets.push((keys, sort_order == -1));
+                    self.skip_whitespace();
+                    if self.consume_char(')') {
+                        break;
+                    }
+                    if !self.consume_char(',') {
+                        return Err(FormulaEvalError::Unsupported);
+                    }
+                    self.skip_whitespace();
+                }
+                by_column = orientation.unwrap_or(false);
+            }
+            self.skip_whitespace();
+            if self.index != self.input.len() {
+                return Err(FormulaEvalError::Unsupported);
+            }
+
+            let mut indexes = if by_column {
+                (0..source_cols).collect::<Vec<_>>()
+            } else {
+                (0..source_rows).collect::<Vec<_>>()
+            };
+            for index in 1..indexes.len() {
+                let current = indexes[index];
+                let mut position = index;
+                while position > 0 {
+                    let previous = indexes[position - 1];
+                    let mut ordering = Ordering::Equal;
+                    for (keys, descending) in &key_sets {
+                        ordering = compare_values(&keys[previous], &keys[current])?;
+                        if *descending {
+                            ordering = ordering.reverse();
+                        }
+                        if ordering != Ordering::Equal {
+                            break;
+                        }
+                    }
+                    if ordering != Ordering::Greater {
+                        break;
+                    }
+                    indexes[position] = previous;
+                    position -= 1;
+                }
+                indexes[position] = current;
+            }
+            let mut values = Vec::with_capacity(source_values.len());
+            if by_column {
+                for row in 0..source_rows {
+                    for &col in &indexes {
+                        values.push(source_values[row * source_cols + col].clone());
+                    }
+                }
+            } else {
+                for &row in &indexes {
+                    values.extend_from_slice(
+                        &source_values[row * source_cols..(row + 1) * source_cols],
+                    );
+                }
+            }
+            return Ok(FormulaArrayResult {
+                rows: source_rows,
+                cols: source_cols,
+                values,
+            });
+        }
+
+        if identifier.eq_ignore_ascii_case("UNIQUE") {
+            let mut by_column = false;
+            let mut exactly_once = false;
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                if !self.consume_char(',') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+                self.skip_whitespace();
+                if !self.peek_char().is_some_and(|ch| matches!(ch, ',' | ')')) {
+                    by_column = self.parse_comparison()? != 0.0;
+                }
+                self.skip_whitespace();
+                if !self.consume_char(')') {
+                    if !self.consume_char(',') {
+                        return Err(FormulaEvalError::Unsupported);
+                    }
+                    self.skip_whitespace();
+                    if !self.peek_char().is_some_and(|ch| matches!(ch, ',' | ')')) {
+                        exactly_once = self.parse_comparison()? != 0.0;
+                    }
+                    self.skip_whitespace();
+                    if !self.consume_char(')') {
+                        return Err(FormulaEvalError::Unsupported);
+                    }
+                }
+            }
+            self.skip_whitespace();
+            if self.index != self.input.len() {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            let record_count = if by_column { source_cols } else { source_rows };
+            let record_len = if by_column { source_rows } else { source_cols };
+            let records_equal = |left: usize, right: usize| -> Result<bool, FormulaEvalError> {
+                for offset in 0..record_len {
+                    let left_value = if by_column {
+                        &source_values[offset * source_cols + left]
+                    } else {
+                        &source_values[left * source_cols + offset]
+                    };
+                    let right_value = if by_column {
+                        &source_values[offset * source_cols + right]
+                    } else {
+                        &source_values[right * source_cols + offset]
+                    };
+                    if !formula_value_probe_exact_match(
+                        &formula_value_probe_from_cell_value(left_value.clone()),
+                        &formula_value_probe_from_cell_value(right_value.clone()),
+                    )? {
+                        return Ok(false);
+                    }
+                }
+                Ok(true)
+            };
+            let mut selected = Vec::new();
+            for candidate in 0..record_count {
+                let mut prior_match = false;
+                let mut count = 0_usize;
+                for other in 0..record_count {
+                    if records_equal(candidate, other)? {
+                        count += 1;
+                        if other < candidate {
+                            prior_match = true;
+                        }
+                    }
+                }
+                if (exactly_once && count == 1) || (!exactly_once && !prior_match) {
+                    selected.push(candidate);
+                }
+            }
+            if selected.is_empty() {
+                return Err(FormulaEvalError::Calc);
+            }
+            let mut values = Vec::with_capacity(selected.len() * record_len);
+            if by_column {
+                for row in 0..source_rows {
+                    for &col in &selected {
+                        values.push(source_values[row * source_cols + col].clone());
+                    }
+                }
+                return Ok(FormulaArrayResult {
+                    rows: source_rows,
+                    cols: selected.len(),
+                    values,
+                });
+            }
+            for &row in &selected {
+                values.extend_from_slice(
+                    &source_values[row * source_cols..(row + 1) * source_cols],
+                );
+            }
+            return Ok(FormulaArrayResult {
+                rows: selected.len(),
+                cols: source_cols,
+                values,
+            });
+        }
+
+        if identifier.eq_ignore_ascii_case("TAKE") || identifier.eq_ignore_ascii_case("DROP") {
+            self.skip_whitespace();
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            let row_count = formula_integer_argument(self.parse_comparison()?)?;
+            let mut col_count = if identifier.eq_ignore_ascii_case("TAKE") {
+                source_cols as i64
+            } else {
+                0
+            };
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                if !self.consume_char(',') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+                col_count = formula_integer_argument(self.parse_comparison()?)?;
+                self.skip_whitespace();
+                if !self.consume_char(')') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+            }
+            self.skip_whitespace();
+            if self.index != self.input.len() {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            let (row_start, rows, col_start, cols) = if identifier.eq_ignore_ascii_case("TAKE") {
+                if row_count == 0
+                    || row_count.unsigned_abs() > source_rows as u64
+                    || col_count == 0
+                    || col_count.unsigned_abs() > source_cols as u64
+                {
+                    return Err(FormulaEvalError::Calc);
+                }
+                let rows = row_count.unsigned_abs() as usize;
+                let cols = col_count.unsigned_abs() as usize;
+                (
+                    if row_count < 0 { source_rows - rows } else { 0 },
+                    rows,
+                    if col_count < 0 { source_cols - cols } else { 0 },
+                    cols,
+                )
+            } else {
+                if row_count.unsigned_abs() >= source_rows as u64
+                    || col_count.unsigned_abs() >= source_cols as u64
+                {
+                    return Err(FormulaEvalError::Calc);
+                }
+                let dropped_rows = row_count.unsigned_abs() as usize;
+                let dropped_cols = col_count.unsigned_abs() as usize;
+                (
+                    if row_count > 0 { dropped_rows } else { 0 },
+                    source_rows - dropped_rows,
+                    if col_count > 0 { dropped_cols } else { 0 },
+                    source_cols - dropped_cols,
+                )
+            };
+            let mut values = Vec::with_capacity(rows * cols);
+            for row in row_start..row_start + rows {
+                values.extend_from_slice(
+                    &source_values[row * source_cols + col_start
+                        ..row * source_cols + col_start + cols],
+                );
+            }
+            return Ok(FormulaArrayResult { rows, cols, values });
+        }
+
+        if identifier.eq_ignore_ascii_case("CHOOSECOLS")
+            || identifier.eq_ignore_ascii_case("CHOOSEROWS")
+        {
+            let selecting_columns = identifier.eq_ignore_ascii_case("CHOOSECOLS");
+            let size = if selecting_columns {
+                source_cols
+            } else {
+                source_rows
+            };
+            let mut selected = Vec::new();
+            loop {
+                self.skip_whitespace();
+                if !self.consume_char(',') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+                let index = formula_integer_argument(self.parse_comparison()?)?;
+                if index == 0 || index.unsigned_abs() > size as u64 {
+                    return Err(FormulaEvalError::Value);
+                }
+                selected.push(if index > 0 {
+                    usize::try_from(index - 1).map_err(|_| FormulaEvalError::Value)?
+                } else {
+                    size - index.unsigned_abs() as usize
+                });
+                self.skip_whitespace();
+                if self.consume_char(')') {
+                    break;
+                }
+            }
+            self.skip_whitespace();
+            if self.index != self.input.len() {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            let mut values = Vec::new();
+            if selecting_columns {
+                values.reserve(source_rows * selected.len());
+                for row in 0..source_rows {
+                    for &col in &selected {
+                        values.push(source_values[row * source_cols + col].clone());
+                    }
+                }
+                return Ok(FormulaArrayResult {
+                    rows: source_rows,
+                    cols: selected.len(),
+                    values,
+                });
+            }
+            values.reserve(selected.len() * source_cols);
+            for &row in &selected {
+                values.extend_from_slice(
+                    &source_values[row * source_cols..(row + 1) * source_cols],
+                );
+            }
+            return Ok(FormulaArrayResult {
+                rows: selected.len(),
+                cols: source_cols,
+                values,
+            });
+        }
+
+        if identifier.eq_ignore_ascii_case("TRANSPOSE") {
             self.skip_whitespace();
             if !self.consume_char(')') {
                 return Err(FormulaEvalError::Unsupported);
             }
-            Some(value)
-        };
-        self.skip_whitespace();
-        if self.index != self.input.len() {
-            return Err(FormulaEvalError::Unsupported);
-        }
-
-        let include_value = |value: CellValue| -> Result<bool, FormulaEvalError> {
-            match value {
-                CellValue::Blank => Ok(false),
-                CellValue::Bool(value) => Ok(value),
-                CellValue::Number(value) => Ok(value != 0.0),
-                CellValue::Text(_) => Err(FormulaEvalError::Value),
-                CellValue::Error(error) => Err(formula_eval_error_from_cell_error(error)),
+            self.skip_whitespace();
+            if self.index != self.input.len() {
+                return Err(FormulaEvalError::Unsupported);
             }
-        };
-        let mut values = Vec::new();
-        let (rows, cols) = if include_rect.height() == source_rect.height()
-            && include_rect.width() == 1
-        {
-            let mut selected_rows = 0_usize;
-            for row_offset in 0..source_rect.height() {
-                let include = self.evaluator.cell_value_or_blank(
-                    include_sheet_id,
-                    include_rect.row_first + row_offset,
-                    include_rect.col_first,
-                )?;
-                if include_value(include)? {
-                    selected_rows += 1;
-                    for col_offset in 0..source_rect.width() {
-                        values.push(self.evaluator.cell_value_or_blank(
-                            source_sheet_id,
-                            source_rect.row_first + row_offset,
-                            source_rect.col_first + col_offset,
-                        )?);
-                    }
+            let mut values = Vec::with_capacity(source_values.len());
+            for col in 0..source_cols {
+                for row in 0..source_rows {
+                    values.push(source_values[row * source_cols + col].clone());
                 }
             }
-            (selected_rows, source_rect.width() as usize)
-        } else if include_rect.width() == source_rect.width() && include_rect.height() == 1 {
-            let selected_columns = (0..source_rect.width())
-                .map(|col_offset| {
-                    self.evaluator
-                        .cell_value_or_blank(
-                            include_sheet_id,
-                            include_rect.row_first,
-                            include_rect.col_first + col_offset,
-                        )
-                        .and_then(&include_value)
-                        .map(|include| (col_offset, include))
-                })
-                .collect::<Result<Vec<_>, _>>()?
-                .into_iter()
-                .filter_map(|(col_offset, include)| include.then_some(col_offset))
-                .collect::<Vec<_>>();
-            for row_offset in 0..source_rect.height() {
-                for &col_offset in &selected_columns {
-                    values.push(self.evaluator.cell_value_or_blank(
-                        source_sheet_id,
-                        source_rect.row_first + row_offset,
-                        source_rect.col_first + col_offset,
-                    )?);
-                }
-            }
-            (source_rect.height() as usize, selected_columns.len())
-        } else {
-            return Err(FormulaEvalError::Value);
-        };
-
-        if rows == 0 || cols == 0 {
-            return if_empty
-                .and_then(formula_cell_value_from_probe)
-                .map(FormulaArrayResult::single)
-                .ok_or(FormulaEvalError::Calc);
+            return Ok(FormulaArrayResult {
+                rows: source_cols,
+                cols: source_rows,
+                values,
+            });
         }
-        Ok(FormulaArrayResult { rows, cols, values })
+
+        Err(FormulaEvalError::Unsupported)
     }
 
     fn binding_value(&self, name: &str) -> Option<FormulaValueProbe> {
@@ -79279,6 +79821,235 @@ mod tests {
                 .expect("spill obstruction remains"),
             OmValue::Text("blocked".to_string())
         );
+    }
+
+    #[test]
+    fn formula2_array_projection_functions_spill_full_shapes() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let source = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:C4".to_string())])
+                .expect("Range(A1:C4)"),
+        );
+        runtime
+            .dispatch_set(
+                source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        4,
+                        3,
+                        vec![
+                            OmValue::Number(3.0),
+                            OmValue::Number(30.0),
+                            OmValue::Text("c".to_string()),
+                            OmValue::Number(1.0),
+                            OmValue::Number(10.0),
+                            OmValue::Text("a".to_string()),
+                            OmValue::Number(2.0),
+                            OmValue::Number(20.0),
+                            OmValue::Text("b".to_string()),
+                            OmValue::Number(1.0),
+                            OmValue::Number(10.0),
+                            OmValue::Text("a".to_string()),
+                        ],
+                    )
+                    .expect("source values"),
+                ),
+                &[],
+            )
+            .expect("set source values");
+
+        let cases = vec![
+            (
+                "E1",
+                "E1:F4",
+                "=SORT(A1:B4,1,1)",
+                vec![
+                    OmValue::Number(1.0),
+                    OmValue::Number(10.0),
+                    OmValue::Number(1.0),
+                    OmValue::Number(10.0),
+                    OmValue::Number(2.0),
+                    OmValue::Number(20.0),
+                    OmValue::Number(3.0),
+                    OmValue::Number(30.0),
+                ],
+            ),
+            (
+                "E6",
+                "E6:G9",
+                "=SORTBY(A1:C4,B1:B4,-1)",
+                vec![
+                    OmValue::Number(3.0),
+                    OmValue::Number(30.0),
+                    OmValue::Text("c".to_string()),
+                    OmValue::Number(2.0),
+                    OmValue::Number(20.0),
+                    OmValue::Text("b".to_string()),
+                    OmValue::Number(1.0),
+                    OmValue::Number(10.0),
+                    OmValue::Text("a".to_string()),
+                    OmValue::Number(1.0),
+                    OmValue::Number(10.0),
+                    OmValue::Text("a".to_string()),
+                ],
+            ),
+            (
+                "E11",
+                "E11:G13",
+                "=UNIQUE(A1:C4)",
+                vec![
+                    OmValue::Number(3.0),
+                    OmValue::Number(30.0),
+                    OmValue::Text("c".to_string()),
+                    OmValue::Number(1.0),
+                    OmValue::Number(10.0),
+                    OmValue::Text("a".to_string()),
+                    OmValue::Number(2.0),
+                    OmValue::Number(20.0),
+                    OmValue::Text("b".to_string()),
+                ],
+            ),
+            (
+                "E16",
+                "E16:F17",
+                "=TAKE(A1:C4,2,-2)",
+                vec![
+                    OmValue::Number(30.0),
+                    OmValue::Text("c".to_string()),
+                    OmValue::Number(10.0),
+                    OmValue::Text("a".to_string()),
+                ],
+            ),
+            (
+                "E20",
+                "E20:F22",
+                "=DROP(A1:C4,1,1)",
+                vec![
+                    OmValue::Number(10.0),
+                    OmValue::Text("a".to_string()),
+                    OmValue::Number(20.0),
+                    OmValue::Text("b".to_string()),
+                    OmValue::Number(10.0),
+                    OmValue::Text("a".to_string()),
+                ],
+            ),
+            (
+                "E25",
+                "E25:F28",
+                "=CHOOSECOLS(A1:C4,3,1)",
+                vec![
+                    OmValue::Text("c".to_string()),
+                    OmValue::Number(3.0),
+                    OmValue::Text("a".to_string()),
+                    OmValue::Number(1.0),
+                    OmValue::Text("b".to_string()),
+                    OmValue::Number(2.0),
+                    OmValue::Text("a".to_string()),
+                    OmValue::Number(1.0),
+                ],
+            ),
+            (
+                "E31",
+                "E31:G32",
+                "=CHOOSEROWS(A1:C4,4,2)",
+                vec![
+                    OmValue::Number(1.0),
+                    OmValue::Number(10.0),
+                    OmValue::Text("a".to_string()),
+                    OmValue::Number(1.0),
+                    OmValue::Number(10.0),
+                    OmValue::Text("a".to_string()),
+                ],
+            ),
+            (
+                "E35",
+                "E35:H37",
+                "=TRANSPOSE(A1:C4)",
+                vec![
+                    OmValue::Number(3.0),
+                    OmValue::Number(1.0),
+                    OmValue::Number(2.0),
+                    OmValue::Number(1.0),
+                    OmValue::Number(30.0),
+                    OmValue::Number(10.0),
+                    OmValue::Number(20.0),
+                    OmValue::Number(10.0),
+                    OmValue::Text("c".to_string()),
+                    OmValue::Text("a".to_string()),
+                    OmValue::Text("b".to_string()),
+                    OmValue::Text("a".to_string()),
+                ],
+            ),
+            (
+                "E40",
+                "E40:G41",
+                "=SEQUENCE(2,3,10,5)",
+                vec![
+                    OmValue::Number(10.0),
+                    OmValue::Number(15.0),
+                    OmValue::Number(20.0),
+                    OmValue::Number(25.0),
+                    OmValue::Number(30.0),
+                    OmValue::Number(35.0),
+                ],
+            ),
+        ];
+        for (anchor, _, formula, _) in &cases {
+            let anchor = expect_object_handle(
+                runtime
+                    .dispatch_invoke(
+                        worksheet,
+                        "Range",
+                        &[OmValue::Text((*anchor).to_string())],
+                    )
+                    .expect("formula anchor"),
+            );
+            runtime
+                .dispatch_set(
+                    anchor,
+                    "Formula2",
+                    OmValue::Text((*formula).to_string()),
+                    &[],
+                )
+                .expect("set Formula2 projection");
+        }
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("calculate projection spills");
+
+        for (_, output, formula, expected) in cases {
+            let output = expect_object_handle(
+                runtime
+                    .dispatch_invoke(
+                        worksheet,
+                        "Range",
+                        &[OmValue::Text(output.to_string())],
+                    )
+                    .expect("spill output range"),
+            );
+            let OmValue::Array(actual) = runtime
+                .dispatch_get(output, "Value2", &[])
+                .expect("spill output values")
+            else {
+                panic!("expected spill output array for {formula}");
+            };
+            assert_eq!(actual.values, expected, "{formula}");
+        }
     }
 
     #[test]
