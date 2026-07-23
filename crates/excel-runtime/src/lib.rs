@@ -54468,6 +54468,13 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             "CHOOSEROWS",
             "TRANSPOSE",
             "SEQUENCE",
+            "EXPAND",
+            "HSTACK",
+            "VSTACK",
+            "TOCOL",
+            "TOROW",
+            "WRAPROWS",
+            "WRAPCOLS",
         ]
         .iter()
         .any(|name| identifier.eq_ignore_ascii_case(name))
@@ -54635,6 +54642,237 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                     .and_then(formula_cell_value_from_probe)
                     .map(FormulaArrayResult::single)
                     .ok_or(FormulaEvalError::Calc);
+            }
+            return Ok(FormulaArrayResult { rows, cols, values });
+        }
+
+        if identifier.eq_ignore_ascii_case("EXPAND") {
+            self.skip_whitespace();
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            let rows = formula_integer_argument(self.parse_comparison()?)?;
+            if rows < source_rows as i64 {
+                return Err(FormulaEvalError::Value);
+            }
+            let mut cols = source_cols as i64;
+            let mut pad = CellValue::Error(CellError::NA);
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                if !self.consume_char(',') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+                self.skip_whitespace();
+                if !self.peek_char().is_some_and(|ch| matches!(ch, ',' | ')')) {
+                    cols = formula_integer_argument(self.parse_comparison()?)?;
+                }
+                if cols < source_cols as i64 {
+                    return Err(FormulaEvalError::Value);
+                }
+                self.skip_whitespace();
+                if !self.consume_char(')') {
+                    if !self.consume_char(',') {
+                        return Err(FormulaEvalError::Unsupported);
+                    }
+                    pad = formula_cell_value_from_probe(self.parse_value_probe_argument()?)
+                        .ok_or(FormulaEvalError::Value)?;
+                    self.skip_whitespace();
+                    if !self.consume_char(')') {
+                        return Err(FormulaEvalError::Unsupported);
+                    }
+                }
+            }
+            self.skip_whitespace();
+            if self.index != self.input.len() || rows < 1 || cols < 1 {
+                return Err(FormulaEvalError::Value);
+            }
+            let rows = usize::try_from(rows).map_err(|_| FormulaEvalError::Value)?;
+            let cols = usize::try_from(cols).map_err(|_| FormulaEvalError::Value)?;
+            let mut values = vec![pad; rows.checked_mul(cols).ok_or(FormulaEvalError::Num)?];
+            for row in 0..source_rows {
+                for col in 0..source_cols {
+                    values[row * cols + col] = source_values[row * source_cols + col].clone();
+                }
+            }
+            return Ok(FormulaArrayResult { rows, cols, values });
+        }
+
+        if identifier.eq_ignore_ascii_case("HSTACK") || identifier.eq_ignore_ascii_case("VSTACK")
+        {
+            let mut matrices = vec![(source_rows, source_cols, source_values)];
+            loop {
+                self.skip_whitespace();
+                if self.consume_char(')') {
+                    break;
+                }
+                if !self.consume_char(',') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+                let (sheet_id, rect) = self.parse_reference_argument()?;
+                let rows = rect.height() as usize;
+                let cols = rect.width() as usize;
+                let mut values = Vec::with_capacity(rows * cols);
+                for row in rect.row_first..=rect.row_last {
+                    for col in rect.col_first..=rect.col_last {
+                        values.push(self.evaluator.cell_value_or_blank(sheet_id, row, col)?);
+                    }
+                }
+                matrices.push((rows, cols, values));
+            }
+            self.skip_whitespace();
+            if self.index != self.input.len() {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            if identifier.eq_ignore_ascii_case("HSTACK") {
+                let rows = matrices
+                    .iter()
+                    .map(|(rows, _, _)| *rows)
+                    .max()
+                    .ok_or(FormulaEvalError::Calc)?;
+                let cols = matrices.iter().try_fold(0_usize, |total, (_, cols, _)| {
+                    total.checked_add(*cols).ok_or(FormulaEvalError::Num)
+                })?;
+                let mut values =
+                    vec![CellValue::Error(CellError::NA); rows * cols];
+                let mut col_start = 0_usize;
+                for (matrix_rows, matrix_cols, matrix_values) in matrices {
+                    for row in 0..matrix_rows {
+                        for col in 0..matrix_cols {
+                            values[row * cols + col_start + col] =
+                                matrix_values[row * matrix_cols + col].clone();
+                        }
+                    }
+                    col_start += matrix_cols;
+                }
+                return Ok(FormulaArrayResult { rows, cols, values });
+            }
+            let rows = matrices.iter().try_fold(0_usize, |total, (rows, _, _)| {
+                total.checked_add(*rows).ok_or(FormulaEvalError::Num)
+            })?;
+            let cols = matrices
+                .iter()
+                .map(|(_, cols, _)| *cols)
+                .max()
+                .ok_or(FormulaEvalError::Calc)?;
+            let mut values = vec![CellValue::Error(CellError::NA); rows * cols];
+            let mut row_start = 0_usize;
+            for (matrix_rows, matrix_cols, matrix_values) in matrices {
+                for row in 0..matrix_rows {
+                    for col in 0..matrix_cols {
+                        values[(row_start + row) * cols + col] =
+                            matrix_values[row * matrix_cols + col].clone();
+                    }
+                }
+                row_start += matrix_rows;
+            }
+            return Ok(FormulaArrayResult { rows, cols, values });
+        }
+
+        if identifier.eq_ignore_ascii_case("TOCOL") || identifier.eq_ignore_ascii_case("TOROW") {
+            let mut ignore = 0_i64;
+            let mut scan_by_column = false;
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                if !self.consume_char(',') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+                self.skip_whitespace();
+                if !self.peek_char().is_some_and(|ch| matches!(ch, ',' | ')')) {
+                    ignore = formula_integer_argument(self.parse_comparison()?)?;
+                }
+                if !(0..=3).contains(&ignore) {
+                    return Err(FormulaEvalError::Value);
+                }
+                self.skip_whitespace();
+                if !self.consume_char(')') {
+                    if !self.consume_char(',') {
+                        return Err(FormulaEvalError::Unsupported);
+                    }
+                    scan_by_column = self.parse_comparison()? != 0.0;
+                    self.skip_whitespace();
+                    if !self.consume_char(')') {
+                        return Err(FormulaEvalError::Unsupported);
+                    }
+                }
+            }
+            self.skip_whitespace();
+            if self.index != self.input.len() {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            let include_value = |value: &CellValue| {
+                let ignore_blank = matches!(ignore, 1 | 3);
+                let ignore_error = matches!(ignore, 2 | 3);
+                !(ignore_blank && matches!(value, CellValue::Blank))
+                    && !(ignore_error && matches!(value, CellValue::Error(_)))
+            };
+            let mut values = Vec::with_capacity(source_values.len());
+            if scan_by_column {
+                for col in 0..source_cols {
+                    for row in 0..source_rows {
+                        let value = &source_values[row * source_cols + col];
+                        if include_value(value) {
+                            values.push(value.clone());
+                        }
+                    }
+                }
+            } else {
+                values.extend(source_values.into_iter().filter(include_value));
+            }
+            if values.is_empty() {
+                return Err(FormulaEvalError::Calc);
+            }
+            let (rows, cols) = if identifier.eq_ignore_ascii_case("TOCOL") {
+                (values.len(), 1)
+            } else {
+                (1, values.len())
+            };
+            return Ok(FormulaArrayResult { rows, cols, values });
+        }
+
+        if identifier.eq_ignore_ascii_case("WRAPROWS")
+            || identifier.eq_ignore_ascii_case("WRAPCOLS")
+        {
+            self.skip_whitespace();
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            let wrap_count = formula_integer_argument(self.parse_comparison()?)?;
+            if wrap_count < 1 {
+                return Err(FormulaEvalError::Value);
+            }
+            let mut pad = CellValue::Error(CellError::NA);
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                if !self.consume_char(',') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+                pad = formula_cell_value_from_probe(self.parse_value_probe_argument()?)
+                    .ok_or(FormulaEvalError::Value)?;
+                self.skip_whitespace();
+                if !self.consume_char(')') {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+            }
+            self.skip_whitespace();
+            if self.index != self.input.len() {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            let wrap_count = usize::try_from(wrap_count).map_err(|_| FormulaEvalError::Value)?;
+            let chunk_count = source_values.len().div_ceil(wrap_count);
+            let (rows, cols) = if identifier.eq_ignore_ascii_case("WRAPROWS") {
+                (chunk_count, wrap_count)
+            } else {
+                (wrap_count, chunk_count)
+            };
+            let mut values = vec![pad; rows.checked_mul(cols).ok_or(FormulaEvalError::Num)?];
+            if identifier.eq_ignore_ascii_case("WRAPROWS") {
+                values[..source_values.len()].clone_from_slice(&source_values);
+            } else {
+                for (index, value) in source_values.into_iter().enumerate() {
+                    let row = index % wrap_count;
+                    let col = index / wrap_count;
+                    values[row * cols + col] = value;
+                }
             }
             return Ok(FormulaArrayResult { rows, cols, values });
         }
@@ -80031,6 +80269,206 @@ mod tests {
         runtime
             .dispatch_invoke(runtime.root_application(), "Calculate", &[])
             .expect("calculate projection spills");
+
+        for (_, output, formula, expected) in cases {
+            let output = expect_object_handle(
+                runtime
+                    .dispatch_invoke(
+                        worksheet,
+                        "Range",
+                        &[OmValue::Text(output.to_string())],
+                    )
+                    .expect("spill output range"),
+            );
+            let OmValue::Array(actual) = runtime
+                .dispatch_get(output, "Value2", &[])
+                .expect("spill output values")
+            else {
+                panic!("expected spill output array for {formula}");
+            };
+            assert_eq!(actual.values, expected, "{formula}");
+        }
+    }
+
+    #[test]
+    fn formula2_shape_transformation_functions_spill_with_padding_and_scan_order() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        for (address, rows, cols, values) in [
+            (
+                "A1:B2",
+                2,
+                2,
+                vec![
+                    OmValue::Number(1.0),
+                    OmValue::Number(2.0),
+                    OmValue::Number(3.0),
+                    OmValue::Number(4.0),
+                ],
+            ),
+            (
+                "C1:C3",
+                3,
+                1,
+                vec![
+                    OmValue::Number(5.0),
+                    OmValue::Number(6.0),
+                    OmValue::Number(7.0),
+                ],
+            ),
+        ] {
+            let range = expect_object_handle(
+                runtime
+                    .dispatch_invoke(
+                        worksheet,
+                        "Range",
+                        &[OmValue::Text(address.to_string())],
+                    )
+                    .expect("source range"),
+            );
+            runtime
+                .dispatch_set(
+                    range,
+                    "Value2",
+                    OmValue::Array(OmArray::new(rows, cols, values).expect("source values")),
+                    &[],
+                )
+                .expect("set source values");
+        }
+
+        let cases = vec![
+            (
+                "E1",
+                "E1:G3",
+                "=EXPAND(A1:B2,3,3,0)",
+                vec![
+                    OmValue::Number(1.0),
+                    OmValue::Number(2.0),
+                    OmValue::Number(0.0),
+                    OmValue::Number(3.0),
+                    OmValue::Number(4.0),
+                    OmValue::Number(0.0),
+                    OmValue::Number(0.0),
+                    OmValue::Number(0.0),
+                    OmValue::Number(0.0),
+                ],
+            ),
+            (
+                "E5",
+                "E5:G7",
+                "=HSTACK(A1:B2,C1:C3)",
+                vec![
+                    OmValue::Number(1.0),
+                    OmValue::Number(2.0),
+                    OmValue::Number(5.0),
+                    OmValue::Number(3.0),
+                    OmValue::Number(4.0),
+                    OmValue::Number(6.0),
+                    OmValue::Error(CellError::NA),
+                    OmValue::Error(CellError::NA),
+                    OmValue::Number(7.0),
+                ],
+            ),
+            (
+                "E9",
+                "E9:F13",
+                "=VSTACK(A1:B2,C1:C3)",
+                vec![
+                    OmValue::Number(1.0),
+                    OmValue::Number(2.0),
+                    OmValue::Number(3.0),
+                    OmValue::Number(4.0),
+                    OmValue::Number(5.0),
+                    OmValue::Error(CellError::NA),
+                    OmValue::Number(6.0),
+                    OmValue::Error(CellError::NA),
+                    OmValue::Number(7.0),
+                    OmValue::Error(CellError::NA),
+                ],
+            ),
+            (
+                "E15",
+                "E15:E18",
+                "=TOCOL(A1:B2)",
+                vec![
+                    OmValue::Number(1.0),
+                    OmValue::Number(2.0),
+                    OmValue::Number(3.0),
+                    OmValue::Number(4.0),
+                ],
+            ),
+            (
+                "G15",
+                "G15:J15",
+                "=TOROW(A1:B2,,TRUE)",
+                vec![
+                    OmValue::Number(1.0),
+                    OmValue::Number(3.0),
+                    OmValue::Number(2.0),
+                    OmValue::Number(4.0),
+                ],
+            ),
+            (
+                "E21",
+                "E21:G22",
+                "=WRAPROWS(A1:B2,3,0)",
+                vec![
+                    OmValue::Number(1.0),
+                    OmValue::Number(2.0),
+                    OmValue::Number(3.0),
+                    OmValue::Number(4.0),
+                    OmValue::Number(0.0),
+                    OmValue::Number(0.0),
+                ],
+            ),
+            (
+                "E25",
+                "E25:F27",
+                "=WRAPCOLS(A1:B2,3,0)",
+                vec![
+                    OmValue::Number(1.0),
+                    OmValue::Number(4.0),
+                    OmValue::Number(2.0),
+                    OmValue::Number(0.0),
+                    OmValue::Number(3.0),
+                    OmValue::Number(0.0),
+                ],
+            ),
+        ];
+        for (anchor, _, formula, _) in &cases {
+            let anchor = expect_object_handle(
+                runtime
+                    .dispatch_invoke(
+                        worksheet,
+                        "Range",
+                        &[OmValue::Text((*anchor).to_string())],
+                    )
+                    .expect("formula anchor"),
+            );
+            runtime
+                .dispatch_set(
+                    anchor,
+                    "Formula2",
+                    OmValue::Text((*formula).to_string()),
+                    &[],
+                )
+                .expect("set Formula2 shape formula");
+        }
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("calculate shape spills");
 
         for (_, output, formula, expected) in cases {
             let output = expect_object_handle(

@@ -5057,7 +5057,7 @@
   - 범위: `INDIRECT`, `OFFSET`, `TRIMRANGE`, `INDEX`와 named/multi-area/3D reference를 scalar, aggregate, array context별 공통 coercion 규칙으로 연결
   - `Step 8.3 IN PROGRESS` dynamic-array function semantics
   - 범위: `FILTER`, `SORT`, `SORTBY`, `UNIQUE`, `TAKE`, `DROP`, `EXPAND`, stack/wrap/row-column projection 함수의 full 2D 결과와 error/empty semantics 구현
-  - 완료: `FILTER`, `SORT`, `SORTBY`, `UNIQUE`, `TAKE`, `DROP`, `CHOOSECOLS`, `CHOOSEROWS`, `TRANSPOSE`, `SEQUENCE`의 `Formula2`/`Formula2Local` 2D spill과 공통 obstruction/recalculation 처리
+  - 완료: `FILTER`, `SORT`, `SORTBY`, `UNIQUE`, `TAKE`, `DROP`, `CHOOSECOLS`, `CHOOSEROWS`, `TRANSPOSE`, `SEQUENCE`, `EXPAND`, `HSTACK`, `VSTACK`, `TOCOL`, `TOROW`, `WRAPROWS`, `WRAPCOLS`의 `Formula2`/`Formula2Local` 2D spill과 공통 obstruction/recalculation 처리
   - `Step 8.4 PENDING` higher-order array and grouped aggregation semantics
   - 범위: `MAP`, `BYROW`, `BYCOL`, `MAKEARRAY`, `REDUCE`, `SCAN`, `GROUPBY`, `PIVOTBY`의 전체 shape, lambda binding, grouped result materialization 구현
   - `Step 8.5 PENDING` pivot OOXML lossless inventory
