@@ -5048,6 +5048,33 @@
   - oracle capture harness
   - diff/report generator
 
+### Step 8. Formula And Pivot Completion
+
+- 진행
+  - `Step 8.1 IN PROGRESS` Formula2 dynamic-array spill foundation
+  - 범위: array-producing formula result를 scalar top-left로 축약하지 않고 spill anchor/extent와 child value로 materialize하며 obstruction `#SPILL!`, recalculation replacement, formula overwrite/clear 및 save/reopen을 TDD로 고정
+  - `Step 8.2 PENDING` reference-returning formula and coercion completion
+  - 범위: `INDIRECT`, `OFFSET`, `TRIMRANGE`, `INDEX`와 named/multi-area/3D reference를 scalar, aggregate, array context별 공통 coercion 규칙으로 연결
+  - `Step 8.3 PENDING` dynamic-array function semantics
+  - 범위: `FILTER`, `SORT`, `SORTBY`, `UNIQUE`, `TAKE`, `DROP`, `EXPAND`, stack/wrap/row-column projection 함수의 full 2D 결과와 error/empty semantics 구현
+  - `Step 8.4 PENDING` higher-order array and grouped aggregation semantics
+  - 범위: `MAP`, `BYROW`, `BYCOL`, `MAKEARRAY`, `REDUCE`, `SCAN`, `GROUPBY`, `PIVOTBY`의 전체 shape, lambda binding, grouped result materialization 구현
+  - `Step 8.5 PENDING` pivot OOXML lossless inventory
+  - 범위: pivot table definition, pivot cache definition/records, workbook/sheet relationships와 content types를 raw graph로 읽고 clean/dirty unrelated save에서 보존
+  - `Step 8.6 PENDING` typed pivot model and cache lifecycle
+  - 범위: pivot fields/items, row/column/page/data axes, cache source, refresh metadata와 range/name source를 model에 올리고 copy/move/delete policy를 정의
+  - `Step 8.7 PENDING` PivotTable object model and calculation integration
+  - 범위: `PivotTables`, `PivotTable`, `PivotFields`, `PivotItems`, `PivotCache`, refresh와 `GETPIVOTDATA`를 실제 typed pivot/cache data에 연결
+  - `Step 8.8 PENDING` PivotChart source integration
+  - 범위: typed pivot table/cache가 준비된 뒤 chart source binding과 refresh lifecycle을 연결하며 chart 구조 확장은 `ARCH-019` 범위로 제한
+- 원칙
+  - 각 단계는 실패 회귀를 먼저 추가하고 구현 후 focused test, crate test, workspace locked test 순서로 검증한다.
+  - scalar fallback을 함수 구현 완료로 간주하지 않고 shape, reference, error, mutation 및 save/reopen semantics까지 완료 기준에 포함한다.
+  - 실제 Excel과 불확실한 동작은 `TEST-002` oracle case로 기록하고 임의 근사 대신 명시적 제한을 유지한다.
+- 우선순위
+  - `Step 8.1 -> 8.2 -> 8.3 -> 8.4 -> 8.5 -> 8.6 -> 8.7 -> 8.8`
+  - chart 신규 기능은 `Step 8.8` 전까지 보류한다.
+
 ## Parallelization Notes
 
 1. 절대적인 크리티컬 패스는 `Step 1 -> Step 2 -> Step 3 -> Step 4 -> Step 5`다.

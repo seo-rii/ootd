@@ -1304,6 +1304,7 @@ impl XlsxCodec {
                             source_xml: sheet_part.bytes.clone(),
                             dirty: false,
                             dirty_cells: Default::default(),
+                            ..WorksheetData::default()
                         },
                     );
                     worksheet_support_parts.insert(
@@ -39611,6 +39612,7 @@ mod tests {
             source_xml: Vec::new(),
             dirty: true,
             dirty_cells: BTreeSet::new(),
+            ..WorksheetData::default()
         };
 
         let error = rewrite_worksheet_xml(&worksheet, None)
@@ -39635,6 +39637,7 @@ mod tests {
                 .to_vec(),
             dirty: true,
             dirty_cells: BTreeSet::new(),
+            ..WorksheetData::default()
         };
 
         let error = rewrite_worksheet_xml(&worksheet, None)
@@ -39663,6 +39666,7 @@ mod tests {
                 .to_vec(),
             dirty: true,
             dirty_cells: BTreeSet::new(),
+            ..WorksheetData::default()
         };
 
         let error = rewrite_worksheet_xml(&worksheet, None)
@@ -39691,6 +39695,7 @@ mod tests {
                 .to_vec(),
             dirty: true,
             dirty_cells: BTreeSet::new(),
+            ..WorksheetData::default()
         };
 
         let error = rewrite_worksheet_xml(&worksheet, None)
@@ -78546,6 +78551,7 @@ mod tests {
                 .to_vec(),
             dirty: true,
             dirty_cells,
+            ..WorksheetData::default()
         };
         let support_parts = WorksheetSupportParts {
             worksheet_part_uri: Some("xl/worksheets/sheet1.xml".to_string()),
@@ -78598,6 +78604,7 @@ mod tests {
                 .to_vec(),
             dirty: true,
             dirty_cells,
+            ..WorksheetData::default()
         };
         let mut comment_summaries = BTreeMap::new();
         comment_summaries.insert(
@@ -78659,6 +78666,7 @@ mod tests {
                 .to_vec(),
             dirty: true,
             dirty_cells,
+            ..WorksheetData::default()
         };
         let support_parts = WorksheetSupportParts {
             worksheet_part_uri: Some("xl/worksheets/sheet1.xml".to_string()),
@@ -78711,6 +78719,7 @@ mod tests {
                 .to_vec(),
             dirty: true,
             dirty_cells,
+            ..WorksheetData::default()
         };
         let mut comment_summaries = BTreeMap::new();
         comment_summaries.insert(
@@ -78777,6 +78786,7 @@ mod tests {
                 .to_vec(),
             dirty: true,
             dirty_cells,
+            ..WorksheetData::default()
         };
         let mut comment_summaries = BTreeMap::new();
         comment_summaries.insert(
@@ -78841,6 +78851,7 @@ mod tests {
                 .to_vec(),
             dirty: true,
             dirty_cells,
+            ..WorksheetData::default()
         };
         let mut comment_summaries = BTreeMap::new();
         comment_summaries.insert(

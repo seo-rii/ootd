@@ -37,6 +37,43 @@ pub struct WorksheetData {
     pub source_xml: Vec<u8>,
     pub dirty: bool,
     pub dirty_cells: BTreeSet<(u32, u32)>,
+    pub dynamic_array_formulas: BTreeSet<(u32, u32)>,
+    pub spill_ranges: BTreeMap<(u32, u32), Rect>,
+    pub spill_owners: BTreeMap<(u32, u32), (u32, u32)>,
+}
+
+impl WorksheetData {
+    pub fn prepare_cell_for_edit(&mut self, key: (u32, u32)) {
+        self.spill_owners.remove(&key);
+        if self.spill_ranges.contains_key(&key) {
+            self.clear_owned_spill(key);
+        }
+        self.dynamic_array_formulas.remove(&key);
+    }
+
+    pub fn clear_owned_spill(&mut self, anchor: (u32, u32)) {
+        let owned_cells = self
+            .spill_owners
+            .iter()
+            .filter_map(|(&key, &owner)| (owner == anchor).then_some(key))
+            .collect::<Vec<_>>();
+        for key in owned_cells {
+            self.spill_owners.remove(&key);
+            let remove = if let Some(cell) = self.cells.get_mut(&key) {
+                cell.value = CellValue::Blank;
+                cell.formula = None;
+                cell.style_id.is_none()
+            } else {
+                false
+            };
+            if remove {
+                self.cells.remove(&key);
+            }
+            self.dirty = true;
+            self.dirty_cells.insert(key);
+        }
+        self.spill_ranges.remove(&anchor);
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -286,11 +323,17 @@ impl WorkbookState {
 
         let worksheet = self.worksheet_data_for_sheet_mut(sheet_id)?;
         for (key, value) in updates {
+            let unchanged = worksheet.cells.get(&key).is_some_and(|existing| {
+                existing.value == value
+                    && existing.formula.is_none()
+                    && !worksheet.spill_owners.contains_key(&key)
+                    && !worksheet.spill_ranges.contains_key(&key)
+            });
+            if unchanged {
+                continue;
+            }
+            worksheet.prepare_cell_for_edit(key);
             if let Some(existing) = worksheet.cells.get_mut(&key) {
-                if existing.value == value && existing.formula.is_none() {
-                    continue;
-                }
-
                 existing.value = value;
                 existing.formula = None;
                 if matches!(existing.value, CellValue::Blank) && existing.style_id.is_none() {
@@ -319,6 +362,23 @@ impl WorkbookState {
     }
 
     pub fn set_range_formulas(&mut self, range: &RangeRef, values: &OmArray) -> OmResult<()> {
+        self.set_range_formulas_impl(range, values, false)
+    }
+
+    pub fn set_range_dynamic_array_formulas(
+        &mut self,
+        range: &RangeRef,
+        values: &OmArray,
+    ) -> OmResult<()> {
+        self.set_range_formulas_impl(range, values, true)
+    }
+
+    fn set_range_formulas_impl(
+        &mut self,
+        range: &RangeRef,
+        values: &OmArray,
+        dynamic_array: bool,
+    ) -> OmResult<()> {
         let (sheet_id, rects) = self.same_sheet_rects(range)?;
         let mut updates = Vec::new();
 
@@ -399,11 +459,17 @@ impl WorkbookState {
 
         let worksheet = self.worksheet_data_for_sheet_mut(sheet_id)?;
         for (key, cell_value, formula) in updates {
+            let is_dynamic_formula = dynamic_array && formula.is_some();
+            let unchanged = worksheet.cells.get(&key).is_some_and(|existing| {
+                existing.value == cell_value
+                    && existing.formula == formula
+                    && worksheet.dynamic_array_formulas.contains(&key) == is_dynamic_formula
+            });
+            if unchanged {
+                continue;
+            }
+            worksheet.prepare_cell_for_edit(key);
             if let Some(existing) = worksheet.cells.get_mut(&key) {
-                if existing.value == cell_value && existing.formula == formula {
-                    continue;
-                }
-
                 existing.value = cell_value;
                 existing.formula = formula;
                 if matches!(existing.value, CellValue::Blank)
@@ -414,10 +480,7 @@ impl WorkbookState {
                 }
                 worksheet.dirty = true;
                 worksheet.dirty_cells.insert(key);
-                continue;
-            }
-
-            if !matches!(cell_value, CellValue::Blank) || formula.is_some() {
+            } else if !matches!(cell_value, CellValue::Blank) || formula.is_some() {
                 worksheet.cells.insert(
                     key,
                     CellData {
@@ -428,6 +491,9 @@ impl WorkbookState {
                 );
                 worksheet.dirty = true;
                 worksheet.dirty_cells.insert(key);
+            }
+            if is_dynamic_formula {
+                worksheet.dynamic_array_formulas.insert(key);
             }
         }
 
@@ -444,16 +510,26 @@ impl WorkbookState {
                     let mut changed = false;
                     let mut remove = false;
 
+                    if worksheet.spill_owners.contains_key(&key)
+                        || worksheet.spill_ranges.contains_key(&key)
+                        || worksheet.dynamic_array_formulas.contains(&key)
+                    {
+                        worksheet.prepare_cell_for_edit(key);
+                        changed = true;
+                    }
+
                     if let Some(existing) = worksheet.cells.get_mut(&key) {
                         if matches!(existing.value, CellValue::Blank) && existing.formula.is_none()
                         {
-                            continue;
+                            if !changed {
+                                continue;
+                            }
+                        } else {
+                            existing.value = CellValue::Blank;
+                            existing.formula = None;
+                            remove = existing.style_id.is_none();
+                            changed = true;
                         }
-
-                        existing.value = CellValue::Blank;
-                        existing.formula = None;
-                        remove = existing.style_id.is_none();
-                        changed = true;
                     }
 
                     if changed {
@@ -599,6 +675,7 @@ mod tests {
                     source_xml: b"<worksheet/>".to_vec(),
                     dirty: false,
                     dirty_cells: BTreeSet::new(),
+                    ..WorksheetData::default()
                 },
             )]),
             defined_names: DefinedNameTable::default(),

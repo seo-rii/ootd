@@ -2034,6 +2034,24 @@ impl ExcelRuntime {
             .set_range_formulas(&spec.range, &spec.values)
     }
 
+    pub fn set_range_dynamic_array_formulas(
+        &mut self,
+        spec: SetRangeValuesSpec,
+    ) -> OmResult<()> {
+        let runtime = self.runtime_workbook_mut(spec.workbook)?;
+        if runtime.read_only {
+            return Err(OmError::new(
+                OmErrorCode::InvalidState,
+                "cannot modify a read-only workbook",
+            ));
+        }
+
+        runtime
+            .loaded
+            .state
+            .set_range_dynamic_array_formulas(&spec.range, &spec.values)
+    }
+
     fn calculate_all_open_workbooks(&mut self) -> OmResult<()> {
         let workbooks = self
             .workbooks
@@ -2090,11 +2108,22 @@ impl ExcelRuntime {
             return Ok(());
         }
 
+        enum CalculationUpdate {
+            Scalar((u32, u32), CellValue),
+            Dynamic((u32, u32), FormulaArrayResult),
+        }
+
         let mut updates = Vec::with_capacity(formula_cells.len());
         for (row, col) in formula_cells {
             let mut evaluator = FormulaEvaluator::new(&snapshot);
-            if let Some(value) = evaluator.evaluate_formula_cell(sheet_id, row, col) {
-                updates.push(((row, col), value));
+            if worksheet.dynamic_array_formulas.contains(&(row, col)) {
+                if let Some(value) =
+                    evaluator.evaluate_dynamic_array_formula_cell(sheet_id, row, col)
+                {
+                    updates.push(CalculationUpdate::Dynamic((row, col), value));
+                }
+            } else if let Some(value) = evaluator.evaluate_formula_cell(sheet_id, row, col) {
+                updates.push(CalculationUpdate::Scalar((row, col), value));
             }
         }
 
@@ -2106,9 +2135,92 @@ impl ExcelRuntime {
             .loaded
             .state
             .worksheet_data_for_sheet_mut(sheet_id)?;
-        for ((row, col), value) in updates {
-            if let Some(cell) = worksheet.cells.get_mut(&(row, col)) {
-                cell.value = value;
+        for update in updates {
+            match update {
+                CalculationUpdate::Scalar((row, col), value) => {
+                    if let Some(cell) = worksheet.cells.get_mut(&(row, col)) {
+                        cell.value = value;
+                    }
+                }
+                CalculationUpdate::Dynamic(anchor @ (row, col), result) => {
+                    worksheet.clear_owned_spill(anchor);
+                    let Some(row_last) = row
+                        .checked_add(u32::try_from(result.rows).unwrap_or(u32::MAX))
+                        .and_then(|value| value.checked_sub(1))
+                    else {
+                        if let Some(cell) = worksheet.cells.get_mut(&anchor) {
+                            cell.value = CellValue::Error(CellError::Spill);
+                        }
+                        continue;
+                    };
+                    let Some(col_last) = col
+                        .checked_add(u32::try_from(result.cols).unwrap_or(u32::MAX))
+                        .and_then(|value| value.checked_sub(1))
+                    else {
+                        if let Some(cell) = worksheet.cells.get_mut(&anchor) {
+                            cell.value = CellValue::Error(CellError::Spill);
+                        }
+                        continue;
+                    };
+                    if row_last > EXCEL_MAX_ROW_INDEX || col_last > EXCEL_MAX_COLUMN_INDEX {
+                        if let Some(cell) = worksheet.cells.get_mut(&anchor) {
+                            cell.value = CellValue::Error(CellError::Spill);
+                        }
+                        continue;
+                    }
+                    let spill_rect = Rect {
+                        row_first: row,
+                        row_last,
+                        col_first: col,
+                        col_last,
+                    };
+                    let obstructed = (row..=row_last).any(|target_row| {
+                        (col..=col_last).any(|target_col| {
+                            let key = (target_row, target_col);
+                            key != anchor
+                                && worksheet.cells.get(&key).is_some_and(|cell| {
+                                    cell.formula.is_some()
+                                        || !matches!(cell.value, CellValue::Blank)
+                                })
+                        })
+                    });
+                    if obstructed {
+                        if let Some(cell) = worksheet.cells.get_mut(&anchor) {
+                            cell.value = CellValue::Error(CellError::Spill);
+                        }
+                        worksheet.dirty = true;
+                        worksheet.dirty_cells.insert(anchor);
+                        continue;
+                    }
+
+                    for (index, value) in result.values.into_iter().enumerate() {
+                        let row_offset = index / result.cols;
+                        let col_offset = index % result.cols;
+                        let key = (row + row_offset as u32, col + col_offset as u32);
+                        if key == anchor {
+                            if let Some(cell) = worksheet.cells.get_mut(&key) {
+                                cell.value = value;
+                            }
+                        } else if let Some(cell) = worksheet.cells.get_mut(&key) {
+                            cell.value = value;
+                            cell.formula = None;
+                            worksheet.spill_owners.insert(key, anchor);
+                        } else {
+                            worksheet.cells.insert(
+                                key,
+                                excel_model::CellData {
+                                    value,
+                                    formula: None,
+                                    style_id: None,
+                                },
+                            );
+                            worksheet.spill_owners.insert(key, anchor);
+                        }
+                        worksheet.dirty_cells.insert(key);
+                    }
+                    worksheet.spill_ranges.insert(anchor, spill_rect);
+                    worksheet.dirty = true;
+                }
             }
         }
         Ok(())
@@ -3708,10 +3820,13 @@ impl ExcelRuntime {
                                 OmValue::Array(array) => array,
                                 scalar => OmArray::new(1, 1, vec![scalar])?,
                             };
-                            if matches!(
-                                member,
-                                "Formula" | "Formula2" | "FormulaLocal" | "Formula2Local"
-                            ) {
+                            if matches!(member, "Formula2" | "Formula2Local") {
+                                self.set_range_dynamic_array_formulas(SetRangeValuesSpec {
+                                    workbook,
+                                    range: RangeRef::try_from(&range)?,
+                                    values,
+                                })?;
+                            } else if matches!(member, "Formula" | "FormulaLocal") {
                                 self.set_range_formulas(SetRangeValuesSpec {
                                     workbook,
                                     range: RangeRef::try_from(&range)?,
@@ -3781,13 +3896,25 @@ impl ExcelRuntime {
                                     .state
                                     .worksheet_data_for_sheet_mut(sheet_id)?;
                                 for (key, cell_value, formula) in updates {
+                                    let is_dynamic_formula = matches!(
+                                        member,
+                                        "Formula2R1C1" | "Formula2R1C1Local"
+                                    ) && formula.is_some();
+                                    let unchanged = worksheet.cells.get(&key).is_some_and(
+                                        |existing| {
+                                            existing.value == cell_value
+                                                && existing.formula == formula
+                                                && worksheet
+                                                    .dynamic_array_formulas
+                                                    .contains(&key)
+                                                    == is_dynamic_formula
+                                        },
+                                    );
+                                    if unchanged {
+                                        continue;
+                                    }
+                                    worksheet.prepare_cell_for_edit(key);
                                     if let Some(existing) = worksheet.cells.get_mut(&key) {
-                                        if existing.value == cell_value
-                                            && existing.formula == formula
-                                        {
-                                            continue;
-                                        }
-
                                         existing.value = cell_value;
                                         existing.formula = formula;
                                         if matches!(existing.value, CellValue::Blank)
@@ -3798,10 +3925,8 @@ impl ExcelRuntime {
                                         }
                                         worksheet.dirty = true;
                                         worksheet.dirty_cells.insert(key);
-                                        continue;
-                                    }
-
-                                    if !matches!(cell_value, CellValue::Blank) || formula.is_some()
+                                    } else if !matches!(cell_value, CellValue::Blank)
+                                        || formula.is_some()
                                     {
                                         worksheet.cells.insert(
                                             key,
@@ -3813,6 +3938,9 @@ impl ExcelRuntime {
                                         );
                                         worksheet.dirty = true;
                                         worksheet.dirty_cells.insert(key);
+                                    }
+                                    if is_dynamic_formula {
+                                        worksheet.dynamic_array_formulas.insert(key);
                                     }
                                 }
                             } else {
@@ -28967,10 +29095,13 @@ impl ExcelRuntime {
                         vec![scalar; rect.height() as usize * rect.width() as usize],
                     )?,
                 };
-                if matches!(
-                    member,
-                    "Formula" | "Formula2" | "FormulaLocal" | "Formula2Local"
-                ) {
+                if matches!(member, "Formula2" | "Formula2Local") {
+                    self.set_range_dynamic_array_formulas(SetRangeValuesSpec {
+                        workbook,
+                        range: self.range_ref(workbook, sheet_id, rect)?,
+                        values,
+                    })?;
+                } else if matches!(member, "Formula" | "FormulaLocal") {
                     self.set_range_formulas(SetRangeValuesSpec {
                         workbook,
                         range: self.range_ref(workbook, sheet_id, rect)?,
@@ -29030,11 +29161,21 @@ impl ExcelRuntime {
                         .state
                         .worksheet_data_for_sheet_mut(sheet_id)?;
                     for (key, cell_value, formula) in updates {
+                        let is_dynamic_formula = matches!(
+                            member,
+                            "Formula2R1C1" | "Formula2R1C1Local"
+                        ) && formula.is_some();
+                        let unchanged = worksheet.cells.get(&key).is_some_and(|existing| {
+                            existing.value == cell_value
+                                && existing.formula == formula
+                                && worksheet.dynamic_array_formulas.contains(&key)
+                                    == is_dynamic_formula
+                        });
+                        if unchanged {
+                            continue;
+                        }
+                        worksheet.prepare_cell_for_edit(key);
                         if let Some(existing) = worksheet.cells.get_mut(&key) {
-                            if existing.value == cell_value && existing.formula == formula {
-                                continue;
-                            }
-
                             existing.value = cell_value;
                             existing.formula = formula;
                             if matches!(existing.value, CellValue::Blank)
@@ -29045,10 +29186,7 @@ impl ExcelRuntime {
                             }
                             worksheet.dirty = true;
                             worksheet.dirty_cells.insert(key);
-                            continue;
-                        }
-
-                        if !matches!(cell_value, CellValue::Blank) || formula.is_some() {
+                        } else if !matches!(cell_value, CellValue::Blank) || formula.is_some() {
                             worksheet.cells.insert(
                                 key,
                                 excel_model::CellData {
@@ -29059,6 +29197,9 @@ impl ExcelRuntime {
                             );
                             worksheet.dirty = true;
                             worksheet.dirty_cells.insert(key);
+                        }
+                        if is_dynamic_formula {
+                            worksheet.dynamic_array_formulas.insert(key);
                         }
                     }
                 } else {
@@ -31987,6 +32128,7 @@ impl ExcelRuntime {
                         source_xml: source_sheet_data.source_xml,
                         dirty: false,
                         dirty_cells: BTreeSet::new(),
+                        ..WorksheetData::default()
                     },
                 );
                 if let Some(worksheet) = runtime
@@ -44492,6 +44634,23 @@ enum FormulaEvalError {
     Unknown,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+struct FormulaArrayResult {
+    rows: usize,
+    cols: usize,
+    values: Vec<CellValue>,
+}
+
+impl FormulaArrayResult {
+    fn single(value: CellValue) -> Self {
+        Self {
+            rows: 1,
+            cols: 1,
+            values: vec![value],
+        }
+    }
+}
+
 impl FormulaEvalError {
     fn into_cell_value(self) -> Option<CellValue> {
         match self {
@@ -49926,6 +50085,17 @@ fn formula_value_probe_from_cell_value(value: CellValue) -> FormulaValueProbe {
     }
 }
 
+fn formula_cell_value_from_probe(value: FormulaValueProbe) -> Option<CellValue> {
+    match value {
+        FormulaValueProbe::Blank => Some(CellValue::Blank),
+        FormulaValueProbe::Bool(value) => Some(CellValue::Bool(value)),
+        FormulaValueProbe::Number(value) => Some(CellValue::Number(value)),
+        FormulaValueProbe::Text(value) => Some(CellValue::Text(value)),
+        FormulaValueProbe::Error(error) => error.into_cell_value(),
+        FormulaValueProbe::Omitted | FormulaValueProbe::Lambda { .. } => None,
+    }
+}
+
 fn formula_number_from_value_probe(value: FormulaValueProbe) -> Result<f64, FormulaEvalError> {
     match value {
         FormulaValueProbe::Blank => Ok(0.0),
@@ -53546,6 +53716,56 @@ impl<'a> FormulaEvaluator<'a> {
         }
     }
 
+    fn evaluate_dynamic_array_formula_cell(
+        &mut self,
+        sheet_id: SheetId,
+        row: u32,
+        col: u32,
+    ) -> Option<FormulaArrayResult> {
+        let formula = self
+            .state
+            .worksheet_data
+            .get(&sheet_id)
+            .and_then(|worksheet| worksheet.cells.get(&(row, col)))
+            .and_then(|cell| cell.formula.as_ref())?;
+        if !self.visiting.insert((sheet_id, row, col)) {
+            return Some(FormulaArrayResult::single(CellValue::Error(
+                CellError::Calc,
+            )));
+        }
+        let formula_text = if formula.is_r1c1 {
+            convert_formula_r1c1_to_a1(&formula.text, row, col)
+        } else {
+            formula.text.clone()
+        };
+        let result = {
+            let mut parser =
+                FormulaParser::new(&formula_text, self, sheet_id, Some((row, col)));
+            parser.parse_dynamic_array_formula()
+        };
+        let result = match result {
+            Ok(result) => Some(result),
+            Err(FormulaEvalError::Unsupported) => self
+                .evaluate_formula_text(sheet_id, &formula_text, Some((row, col)))
+                .map(FormulaArrayResult::single)
+                .ok()
+                .or_else(|| {
+                    let mut parser =
+                        FormulaParser::new(&formula_text, self, sheet_id, Some((row, col)));
+                    parser
+                        .parse_value_probe_formula()
+                        .ok()
+                        .and_then(formula_cell_value_from_probe)
+                        .map(FormulaArrayResult::single)
+                }),
+            Err(error) => error
+                .into_cell_value()
+                .map(FormulaArrayResult::single),
+        };
+        self.visiting.remove(&(sheet_id, row, col));
+        result
+    }
+
     fn evaluate_cell(
         &mut self,
         sheet_id: SheetId,
@@ -54230,6 +54450,114 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             current_position,
             bindings: Vec::new(),
         }
+    }
+
+    fn parse_dynamic_array_formula(&mut self) -> Result<FormulaArrayResult, FormulaEvalError> {
+        self.skip_whitespace();
+        let Some(identifier) = self.parse_identifier() else {
+            return Err(FormulaEvalError::Unsupported);
+        };
+        if !identifier.eq_ignore_ascii_case("FILTER") {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        self.skip_whitespace();
+        if !self.consume_char('(') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let (source_sheet_id, source_rect) = self.parse_reference_argument()?;
+        self.skip_whitespace();
+        if !self.consume_char(',') {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let (include_sheet_id, include_rect) = self.parse_reference_argument()?;
+        self.skip_whitespace();
+        let if_empty = if self.consume_char(')') {
+            None
+        } else {
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            let value = self.parse_value_probe_argument()?;
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            Some(value)
+        };
+        self.skip_whitespace();
+        if self.index != self.input.len() {
+            return Err(FormulaEvalError::Unsupported);
+        }
+
+        let include_value = |value: CellValue| -> Result<bool, FormulaEvalError> {
+            match value {
+                CellValue::Blank => Ok(false),
+                CellValue::Bool(value) => Ok(value),
+                CellValue::Number(value) => Ok(value != 0.0),
+                CellValue::Text(_) => Err(FormulaEvalError::Value),
+                CellValue::Error(error) => Err(formula_eval_error_from_cell_error(error)),
+            }
+        };
+        let mut values = Vec::new();
+        let (rows, cols) = if include_rect.height() == source_rect.height()
+            && include_rect.width() == 1
+        {
+            let mut selected_rows = 0_usize;
+            for row_offset in 0..source_rect.height() {
+                let include = self.evaluator.cell_value_or_blank(
+                    include_sheet_id,
+                    include_rect.row_first + row_offset,
+                    include_rect.col_first,
+                )?;
+                if include_value(include)? {
+                    selected_rows += 1;
+                    for col_offset in 0..source_rect.width() {
+                        values.push(self.evaluator.cell_value_or_blank(
+                            source_sheet_id,
+                            source_rect.row_first + row_offset,
+                            source_rect.col_first + col_offset,
+                        )?);
+                    }
+                }
+            }
+            (selected_rows, source_rect.width() as usize)
+        } else if include_rect.width() == source_rect.width() && include_rect.height() == 1 {
+            let selected_columns = (0..source_rect.width())
+                .map(|col_offset| {
+                    self.evaluator
+                        .cell_value_or_blank(
+                            include_sheet_id,
+                            include_rect.row_first,
+                            include_rect.col_first + col_offset,
+                        )
+                        .and_then(&include_value)
+                        .map(|include| (col_offset, include))
+                })
+                .collect::<Result<Vec<_>, _>>()?
+                .into_iter()
+                .filter_map(|(col_offset, include)| include.then_some(col_offset))
+                .collect::<Vec<_>>();
+            for row_offset in 0..source_rect.height() {
+                for &col_offset in &selected_columns {
+                    values.push(self.evaluator.cell_value_or_blank(
+                        source_sheet_id,
+                        source_rect.row_first + row_offset,
+                        source_rect.col_first + col_offset,
+                    )?);
+                }
+            }
+            (source_rect.height() as usize, selected_columns.len())
+        } else {
+            return Err(FormulaEvalError::Value);
+        };
+
+        if rows == 0 || cols == 0 {
+            return if_empty
+                .and_then(formula_cell_value_from_probe)
+                .map(FormulaArrayResult::single)
+                .ok_or(FormulaEvalError::Calc);
+        }
+        Ok(FormulaArrayResult { rows, cols, values })
     }
 
     fn binding_value(&self, name: &str) -> Option<FormulaValueProbe> {
@@ -78801,6 +79129,155 @@ mod tests {
                 OmValue::Error(CellError::Calc),
                 OmValue::Error(CellError::Value),
             ]
+        );
+    }
+
+    #[test]
+    fn formula2_filter_spills_recalculates_and_reports_obstructions() {
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let source = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("A1:C3".to_string())])
+                .expect("Range(A1:C3)"),
+        );
+        let anchor = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("E1".to_string())])
+                .expect("Range(E1)"),
+        );
+        let spill = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("E1:F2".to_string())])
+                .expect("Range(E1:F2)"),
+        );
+        let old_tail = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("E2:F2".to_string())])
+                .expect("Range(E2:F2)"),
+        );
+        let include_second_row = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("C2".to_string())])
+                .expect("Range(C2)"),
+        );
+        let obstruction = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheet, "Range", &[OmValue::Text("F2".to_string())])
+                .expect("Range(F2)"),
+        );
+
+        runtime
+            .dispatch_set(
+                source,
+                "Value2",
+                OmValue::Array(
+                    OmArray::new(
+                        3,
+                        3,
+                        vec![
+                            OmValue::Number(1.0),
+                            OmValue::Number(10.0),
+                            OmValue::Bool(false),
+                            OmValue::Number(2.0),
+                            OmValue::Number(20.0),
+                            OmValue::Bool(true),
+                            OmValue::Number(3.0),
+                            OmValue::Number(30.0),
+                            OmValue::Bool(true),
+                        ],
+                    )
+                    .expect("source values"),
+                ),
+                &[],
+            )
+            .expect("set source values");
+        runtime
+            .dispatch_set(
+                anchor,
+                "Formula2",
+                OmValue::Text("=FILTER(A1:B3,C1:C3)".to_string()),
+                &[],
+            )
+            .expect("set Formula2 FILTER");
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("calculate initial spill");
+
+        let OmValue::Array(values) = runtime
+            .dispatch_get(spill, "Value2", &[])
+            .expect("initial spill values")
+        else {
+            panic!("expected 2x2 spill array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Number(2.0),
+                OmValue::Number(20.0),
+                OmValue::Number(3.0),
+                OmValue::Number(30.0),
+            ]
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(anchor, "Formula2", &[])
+                .expect("spill anchor Formula2"),
+            OmValue::Text("=FILTER(A1:B3,C1:C3)".to_string())
+        );
+
+        runtime
+            .dispatch_set(include_second_row, "Value2", OmValue::Bool(false), &[])
+            .expect("exclude second row");
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("recalculate smaller spill");
+        assert_eq!(
+            runtime
+                .dispatch_get(anchor, "Value2", &[])
+                .expect("smaller spill anchor"),
+            OmValue::Number(3.0)
+        );
+        let OmValue::Array(values) = runtime
+            .dispatch_get(old_tail, "Value2", &[])
+            .expect("old spill tail")
+        else {
+            panic!("expected old spill tail array");
+        };
+        assert_eq!(values.values, vec![OmValue::Empty, OmValue::Empty]);
+
+        runtime
+            .dispatch_set(obstruction, "Value2", OmValue::Text("blocked".to_string()), &[])
+            .expect("set spill obstruction");
+        runtime
+            .dispatch_set(include_second_row, "Value2", OmValue::Bool(true), &[])
+            .expect("include second row again");
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("calculate obstructed spill");
+        assert_eq!(
+            runtime
+                .dispatch_get(anchor, "Value2", &[])
+                .expect("obstructed spill anchor"),
+            OmValue::Error(CellError::Spill)
+        );
+        assert_eq!(
+            runtime
+                .dispatch_get(obstruction, "Value2", &[])
+                .expect("spill obstruction remains"),
+            OmValue::Text("blocked".to_string())
         );
     }
 
