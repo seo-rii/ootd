@@ -1,5 +1,8 @@
 using System.Security.Cryptography;
+using System.IO.Compression;
+using System.Runtime.CompilerServices;
 using System.Text.Json.Nodes;
+using ExcelOracle.Contracts;
 using ExcelOracle.Win;
 
 Run("configures opens executes and closes in order", () =>
@@ -53,6 +56,100 @@ Run("closes and disposes after an unexpected probe failure", () =>
 
     True(automation.Calls.Contains("close"), "close was not called");
     Equal("dispose", automation.Calls[^1]);
+});
+
+Run("parses a strict observe command", () =>
+{
+    var options = RunnerOptions.Parse([
+        "observe",
+        "--run-id", "application-name-a",
+        "--case", "case.json",
+        "--input", "input.xlsx",
+        "--output-root", "run",
+        "--observation", "run/observations/oracle.json",
+        "--channel", "Current",
+        "--locale", "en-US",
+        "--timezone", "UTC",
+    ]);
+
+    Equal("application-name-a", options.RunId);
+    Equal("case.json", options.CasePath);
+    Equal("input.xlsx", options.InputPath);
+    Equal("Current", options.Channel);
+    Throws<ContractException>(() => RunnerOptions.Parse(["observe", "--unknown", "value"]));
+});
+
+Run("rejects macro and legacy execution parts before Excel activation", () =>
+{
+    var path = Path.Combine(Path.GetTempPath(), $"ootd-oracle-macro-{Guid.NewGuid():N}.xlsx");
+    try
+    {
+        using (var stream = File.Create(path))
+        using (var archive = new ZipArchive(stream, ZipArchiveMode.Create))
+        {
+            archive.CreateEntry("[Content_Types].xml");
+            archive.CreateEntry("xl/workbook.xml");
+            archive.CreateEntry("xl/vbaProject.bin");
+        }
+
+        Throws<ContractException>(() => PackagePreflight.Validate(path));
+    }
+    finally
+    {
+        File.Delete(path);
+    }
+});
+
+Run("returns the exact bytes written for artifact hashing", () =>
+{
+    var root = Path.Combine(Path.GetTempPath(), $"ootd-oracle-artifact-{Guid.NewGuid():N}");
+    var path = Path.Combine(root, "manifest", "run_manifest.json");
+    try
+    {
+        var bytes = AtomicArtifacts.WriteJson(
+            path,
+            new JsonObject
+            {
+                ["schemaVersion"] = 1,
+                ["runId"] = "application-name-a",
+            });
+
+        True(bytes.SequenceEqual(File.ReadAllBytes(path)), "returned artifact bytes differed from disk");
+    }
+    finally
+    {
+        if (Directory.Exists(root))
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+});
+
+Run("records every owned Excel process once for watchdog cleanup", () =>
+{
+    var root = Path.Combine(Path.GetTempPath(), $"ootd-oracle-processes-{Guid.NewGuid():N}");
+    var path = Path.Combine(root, "manifest", "owned_processes.json");
+    try
+    {
+        var registry = new OwnedProcessRegistry(path);
+        var first = new OwnedExcelProcess(101, new DateTime(2026, 7, 26, 1, 2, 3, DateTimeKind.Utc));
+        var second = new OwnedExcelProcess(202, new DateTime(2026, 7, 26, 1, 2, 4, DateTimeKind.Utc));
+        registry.Record(first);
+        registry.Record(second);
+        registry.Record(first);
+
+        var manifest = JsonNode.Parse(File.ReadAllBytes(path))!;
+        Equal(1, manifest["schemaVersion"]?.GetValue<int>());
+        Equal(2, manifest["processes"]?.AsArray().Count);
+        Equal(202, manifest["processes"]?[1]?["processId"]?.GetValue<int>());
+    }
+    finally
+    {
+        if (Directory.Exists(root))
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
 });
 
 return;
@@ -185,6 +282,8 @@ sealed class FakeAutomation : IExcelAutomation
     }
 
     public bool IsAutomationObject(object? value) => value is Token;
+
+    public long GetAutomationIdentity(object value) => RuntimeHelpers.GetHashCode(value);
 
     public string GetAutomationTypeName(object value) => ((Token)value).TypeName;
 

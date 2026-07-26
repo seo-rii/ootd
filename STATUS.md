@@ -21,7 +21,7 @@ contract-based until Milestone M1 pins the first behavioral Excel corpus.
 | Area | Status | Current boundary | Next verification gate |
 |---|---|---|---|
 | Office OM source intake | Partial | Schema, template, capture planning, Windows launcher, receipt, and normalization paths exist; the real TypeLib/PIA bundle is not pinned | Real Windows capture bundle with build, channel, architecture, and locale |
-| Behavioral Excel oracle | Unsupported | Differential report and gate contracts exist, but no runner executes the same case in Excel and OOTD | M1 typed observations, COM runner, runtime adapter, and pinned corpus |
+| Behavioral Excel oracle | Partial | Typed cases, exact-byte run manifests, comparison/gate bridge, `ExcelRuntime` adapter, .NET contract tests, and an isolated COM runner/watchdog exist; no real Excel observation is pinned | Execute twice on the pinned Windows/Excel profile and commit the first required corpus |
 | OPC package loading | Partial | ZIP parts and opaque bytes are retained; default loading is not resource-bounded and part identity validation is narrow | M3 decompression limits and canonical part/relationship validation |
 | Workbook and worksheet model | Partial | Workbook, sheet, cell, name, chart, drawing, and basic dynamic-array state are modeled | Oracle-backed mutation and save/reopen cases |
 | XLSX load/save | Partial | No-op and targeted dirty-save preservation have broad synthetic regression coverage | Tracked real-world corpus, bounded parsing, and Excel reopen without repair |
@@ -39,7 +39,9 @@ contract-based until Milestone M1 pins the first behavioral Excel corpus.
 - Linux workspace tests: enabled in CI.
 - Current root test inventory: 677 `excel-runtime` tests and 2,826 `excel-xlsx` tests.
 - Formatting, strict Clippy, MSRV, and Windows jobs: scheduled for M3.
-- Real Excel behavioral cases: none pinned yet.
+- Behavioral Oracle foundation: Rust and .NET contracts, runtime adapter, differential gate bridge,
+  COM runner, and watchdog are implemented and synthetic/fake-backed tests pass.
+- Real Excel behavioral cases: none pinned yet; the current Linux host cannot execute desktop Excel.
 - Tracked corpus/golden XLSX fixtures: none yet; synthetic workbooks are generated inside tests.
 
 ## Stability

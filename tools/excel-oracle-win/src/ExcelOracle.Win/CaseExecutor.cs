@@ -8,7 +8,7 @@ internal sealed class CaseExecutor
 {
     private readonly IExcelAutomation automation;
     private readonly Dictionary<string, object> objects = new(StringComparer.Ordinal);
-    private readonly Dictionary<object, string> identities = new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<long, string> identities = [];
     private int nextIdentity = 1;
 
     public CaseExecutor(IExcelAutomation automation, object workbook)
@@ -178,10 +178,11 @@ internal sealed class CaseExecutor
                 throw new ContractException($"object binding {bind} already exists");
             }
         }
-        if (!identities.TryGetValue(objectValue, out var identity))
+        var automationIdentity = automation.GetAutomationIdentity(objectValue);
+        if (!identities.TryGetValue(automationIdentity, out var identity))
         {
             identity = bind ?? $"object_{nextIdentity++:0000}";
-            identities.Add(objectValue, identity);
+            identities.Add(automationIdentity, identity);
         }
         return ValueNormalizer.NormalizeObject(automation.GetAutomationTypeName(objectValue), identity);
     }
@@ -235,7 +236,7 @@ internal sealed class CaseExecutor
     private void BindInitial(string identity, object value)
     {
         objects.Add(identity, value);
-        identities.Add(value, identity);
+        identities.Add(automation.GetAutomationIdentity(value), identity);
     }
 
     private static string? OptionalBind(JsonElement operation) =>

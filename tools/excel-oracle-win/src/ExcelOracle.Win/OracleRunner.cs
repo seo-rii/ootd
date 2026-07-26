@@ -33,7 +33,7 @@ public sealed class OracleRunner(Func<IExcelAutomation> automationFactory)
             var result = new CaseExecutor(automation, workbook).Execute(root, outputRoot);
             result.Insert(0, "schemaVersion", 1);
             result.Insert(1, "caseId", root.GetProperty("id").GetString());
-            result.Insert(2, "engine", EngineJson(engine));
+            result.Insert(2, "engine", engine.ToObservationJson());
             return result;
         }
         finally
@@ -41,16 +41,4 @@ public sealed class OracleRunner(Func<IExcelAutomation> automationFactory)
             automation.Close();
         }
     }
-
-    private static JsonObject EngineJson(EngineFingerprint engine) => new()
-    {
-        ["kind"] = "excel",
-        ["version"] = engine.Version,
-        ["build"] = engine.Build,
-        ["channel"] = engine.Channel,
-        ["os"] = engine.Os,
-        ["architecture"] = engine.Architecture,
-        ["locale"] = engine.Locale,
-        ["timezone"] = engine.Timezone,
-    };
 }

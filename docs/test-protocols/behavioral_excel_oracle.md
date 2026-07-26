@@ -1,0 +1,47 @@
+# Behavioral Excel Oracle Protocol
+
+Milestone M1 compares a versioned operation DSL through desktop Excel and `ExcelRuntime`. The
+cross-platform Rust contract lives in `crates/excel-oracle`; the desktop runner lives in
+`tools/excel-oracle-win`.
+
+## Artifact Layers
+
+The protocol deliberately separates four artifact kinds.
+
+1. A case pins its profile, input path, exact input SHA-256, provenance, ordered operations, and
+   complete probes.
+2. A run manifest pins the actual engine fingerprint and exactly one record for every suite case.
+3. An observation contains typed semantic values only: `Void`, `Missing`, `Empty`, `Null`, Boolean,
+   finite number, text, cell error, symbolic object, and rectangular row-major array.
+4. The existing `office-codegen` differential report is a summary/gate. Its artifact links point to
+   the typed Oracle and runtime observations rather than flattening them into strings.
+
+Case, input, and observation hashes cover the exact checked-in bytes. Missing, extra,
+case-insensitively duplicated, skipped, failed, or unsupported `mustMatch` cases block the gate.
+Native COM messages and HRESULTs remain diagnostic data; comparison uses the canonical error kind
+and code so locale-specific messages cannot change a golden result. Number comparison is exact by
+default and tolerances must be opted into per comparison policy.
+
+## Excel Execution
+
+One runner process owns and records every Excel Application it activates. The host must have no
+pre-existing Excel process.
+The runner configures automation security and manual calculation before opening the case-local
+workbook copy, executes every operation, records OM errors without aborting later probes, and then
+closes Excel even after failure.
+
+Save cases are reopened in a new Excel session with `CorruptLoad=xlNormalLoad`. A successful normal
+open is recorded as `repairDetected=false`; failure, crash, or timeout records an unknown repair
+state and cannot pass a required case. The runner never retries with `xlRepairFile`.
+
+ZIP bytes are not compared directly. Future corpus snapshots normalize semantic workbook state,
+XML, and the OPC part/relationship graph while ignoring entry order, compression output, and ZIP
+timestamps.
+
+## Current Verification Boundary
+
+Rust contract, manifest, comparator, report bridge, `ExcelRuntime` adapter, .NET contract
+normalization, and fake-backed runner lifecycle tests execute in this repository. The COM session
+and watchdog compile on Linux but require a real Windows Excel host for execution. No real Excel
+observation or 20-case required corpus is pinned as of 2026-07-26, so no behavior is yet
+Oracle-verified.

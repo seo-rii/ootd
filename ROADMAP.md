@@ -20,6 +20,21 @@ Status: complete.
 
 Status: in progress.
 
+Implemented foundation:
+
+- Versioned typed case, observation, suite, and exact-byte run-manifest contracts.
+- Required-case completeness mapping into the existing differential report and blocking gate.
+- An `ExcelRuntime` adapter for get/set/invoke/calculate cases with typed arrays and symbolic
+  bindings; save cases remain gated on an external Excel normal-open verifier.
+- A dependency-free .NET 10 runner with cross-platform contract tests, fake-backed lifecycle
+  tests, late-bound COM automation, executable-part preflight, and a PID-scoped watchdog.
+
+Still required before M1 closes:
+
+- Execute the runner on the declared Windows/Excel profile and pin the actual fingerprint.
+- Capture and replay at least 20 required cases twice, including save/reopen repair evidence and
+  normalized package relationship artifacts.
+
 - Keep OM TypeLib/PIA acquisition separate from behavioral Excel observation.
 - Define versioned case, run-manifest, Oracle-observation, and runtime-observation contracts.
 - Execute the same operation DSL through desktop Excel COM and `ExcelRuntime`.

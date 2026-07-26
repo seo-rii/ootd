@@ -1,3 +1,5 @@
+using System.Text.Json.Nodes;
+
 namespace ExcelOracle.Win;
 
 public sealed record EngineFingerprint(
@@ -17,6 +19,18 @@ public sealed record EngineFingerprint(
         "x64",
         "en-US",
         "UTC");
+
+    public JsonObject ToObservationJson() => new()
+    {
+        ["kind"] = "excel",
+        ["version"] = Version,
+        ["build"] = Build,
+        ["channel"] = Channel,
+        ["os"] = Os,
+        ["architecture"] = Architecture,
+        ["locale"] = Locale,
+        ["timezone"] = Timezone,
+    };
 }
 
 public sealed record SaveReopenResult(
@@ -36,6 +50,7 @@ public interface IExcelAutomation : IDisposable
     void SaveAs(object workbook, string outputPath);
     SaveReopenResult ReopenNormal(string outputPath);
     bool IsAutomationObject(object? value);
+    long GetAutomationIdentity(object value);
     string GetAutomationTypeName(object value);
     void Close();
 }
