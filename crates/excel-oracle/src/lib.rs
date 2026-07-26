@@ -36,13 +36,21 @@ pub enum CaseTier {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CaseProvenance {
+    pub source: String,
+    pub producer: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CaseInput {
     pub path: String,
     pub sha256: String,
+    pub provenance: CaseProvenance,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "operation", rename_all = "camelCase")]
+#[serde(tag = "operation", rename_all = "camelCase", deny_unknown_fields)]
 pub enum CaseOperation {
     Get {
         target: String,
@@ -56,6 +64,8 @@ pub enum CaseOperation {
         target: String,
         member: String,
         value: ObservedValue,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        args: Vec<ObservedValue>,
     },
     Invoke {
         target: String,
@@ -90,6 +100,7 @@ pub struct CaseSpec {
     pub version: u32,
     pub tier: CaseTier,
     pub input: CaseInput,
+    pub profile_id: String,
     pub operations: Vec<CaseOperation>,
     pub probes: Vec<CaseProbe>,
 }
@@ -129,6 +140,17 @@ impl CaseSpec {
         if self.version == 0 {
             return Err(OracleContractError::new("case version must be positive"));
         }
+        if self.profile_id.is_empty()
+            || self.profile_id.trim() != self.profile_id
+            || !self
+                .profile_id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+        {
+            return Err(OracleContractError::new(
+                "case profileId must be a trimmed ASCII identifier",
+            ));
+        }
         if self.input.path.is_empty()
             || self.input.path.starts_with('/')
             || self.input.path.contains('\\')
@@ -152,6 +174,16 @@ impl CaseSpec {
             return Err(OracleContractError::new(
                 "input sha256 must contain 64 lowercase hexadecimal characters",
             ));
+        }
+        for (label, value) in [
+            ("source", self.input.provenance.source.as_str()),
+            ("producer", self.input.provenance.producer.as_str()),
+        ] {
+            if value.is_empty() || value.trim() != value {
+                return Err(OracleContractError::new(format!(
+                    "input provenance {label} must be non-empty and trimmed"
+                )));
+            }
         }
         if self.operations.is_empty() {
             return Err(OracleContractError::new(
@@ -193,6 +225,7 @@ impl CaseSpec {
                     target,
                     member,
                     value,
+                    args,
                 } => {
                     if target.is_empty() || member.is_empty() {
                         return Err(OracleContractError::new(
@@ -200,6 +233,9 @@ impl CaseSpec {
                         ));
                     }
                     value.validate()?;
+                    for value in args {
+                        value.validate()?;
+                    }
                 }
                 CaseOperation::Calculate => {}
                 CaseOperation::Save { workbook, output } => {
@@ -291,20 +327,81 @@ impl EngineIdentity {
 #[serde(rename_all = "camelCase")]
 pub enum ObservedErrorKind {
     ExcelCom,
-    ExcelCell,
     Ootd,
     Runner,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CanonicalErrorKind {
+    InvalidArgument,
+    NotFound,
+    TypeMismatch,
+    Unsupported,
+    InvalidState,
+    Io,
+    Parse,
+    Calculation,
+    External,
+    ApplicationDefined,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NativeErrorDiagnostic {
+    pub origin: ObservedErrorKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hresult: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ObservedError {
-    pub kind: ObservedErrorKind,
+    pub kind: CanonicalErrorKind,
     pub code: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub hresult: Option<i32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub message: Option<String>,
+    pub diagnostic: Option<NativeErrorDiagnostic>,
+}
+
+impl ObservedError {
+    fn validate(&self) -> Result<(), OracleContractError> {
+        if self.code.is_empty() || self.code.trim() != self.code {
+            return Err(OracleContractError::new(
+                "observed error codes must be non-empty and trimmed",
+            ));
+        }
+        if self
+            .diagnostic
+            .as_ref()
+            .and_then(|diagnostic| diagnostic.message.as_deref())
+            .is_some_and(|message| message.is_empty() || message.trim() != message)
+        {
+            return Err(OracleContractError::new(
+                "native error diagnostic messages must be non-empty and trimmed",
+            ));
+        }
+        Ok(())
+    }
+
+    fn semantically_eq(&self, other: &Self) -> bool {
+        self.kind == other.kind && self.code == other.code
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ObservedCellError {
+    pub code: String,
+    pub cv_err: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ObservedObject {
+    pub type_name: String,
+    pub identity: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -316,16 +413,22 @@ pub struct ObservedArray {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", content = "value", rename_all = "camelCase")]
+#[serde(
+    tag = "type",
+    content = "value",
+    rename_all = "camelCase",
+    deny_unknown_fields
+)]
 pub enum ObservedValue {
+    Void,
     Missing,
     Empty,
     Null,
     Bool(bool),
     Number(f64),
     Text(String),
-    Error(ObservedError),
-    Object(String),
+    CellError(ObservedCellError),
+    Object(ObservedObject),
     Array(ObservedArray),
 }
 
@@ -335,12 +438,25 @@ impl ObservedValue {
             Self::Number(value) if !value.is_finite() => {
                 Err(OracleContractError::new("observed numbers must be finite"))
             }
-            Self::Object(value) if value.is_empty() => Err(OracleContractError::new(
-                "observed object identities must not be empty",
-            )),
-            Self::Error(error) if error.code.is_empty() => Err(OracleContractError::new(
-                "observed error codes must not be empty",
-            )),
+            Self::Object(value)
+                if value.type_name.is_empty()
+                    || value.type_name.trim() != value.type_name
+                    || value.identity.is_empty()
+                    || value.identity.trim() != value.identity =>
+            {
+                Err(OracleContractError::new(
+                    "observed object type names and identities must be non-empty and trimmed",
+                ))
+            }
+            Self::CellError(error)
+                if error.code.is_empty()
+                    || error.code.trim() != error.code
+                    || error.cv_err == 0 =>
+            {
+                Err(OracleContractError::new(
+                    "observed cell errors require a trimmed code and positive cvErr",
+                ))
+            }
             Self::Array(array) => {
                 if array.rows == 0
                     || array.cols == 0
@@ -361,7 +477,12 @@ impl ObservedValue {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "status", content = "result", rename_all = "camelCase")]
+#[serde(
+    tag = "status",
+    content = "result",
+    rename_all = "camelCase",
+    deny_unknown_fields
+)]
 pub enum ObservationResult {
     Value(ObservedValue),
     Error(ObservedError),
@@ -371,10 +492,7 @@ impl ObservationResult {
     fn validate(&self) -> Result<(), OracleContractError> {
         match self {
             Self::Value(value) => value.validate(),
-            Self::Error(error) if error.code.is_empty() => Err(OracleContractError::new(
-                "observation error codes must not be empty",
-            )),
-            Self::Error(_) => Ok(()),
+            Self::Error(error) => error.validate(),
         }
     }
 }
@@ -397,9 +515,11 @@ pub struct ProbeObservation {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SaveReopenObservation {
     pub attempted: bool,
-    pub opened: bool,
+    pub normal_load_succeeded: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repair_detected: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -429,13 +549,15 @@ impl ObservationDocument {
             ));
         }
         self.engine.validate()?;
-        let mut operation_indexes = BTreeSet::new();
-        for operation in &self.operations {
-            if operation.operation_index >= case.operations.len()
-                || !operation_indexes.insert(operation.operation_index)
-            {
+        if self.operations.len() != case.operations.len() {
+            return Err(OracleContractError::new(
+                "operation observations must exactly cover the case operations",
+            ));
+        }
+        for (expected_index, operation) in self.operations.iter().enumerate() {
+            if operation.operation_index != expected_index {
                 return Err(OracleContractError::new(
-                    "operation observations must use unique in-range indexes",
+                    "operation observations must exactly cover ordered indexes from zero",
                 ));
             }
             operation.result.validate()?;
@@ -468,10 +590,36 @@ impl ObservationDocument {
                     "saveReopen must record an attempted reopen",
                 ));
             }
-            if case.tier == CaseTier::MustMatch && save_reopen.repair_detected.is_none() {
+            if !save_reopen.normal_load_succeeded && save_reopen.repair_detected == Some(false) {
                 return Err(OracleContractError::new(
-                    "mustMatch save cases require an explicit repairDetected result",
+                    "repairDetected=false requires a successful normal load",
                 ));
+            }
+            if save_reopen
+                .evidence
+                .as_deref()
+                .is_some_and(|evidence| evidence.is_empty() || evidence.trim() != evidence)
+            {
+                return Err(OracleContractError::new(
+                    "saveReopen evidence must be non-empty and trimmed",
+                ));
+            }
+            if case.tier == CaseTier::MustMatch {
+                if !save_reopen.normal_load_succeeded {
+                    return Err(OracleContractError::new(
+                        "mustMatch save cases require a successful normal load",
+                    ));
+                }
+                if save_reopen.repair_detected != Some(false) {
+                    return Err(OracleContractError::new(
+                        "mustMatch save cases require repairDetected=false",
+                    ));
+                }
+                if save_reopen.evidence.is_none() {
+                    return Err(OracleContractError::new(
+                        "mustMatch save cases require normal-load evidence",
+                    ));
+                }
             }
         } else if self.save_reopen.is_some() {
             return Err(OracleContractError::new(
@@ -490,7 +638,7 @@ pub struct ComparisonPolicy {
 impl Default for ComparisonPolicy {
     fn default() -> Self {
         Self {
-            number_tolerance: 1e-12,
+            number_tolerance: 0.0,
         }
     }
 }
@@ -647,7 +795,7 @@ fn compare_result(
             );
         }
         (ObservationResult::Error(expected), ObservationResult::Error(actual))
-            if expected == actual => {}
+            if expected.semantically_eq(actual) => {}
         _ if expected == actual => {}
         _ => mismatches.push(ObservationMismatch {
             path: path.to_string(),
