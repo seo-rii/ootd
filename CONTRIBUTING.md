@@ -26,7 +26,7 @@ If your work changes how object model data is acquired or normalized, also read:
 
 ## Toolchain
 
-- Rust `1.85` or newer
+- Rust `1.88` or newer
 
 ## Common Commands
 
