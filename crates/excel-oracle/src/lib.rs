@@ -5,6 +5,10 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Display, Formatter};
 
+mod report;
+
+pub use report::{RunBundle, build_behavioral_differential_report};
+
 pub const ORACLE_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
