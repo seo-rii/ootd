@@ -58,6 +58,8 @@ Completed slices:
 
 - Externalized all 2,826 `excel-xlsx` and 677 `excel-runtime` unit tests from their library roots
   while preserving both sorted test-name hashes and passing behavior.
+- Routed the parser-backed formula coverage scan through an explicit implementation-source
+  contract so calculation code can move without silently weakening the coverage gate.
 
 - Isolate the current calculation engine before redesigning its values.
 - Isolate worksheet cell parsing/writing, recalculation writeback, and relationship primitives.

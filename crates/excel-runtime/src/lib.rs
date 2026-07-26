@@ -604,6 +604,8 @@ const PINNED_OM_TEMPLATE_JSON: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../specs/pinned/office_idl_excel_om.template.json"
 ));
+#[cfg(test)]
+const FORMULA_IMPLEMENTATION_SOURCE: &str = include_str!("lib.rs");
 
 static FORMULA_RANDOM_STATE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 

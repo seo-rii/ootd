@@ -1538,7 +1538,7 @@
 
     #[test]
     fn parser_backed_formula_functions_are_pinned_as_worksheet_functions() {
-        let source = include_str!("lib.rs");
+        let source = super::FORMULA_IMPLEMENTATION_SOURCE;
         let parser_start = source
             .find("fn formula_array_projection_function_name")
             .expect("formula function helper start");
