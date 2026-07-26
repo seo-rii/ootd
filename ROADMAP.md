@@ -56,10 +56,9 @@ Status: in progress after the synthetic M1 vertical slice; real Excel evidence r
 
 Completed slices:
 
-- Externalized all 2,826 `excel-xlsx` unit tests from the library root while preserving the
-  sorted test-name hash and passing behavior.
+- Externalized all 2,826 `excel-xlsx` and 677 `excel-runtime` unit tests from their library roots
+  while preserving both sorted test-name hashes and passing behavior.
 
-- Externalize the two large inline test modules without changing test identity.
 - Isolate the current calculation engine before redesigning its values.
 - Isolate worksheet cell parsing/writing, recalculation writeback, and relationship primitives.
 - Split runtime dispatch by object-model surface, not only by get/set/invoke operation.
