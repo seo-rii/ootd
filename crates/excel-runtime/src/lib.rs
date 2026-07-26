@@ -44,7 +44,7 @@ use office_opc::{CompressionMethod, OpcPackage, OpcPart};
 use quick_xml::escape::partial_escape;
 use quick_xml::events::{BytesEnd, BytesStart, Event};
 use quick_xml::{Reader, Writer};
-use regex::{Regex, RegexBuilder};
+use regex::RegexBuilder;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;

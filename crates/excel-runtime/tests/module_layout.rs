@@ -20,3 +20,14 @@ fn calculation_engine_is_isolated_from_library_root() {
     assert!(library.contains("mod calc;"));
     assert!(!library.contains("enum FormulaEvalError"));
 }
+
+#[test]
+fn calculation_engine_declares_its_parent_dependencies() {
+    let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let calculation =
+        fs::read_to_string(crate_root.join("src/calc/mod.rs")).expect("read calculation module");
+
+    assert!(!calculation.contains("use super::*;"));
+    assert!(calculation.contains("use super::{"));
+    assert!(calculation.contains("use office_common::{"));
+}

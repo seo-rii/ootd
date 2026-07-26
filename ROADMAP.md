@@ -62,6 +62,8 @@ Completed slices:
   contract so calculation code can move without silently weakening the coverage gate.
 - Moved the existing formula evaluator, parser, reference conversion, and calculation helpers
   behind `excel-runtime::calc` without changing public paths or test identities.
+- Replaced the calculation module's wildcard parent import with an explicit internal dependency
+  list, keeping its boundary reviewable before the M4 value-model redesign.
 
 - Isolate worksheet cell parsing/writing, recalculation writeback, and relationship primitives.
 - Split runtime dispatch by object-model surface, not only by get/set/invoke operation.
