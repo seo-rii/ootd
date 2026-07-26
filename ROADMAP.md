@@ -64,8 +64,10 @@ Completed slices:
   behind `excel-runtime::calc` without changing public paths or test identities.
 - Replaced the calculation module's wildcard parent import with an explicit internal dependency
   list, keeping its boundary reviewable before the M4 value-model redesign.
+- Isolated workbook/sheet recalculation and dynamic-array spill writeback in a dedicated module so
+  M4 can replace mutation semantics without reopening the evaluator implementation.
 
-- Isolate worksheet cell parsing/writing, recalculation writeback, and relationship primitives.
+- Isolate worksheet cell parsing/writing and relationship primitives.
 - Split runtime dispatch by object-model surface, not only by get/set/invoke operation.
 
 Exit criteria:

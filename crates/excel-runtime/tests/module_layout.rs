@@ -31,3 +31,13 @@ fn calculation_engine_declares_its_parent_dependencies() {
     assert!(calculation.contains("use super::{"));
     assert!(calculation.contains("use office_common::{"));
 }
+
+#[test]
+fn recalculation_writeback_is_isolated_from_library_root() {
+    let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let library = fs::read_to_string(crate_root.join("src/lib.rs")).expect("read library root");
+
+    assert!(crate_root.join("src/recalculation.rs").is_file());
+    assert!(library.contains("mod recalculation;"));
+    assert!(!library.contains("fn calculate_sheet_formulas("));
+}
