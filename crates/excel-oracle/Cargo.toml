@@ -7,7 +7,9 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
+excel-runtime = { path = "../excel-runtime" }
 office-codegen = { path = "../office-codegen" }
+office-common = { path = "../office-common" }
 serde.workspace = true
 serde_json = "1"
 sha2 = "0.10"

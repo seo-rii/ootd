@@ -179,7 +179,9 @@ dependencies = [
 name = "excel-oracle"
 version = "0.1.0"
 dependencies = [
+ "excel-runtime",
  "office-codegen",
+ "office-common",
  "serde",
  "serde_json",
  "sha2",

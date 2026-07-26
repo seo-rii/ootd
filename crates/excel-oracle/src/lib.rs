@@ -6,8 +6,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Display, Formatter};
 
 mod report;
+mod runtime;
 
 pub use report::{RunBundle, build_behavioral_differential_report};
+pub use runtime::{RuntimeCaseOutput, run_runtime_case};
 
 pub const ORACLE_SCHEMA_VERSION: u32 = 1;
 
