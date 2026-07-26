@@ -26,7 +26,7 @@ contract-based until Milestone M1 pins the first behavioral Excel corpus.
 | Workbook and worksheet model | Partial | Workbook, sheet, cell, name, chart, drawing, and basic dynamic-array state are modeled | Oracle-backed mutation and save/reopen cases |
 | XLSX load/save | Partial | No-op and targeted dirty-save preservation have broad synthetic regression coverage | Tracked real-world corpus, bounded parsing, and Excel reopen without repair |
 | Runtime object model | Partial | Application, workbook, worksheet, range, names, selection, clipboard, and chart-related dispatch are available | Generated member coverage and behavioral Oracle cases |
-| Scalar formula calculation | Partial | Broad deterministic function coverage exists, including Evaluate and Calculate paths | Shared coercion/reference model and Excel differential corpus |
+| Scalar formula calculation | Partial | Broad deterministic function coverage exists behind an internal `calc` module, including Evaluate and Calculate paths; its value/coercion model is not yet unified | Shared coercion/reference model and Excel differential corpus |
 | Formula2 and dynamic arrays | Partial | Seventeen array functions produce two-dimensional spill results with basic obstruction and recalculation handling | Full spill mutation lifecycle, `@`/`#`, dependency order, XLSX metadata, and Oracle agreement |
 | Charts and drawings | Partial | Typed chart mutation and lossless-first relationship graph lifecycle cover a broad surface | Remain feature-frozen until PivotChart work; fix preservation regressions only |
 | Styles and themes | Preserve-only | Raw bytes and typed summaries are retained; general typed style allocation and mutation are incomplete | Corpus preservation before broader typed editing |
@@ -39,7 +39,8 @@ contract-based until Milestone M1 pins the first behavioral Excel corpus.
 - Linux workspace tests: enabled in CI.
 - Current root test inventory: 677 `excel-runtime` tests and 2,826 `excel-xlsx` tests.
 - M2 boundary progress: the `excel-xlsx` and `excel-runtime` unit tests now live outside their
-  library roots with test identities unchanged; implementation boundaries remain to be split.
+  library roots with test identities unchanged, and the current calculation engine is isolated;
+  recalculation, codec, relationship, and dispatch boundaries remain to be split.
 - Formatting, strict Clippy, MSRV, and Windows jobs: scheduled for M3.
 - Behavioral Oracle foundation: Rust and .NET contracts, runtime adapter, differential gate bridge,
   COM runner, and watchdog are implemented and synthetic/fake-backed tests pass.

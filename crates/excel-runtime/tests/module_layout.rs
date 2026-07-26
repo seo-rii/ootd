@@ -10,3 +10,13 @@ fn unit_tests_are_externalized_from_library_root() {
     assert!(library.contains("#[cfg(test)]\nmod tests;"));
     assert!(!library.contains("#[cfg(test)]\nmod tests {"));
 }
+
+#[test]
+fn calculation_engine_is_isolated_from_library_root() {
+    let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let library = fs::read_to_string(crate_root.join("src/lib.rs")).expect("read library root");
+
+    assert!(crate_root.join("src/calc/mod.rs").is_file());
+    assert!(library.contains("mod calc;"));
+    assert!(!library.contains("enum FormulaEvalError"));
+}

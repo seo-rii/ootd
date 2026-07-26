@@ -60,8 +60,9 @@ Completed slices:
   while preserving both sorted test-name hashes and passing behavior.
 - Routed the parser-backed formula coverage scan through an explicit implementation-source
   contract so calculation code can move without silently weakening the coverage gate.
+- Moved the existing formula evaluator, parser, reference conversion, and calculation helpers
+  behind `excel-runtime::calc` without changing public paths or test identities.
 
-- Isolate the current calculation engine before redesigning its values.
 - Isolate worksheet cell parsing/writing, recalculation writeback, and relationship primitives.
 - Split runtime dispatch by object-model surface, not only by get/set/invoke operation.
 
