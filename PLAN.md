@@ -1,5 +1,9 @@
 # OOTD Phase 1 Plan
 
+> This file is the historical implementation log. Use `STATUS.md` for current compatibility
+> claims and `ROADMAP.md` for the active M0-M5 sequence. Historical completion markers are not
+> evidence of real Excel agreement unless `STATUS.md` marks the surface as Oracle-verified.
+
 ## Goal
 
 `ootd`는 단순한 `.xlsx` 파서/라이터가 아니라, 문서 번들에서 정의한 대로 Excel Object Model 호환 코어를 향해 가는 Rust 기반 라이브러리로 시작한다.
@@ -5110,11 +5114,12 @@
 
 ## Deferred Work
 
-- broader formula parity: string semantics, additional date/time and lookup/reference families, volatile functions, name resolution, richer coercion semantics
-- dynamic array / `Formula2` dialect
-- style/theme/drawing typed model
+- broader formula parity beyond the current deterministic subset and shared coercion/reference model
+- Formula2 lifecycle completion: mutation invariants, `@`/`#`, dependency order, and XLSX save/reopen metadata
+- general style/theme typed mutation beyond the current preserve-first summaries
 - macro-preserving `.xlsm` specifics
-- validator/oracle Windows automation
+- behavioral Excel Oracle execution and pinned corpus
+- PivotTable/cache preserve-only inventory followed by typed mutation and PivotChart integration
 - WASM/TS binding
 
 ## Notes

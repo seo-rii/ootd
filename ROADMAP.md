@@ -1,0 +1,111 @@
+# OOTD Roadmap
+
+This document contains the active roadmap. Detailed historical steps remain in `PLAN.md`.
+Milestones close only when their exit criteria are met; adding API names or synthetic happy-path
+tests alone does not complete a compatibility milestone.
+
+## Active Sequence
+
+### M0 — Baseline And Scope Control
+
+Status: complete.
+
+- Align the declared MSRV and package metadata across all crates.
+- Establish `STATUS.md` as the current compatibility source of truth.
+- Establish this file as the active M0-M5 roadmap.
+- Freeze new chart features, new array-function breadth, and typed pivot work until their
+  prerequisite milestones close.
+
+### M1 — Behavioral Excel Oracle
+
+Status: in progress.
+
+- Keep OM TypeLib/PIA acquisition separate from behavioral Excel observation.
+- Define versioned case, run-manifest, Oracle-observation, and runtime-observation contracts.
+- Execute the same operation DSL through desktop Excel COM and `ExcelRuntime`.
+- Compare typed return values, errors, arrays, symbolic object identity, workbook state,
+  normalized package relationships, save/reopen results, and repair detection.
+- Pin an initial required corpus and replay it without Excel in normal pull-request CI.
+
+Exit criteria:
+
+- One Excel build/channel/architecture/locale/timezone profile is pinned.
+- At least 20 required cases have input SHA-256 and provenance metadata.
+- Required cases contain no failed, missing, unsupported, or skipped result.
+- Saved files reopen in Excel with repair explicitly observed as false.
+- Pinned observations reproduce twice on the same host after normalization.
+
+### M2 — Stable Internal Boundaries
+
+Status: pending M1 vertical slice.
+
+- Externalize the two large inline test modules without changing test identity.
+- Isolate the current calculation engine before redesigning its values.
+- Isolate worksheet cell parsing/writing, recalculation writeback, and relationship primitives.
+- Split runtime dispatch by object-model surface, not only by get/set/invoke operation.
+
+Exit criteria:
+
+- Public root paths and test names remain stable.
+- Move-only changes contain no semantic body changes beyond imports and visibility.
+- Runtime state and package semantic snapshots are identical before and after each move.
+
+### M3 — CI And Untrusted Input Safety
+
+Status: pending; independent slices may run alongside M1 and M2.
+
+- Enforce formatting, strict Clippy, MSRV, Linux stable, and Windows portability jobs.
+- Add bounded ZIP loading and canonical OPC part/relationship identity.
+- Apply shared XML depth, event, text, attribute, and collection budgets.
+- Add dependency/license policy, property tests, scheduled fuzzing, and benchmark trends.
+
+Exit criteria:
+
+- Every default public workbook-open path is resource-bounded.
+- Limit-plus-one, entry-flood, compression-bomb, malformed-target, and XML-budget tests fail
+  with stable structured errors and do not expose partial models.
+- General Windows CI does not require Excel; Excel automation remains a separate job.
+
+### M4 — Formula2 Foundation
+
+Status: pending M1 evidence and M2 calculation boundaries.
+
+- Route all cell mutations through invariant-preserving model commands.
+- Make spill replacement and obstruction atomic across all mutation paths.
+- Introduce a common evaluation value model for scalar, array, reference, error, lambda, and
+  omitted arguments.
+- Centralize scalar, aggregate, array, and reference coercion.
+- Complete `INDEX`, `INDIRECT`, `OFFSET`, `TRIMRANGE`, names, multi-area, 3D, `@`, and `#` semantics.
+- Add dependency invalidation, cycle handling, and dynamic-array XLSX save/reopen metadata.
+- Revalidate the existing 17 array functions before adding higher-order functions.
+
+Exit criteria for every supported function:
+
+`value + shape + reference + error + recalculation + mutation + save/reopen + Excel agreement`
+
+### M5 — Pivot Preserve-Only
+
+Status: pending M3 package safety and M4 calculation foundation.
+
+- Inventory pivot table definitions, cache definitions and records, slicers, timelines,
+  relationships, and content types.
+- Preserve the graph across no-op save and unrelated cell edits.
+- Define safe sheet rename/copy/move/delete and shared-cache ownership behavior.
+- Reject unsupported destructive mutations before changing model or package state.
+
+Exit criteria:
+
+- The tracked pivot corpus retains its semantic part and relationship graph across supported
+  operations and reopens in Excel without repair.
+- Typed PivotTable mutation, refresh, and PivotChart binding remain out of scope until a later
+  milestone.
+
+## Development Policy During M0-M5
+
+- Use test-driven development for behavior changes: failing regression, implementation, then
+  focused and broader passing tests.
+- Keep one independently reviewable and revertible work unit per commit.
+- Never update Oracle golden results automatically in CI.
+- Do not mix mechanical code movement with semantic changes.
+- Continue to preserve unknown package data or return an explicit unsupported error when safe
+  mutation cannot be proved.

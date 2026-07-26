@@ -8,7 +8,9 @@ Some detailed implementation notes currently remain in Korean because they were 
 ## Core Entry Points
 
 - [Repository overview](../README.md)
-- [Current implementation plan](../PLAN.md)
+- [Current compatibility status](../STATUS.md)
+- [Active roadmap](../ROADMAP.md)
+- [Historical implementation plan](../PLAN.md)
 - [Contributing guide](../CONTRIBUTING.md)
 
 ## Current Runtime Surfaces
@@ -26,7 +28,9 @@ Some detailed implementation notes currently remain in Korean because they were 
 
 - [`../specs/`](../specs/): canonical schemas, generated assets, and pinned templates used by the codebase.
 - [`../specs/pinned/`](../specs/pinned/): versioned contract templates and pinned capture placeholders.
-- [`../fixtures/`](../fixtures/): synthetic and golden inputs used by regression tests.
+- `../fixtures/`: reserved for the tracked corpus and golden inputs introduced by M1. Current
+  synthetic workbooks are generated inside crate tests, so a clean clone does not yet contain
+  tracked fixture files.
 
 ## Background Material
 

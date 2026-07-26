@@ -7,11 +7,13 @@ The current repository focuses on the Excel slice first. The near-term goal is n
 - preserve XLSX packages with a lossless-first bias,
 - normalize machine-readable Excel object model inputs,
 - generate code and metadata from pinned contracts, and
-- expose a minimal runtime surface for workbook/session and range operations.
+- expose an Excel-compatible runtime surface for workbook, range, formula, and chart workflows.
 
 ## Status
 
-This project is still in an early implementation phase.
+This project is pre-1.0 and implements a broad compatibility-oriented core, but it does not yet
+claim full Excel parity. See [STATUS.md](STATUS.md) for the supported, partial, preserve-only, and
+unsupported surfaces, and [ROADMAP.md](ROADMAP.md) for the active M0-M5 sequence.
 
 Implemented so far:
 
@@ -23,13 +25,18 @@ Implemented so far:
 - `excel-xlsx` load/save support for a focused vertical slice,
 - `excel-runtime` orchestration for workbook/session and range access,
 - `excel-runtime` formula evaluation for arithmetic, comparisons, logical/control helpers, aggregate/statistical helpers, criteria aggregates, lookup/reference and reference metadata helpers, date/time serial, week, and text-parse helpers, error/info helpers, focused text helpers, and `Application`/`Worksheet.Evaluate`,
+- `excel-runtime` Formula2 two-dimensional spill support for the current dynamic-array function slice,
+- chart and drawing mutation with lossless-first relationship graph preservation,
 - `office-capture` support for Windows capture bundle planning and materialization.
 
 Not implemented yet:
 
 - a complete Excel object model facade,
 - full Excel calculation parity beyond the current formula subset,
+- a behavioral runner that executes the same cases in desktop Excel and OOTD,
 - a fully pinned real-world Windows capture bundle checked into the repository,
+- bounded loading for untrusted XLSX/OPC input,
+- typed PivotTable, pivot cache, refresh, and PivotChart integration,
 - broader Office applications beyond the current Excel-first slice.
 
 ## Workspace Layout
@@ -44,7 +51,7 @@ Not implemented yet:
 - `crates/excel-runtime`: runtime orchestration and workbook/session APIs.
 - `docs/`: repository documentation and spec intake notes.
 - `specs/`: canonical schemas, pinned templates, and generated spec assets.
-- `fixtures/`: synthetic and golden inputs for regression coverage.
+- `fixtures/`: reserved location for the tracked corpus and golden inputs introduced by M1; current synthetic workbooks are generated inside tests.
 - `excel_compatibility_bundle/`: archived background bundle that informed the current layout.
 
 ## Getting Started
@@ -77,7 +84,9 @@ cargo test --workspace --locked --quiet
 ## Documentation
 
 - [Documentation index](docs/README.md)
-- [Phase 1 plan](PLAN.md)
+- [Current compatibility status](STATUS.md)
+- [Active roadmap](ROADMAP.md)
+- [Historical Phase 1 plan](PLAN.md)
 - [Excel runtime calculation surface](docs/interfaces/excel_runtime_calculation.md)
 - [Spec roots](docs/spec_roots.md)
 - [OM source acquisition](docs/specs/om_source_acquisition.md)
