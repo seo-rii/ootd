@@ -28,6 +28,9 @@ use quick_xml::{NsReader, Reader, Writer};
 
 mod chart_encoder;
 mod chart_graph;
+mod shared_strings;
+
+use shared_strings::parse_shared_strings;
 
 pub use chart_encoder::encode_chart_model_xml;
 pub use chart_graph::materialize_state_only_chart_graphs;
@@ -26094,45 +26097,6 @@ fn should_strip_calc_chain_override(
         }
     }
     Ok(false)
-}
-
-fn parse_shared_strings(shared_strings_xml: &[u8]) -> OmResult<Vec<String>> {
-    let mut reader = Reader::from_reader(Cursor::new(shared_strings_xml));
-    reader.config_mut().trim_text(false);
-    let mut buffer = Vec::new();
-    let mut values = Vec::new();
-    let mut current = String::new();
-    let mut inside_text = false;
-    let mut inside_string_item = false;
-
-    loop {
-        match reader.read_event_into(&mut buffer) {
-            Ok(Event::Start(element)) if element.name().as_ref() == b"si" => {
-                current.clear();
-                inside_string_item = true;
-            }
-            Ok(Event::Start(element)) if inside_string_item && element.name().as_ref() == b"t" => {
-                inside_text = true;
-            }
-            Ok(Event::End(element)) if element.name().as_ref() == b"t" => inside_text = false,
-            Ok(Event::End(element)) if element.name().as_ref() == b"si" => {
-                values.push(current.clone());
-                inside_string_item = false;
-            }
-            Ok(Event::Text(text)) if inside_text => {
-                current.push_str(&text.xml_content().map_err(xml_error)?);
-            }
-            Ok(Event::CData(text)) if inside_text => {
-                current.push_str(&text.xml_content().map_err(xml_error)?);
-            }
-            Ok(Event::Eof) => break,
-            Ok(_) => {}
-            Err(error) => return Err(xml_error(error)),
-        }
-        buffer.clear();
-    }
-
-    Ok(values)
 }
 
 fn parse_cell_reference(reference: &str, current_row: Option<u32>) -> OmResult<(u32, u32)> {
