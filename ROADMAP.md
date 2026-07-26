@@ -69,8 +69,9 @@ Completed slices:
 - Isolated shared-string parsing as the first `excel-xlsx` codec boundary.
 - Isolated relationship parsing, part URI derivation, and target normalization before M3 changes
   their validation semantics.
+- Isolated worksheet cell parsing, lossless XML rewriting, error conversion, and dimension helpers
+  behind `excel-xlsx::worksheet` with the full test-name inventory unchanged.
 
-- Isolate worksheet cell parsing/writing.
 - Split runtime dispatch by object-model surface, not only by get/set/invoke operation.
 
 Exit criteria:
