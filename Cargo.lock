@@ -176,6 +176,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "excel-oracle"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "excel-runtime"
 version = "0.1.0"
 dependencies = [

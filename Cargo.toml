@@ -9,6 +9,7 @@ members = [
   "crates/excel-model",
   "crates/excel-xlsx",
   "crates/excel-runtime",
+  "crates/excel-oracle",
 ]
 
 default-members = [
@@ -20,6 +21,7 @@ default-members = [
   "crates/excel-model",
   "crates/excel-xlsx",
   "crates/excel-runtime",
+  "crates/excel-oracle",
 ]
 
 [workspace.package]
