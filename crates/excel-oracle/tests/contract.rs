@@ -1,8 +1,9 @@
 use excel_oracle::{
-    CanonicalErrorKind, CaseInput, CaseOperation, CaseProbe, CaseProvenance, CaseSpec, CaseTier,
-    ComparisonPolicy, EngineIdentity, EngineKind, NativeErrorDiagnostic, ObservationDocument,
-    ObservationResult, ObservedArray, ObservedError, ObservedErrorKind, ObservedObject,
-    ObservedValue, OperationObservation, SaveReopenObservation, compare_observations,
+    CanonicalErrorKind, CaseArtifactRef, CaseInput, CaseOperation, CaseProbe, CaseProvenance,
+    CaseSpec, CaseTier, ComparisonPolicy, EngineIdentity, EngineKind, NativeErrorDiagnostic,
+    ObservationDocument, ObservationResult, ObservedArray, ObservedError, ObservedErrorKind,
+    ObservedObject, ObservedValue, OperationObservation, OracleSuiteManifest, RunCaseRecord,
+    RunCaseStatus, RunManifest, SaveReopenObservation, compare_observations, sha256_hex,
 };
 
 const INPUT_SHA256: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -284,4 +285,137 @@ fn default_number_comparison_is_exact_and_tolerance_is_opt_in() {
 
     assert!(!exact.passed());
     assert!(tolerant.passed());
+}
+
+fn manifest_fixture() -> (
+    CaseSpec,
+    Vec<u8>,
+    Vec<u8>,
+    OracleSuiteManifest,
+    ObservationDocument,
+    Vec<u8>,
+    RunManifest,
+) {
+    let input_bytes = b"pinned xlsx fixture".to_vec();
+    let mut case = must_match_case();
+    case.input.sha256 = sha256_hex(&input_bytes);
+    let case_bytes = case.to_json_pretty().expect("serialize case").into_bytes();
+    let oracle = observation(EngineKind::Excel, 3, 1);
+    let observation_bytes = serde_json::to_vec_pretty(&oracle).expect("serialize observation");
+    let suite = OracleSuiteManifest {
+        schema_version: 1,
+        id: "excel-win-en-us-smoke".to_string(),
+        profile_id: case.profile_id.clone(),
+        expected_engine: environment(EngineKind::Excel),
+        cases: vec![CaseArtifactRef {
+            case_id: case.id.clone(),
+            case_version: case.version,
+            tier: case.tier,
+            path: "cases/formula2.sequence.basic.json".to_string(),
+            sha256: sha256_hex(&case_bytes),
+            input_sha256: case.input.sha256.clone(),
+        }],
+    };
+    let run = RunManifest {
+        schema_version: 1,
+        run_id: "excel-win-en-us-20260726-a".to_string(),
+        profile_id: case.profile_id.clone(),
+        engine: environment(EngineKind::Excel),
+        cases: vec![RunCaseRecord {
+            case_id: case.id.clone(),
+            case_version: case.version,
+            tier: case.tier,
+            case_sha256: sha256_hex(&case_bytes),
+            input_sha256: case.input.sha256.clone(),
+            status: RunCaseStatus::Completed,
+            observation_path: Some("observations/formula2.sequence.basic/oracle.json".to_string()),
+            observation_sha256: Some(sha256_hex(&observation_bytes)),
+            message: None,
+        }],
+    };
+
+    (
+        case,
+        case_bytes,
+        input_bytes,
+        suite,
+        oracle,
+        observation_bytes,
+        run,
+    )
+}
+
+#[test]
+fn validates_exact_byte_case_input_and_observation_artifacts() {
+    let (case, case_bytes, input_bytes, suite, oracle, observation_bytes, run) = manifest_fixture();
+
+    suite.validate().expect("valid suite");
+    run.validate_for_suite(&suite).expect("complete run");
+    let loaded_case = suite
+        .load_case(&case.id, &case_bytes)
+        .expect("case checksum and contract");
+    suite.cases[0]
+        .validate_input(&loaded_case, &input_bytes)
+        .expect("input checksum");
+    let loaded_observation = run.cases[0]
+        .load_observation(&loaded_case, &run.engine, &observation_bytes)
+        .expect("observation checksum and contract");
+
+    assert_eq!(loaded_case, case);
+    assert_eq!(loaded_observation, oracle);
+    assert_eq!(
+        sha256_hex(b"abc"),
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    );
+}
+
+#[test]
+fn rejects_missing_extra_and_case_insensitive_duplicate_run_records() {
+    let (_, _, _, suite, _, _, run) = manifest_fixture();
+
+    let mut missing = run.clone();
+    missing.cases.clear();
+    assert!(
+        missing
+            .validate_for_suite(&suite)
+            .expect_err("missing record")
+            .to_string()
+            .contains("exactly cover")
+    );
+
+    let mut duplicate = run;
+    let mut second = duplicate.cases[0].clone();
+    second.case_id = second.case_id.to_ascii_uppercase();
+    duplicate.cases.push(second);
+    assert!(
+        duplicate
+            .validate_for_suite(&suite)
+            .expect_err("case-insensitive duplicate")
+            .to_string()
+            .contains("case-insensitive")
+    );
+}
+
+#[test]
+fn required_cases_cannot_be_failed_unsupported_or_skipped() {
+    let (_, _, _, suite, _, _, mut run) = manifest_fixture();
+
+    for status in [
+        RunCaseStatus::Failed,
+        RunCaseStatus::Unsupported,
+        RunCaseStatus::Skipped,
+    ] {
+        run.cases[0].status = status;
+        run.cases[0].observation_path = None;
+        run.cases[0].observation_sha256 = None;
+        run.cases[0].message = Some("runner did not complete".to_string());
+        run.validate_for_suite(&suite)
+            .expect("structurally valid incomplete run");
+        assert!(
+            run.validate_required_completeness(&suite)
+                .expect_err("mustMatch status must block")
+                .to_string()
+                .contains("mustMatch")
+        );
+    }
 }

@@ -1,6 +1,7 @@
 //! Cross-platform contracts for behavioral comparison between desktop Excel and OOTD.
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Display, Formatter};
 
@@ -628,6 +629,450 @@ impl ObservationDocument {
         }
         Ok(())
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CaseArtifactRef {
+    pub case_id: String,
+    pub case_version: u32,
+    pub tier: CaseTier,
+    pub path: String,
+    pub sha256: String,
+    pub input_sha256: String,
+}
+
+impl CaseArtifactRef {
+    fn validate(&self) -> Result<(), OracleContractError> {
+        validate_ascii_identifier("suite case id", &self.case_id)?;
+        if self.case_version == 0 {
+            return Err(OracleContractError::new(
+                "suite case version must be positive",
+            ));
+        }
+        validate_safe_relative_path("suite case path", &self.path)?;
+        validate_sha256("suite case sha256", &self.sha256)?;
+        validate_sha256("suite input sha256", &self.input_sha256)
+    }
+
+    fn load_case_bytes(&self, bytes: &[u8]) -> Result<CaseSpec, OracleContractError> {
+        if sha256_hex(bytes) != self.sha256 {
+            return Err(OracleContractError::new(format!(
+                "case {} exact-byte sha256 did not match the suite",
+                self.case_id
+            )));
+        }
+        let json = std::str::from_utf8(bytes).map_err(|error| {
+            OracleContractError::new(format!("case {} was not UTF-8: {error}", self.case_id))
+        })?;
+        let case = CaseSpec::from_json_str(json)?;
+        if case.id != self.case_id
+            || case.version != self.case_version
+            || case.tier != self.tier
+            || case.input.sha256 != self.input_sha256
+        {
+            return Err(OracleContractError::new(format!(
+                "case {} metadata did not match the suite",
+                self.case_id
+            )));
+        }
+        Ok(case)
+    }
+
+    pub fn validate_input(&self, case: &CaseSpec, bytes: &[u8]) -> Result<(), OracleContractError> {
+        if case.id != self.case_id || case.input.sha256 != self.input_sha256 {
+            return Err(OracleContractError::new(
+                "input case metadata did not match the suite",
+            ));
+        }
+        if sha256_hex(bytes) != self.input_sha256 {
+            return Err(OracleContractError::new(format!(
+                "input for case {} exact-byte sha256 did not match the suite",
+                self.case_id
+            )));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OracleSuiteManifest {
+    pub schema_version: u32,
+    pub id: String,
+    pub profile_id: String,
+    pub expected_engine: EngineIdentity,
+    pub cases: Vec<CaseArtifactRef>,
+}
+
+impl OracleSuiteManifest {
+    pub fn validate(&self) -> Result<(), OracleContractError> {
+        if self.schema_version != ORACLE_SCHEMA_VERSION {
+            return Err(OracleContractError::new(format!(
+                "unsupported suite schemaVersion {}",
+                self.schema_version
+            )));
+        }
+        validate_ascii_identifier("suite id", &self.id)?;
+        validate_ascii_identifier("suite profileId", &self.profile_id)?;
+        self.expected_engine.validate()?;
+        if self.expected_engine.kind != EngineKind::Excel {
+            return Err(OracleContractError::new(
+                "suite expectedEngine must identify desktop Excel",
+            ));
+        }
+        if self.cases.is_empty() {
+            return Err(OracleContractError::new("suite cases must not be empty"));
+        }
+        let mut ids = BTreeSet::new();
+        let mut casefold_ids = BTreeSet::new();
+        let mut paths = BTreeSet::new();
+        for case in &self.cases {
+            case.validate()?;
+            if !ids.insert(case.case_id.as_str()) {
+                return Err(OracleContractError::new(format!(
+                    "suite duplicate case id {}",
+                    case.case_id
+                )));
+            }
+            if !casefold_ids.insert(case.case_id.to_ascii_lowercase()) {
+                return Err(OracleContractError::new(format!(
+                    "suite duplicate case id {} under case-insensitive matching",
+                    case.case_id
+                )));
+            }
+            if !paths.insert(case.path.as_str()) {
+                return Err(OracleContractError::new(format!(
+                    "suite duplicate case path {}",
+                    case.path
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn load_case(&self, case_id: &str, bytes: &[u8]) -> Result<CaseSpec, OracleContractError> {
+        self.validate()?;
+        let artifact = self
+            .cases
+            .iter()
+            .find(|artifact| artifact.case_id == case_id)
+            .ok_or_else(|| OracleContractError::new(format!("suite case {case_id} not found")))?;
+        let case = artifact.load_case_bytes(bytes)?;
+        if case.profile_id != self.profile_id {
+            return Err(OracleContractError::new(format!(
+                "case {} profileId did not match the suite",
+                case.id
+            )));
+        }
+        Ok(case)
+    }
+
+    pub fn from_json_str(input: &str) -> Result<Self, OracleContractError> {
+        let value: Self = serde_json::from_str(input)
+            .map_err(|error| OracleContractError::new(format!("invalid suite JSON: {error}")))?;
+        value.validate()?;
+        Ok(value)
+    }
+
+    pub fn to_json_pretty(&self) -> Result<String, OracleContractError> {
+        self.validate()?;
+        serde_json::to_string_pretty(self).map_err(|error| {
+            OracleContractError::new(format!("failed to serialize suite: {error}"))
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RunCaseStatus {
+    Completed,
+    Failed,
+    Unsupported,
+    Skipped,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RunCaseRecord {
+    pub case_id: String,
+    pub case_version: u32,
+    pub tier: CaseTier,
+    pub case_sha256: String,
+    pub input_sha256: String,
+    pub status: RunCaseStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observation_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observation_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+impl RunCaseRecord {
+    fn validate(&self) -> Result<(), OracleContractError> {
+        validate_ascii_identifier("run case id", &self.case_id)?;
+        if self.case_version == 0 {
+            return Err(OracleContractError::new(
+                "run case version must be positive",
+            ));
+        }
+        validate_sha256("run case sha256", &self.case_sha256)?;
+        validate_sha256("run input sha256", &self.input_sha256)?;
+        match self.status {
+            RunCaseStatus::Completed => {
+                let path = self.observation_path.as_deref().ok_or_else(|| {
+                    OracleContractError::new("completed run cases require an observationPath")
+                })?;
+                validate_safe_relative_path("run observation path", path)?;
+                validate_sha256(
+                    "run observation sha256",
+                    self.observation_sha256.as_deref().ok_or_else(|| {
+                        OracleContractError::new("completed run cases require an observationSha256")
+                    })?,
+                )?;
+                if self.message.is_some() {
+                    return Err(OracleContractError::new(
+                        "completed run cases must not include a message",
+                    ));
+                }
+            }
+            RunCaseStatus::Failed | RunCaseStatus::Unsupported | RunCaseStatus::Skipped => {
+                if self.observation_path.is_some() || self.observation_sha256.is_some() {
+                    return Err(OracleContractError::new(
+                        "incomplete run cases must not include observation artifacts",
+                    ));
+                }
+                validate_nonempty_trimmed(
+                    "incomplete run case message",
+                    self.message.as_deref().ok_or_else(|| {
+                        OracleContractError::new("incomplete run cases require a message")
+                    })?,
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn load_observation(
+        &self,
+        case: &CaseSpec,
+        engine: &EngineIdentity,
+        bytes: &[u8],
+    ) -> Result<ObservationDocument, OracleContractError> {
+        self.validate()?;
+        if self.status != RunCaseStatus::Completed {
+            return Err(OracleContractError::new(
+                "only completed run cases have an observation",
+            ));
+        }
+        if self.case_id != case.id
+            || self.case_version != case.version
+            || self.tier != case.tier
+            || self.input_sha256 != case.input.sha256
+        {
+            return Err(OracleContractError::new(
+                "observation case metadata did not match the run record",
+            ));
+        }
+        if self.observation_sha256.as_deref() != Some(sha256_hex(bytes).as_str()) {
+            return Err(OracleContractError::new(format!(
+                "observation for case {} exact-byte sha256 did not match the run",
+                self.case_id
+            )));
+        }
+        let observation: ObservationDocument = serde_json::from_slice(bytes).map_err(|error| {
+            OracleContractError::new(format!(
+                "invalid observation JSON for case {}: {error}",
+                self.case_id
+            ))
+        })?;
+        observation.validate_for_case(case)?;
+        if &observation.engine != engine {
+            return Err(OracleContractError::new(format!(
+                "observation engine for case {} did not match the run manifest",
+                self.case_id
+            )));
+        }
+        Ok(observation)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RunManifest {
+    pub schema_version: u32,
+    pub run_id: String,
+    pub profile_id: String,
+    pub engine: EngineIdentity,
+    pub cases: Vec<RunCaseRecord>,
+}
+
+impl RunManifest {
+    pub fn validate_for_suite(
+        &self,
+        suite: &OracleSuiteManifest,
+    ) -> Result<(), OracleContractError> {
+        suite.validate()?;
+        if self.schema_version != ORACLE_SCHEMA_VERSION {
+            return Err(OracleContractError::new(format!(
+                "unsupported run schemaVersion {}",
+                self.schema_version
+            )));
+        }
+        validate_ascii_identifier("run id", &self.run_id)?;
+        validate_ascii_identifier("run profileId", &self.profile_id)?;
+        self.engine.validate()?;
+        if self.profile_id != suite.profile_id {
+            return Err(OracleContractError::new(
+                "run profileId did not match the suite",
+            ));
+        }
+        if self.engine.kind == EngineKind::Excel && self.engine != suite.expected_engine {
+            return Err(OracleContractError::new(
+                "Excel run engine fingerprint did not match the pinned suite profile",
+            ));
+        }
+        let mut ids = BTreeSet::new();
+        let mut casefold_ids = BTreeSet::new();
+        for record in &self.cases {
+            record.validate()?;
+            if !ids.insert(record.case_id.as_str()) {
+                return Err(OracleContractError::new(format!(
+                    "run duplicate case id {}",
+                    record.case_id
+                )));
+            }
+            if !casefold_ids.insert(record.case_id.to_ascii_lowercase()) {
+                return Err(OracleContractError::new(format!(
+                    "run duplicate case id {} under case-insensitive matching",
+                    record.case_id
+                )));
+            }
+        }
+        if self.cases.len() != suite.cases.len() {
+            return Err(OracleContractError::new(
+                "run records must exactly cover the suite cases",
+            ));
+        }
+        for expected in &suite.cases {
+            let actual = self
+                .cases
+                .iter()
+                .find(|record| record.case_id == expected.case_id)
+                .ok_or_else(|| {
+                    OracleContractError::new("run records must exactly cover the suite cases")
+                })?;
+            if actual.case_version != expected.case_version
+                || actual.tier != expected.tier
+                || actual.case_sha256 != expected.sha256
+                || actual.input_sha256 != expected.input_sha256
+            {
+                return Err(OracleContractError::new(format!(
+                    "run metadata for case {} did not match the suite",
+                    expected.case_id
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn validate_required_completeness(
+        &self,
+        suite: &OracleSuiteManifest,
+    ) -> Result<(), OracleContractError> {
+        self.validate_for_suite(suite)?;
+        for expected in &suite.cases {
+            if expected.tier == CaseTier::MustMatch {
+                let actual = self
+                    .cases
+                    .iter()
+                    .find(|record| record.case_id == expected.case_id)
+                    .expect("validated exact run coverage");
+                if actual.status != RunCaseStatus::Completed {
+                    return Err(OracleContractError::new(format!(
+                        "mustMatch case {} did not complete",
+                        expected.case_id
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn from_json_str(
+        suite: &OracleSuiteManifest,
+        input: &str,
+    ) -> Result<Self, OracleContractError> {
+        let value: Self = serde_json::from_str(input)
+            .map_err(|error| OracleContractError::new(format!("invalid run JSON: {error}")))?;
+        value.validate_for_suite(suite)?;
+        Ok(value)
+    }
+
+    pub fn to_json_pretty(
+        &self,
+        suite: &OracleSuiteManifest,
+    ) -> Result<String, OracleContractError> {
+        self.validate_for_suite(suite)?;
+        serde_json::to_string_pretty(self)
+            .map_err(|error| OracleContractError::new(format!("failed to serialize run: {error}")))
+    }
+}
+
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
+}
+
+fn validate_ascii_identifier(label: &str, value: &str) -> Result<(), OracleContractError> {
+    if value.is_empty()
+        || value.trim() != value
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+    {
+        return Err(OracleContractError::new(format!(
+            "{label} must be a trimmed ASCII identifier"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_nonempty_trimmed(label: &str, value: &str) -> Result<(), OracleContractError> {
+    if value.is_empty() || value.trim() != value {
+        return Err(OracleContractError::new(format!(
+            "{label} must be non-empty and trimmed"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_sha256(label: &str, value: &str) -> Result<(), OracleContractError> {
+    if value.len() != 64
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(OracleContractError::new(format!(
+            "{label} must contain 64 lowercase hexadecimal characters"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_safe_relative_path(label: &str, value: &str) -> Result<(), OracleContractError> {
+    if value.is_empty()
+        || value.starts_with('/')
+        || value.contains('\\')
+        || value
+            .split('/')
+            .any(|segment| segment.is_empty() || matches!(segment, "." | ".."))
+    {
+        return Err(OracleContractError::new(format!(
+            "{label} must be a safe forward-slash relative path"
+        )));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
