@@ -67,8 +67,10 @@ Completed slices:
 - Isolated workbook/sheet recalculation and dynamic-array spill writeback in a dedicated module so
   M4 can replace mutation semantics without reopening the evaluator implementation.
 - Isolated shared-string parsing as the first `excel-xlsx` codec boundary.
+- Isolated relationship parsing, part URI derivation, and target normalization before M3 changes
+  their validation semantics.
 
-- Isolate worksheet cell parsing/writing and relationship primitives.
+- Isolate worksheet cell parsing/writing.
 - Split runtime dispatch by object-model surface, not only by get/set/invoke operation.
 
 Exit criteria:
