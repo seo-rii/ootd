@@ -52,7 +52,12 @@ Exit criteria:
 
 ### M2 — Stable Internal Boundaries
 
-Status: pending M1 vertical slice.
+Status: in progress after the synthetic M1 vertical slice; real Excel evidence remains pending.
+
+Completed slices:
+
+- Externalized all 2,826 `excel-xlsx` unit tests from the library root while preserving the
+  sorted test-name hash and passing behavior.
 
 - Externalize the two large inline test modules without changing test identity.
 - Isolate the current calculation engine before redesigning its values.
