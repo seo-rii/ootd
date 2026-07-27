@@ -28,6 +28,223 @@
 4. unknown part, relationship, extension은 typed model과 별개로 보존 가능한 구조를 둔다.
 5. 테스트는 synthetic fixture와 byte/package round-trip 검증을 기준으로 쌓는다.
 
+## 2026-07-27 Compatibility Audit Execution Plan
+
+이 절은 `79f8d6f` 기준 전체 Rust workspace, XLSX/OPC codec, runtime/object dispatch,
+calculation, chart/pivot preservation, Windows Excel Oracle, CI와 문서 구조를 다시 감사한
+결과의 실행 순서다. 상세 위험과 근거는 로컬 `RISK_REGISTER.md`의 stable ID
+`OOTD-001`~`OOTD-044`에 있고, 아래 ID는 그대로 GitHub Issue 제목과 commit trace에
+사용한다.
+
+기능 breadth보다 다음 세 gate를 먼저 닫는다.
+
+1. 성공한 저장은 durable output과 동일한 새 baseline을 commit하며 실패 시 live state와
+   기존 파일을 유지한다.
+2. 구현하지 않은 public argument/member/security policy는 성공처럼 보이지 않고
+   fail-closed한다.
+3. compatibility 표시는 synthetic test만으로 올리지 않고 pin된 desktop Excel observation을
+   요구한다.
+
+각 번호는 독립적으로 review/revert 가능한 work unit이다. behavior 변경은 반드시 실패
+회귀를 먼저 확인하고 구현한 뒤 focused test, crate test, workspace locked test 순으로
+확장한다. 한 work unit이 통과하면 conventional commit으로 현재 branch에 commit/push한 뒤
+다음 번호로 이동한다. `RISK_REGISTER.md`, workspace `STAGING.md`, `MISTAKES.md`는 commit하지
+않는다.
+
+### Audit Wave 1 — Persistence And Data-Preservation Invariants
+
+새 편집 기능은 이 wave의 release blocker가 닫힐 때까지 확대하지 않는다.
+
+1. `OOTD-001`: Save/SaveAs 성공 결과를 runtime baseline으로 commit한다. cell, defined name,
+   chart, drawing의 두 번 연속 저장을 모두 검증한다.
+2. `OOTD-002` + `OOTD-046`: `Saved`/prompt 상태와 semantic, serialization, formula-cache,
+   package-graph dirty domain을 분리한다.
+3. `OOTD-003`: source path가 없는 `Workbook.Save`를 stable error로 거부한다.
+4. `OOTD-004`: read-only source overwrite를 거부하고 SaveAs/SaveCopyAs 정책을 고정한다.
+5. `OOTD-005`: dirty/source/SaveChanges/Filename/DisplayAlerts close state table을 구현한다.
+6. `OOTD-006` + `OOTD-045`: 모든 저장 API를
+   `prepare → durable same-directory replace → commit snapshot` transaction으로 통합하고
+   fault injection을 추가한다.
+7. `OOTD-007`: scalar formula cached value를 serialization dirty로 기록한다.
+8. `OOTD-008` + `OOTD-009`: structured `CalculationReport`, partial-calculation state와
+   `calcPr`/calc-chain lifecycle을 연결한다.
+
+Wave 1 exit gate:
+
+- 직전 성공 저장의 모든 semantic/package 변경이 이후 저장에서 사라지지 않는다.
+- 저장 실패는 기존 파일, source path, live model, object handles와 dirty domain을 유지한다.
+- `Saved = true`는 prompt 정책만 바꾸며 serializable delta를 제거하지 않는다.
+- 계산 후 저장한 formula text/cache와 재계산 metadata가 서로 모순되지 않는다.
+
+### Audit Wave 2 — Fail-Closed Public And Security Contracts
+
+1. `OOTD-010`: `Workbook.SaveAs`의 미지원 non-default optional argument를 거부한다.
+2. `OOTD-011`: `Workbooks.Open` optional argument별 behavior/unsupported matrix를 고정한다.
+3. `OOTD-012`: `LoadOptions`/`SaveOptions`를 실제 codec policy에 연결하거나 비공개화한다.
+4. `OOTD-013`: observable effect가 없는 workbook/worksheet method를 `Unsupported`로 바꾼다.
+5. `OOTD-062`: CFB/encrypted OOXML 탐지와 Password fail-closed 1단계를 구현한다.
+6. `OOTD-063`: signed package mutation의 refuse 또는 explicit strip+audit 정책을 구현한다.
+7. `OOTD-022` + `OOTD-064`: VBA, XLM, ActiveX, OLE, custom UI 전체 relationship closure에
+   preserve/strip/refuse 정책을 적용한다.
+8. `OOTD-065`: external link/connection/query offline policy와 host callback boundary를
+   정의한다.
+9. `OOTD-044` + `OOTD-059`: machine-readable capability manifest를 source of truth로 두고
+   README/STATUS/ROADMAP/archived bundle drift를 CI에서 검출한다.
+
+Wave 2 exit gate:
+
+- 성공한 public call은 파일, 상태, event 또는 documented return이라는 관찰 가능한 결과가
+  있다.
+- 미지원 optional argument, 암호화, repair, refresh, active-content 정책은 silent ignore가
+  없다.
+- open만으로 외부 network/provider 접근이 일어나지 않는다.
+
+### Audit Wave 3 — OOXML Discovery, Parsing, References And Invariants
+
+1. `OOTD-014` + `OOTD-060`: OPC root relationship 기반 main document discovery와
+   Strict/Transitional dialect table을 구현한다.
+2. `OOTD-015` + `OOTD-049` + `OOTD-061`: bounded QName-aware XML layer, prefix preservation,
+   root schema validation, Markup Compatibility/AlternateContent/extLst owner-aware 보존과
+   raw-fragment splice를 도입한다.
+3. `OOTD-016` + `OOTD-017`: workbook/worksheet strict parse와 explicit repair report를
+   분리한다.
+4. `OOTD-018` + `OOTD-019` + `OOTD-048`: A1/R1C1/range/sheet quoting/grid limits를 checked
+   reference subsystem으로 통합한다.
+5. `OOTD-020` + `OOTD-021`: source format, macro/template kind와 OOXML dialect를 분리하고
+   unknown/Strict capability를 정확히 제한한다.
+6. `OOTD-029` + `OOTD-030`: content-types와 relationships root/namespace/duplicate 검증을
+   fail-closed한다.
+7. `OOTD-031` + `OOTD-032` + `OOTD-033` + `OOTD-054`: mutable public state를 validated
+   command/transaction으로 닫고 workbook identity assignment를 fallible/atomic하게 만든다.
+8. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
+   structured error에 추가한다.
+
+Wave 3 exit gate:
+
+- 합법적인 alternate prefix/main-part URI는 보존되고 malformed/ambiguous package는
+  deterministic error 또는 명시적 repair report를 낸다.
+- public mutation만으로 orphan sheet, dangling relationship, partial identity rebind를
+  만들 수 없다.
+- 모든 reference consumer가 동일한 syntax와 XFD1048576 limit를 사용한다.
+
+### Audit Wave 4 — Cell, Formula And Calculation Fidelity
+
+1. `OOTD-023` + `OOTD-024` + `OOTD-025` + `OOTD-026` + `OOTD-066`: finite number, exact
+   error lexical, ISO date, rich and phonetic text, blank/missing/formula-cache fidelity model을
+   구현한다.
+2. `OOTD-027` + `OOTD-028` + `OOTD-067`: normal/shared/legacy-array/data-table/dynamic-array
+   formula group model과 group-level mutation preflight를 구현한다.
+3. `OOTD-038` + `OOTD-039` + `OOTD-047`: clock, timezone, locale, date system, RNG와 runtime
+   policy를 workbook/session `RuntimeEnvironment`/`CalcContext`에 주입한다.
+4. `OOTD-040` + `OOTD-050` + `OOTD-051`: common value/coercion/reference/error model,
+   calculation session dependency graph, SCC/cycle, memoization을 만들고 calc monolith를
+   function family별로 분리한다.
+5. `OOTD-075` + `OOTD-076` + `OOTD-077`: calculation mode/iteration, locale coercion,
+   `@`/`#`와 modern dynamic-array metadata를 Excel observation에 맞춘다.
+6. `OOTD-078`: defined name scope, built-in/hidden name, constants, multi-area/3D/external
+   reference와 lifecycle retargeting을 완성한다.
+
+Wave 4 exit gate:
+
+- cell type과 formula group마다 no-op, unrelated edit, targeted mutation, save/reopen matrix가
+  있다.
+- 한 calculation cycle의 clock/RNG/volatile result와 dependency order가 결정적이다.
+- 지원하지 못한 formula와 cycle/partial calculation은 stale cache를 성공 결과로 위장하지
+  않는다.
+
+### Audit Wave 5 — Excel-Proved Practical Compatibility
+
+1. `OOTD-041` + `OOTD-042` + `OOTD-043` + `OOTD-085`: Oracle preflight를 closure 기반으로
+   강화하고, format-aware case schema와 첫 hash-pinned end-to-end Excel corpus를 만든다.
+2. `OOTD-079`: existing chart series/category/title formula retarget과 cache invalidation을
+   preservation-first capability로 고정한다.
+3. `OOTD-080`: pivot cache worksheet source range retarget과 refresh-on-open을 shared-owner
+   preflight 뒤 제한적으로 지원한다.
+4. `OOTD-068`: style/theme/number-format typed mutation과 deduplicating allocator를 구현한다.
+5. `OOTD-069`: row/column metadata, dimensions, merge/unmerge mutation을 구현한다.
+6. `OOTD-070`: table, structured reference, AutoFilter와 SortState를 구현한다.
+7. `OOTD-071`: data validation과 range/sheet lifecycle retargeting을 구현한다.
+8. `OOTD-072`: conditional formatting priority/dxf/extension preservation을 구현한다.
+9. `OOTD-073`: hyperlink, legacy note/VML, threaded comments/person closure를 구현한다.
+10. `OOTD-074`: worksheet view/pane/selection/page/print settings을 구현한다.
+11. `OOTD-081`: typed pivot/cache를 cache records부터 PivotTable, slicer/timeline,
+    PivotChart 순의 독립 capability gate로 연다.
+12. `OOTD-082`: drawing/image/shape/OLE lifecycle과 row/column anchor update를 구현한다.
+13. `OOTD-083` + `OOTD-084`: OM lifecycle/identity/collection semantics와
+    alerts/events/headless prompt suppression 정책을 behavioral Oracle case로 고정한다.
+14. `OOTD-086`: Excel build/channel/architecture/locale/date-system/package-kind profile
+    matrix를 compatibility release gate로 연결한다.
+
+Wave 5 exit gate:
+
+- 필수 corpus는 input/OOTD output/Excel output/observation/profile manifest를 hash-pinning한다.
+- Excel open/save/reopen에서 repair가 없고 pivot refresh, chart appearance/anchor, formula
+  result와 package graph가 case rule에 맞는다.
+- release note는 profile별 pass/known-difference/unsupported를 자동 생성한다.
+
+### Cross-Cutting Refactoring And Resource Ratchets
+
+아래 항목은 관련 wave의 invariant가 먼저 고정된 뒤 별도 commit으로 수행한다. semantic
+변경과 mechanical movement를 한 commit에 섞지 않는다.
+
+- `OOTD-034` + `OOTD-035` + `OOTD-056`: immutable `Arc<[u8]>` part store, COW/digest
+  snapshot, single-pass sniff/load, streaming/reuse writer와 peak RSS/save-latency gate.
+- `OOTD-036` + `OOTD-037`: source/detected/target format과 decoded/runtime identity 책임 분리.
+- `OOTD-052`: runtime/xlsx/chart encoder monolith를 persistence, registry, package discovery,
+  workbook/worksheet/style/drawing/active-content boundary로 분해.
+- `OOTD-053`: IDL에서 member identity, argument schema, defaults/aliases와 dispatch skeleton을
+  생성하고 handwritten semantics만 유지.
+- `OOTD-057`: runtime/xlsx test monolith를 fixture DSL과 domain module로 분해하면서 test
+  name/count hash를 유지.
+- `OOTD-058`: runtime/xlsx strict Clippy ratchet, .NET build/unit lane, parser/rewrite fuzz와
+  resource/performance gate 확대.
+
+### Immediate Regression Inventory
+
+Wave 작업은 아래 이름을 우선 사용한다. 이름이 이미 존재하면 같은 contract를 확장하고
+중복 test를 만들지 않는다.
+
+- `sequential_save_commits_previous_cell_edits`
+- `sequential_save_commits_defined_name_edits`
+- `sequential_save_commits_chart_and_drawing_edits`
+- `saved_true_does_not_clear_serialization_dirty`
+- `save_without_source_path_fails`
+- `read_only_save_never_overwrites_source`
+- `close_save_changes_without_target_fails_without_closing`
+- `atomic_save_failure_preserves_original_and_dirty_state`
+- `saveas_nonempty_password_is_rejected_until_encryption_exists`
+- `open_corruptload_nondefault_is_rejected_until_repair_exists`
+- `calculate_save_reopen_persists_formula_cached_value`
+- `unsupported_formula_is_reported_and_forces_recalc_on_open`
+- `root_relationship_discovers_nonstandard_workbook_part`
+- `prefixed_spreadsheetml_round_trips`
+- `duplicate_cell_and_invalid_sheet_id_fail_closed`
+- `a1_parser_rejects_beyond_xfd1048576_and_overflow`
+- `iso_date_cell_round_trips`
+- `shared_formula_attributes_round_trip`
+- `legacy_array_and_dynamic_spill_have_distinct_edit_rules`
+- `macro_to_xlsx_conversion_has_no_orphan_active_content`
+- `pivot_source_ref_update_opens_and_refreshes_in_excel`
+- `chart_formula_retarget_preserves_anchor_and_style`
+
+### Compatibility Completion Definition
+
+어떤 surface도 다음 evidence를 모두 갖기 전에는 `Oracle-verified` 또는 무조건적인
+“Excel-compatible”로 표시하지 않는다.
+
+1. typed input/output/error/unsupported contract
+2. malformed/edge synthetic contract test
+3. no-op 및 unrelated-edit round-trip preservation
+4. targeted mutation과 relationship closure validation
+5. pin된 desktop Excel profile의 repair-free open/save/reopen
+6. value/formula/package graph/object-model differential observation
+7. external access, macro, signature, prompt security policy
+8. input 대비 memory/time resource gate
+9. build/locale/format별 capability manifest entry
+
+증거가 부족한 surface는 `Partial`, `Preserve-only`, `Experimental`, `Unsupported` 중 하나로
+남긴다.
+
 ## Implemented So Far
 
 - `docs`

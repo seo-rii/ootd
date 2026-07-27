@@ -4,6 +4,28 @@ This document contains the active roadmap. Detailed historical steps remain in `
 Milestones close only when their exit criteria are met; adding API names or synthetic happy-path
 tests alone does not complete a compatibility milestone.
 
+## 2026-07-27 Audit Priority Override
+
+The repository-wide compatibility audit identified persistence correctness and silent-success
+contracts as release blockers. Until Audit Wave 1 closes, new editing breadth, typed pivot work,
+and new chart families remain frozen even when an older milestone below lists them as a next slice.
+
+Active order:
+
+1. `OOTD-001` commit every successful save as the next package/source baseline.
+2. `OOTD-002`/`OOTD-046` separate prompt state from serialization dirty domains.
+3. `OOTD-003`~`OOTD-006` make Save/SaveAs/SaveCopyAs/Close target-aware, read-only-safe, durable,
+   atomic, and transactional through `OOTD-045`.
+4. `OOTD-007`~`OOTD-009` persist formula caches and synchronize calculation metadata.
+5. Continue with fail-closed public/security contracts, QName/reference/parser invariants, then
+   cell/formula fidelity.
+6. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
+   claiming practical chart/pivot/style parity.
+
+Every numbered work unit starts with a failing regression and lands as its own reviewable commit.
+The complete `OOTD-001`~`OOTD-086` ordering, regression inventory, and compatibility completion
+definition are in `PLAN.md`; detailed active risks are in the local `RISK_REGISTER.md`.
+
 ## Active Sequence
 
 ### M0 — Baseline And Scope Control
