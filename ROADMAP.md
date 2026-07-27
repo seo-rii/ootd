@@ -71,8 +71,10 @@ Completed slices:
   their validation semantics.
 - Isolated worksheet cell parsing, lossless XML rewriting, error conversion, and dimension helpers
   behind `excel-xlsx::worksheet` with the full test-name inventory unchanged.
+- Grouped Application property and method dispatch in an explicit-dependency object-surface module,
+  establishing the extraction pattern for the remaining runtime objects.
 
-- Split runtime dispatch by object-model surface, not only by get/set/invoke operation.
+- Apply the object-surface dispatch pattern to workbook, worksheet, range, names, and chart objects.
 
 Exit criteria:
 

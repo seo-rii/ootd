@@ -41,3 +41,18 @@ fn recalculation_writeback_is_isolated_from_library_root() {
     assert!(library.contains("mod recalculation;"));
     assert!(!library.contains("fn calculate_sheet_formulas("));
 }
+
+#[test]
+fn application_dispatch_is_grouped_by_object_surface() {
+    let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let library = fs::read_to_string(crate_root.join("src/lib.rs")).expect("read library root");
+    let application = fs::read_to_string(crate_root.join("src/dispatch/application.rs"))
+        .expect("read Application dispatch module");
+
+    assert!(library.contains("mod dispatch;"));
+    assert!(application.contains("fn dispatch_get_application("));
+    assert!(application.contains("fn dispatch_invoke_application("));
+    assert!(!application.contains("use super::super::*;"));
+    assert!(!library.contains("fn dispatch_get_application("));
+    assert!(!library.contains("fn dispatch_invoke_application("));
+}
