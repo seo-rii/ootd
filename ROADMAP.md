@@ -152,8 +152,10 @@ Completed slices:
   when an anchor becomes an ordinary formula. Spill ranges remain authoritative even when a blank
   child has no cached cell node.
 - Added A1 spill-range references such as `J10#`, including explicit `#REF!` for non-spill anchors
-  and extent lookup after a materialized spill changes shape; dependency-aware recalculation of
-  downstream `#` formulas remains a separate slice.
+  and extent lookup after a materialized spill changes shape.
+- Split worksheet calculation into dynamic materialization followed by scalar evaluation, so a
+  scalar `SUM(J10#)` dependent observes a changed spill shape in the same `Calculate` call without
+  relying on cell order. Dynamic-to-dynamic dependencies and a general graph remain outstanding.
 
 Next slices:
 
@@ -163,7 +165,7 @@ Next slices:
   omitted arguments.
 - Centralize scalar, aggregate, array, and reference coercion.
 - Complete `INDEX`, `INDIRECT`, `OFFSET`, `TRIMRANGE`, names, multi-area, 3D, `@`, and
-  dependency-aware `#` semantics.
+  dynamic-to-dynamic `#` dependency semantics.
 - Add dependency invalidation and cycle handling; validate dynamic-array extension metadata and
   save/reopen behavior against the pinned Excel Oracle profile.
 - Revalidate the existing 17 array functions before adding higher-order functions.

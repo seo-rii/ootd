@@ -35468,6 +35468,12 @@
         );
         assert_eq!(
             runtime
+                .dispatch_get(sum, "Value2", &[])
+                .expect("recalculated resized spill-range sum"),
+            OmValue::Number(60.0),
+        );
+        assert_eq!(
+            runtime
                 .dispatch_invoke(
                     runtime.root_application(),
                     "Evaluate",

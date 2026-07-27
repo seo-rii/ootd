@@ -60,118 +60,124 @@ impl ExcelRuntime {
             return Ok(());
         }
 
-        enum CalculationUpdate {
-            Scalar((u32, u32), CellValue),
-            Dynamic((u32, u32), FormulaArrayResult),
-        }
-
-        let mut updates = Vec::with_capacity(formula_cells.len());
+        let mut dynamic_updates = Vec::<((u32, u32), FormulaArrayResult)>::new();
+        let mut scalar_formula_cells = Vec::new();
         for (row, col) in formula_cells {
-            let mut evaluator = FormulaEvaluator::new(&snapshot);
             if worksheet.dynamic_array_formulas.contains(&(row, col)) {
+                let mut evaluator = FormulaEvaluator::new(&snapshot);
                 if let Some(value) =
                     evaluator.evaluate_dynamic_array_formula_cell(sheet_id, row, col)
                 {
-                    updates.push(CalculationUpdate::Dynamic((row, col), value));
+                    dynamic_updates.push(((row, col), value));
                 }
-            } else if let Some(value) = evaluator.evaluate_formula_cell(sheet_id, row, col) {
-                updates.push(CalculationUpdate::Scalar((row, col), value));
+            } else {
+                scalar_formula_cells.push((row, col));
             }
         }
 
-        if updates.is_empty() {
-            return Ok(());
-        }
-        let worksheet = self
-            .runtime_workbook_mut(workbook)?
-            .loaded
-            .state
-            .worksheet_data_for_sheet_mut(sheet_id)?;
-        for update in updates {
-            match update {
-                CalculationUpdate::Scalar((row, col), value) => {
-                    if let Some(cell) = worksheet.cells.get_mut(&(row, col)) {
-                        cell.value = value;
+        if !dynamic_updates.is_empty() {
+            let worksheet = self
+                .runtime_workbook_mut(workbook)?
+                .loaded
+                .state
+                .worksheet_data_for_sheet_mut(sheet_id)?;
+            for (anchor @ (row, col), result) in dynamic_updates {
+                worksheet.clear_owned_spill(anchor);
+                let Some(row_last) = row
+                    .checked_add(u32::try_from(result.rows).unwrap_or(u32::MAX))
+                    .and_then(|value| value.checked_sub(1))
+                else {
+                    if let Some(cell) = worksheet.cells.get_mut(&anchor) {
+                        cell.value = CellValue::Error(CellError::Spill);
                     }
+                    continue;
+                };
+                let Some(col_last) = col
+                    .checked_add(u32::try_from(result.cols).unwrap_or(u32::MAX))
+                    .and_then(|value| value.checked_sub(1))
+                else {
+                    if let Some(cell) = worksheet.cells.get_mut(&anchor) {
+                        cell.value = CellValue::Error(CellError::Spill);
+                    }
+                    continue;
+                };
+                if row_last > EXCEL_MAX_ROW_INDEX || col_last > EXCEL_MAX_COLUMN_INDEX {
+                    if let Some(cell) = worksheet.cells.get_mut(&anchor) {
+                        cell.value = CellValue::Error(CellError::Spill);
+                    }
+                    continue;
                 }
-                CalculationUpdate::Dynamic(anchor @ (row, col), result) => {
-                    worksheet.clear_owned_spill(anchor);
-                    let Some(row_last) = row
-                        .checked_add(u32::try_from(result.rows).unwrap_or(u32::MAX))
-                        .and_then(|value| value.checked_sub(1))
-                    else {
-                        if let Some(cell) = worksheet.cells.get_mut(&anchor) {
-                            cell.value = CellValue::Error(CellError::Spill);
-                        }
-                        continue;
-                    };
-                    let Some(col_last) = col
-                        .checked_add(u32::try_from(result.cols).unwrap_or(u32::MAX))
-                        .and_then(|value| value.checked_sub(1))
-                    else {
-                        if let Some(cell) = worksheet.cells.get_mut(&anchor) {
-                            cell.value = CellValue::Error(CellError::Spill);
-                        }
-                        continue;
-                    };
-                    if row_last > EXCEL_MAX_ROW_INDEX || col_last > EXCEL_MAX_COLUMN_INDEX {
-                        if let Some(cell) = worksheet.cells.get_mut(&anchor) {
-                            cell.value = CellValue::Error(CellError::Spill);
-                        }
-                        continue;
+                let spill_rect = Rect {
+                    row_first: row,
+                    row_last,
+                    col_first: col,
+                    col_last,
+                };
+                let obstructed = (row..=row_last).any(|target_row| {
+                    (col..=col_last).any(|target_col| {
+                        let key = (target_row, target_col);
+                        key != anchor
+                            && worksheet.cells.get(&key).is_some_and(|cell| {
+                                cell.formula.is_some() || !matches!(cell.value, CellValue::Blank)
+                            })
+                    })
+                });
+                if obstructed {
+                    if let Some(cell) = worksheet.cells.get_mut(&anchor) {
+                        cell.value = CellValue::Error(CellError::Spill);
                     }
-                    let spill_rect = Rect {
-                        row_first: row,
-                        row_last,
-                        col_first: col,
-                        col_last,
-                    };
-                    let obstructed = (row..=row_last).any(|target_row| {
-                        (col..=col_last).any(|target_col| {
-                            let key = (target_row, target_col);
-                            key != anchor
-                                && worksheet.cells.get(&key).is_some_and(|cell| {
-                                    cell.formula.is_some()
-                                        || !matches!(cell.value, CellValue::Blank)
-                                })
-                        })
-                    });
-                    if obstructed {
-                        if let Some(cell) = worksheet.cells.get_mut(&anchor) {
-                            cell.value = CellValue::Error(CellError::Spill);
-                        }
-                        worksheet.dirty = true;
-                        worksheet.dirty_cells.insert(anchor);
-                        continue;
-                    }
-
-                    for (index, value) in result.values.into_iter().enumerate() {
-                        let row_offset = index / result.cols;
-                        let col_offset = index % result.cols;
-                        let key = (row + row_offset as u32, col + col_offset as u32);
-                        if key == anchor {
-                            if let Some(cell) = worksheet.cells.get_mut(&key) {
-                                cell.value = value;
-                            }
-                        } else if let Some(cell) = worksheet.cells.get_mut(&key) {
-                            cell.value = value;
-                            cell.formula = None;
-                            worksheet.spill_owners.insert(key, anchor);
-                        } else {
-                            worksheet.cells.insert(
-                                key,
-                                excel_model::CellData {
-                                    value,
-                                    formula: None,
-                                    style_id: None,
-                                },
-                            );
-                            worksheet.spill_owners.insert(key, anchor);
-                        }
-                        worksheet.dirty_cells.insert(key);
-                    }
-                    worksheet.spill_ranges.insert(anchor, spill_rect);
                     worksheet.dirty = true;
+                    worksheet.dirty_cells.insert(anchor);
+                    continue;
+                }
+
+                for (index, value) in result.values.into_iter().enumerate() {
+                    let row_offset = index / result.cols;
+                    let col_offset = index % result.cols;
+                    let key = (row + row_offset as u32, col + col_offset as u32);
+                    if key == anchor {
+                        if let Some(cell) = worksheet.cells.get_mut(&key) {
+                            cell.value = value;
+                        }
+                    } else if let Some(cell) = worksheet.cells.get_mut(&key) {
+                        cell.value = value;
+                        cell.formula = None;
+                        worksheet.spill_owners.insert(key, anchor);
+                    } else {
+                        worksheet.cells.insert(
+                            key,
+                            excel_model::CellData {
+                                value,
+                                formula: None,
+                                style_id: None,
+                            },
+                        );
+                        worksheet.spill_owners.insert(key, anchor);
+                    }
+                    worksheet.dirty_cells.insert(key);
+                }
+                worksheet.spill_ranges.insert(anchor, spill_rect);
+                worksheet.dirty = true;
+            }
+        }
+
+        if !scalar_formula_cells.is_empty() {
+            let scalar_snapshot = self.runtime_workbook(workbook)?.loaded.state.clone();
+            let mut scalar_updates = Vec::with_capacity(scalar_formula_cells.len());
+            for (row, col) in scalar_formula_cells {
+                let mut evaluator = FormulaEvaluator::new(&scalar_snapshot);
+                if let Some(value) = evaluator.evaluate_formula_cell(sheet_id, row, col) {
+                    scalar_updates.push(((row, col), value));
+                }
+            }
+            let worksheet = self
+                .runtime_workbook_mut(workbook)?
+                .loaded
+                .state
+                .worksheet_data_for_sheet_mut(sheet_id)?;
+            for ((row, col), value) in scalar_updates {
+                if let Some(cell) = worksheet.cells.get_mut(&(row, col)) {
+                    cell.value = value;
                 }
             }
         }
