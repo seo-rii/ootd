@@ -22,12 +22,15 @@ Active order:
 4. `OOTD-004` complete (2026-07-27): read-only `Save` cannot overwrite its source;
    `SaveAs`/`SaveCopyAs` accept only create-new targets, with `SaveAs` detaching to a writable
    source and `SaveCopyAs` preserving read-only identity.
-5. **Active:** `OOTD-005`~`OOTD-006` make Save/SaveAs/SaveCopyAs/Close durable, atomic, and
-   transactional through `OOTD-045`.
-6. `OOTD-007`~`OOTD-009` persist formula caches and synchronize calculation metadata.
-7. Continue with fail-closed public/security contracts, QName/reference/parser invariants, then
+5. `OOTD-005` complete (2026-07-27): `Workbook.Close` now follows a 48-case headless state table;
+   explicit save requires a real target, prompt-required closes fail without invalidating the
+   workbook, and read-only close-save accepts only a create-new Filename.
+6. **Active:** `OOTD-006` makes Save/SaveAs/SaveCopyAs/Close durable, atomic, and transactional
+   through `OOTD-045`.
+7. `OOTD-007`~`OOTD-009` persist formula caches and synchronize calculation metadata.
+8. Continue with fail-closed public/security contracts, QName/reference/parser invariants, then
    cell/formula fidelity.
-8. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
+9. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
    claiming practical chart/pivot/style parity.
 
 Every numbered work unit starts with a failing regression and lands as its own reviewable commit.

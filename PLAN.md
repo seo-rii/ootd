@@ -71,7 +71,10 @@ calculation, chart/pivot preservation, Windows Excel Oracle, CI와 문서 구조
    overwrite하지 않는다. `SaveAs`/`SaveCopyAs`는 OS-level create-new로 새 filename만
    허용한다. `SaveCopyAs`는 read-only source identity를 유지하고, 성공한 `SaveAs`는 새
    writable source로 분리된다.
-5. `OOTD-005`: dirty/source/SaveChanges/Filename/DisplayAlerts close state table을 구현한다.
+5. `OOTD-005` — 완료 (2026-07-27): prompt-dirty/source/SaveChanges/Filename/
+   DisplayAlerts의 48개 조합을 상태표로 고정했다. 명시적 save는 실제 target이 있어야
+   닫히며, prompt callback이 없는 headless runtime은 alert가 활성화된 dirty close에서
+   stable 오류를 반환한다. read-only close-save는 create-new Filename만 허용한다.
 6. `OOTD-006` + `OOTD-045`: 모든 저장 API를
    `prepare → durable same-directory replace → commit snapshot` transaction으로 통합하고
    fault injection을 추가한다.

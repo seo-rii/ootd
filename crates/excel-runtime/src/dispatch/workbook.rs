@@ -399,8 +399,8 @@ impl ExcelRuntime {
                     ));
                 }
                 let save_changes = match args.first() {
-                    None | Some(OmValue::Missing | OmValue::Empty | OmValue::Null) => false,
-                    Some(OmValue::Bool(save_changes)) => *save_changes,
+                    None | Some(OmValue::Missing | OmValue::Empty | OmValue::Null) => None,
+                    Some(OmValue::Bool(save_changes)) => Some(*save_changes),
                     Some(_) => {
                         return Err(OmError::type_mismatch(
                             "Workbook.Close SaveChanges expects a boolean when provided",
@@ -425,10 +425,32 @@ impl ExcelRuntime {
                         ));
                     }
                 }
-                if save_changes {
-                    let filename_format = filename
-                        .as_ref()
-                        .and_then(|path| file_format_from_path(path));
+                let should_save = match save_changes {
+                    Some(save_changes) => save_changes,
+                    None => {
+                        if self.runtime_workbook(workbook)?.prompt_dirty && self.display_alerts {
+                            return Err(OmError::invalid_state(
+                                "Workbook.Close requires an explicit SaveChanges value because DisplayAlerts is enabled and no prompt callback is configured",
+                            ));
+                        }
+                        false
+                    }
+                };
+                if should_save {
+                    let runtime = self.runtime_workbook(workbook)?;
+                    let source_path = runtime.source_path.clone();
+                    let read_only = runtime.read_only;
+                    if read_only && filename.is_none() {
+                        return Err(OmError::invalid_state(
+                            "Workbook.Close cannot overwrite a read-only workbook; provide a new Filename",
+                        ));
+                    }
+                    let save_path = filename.clone().or(source_path).ok_or_else(|| {
+                        OmError::invalid_state(
+                            "Workbook.Close with SaveChanges=true requires a Filename or source path",
+                        )
+                    })?;
+                    let filename_format = file_format_from_path(&save_path);
                     let format = match filename_format {
                         Some(format) => format,
                         None => self.workbook_model(workbook)?.format,
@@ -441,16 +463,35 @@ impl ExcelRuntime {
                             lossless: true,
                         },
                     )?;
-                    let save_path = if let Some(path) = filename.as_ref() {
-                        Some(path.clone())
+                    if read_only {
+                        let write_result = fs::OpenOptions::new()
+                            .write(true)
+                            .create_new(true)
+                            .open(&save_path)
+                            .and_then(|mut file| file.write_all(&bytes));
+                        write_result.map_err(|error| {
+                            if error.kind() == std::io::ErrorKind::AlreadyExists {
+                                OmError::invalid_state(
+                                    "Workbook.Close for a read-only workbook requires a new Filename",
+                                )
+                            } else {
+                                OmError::new(
+                                    OmErrorCode::Io,
+                                    format!(
+                                        "failed to write read-only workbook {}: {error}",
+                                        save_path.display()
+                                    ),
+                                )
+                            }
+                        })?;
                     } else {
-                        self.runtime_workbook(workbook)?.source_path.clone()
-                    };
-                    if let Some(path) = save_path.as_ref() {
-                        fs::write(path, &bytes).map_err(|error| {
+                        fs::write(&save_path, &bytes).map_err(|error| {
                             OmError::new(
                                 OmErrorCode::Io,
-                                format!("failed to write workbook {}: {error}", path.display()),
+                                format!(
+                                    "failed to write workbook {}: {error}",
+                                    save_path.display()
+                                ),
                             )
                         })?;
                     }

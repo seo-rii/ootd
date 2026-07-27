@@ -34729,8 +34729,8 @@
                 .expect("Workbook.Saved after mutation")
         ));
         runtime
-            .dispatch_invoke(cloned_workbook, "Close", &[OmValue::Bool(true)])
-            .expect("Close cloned workbook");
+            .dispatch_invoke(cloned_workbook, "Close", &[OmValue::Bool(false)])
+            .expect("discard and close cloned workbook");
 
         let mut inspect_runtime = ExcelRuntime::new();
         let inspected_workbooks = expect_object_handle(
@@ -120699,6 +120699,411 @@
         ));
 
         fs::remove_dir_all(&base_dir).expect("cleanup Saved fixture");
+    }
+
+    #[test]
+    fn close_save_changes_without_target_fails_without_closing() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open pathless workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        runtime
+            .dispatch_set(
+                active_sheet,
+                "Name",
+                OmValue::Text("StillOpen".to_string()),
+                &[],
+            )
+            .expect("dirty pathless workbook");
+
+        let error = runtime
+            .dispatch_invoke(workbook.0, "Close", &[OmValue::Bool(true)])
+            .expect_err("Close(true) without a target must fail");
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert_eq!(
+            error.message,
+            "Workbook.Close with SaveChanges=true requires a Filename or source path"
+        );
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(workbook.0, "Name", &[])
+                    .expect("workbook remains open")
+            ),
+            "Workbook"
+        );
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("dirty state remains after rejected Close")
+        ));
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(active_sheet, "Name", &[])
+                    .expect("worksheet remains available")
+            ),
+            "StillOpen"
+        );
+    }
+
+    #[test]
+    fn workbook_close_headless_policy_covers_state_table() {
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        enum SaveChangesCase {
+            Omitted,
+            Save,
+            Discard,
+        }
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        let base_dir = std::env::temp_dir().join(format!("ootd-close-state-table-{unique}"));
+        fs::create_dir_all(&base_dir).expect("create Close state-table fixture dir");
+        let source_bytes = synthetic_workbook_bytes();
+        let mut case_index = 0_u32;
+
+        for dirty in [false, true] {
+            for has_source in [false, true] {
+                for save_changes in [
+                    SaveChangesCase::Omitted,
+                    SaveChangesCase::Save,
+                    SaveChangesCase::Discard,
+                ] {
+                    for has_filename in [false, true] {
+                        for display_alerts in [false, true] {
+                            case_index += 1;
+                            let mut runtime = ExcelRuntime::new();
+                            let application = runtime.root_application();
+                            runtime
+                                .dispatch_set(
+                                    application,
+                                    "DisplayAlerts",
+                                    OmValue::Bool(display_alerts),
+                                    &[],
+                                )
+                                .expect("set DisplayAlerts for Close state-table case");
+                            let source_path =
+                                base_dir.join(format!("source-{case_index}.xlsx"));
+                            let target_path =
+                                base_dir.join(format!("target-{case_index}.xlsx"));
+                            let workbook = if has_source {
+                                fs::write(&source_path, &source_bytes)
+                                    .expect("write Close state-table source");
+                                let workbooks = expect_object_handle(
+                                    runtime
+                                        .dispatch_get(application, "Workbooks", &[])
+                                        .expect("Workbooks"),
+                                );
+                                expect_object_handle(
+                                    runtime
+                                        .dispatch_invoke(
+                                            workbooks,
+                                            "Open",
+                                            &[OmValue::Text(
+                                                source_path.to_string_lossy().into_owned(),
+                                            )],
+                                        )
+                                        .expect("open Close state-table source"),
+                                )
+                            } else {
+                                runtime
+                                    .open_workbook(OpenWorkbookSpec {
+                                        bytes: source_bytes.clone(),
+                                        format_hint: Some(FileFormat::Xlsx),
+                                        profile: ExcelProfile::Excel365,
+                                        read_only: false,
+                                    })
+                                    .expect("open pathless Close state-table workbook")
+                                    .0
+                            };
+                            let active_sheet = expect_object_handle(
+                                runtime
+                                    .dispatch_get(application, "ActiveSheet", &[])
+                                    .expect("ActiveSheet for Close state-table case"),
+                            );
+                            let dirty_sheet_name = format!("Dirty{case_index}");
+                            if dirty {
+                                runtime
+                                    .dispatch_set(
+                                        active_sheet,
+                                        "Name",
+                                        OmValue::Text(dirty_sheet_name.clone()),
+                                        &[],
+                                    )
+                                    .expect("dirty Close state-table workbook");
+                            }
+
+                            let mut args = match save_changes {
+                                SaveChangesCase::Omitted => Vec::new(),
+                                SaveChangesCase::Save => vec![OmValue::Bool(true)],
+                                SaveChangesCase::Discard => vec![OmValue::Bool(false)],
+                            };
+                            if has_filename {
+                                if args.is_empty() {
+                                    args.push(OmValue::Missing);
+                                }
+                                args.push(OmValue::Text(
+                                    target_path.to_string_lossy().into_owned(),
+                                ));
+                            }
+
+                            let prompt_error = dirty
+                                && save_changes == SaveChangesCase::Omitted
+                                && display_alerts;
+                            let missing_target_error = save_changes == SaveChangesCase::Save
+                                && !has_filename
+                                && !has_source;
+                            let result = runtime.dispatch_invoke(workbook, "Close", &args);
+                            let case_description = format!(
+                                "dirty={dirty}, source={has_source}, SaveChanges={save_changes:?}, Filename={has_filename}, DisplayAlerts={display_alerts}"
+                            );
+
+                            if prompt_error {
+                                let error = match result {
+                                    Err(error) => error,
+                                    Ok(value) => panic!(
+                                        "prompt-required Close must fail: {case_description}; got {value:?}"
+                                    ),
+                                };
+                                assert_eq!(
+                                    error.code,
+                                    OmErrorCode::InvalidState,
+                                    "{case_description}"
+                                );
+                                assert_eq!(
+                                    error.message,
+                                    "Workbook.Close requires an explicit SaveChanges value because DisplayAlerts is enabled and no prompt callback is configured",
+                                    "{case_description}"
+                                );
+                            } else if missing_target_error {
+                                let error = match result {
+                                    Err(error) => error,
+                                    Ok(value) => panic!(
+                                        "targetless Close(true) must fail: {case_description}; got {value:?}"
+                                    ),
+                                };
+                                assert_eq!(
+                                    error.code,
+                                    OmErrorCode::InvalidState,
+                                    "{case_description}"
+                                );
+                                assert_eq!(
+                                    error.message,
+                                    "Workbook.Close with SaveChanges=true requires a Filename or source path",
+                                    "{case_description}"
+                                );
+                            } else {
+                                result.unwrap_or_else(|error| {
+                                    panic!(
+                                        "Close must succeed for {case_description}: {error:?}"
+                                    )
+                                });
+                            }
+
+                            if prompt_error || missing_target_error {
+                                assert!(
+                                    runtime.dispatch_get(workbook, "Name", &[]).is_ok(),
+                                    "failed Close must leave workbook open: {case_description}"
+                                );
+                                assert_eq!(
+                                    expect_bool(
+                                        runtime
+                                            .dispatch_get(workbook, "Saved", &[])
+                                            .expect("Saved after rejected Close")
+                                    ),
+                                    !dirty,
+                                    "{case_description}"
+                                );
+                            } else {
+                                assert_eq!(
+                                    runtime
+                                        .dispatch_get(workbook, "Name", &[])
+                                        .expect_err("successful Close invalidates workbook")
+                                        .code,
+                                    OmErrorCode::InvalidState,
+                                    "{case_description}"
+                                );
+                            }
+
+                            let saved_to_source = save_changes == SaveChangesCase::Save
+                                && !missing_target_error
+                                && !has_filename
+                                && has_source;
+                            let saved_to_filename = save_changes == SaveChangesCase::Save
+                                && !missing_target_error
+                                && has_filename;
+                            let expected_sheet_name = if dirty {
+                                dirty_sheet_name.as_str()
+                            } else {
+                                "Sheet1"
+                            };
+                            if has_source {
+                                if saved_to_source {
+                                    let reopened = ExcelRuntime::new()
+                                        .codec
+                                        .load(
+                                            &fs::read(&source_path)
+                                                .expect("read saved Close source"),
+                                            LoadOptions::default(),
+                                        )
+                                        .expect("reload saved Close source");
+                                    assert_eq!(
+                                        reopened.state.worksheets[0].name,
+                                        expected_sheet_name,
+                                        "{case_description}"
+                                    );
+                                } else {
+                                    assert_eq!(
+                                        fs::read(&source_path)
+                                            .expect("read unchanged Close source"),
+                                        source_bytes,
+                                        "{case_description}"
+                                    );
+                                }
+                            }
+                            if saved_to_filename {
+                                let reopened = ExcelRuntime::new()
+                                    .codec
+                                    .load(
+                                        &fs::read(&target_path)
+                                            .expect("read Close Filename target"),
+                                        LoadOptions::default(),
+                                    )
+                                    .expect("reload Close Filename target");
+                                assert_eq!(
+                                    reopened.state.worksheets[0].name,
+                                    expected_sheet_name,
+                                    "{case_description}"
+                                );
+                            } else {
+                                assert!(
+                                    !target_path.exists(),
+                                    "ignored Filename must not be written: {case_description}"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        fs::remove_dir_all(base_dir).expect("cleanup Close state-table fixture");
+    }
+
+    #[test]
+    fn read_only_close_save_changes_requires_new_filename() {
+        let mut runtime = ExcelRuntime::new();
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        let base_dir = std::env::temp_dir().join(format!("ootd-read-only-close-{unique}"));
+        fs::create_dir_all(&base_dir).expect("create read-only Close fixture dir");
+        let source_path = base_dir.join("source.xlsx");
+        let existing_path = base_dir.join("existing.xlsx");
+        let target_path = base_dir.join("target.xlsx");
+        let source_bytes = synthetic_workbook_bytes();
+        let existing_bytes = b"existing Close target must remain unchanged".to_vec();
+        fs::write(&source_path, &source_bytes).expect("write read-only Close source");
+        fs::write(&existing_path, &existing_bytes).expect("write existing Close target");
+
+        let workbooks = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "Workbooks", &[])
+                .expect("Workbooks"),
+        );
+        let workbook = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    workbooks,
+                    "Open",
+                    &[
+                        OmValue::Text(source_path.to_string_lossy().into_owned()),
+                        OmValue::Missing,
+                        OmValue::Bool(true),
+                    ],
+                )
+                .expect("open read-only Close source"),
+        );
+        let no_filename_error = runtime
+            .dispatch_invoke(workbook, "Close", &[OmValue::Bool(true)])
+            .expect_err("read-only Close(true) without Filename must fail");
+        assert_eq!(no_filename_error.code, OmErrorCode::InvalidState);
+        assert_eq!(
+            no_filename_error.message,
+            "Workbook.Close cannot overwrite a read-only workbook; provide a new Filename"
+        );
+        assert_eq!(
+            fs::read(&source_path).expect("read source after rejected read-only Close"),
+            source_bytes
+        );
+        assert!(runtime.dispatch_get(workbook, "Name", &[]).is_ok());
+
+        let existing_error = runtime
+            .dispatch_invoke(
+                workbook,
+                "Close",
+                &[
+                    OmValue::Bool(true),
+                    OmValue::Text(existing_path.to_string_lossy().into_owned()),
+                ],
+            )
+            .expect_err("read-only Close(true) must not replace an existing Filename");
+        assert_eq!(existing_error.code, OmErrorCode::InvalidState);
+        assert_eq!(
+            existing_error.message,
+            "Workbook.Close for a read-only workbook requires a new Filename"
+        );
+        assert_eq!(
+            fs::read(&existing_path).expect("read existing Close target"),
+            existing_bytes
+        );
+        assert!(runtime.dispatch_get(workbook, "Name", &[]).is_ok());
+
+        runtime
+            .dispatch_invoke(
+                workbook,
+                "Close",
+                &[
+                    OmValue::Bool(true),
+                    OmValue::Text(target_path.to_string_lossy().into_owned()),
+                ],
+            )
+            .expect("read-only Close(true) to new Filename");
+        assert_eq!(
+            runtime
+                .dispatch_get(workbook, "Name", &[])
+                .expect_err("successful read-only Close invalidates workbook")
+                .code,
+            OmErrorCode::InvalidState
+        );
+        assert_eq!(
+            fs::read(&source_path).expect("read original after read-only Close"),
+            source_bytes
+        );
+        let reopened = ExcelRuntime::new()
+            .codec
+            .load(
+                &fs::read(&target_path).expect("read read-only Close target"),
+                LoadOptions::default(),
+            )
+            .expect("reload read-only Close target");
+        assert_eq!(reopened.state.worksheets[0].name, "Sheet1");
+
+        fs::remove_dir_all(base_dir).expect("cleanup read-only Close fixture");
     }
 
     #[test]
