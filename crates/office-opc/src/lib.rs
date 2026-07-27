@@ -7,6 +7,29 @@ pub use zip::CompressionMethod;
 use zip::write::SimpleFileOptions;
 use zip::{ZipArchive, ZipWriter};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LoadLimits {
+    pub max_archive_bytes: u64,
+    pub max_entries: usize,
+    pub max_part_name_bytes: usize,
+    pub max_entry_uncompressed_bytes: u64,
+    pub max_total_uncompressed_bytes: u64,
+    pub max_compression_ratio: u64,
+}
+
+impl Default for LoadLimits {
+    fn default() -> Self {
+        Self {
+            max_archive_bytes: 128 * 1024 * 1024,
+            max_entries: 10_000,
+            max_part_name_bytes: 1_024,
+            max_entry_uncompressed_bytes: 64 * 1024 * 1024,
+            max_total_uncompressed_bytes: 256 * 1024 * 1024,
+            max_compression_ratio: 1_000,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpcPart {
     pub name: String,
@@ -26,9 +49,74 @@ impl OpcPackage {
     }
 
     pub fn from_bytes(bytes: &[u8]) -> OmResult<Self> {
+        Self::from_bytes_with_limits(bytes, LoadLimits::default())
+    }
+
+    pub fn from_bytes_with_limits(bytes: &[u8], limits: LoadLimits) -> OmResult<Self> {
+        let archive_bytes = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+        ensure_within_limit("archive bytes", archive_bytes, limits.max_archive_bytes)?;
+        let declared_entry_count = preflight_zip_entry_count(bytes)?;
+        ensure_within_limit(
+            "entry count",
+            declared_entry_count,
+            u64::try_from(limits.max_entries).unwrap_or(u64::MAX),
+        )?;
+
         let mut archive = ZipArchive::new(Cursor::new(bytes)).map_err(zip_error)?;
+        let indexed_entry_count = u64::try_from(archive.len()).unwrap_or(u64::MAX);
+        if indexed_entry_count != declared_entry_count {
+            return Err(OmError::parse(format!(
+                "OPC ZIP contains a duplicate ZIP entry name or inconsistent central directory: declared {declared_entry_count}, indexed {indexed_entry_count}"
+            )));
+        }
+        ensure_within_limit(
+            "entry count",
+            indexed_entry_count,
+            u64::try_from(limits.max_entries).unwrap_or(u64::MAX),
+        )?;
+
+        let mut declared_total = 0_u64;
+        for index in 0..archive.len() {
+            let file = archive.by_index(index).map_err(zip_error)?;
+            ensure_within_limit(
+                "part name bytes",
+                u64::try_from(file.name().len()).unwrap_or(u64::MAX),
+                u64::try_from(limits.max_part_name_bytes).unwrap_or(u64::MAX),
+            )?;
+            if file.is_dir() {
+                continue;
+            }
+
+            let uncompressed_bytes = file.size();
+            ensure_within_limit(
+                "entry uncompressed bytes",
+                uncompressed_bytes,
+                limits.max_entry_uncompressed_bytes,
+            )?;
+            declared_total = declared_total
+                .checked_add(uncompressed_bytes)
+                .ok_or_else(|| {
+                    resource_limit_error(
+                        "total uncompressed bytes",
+                        u64::MAX,
+                        limits.max_total_uncompressed_bytes,
+                    )
+                })?;
+            ensure_within_limit(
+                "total uncompressed bytes",
+                declared_total,
+                limits.max_total_uncompressed_bytes,
+            )?;
+            ensure_compression_ratio_within_limit(
+                uncompressed_bytes,
+                file.compressed_size(),
+                limits.max_compression_ratio,
+            )?;
+        }
+
         let mut parts = Vec::with_capacity(archive.len());
         let mut content_types_xml = None;
+        let mut actual_total = 0_u64;
 
         for index in 0..archive.len() {
             let mut file = archive.by_index(index).map_err(zip_error)?;
@@ -38,7 +126,36 @@ impl OpcPackage {
             let name = normalize_part_name(file.name())?;
             let compression = file.compression();
             let mut part_bytes = Vec::new();
-            file.read_to_end(&mut part_bytes).map_err(io_error)?;
+            let remaining_total = limits
+                .max_total_uncompressed_bytes
+                .saturating_sub(actual_total);
+            let read_limit = limits
+                .max_entry_uncompressed_bytes
+                .min(remaining_total)
+                .saturating_add(1);
+            file.by_ref()
+                .take(read_limit)
+                .read_to_end(&mut part_bytes)
+                .map_err(io_error)?;
+            ensure_within_limit(
+                "entry uncompressed bytes",
+                u64::try_from(part_bytes.len()).unwrap_or(u64::MAX),
+                limits.max_entry_uncompressed_bytes,
+            )?;
+            actual_total = actual_total
+                .checked_add(u64::try_from(part_bytes.len()).unwrap_or(u64::MAX))
+                .ok_or_else(|| {
+                    resource_limit_error(
+                        "total uncompressed bytes",
+                        u64::MAX,
+                        limits.max_total_uncompressed_bytes,
+                    )
+                })?;
+            ensure_within_limit(
+                "total uncompressed bytes",
+                actual_total,
+                limits.max_total_uncompressed_bytes,
+            )?;
             if name == "[Content_Types].xml" {
                 content_types_xml = Some(part_bytes.clone());
             }
@@ -122,6 +239,91 @@ impl OpcPackage {
         self.parts.retain(|part| part.name != normalized);
         self.parts.len() != original_len
     }
+}
+
+fn ensure_within_limit(label: &str, actual: u64, maximum: u64) -> OmResult<()> {
+    if actual > maximum {
+        return Err(resource_limit_error(label, actual, maximum));
+    }
+    Ok(())
+}
+
+fn ensure_compression_ratio_within_limit(
+    uncompressed_bytes: u64,
+    compressed_bytes: u64,
+    maximum_ratio: u64,
+) -> OmResult<()> {
+    if uncompressed_bytes == 0 {
+        return Ok(());
+    }
+    let allowed_uncompressed =
+        u128::from(compressed_bytes).saturating_mul(u128::from(maximum_ratio));
+    if compressed_bytes == 0 || u128::from(uncompressed_bytes) > allowed_uncompressed {
+        return Err(OmError::resource_limit(format!(
+            "OPC ZIP compression ratio limit exceeded: {uncompressed_bytes} uncompressed bytes, {compressed_bytes} compressed bytes, maximum ratio {maximum_ratio}:1"
+        )));
+    }
+    Ok(())
+}
+
+fn resource_limit_error(label: &str, actual: u64, maximum: u64) -> OmError {
+    OmError::resource_limit(format!(
+        "OPC ZIP {label} limit exceeded: {actual} > {maximum}"
+    ))
+}
+
+fn preflight_zip_entry_count(bytes: &[u8]) -> OmResult<u64> {
+    try_preflight_zip_entry_count(bytes).ok_or_else(|| {
+        OmError::parse("OPC ZIP end-of-central-directory entry count is missing or malformed")
+    })
+}
+
+fn try_preflight_zip_entry_count(bytes: &[u8]) -> Option<u64> {
+    const EOCD_SIGNATURE: [u8; 4] = [0x50, 0x4b, 0x05, 0x06];
+    const ZIP64_EOCD_SIGNATURE: [u8; 4] = [0x50, 0x4b, 0x06, 0x06];
+    const ZIP64_LOCATOR_SIGNATURE: [u8; 4] = [0x50, 0x4b, 0x06, 0x07];
+    const EOCD_BYTES: usize = 22;
+    const MAX_COMMENT_BYTES: usize = u16::MAX as usize;
+
+    if bytes.len() < EOCD_BYTES {
+        return None;
+    }
+    let search_start = bytes.len().saturating_sub(EOCD_BYTES + MAX_COMMENT_BYTES);
+    let latest_start = bytes.len() - EOCD_BYTES;
+    for offset in (search_start..=latest_start).rev() {
+        if bytes.get(offset..offset.checked_add(4)?)? != EOCD_SIGNATURE {
+            continue;
+        }
+        let comment_bytes = read_u16_le(bytes, offset + 20)? as usize;
+        if offset.checked_add(EOCD_BYTES)?.checked_add(comment_bytes)? != bytes.len() {
+            continue;
+        }
+        let entries = read_u16_le(bytes, offset + 10)?;
+        if entries != u16::MAX {
+            return Some(u64::from(entries));
+        }
+
+        let locator_offset = offset.checked_sub(20)?;
+        if bytes.get(locator_offset..locator_offset.checked_add(4)?)? != ZIP64_LOCATOR_SIGNATURE {
+            return None;
+        }
+        let zip64_offset = usize::try_from(read_u64_le(bytes, locator_offset + 8)?).ok()?;
+        if bytes.get(zip64_offset..zip64_offset.checked_add(4)?)? != ZIP64_EOCD_SIGNATURE {
+            return None;
+        }
+        return read_u64_le(bytes, zip64_offset + 32);
+    }
+    None
+}
+
+fn read_u16_le(bytes: &[u8], offset: usize) -> Option<u16> {
+    let end = offset.checked_add(2)?;
+    Some(u16::from_le_bytes(bytes.get(offset..end)?.try_into().ok()?))
+}
+
+fn read_u64_le(bytes: &[u8], offset: usize) -> Option<u64> {
+    let end = offset.checked_add(8)?;
+    Some(u64::from_le_bytes(bytes.get(offset..end)?.try_into().ok()?))
 }
 
 #[derive(Debug, Default)]
@@ -230,7 +432,7 @@ fn xml_error(error: impl std::fmt::Display) -> OmError {
 
 #[cfg(test)]
 mod tests {
-    use super::{CompressionMethod, OpcPackage, OpcPart};
+    use super::{CompressionMethod, LoadLimits, OpcPackage, OpcPart};
     use office_common::OmErrorCode;
     use std::io::{Cursor, Write};
     use zip::ZipWriter;
@@ -662,5 +864,157 @@ mod tests {
         let error = OpcPackage::from_bytes(&bytes).expect_err("malformed manifest should fail");
 
         assert_eq!(error.code, OmErrorCode::Parse);
+    }
+
+    #[test]
+    fn bounded_load_rejects_archive_bytes_over_limit() {
+        let bytes = zip_bytes(&[("xl/workbook.xml", CompressionMethod::Stored, b"<workbook/>")]);
+        let limits = LoadLimits {
+            max_archive_bytes: bytes.len() as u64 - 1,
+            ..LoadLimits::default()
+        };
+
+        let error = OpcPackage::from_bytes_with_limits(&bytes, limits)
+            .expect_err("oversized archive should fail");
+
+        assert_eq!(error.code, OmErrorCode::ResourceLimit);
+        assert!(error.message.contains("archive bytes"));
+    }
+
+    #[test]
+    fn bounded_load_rejects_entry_count_over_limit() {
+        let bytes = zip_bytes(&[
+            ("xl/workbook.xml", CompressionMethod::Stored, b"<workbook/>"),
+            (
+                "xl/worksheets/sheet1.xml",
+                CompressionMethod::Stored,
+                b"<worksheet/>",
+            ),
+        ]);
+        let limits = LoadLimits {
+            max_entries: 1,
+            ..LoadLimits::default()
+        };
+
+        let error = OpcPackage::from_bytes_with_limits(&bytes, limits)
+            .expect_err("entry flood should fail");
+
+        assert_eq!(error.code, OmErrorCode::ResourceLimit);
+        assert!(error.message.contains("entry count"));
+    }
+
+    #[test]
+    fn bounded_load_rejects_part_name_over_limit() {
+        let bytes = zip_bytes(&[("xl/workbook.xml", CompressionMethod::Stored, b"<workbook/>")]);
+        let limits = LoadLimits {
+            max_part_name_bytes: 8,
+            ..LoadLimits::default()
+        };
+
+        let error = OpcPackage::from_bytes_with_limits(&bytes, limits)
+            .expect_err("long part name should fail");
+
+        assert_eq!(error.code, OmErrorCode::ResourceLimit);
+        assert!(error.message.contains("part name bytes"));
+    }
+
+    #[test]
+    fn bounded_load_rejects_single_and_total_uncompressed_bytes_over_limit() {
+        let bytes = zip_bytes(&[
+            ("one.bin", CompressionMethod::Stored, b"12345"),
+            ("two.bin", CompressionMethod::Stored, b"67890"),
+        ]);
+        let entry_error = OpcPackage::from_bytes_with_limits(
+            &bytes,
+            LoadLimits {
+                max_entry_uncompressed_bytes: 4,
+                ..LoadLimits::default()
+            },
+        )
+        .expect_err("oversized entry should fail");
+        let total_error = OpcPackage::from_bytes_with_limits(
+            &bytes,
+            LoadLimits {
+                max_total_uncompressed_bytes: 9,
+                ..LoadLimits::default()
+            },
+        )
+        .expect_err("oversized total should fail");
+
+        assert_eq!(entry_error.code, OmErrorCode::ResourceLimit);
+        assert!(entry_error.message.contains("entry uncompressed bytes"));
+        assert_eq!(total_error.code, OmErrorCode::ResourceLimit);
+        assert!(total_error.message.contains("total uncompressed bytes"));
+    }
+
+    #[test]
+    fn bounded_load_rejects_compression_ratio_over_limit() {
+        let repeated = vec![0_u8; 16 * 1024];
+        let bytes = zip_bytes(&[(
+            "xl/worksheets/sheet1.xml",
+            CompressionMethod::Deflated,
+            repeated.as_slice(),
+        )]);
+        let limits = LoadLimits {
+            max_compression_ratio: 2,
+            ..LoadLimits::default()
+        };
+
+        let error = OpcPackage::from_bytes_with_limits(&bytes, limits)
+            .expect_err("compression bomb should fail");
+
+        assert_eq!(error.code, OmErrorCode::ResourceLimit);
+        assert!(error.message.contains("compression ratio"));
+    }
+
+    #[test]
+    fn bounded_load_accepts_values_exactly_at_each_limit() {
+        let bytes = zip_bytes(&[("one.bin", CompressionMethod::Stored, b"12345")]);
+        let limits = LoadLimits {
+            max_archive_bytes: bytes.len() as u64,
+            max_entries: 1,
+            max_part_name_bytes: "one.bin".len(),
+            max_entry_uncompressed_bytes: 5,
+            max_total_uncompressed_bytes: 5,
+            max_compression_ratio: 1,
+        };
+
+        let package = OpcPackage::from_bytes_with_limits(&bytes, limits)
+            .expect("exact limits should be accepted");
+
+        assert_eq!(package.parts().len(), 1);
+        assert_eq!(package.parts()[0].bytes, b"12345");
+    }
+
+    #[test]
+    fn bounded_load_rejects_duplicate_raw_zip_entry_names() {
+        let mut bytes = zip_bytes(&[
+            ("one.bin", CompressionMethod::Stored, b"one"),
+            ("two.bin", CompressionMethod::Stored, b"two"),
+        ]);
+        for offset in 0..=bytes.len() - b"two.bin".len() {
+            if bytes[offset..].starts_with(b"two.bin") {
+                bytes[offset..offset + b"two.bin".len()].copy_from_slice(b"one.bin");
+            }
+        }
+
+        let error = OpcPackage::from_bytes(&bytes).expect_err("duplicate names should fail");
+
+        assert_eq!(error.code, OmErrorCode::Parse);
+        assert!(error.message.contains("duplicate ZIP entry name"));
+    }
+
+    fn zip_bytes(entries: &[(&str, CompressionMethod, &[u8])]) -> Vec<u8> {
+        let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+        for (name, compression, bytes) in entries {
+            writer
+                .start_file(
+                    *name,
+                    SimpleFileOptions::default().compression_method(*compression),
+                )
+                .expect("start ZIP entry");
+            writer.write_all(bytes).expect("write ZIP entry");
+        }
+        writer.finish().expect("finish ZIP").into_inner()
     }
 }

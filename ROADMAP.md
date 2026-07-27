@@ -96,10 +96,18 @@ Exit criteria:
 
 ### M3 — CI And Untrusted Input Safety
 
-Status: pending; independent slices may run alongside M1 and M2.
+Status: in progress; independent slices may run alongside M1 and M2.
+
+Completed slices:
+
+- Added finite default OPC ZIP budgets for archive bytes, central-directory entry count, part-name
+  bytes, per-entry and total decompressed bytes, and compression ratio.
+- Added an explicit `from_bytes_with_limits` override path and structured `ResourceLimit` errors;
+  the default `from_bytes` path is bounded and preflights EOCD/ZIP64 entry counts before opening the
+  central directory.
 
 - Enforce formatting, strict Clippy, MSRV, Linux stable, and Windows portability jobs.
-- Add bounded ZIP loading and canonical OPC part/relationship identity.
+- Add canonical OPC part/relationship identity and duplicate rejection.
 - Apply shared XML depth, event, text, attribute, and collection budgets.
 - Add dependency/license policy, property tests, scheduled fuzzing, and benchmark trends.
 

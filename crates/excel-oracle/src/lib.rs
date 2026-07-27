@@ -348,6 +348,7 @@ pub enum CanonicalErrorKind {
     InvalidState,
     Io,
     Parse,
+    ResourceLimit,
     Calculation,
     External,
     ApplicationDefined,

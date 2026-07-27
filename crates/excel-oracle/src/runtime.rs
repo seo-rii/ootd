@@ -311,6 +311,7 @@ fn observe_om_error(error: OmError) -> ObservedError {
         OmErrorCode::InvalidState => CanonicalErrorKind::InvalidState,
         OmErrorCode::Io => CanonicalErrorKind::Io,
         OmErrorCode::Parse => CanonicalErrorKind::Parse,
+        OmErrorCode::ResourceLimit => CanonicalErrorKind::ResourceLimit,
         OmErrorCode::Calculation => CanonicalErrorKind::Calculation,
         OmErrorCode::External => CanonicalErrorKind::External,
     };
@@ -322,6 +323,7 @@ fn observe_om_error(error: OmError) -> ObservedError {
         OmErrorCode::InvalidState => "invalidState",
         OmErrorCode::Io => "io",
         OmErrorCode::Parse => "parse",
+        OmErrorCode::ResourceLimit => "resourceLimit",
         OmErrorCode::Calculation => "calculation",
         OmErrorCode::External => "external",
     };

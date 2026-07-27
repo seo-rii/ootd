@@ -23,6 +23,7 @@ pub enum OmErrorCode {
     InvalidState,
     Io,
     Parse,
+    ResourceLimit,
     Calculation,
     External,
 }
@@ -55,6 +56,10 @@ impl OmError {
 
     pub fn parse(message: impl Into<String>) -> Self {
         Self::new(OmErrorCode::Parse, message)
+    }
+
+    pub fn resource_limit(message: impl Into<String>) -> Self {
+        Self::new(OmErrorCode::ResourceLimit, message)
     }
 
     pub fn unsupported(message: impl Into<String>) -> Self {
