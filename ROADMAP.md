@@ -30,11 +30,13 @@ Active order:
    parent-directory sync before runtime commit; host-writer commit is success-gated too.
 7. `OOTD-007` complete (2026-07-27): changed scalar formula results now mark their formula cells
    serialization-dirty, and Calculate → Save → reopen persists both formula text and cached value.
-8. **Active:** `OOTD-008`/`OOTD-009` report partial calculation and synchronize calculation
-   metadata.
-9. Continue with fail-closed public/security contracts, QName/reference/parser invariants, then
+8. `OOTD-008` complete (2026-07-27): a public typed report classifies evaluated, unsupported,
+   external, circular, volatile, and Excel-error formula cells by address while preserving
+   unresolved cached values.
+9. **Active:** `OOTD-009` synchronizes partial calculation with `calcPr` and calc-chain metadata.
+10. Continue with fail-closed public/security contracts, QName/reference/parser invariants, then
    cell/formula fidelity.
-10. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
+11. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
    claiming practical chart/pivot/style parity.
 
 Every numbered work unit starts with a failing regression and lands as its own reviewable commit.

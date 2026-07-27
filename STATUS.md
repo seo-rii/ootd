@@ -26,7 +26,7 @@ contract-based until Milestone M1 pins the first behavioral Excel corpus.
 | Workbook and worksheet model | Partial | Workbook, sheet, cell, name, chart, drawing, and basic dynamic-array state are modeled | Oracle-backed mutation and save/reopen cases |
 | XLSX load/save | Partial | No-op and targeted dirty-save preservation have broad synthetic regression coverage; filesystem saves use verified preparation, same-directory durable temporary files, atomic replace/create-new, and post-write baseline commit; read-only Save cannot overwrite its source | Tracked real-world corpus and Excel reopen without repair |
 | Runtime object model | Partial | Application, workbook, worksheet, range, names, selection, clipboard, and chart-related dispatch are available; `Workbook.Saved` uses prompt-only state, pathless `Workbook.Save` fails closed, and `Workbook.Close` has a deterministic headless save/discard/prompt state table | Complete dirty-domain taxonomy, generated member coverage, and behavioral Oracle cases |
-| Scalar formula calculation | Partial | Broad deterministic function coverage exists behind an internal `calc` module, including Evaluate and Calculate paths; changed recalculation results are serialized as formula cached values, while unsupported/partial calculation reporting is not yet modeled | Structured partial-calculation report, shared coercion/reference model, calc metadata synchronization, and Excel differential corpus |
+| Scalar formula calculation | Partial | Broad deterministic function coverage exists behind an internal `calc` module; changed results are serialized as cached values, and a public report classifies evaluated, unsupported, external, circular, volatile, and Excel-error cells by address without overwriting unresolved caches | Shared coercion/reference model, calc metadata synchronization, and Excel differential corpus |
 | Formula2 and dynamic arrays | Partial | Seventeen array functions produce two-dimensional spill results; model value, A1/R1C1 formula families, and `ClearContents` commands reject spill-child batches atomically; worksheet array formula metadata restores and writes spill state across synthetic save/reopen; A1 `anchor#` resolves a materialized extent, and scalar dependents recalculate after dynamic materialization | Remaining runtime mutation paths, `@`, dynamic-to-dynamic dependency order/cycles, Excel-specific dynamic-array extension metadata, and Oracle agreement |
 | Charts and drawings | Partial | Typed chart mutation and lossless-first relationship graph lifecycle cover a broad surface | Remain feature-frozen until PivotChart work; fix preservation regressions only |
 | Styles and themes | Preserve-only | Raw bytes and typed summaries are retained; general typed style allocation and mutation are incomplete | Corpus preservation before broader typed editing |
@@ -37,7 +37,7 @@ contract-based until Milestone M1 pins the first behavioral Excel corpus.
 
 - Rust MSRV: 1.88; development toolchain: 1.94.0.
 - Linux workspace tests: enabled in CI.
-- Current root test inventory: 705 `excel-runtime` tests and 2,838 `excel-xlsx` tests.
+- Current root test inventory: 706 `excel-runtime` tests and 2,838 `excel-xlsx` tests.
 - M2 boundary progress: the `excel-xlsx` and `excel-runtime` unit tests now live outside their
   library roots with test identities unchanged; calculation and recalculation/writeback are
   isolated; shared strings, relationships, and worksheet cell codec logic are isolated; Application,
@@ -81,6 +81,10 @@ contract-based until Milestone M1 pins the first behavioral Excel corpus.
   cache and marks changed formula cells and their worksheet serialization-dirty without changing
   the prompt-facing `Workbook.Saved` state. A precedent-change → Calculate → Save → reopen
   regression verifies the new cached value and original formula text together.
+- Calculation diagnostics: `calculate_workbook_with_report` returns deterministic one-based cell
+  addresses for evaluated, unsupported, external-workbook, circular, volatile, and Excel-error
+  outcomes. Unsupported and external formulas retain their previous cached values; volatile is an
+  overlapping annotation, and unresolved categories make the report incomplete.
 - M5 pivot preservation: the codec inventories seven known pivot package kinds plus their internal
   opaque closure, incoming/shared and outgoing/external relationships, content types, compression,
   and raw bytes. Save-time gates protect clean and unrelated-cell edits and reject drift or dangling

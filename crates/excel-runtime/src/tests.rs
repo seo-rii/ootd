@@ -1,11 +1,12 @@
     use super::{
-        APPLICATION_NAME, APPLICATION_VERSION, ChartObjectsParent, ExcelRuntime, RangeProjection,
-        RuntimeObjectKind, XL_4_DIGIT_YEARS, XL_24_HOUR_CLOCK, XL_A1, XL_CALCULATION_AUTOMATIC,
-        XL_CALCULATION_MANUAL, XL_CALCULATION_SEMIAUTOMATIC, XL_COLUMN_SEPARATOR, XL_COUNTRY_CODE,
-        XL_CURRENCY_CODE, XL_CURRENCY_DIGITS, XL_DATE_SEPARATOR, XL_DECIMAL_SEPARATOR,
-        XL_LIST_SEPARATOR, XL_R1C1, XL_ROW_SEPARATOR, XL_THOUSANDS_SEPARATOR, XL_TIME_SEPARATOR,
-        XL_UPPER_CASE_COLUMN_LETTER, XL_UPPER_CASE_ROW_LETTER, blank_workbook_bytes,
-        formula_complex_from_text, supports_format, worksheet_relationships_part_uri_for,
+        APPLICATION_NAME, APPLICATION_VERSION, CalculationCell, CalculationCellError,
+        ChartObjectsParent, ExcelRuntime, RangeProjection, RuntimeObjectKind, XL_4_DIGIT_YEARS,
+        XL_24_HOUR_CLOCK, XL_A1, XL_CALCULATION_AUTOMATIC, XL_CALCULATION_MANUAL,
+        XL_CALCULATION_SEMIAUTOMATIC, XL_COLUMN_SEPARATOR, XL_COUNTRY_CODE, XL_CURRENCY_CODE,
+        XL_CURRENCY_DIGITS, XL_DATE_SEPARATOR, XL_DECIMAL_SEPARATOR, XL_LIST_SEPARATOR, XL_R1C1,
+        XL_ROW_SEPARATOR, XL_THOUSANDS_SEPARATOR, XL_TIME_SEPARATOR, XL_UPPER_CASE_COLUMN_LETTER,
+        XL_UPPER_CASE_ROW_LETTER, blank_workbook_bytes, formula_complex_from_text, supports_format,
+        worksheet_relationships_part_uri_for,
     };
     use excel_model::{ChartDataLabelPosition, ChartSheetBinding, ChartType, DrawingObjectModel};
     use std::fs;
@@ -5589,6 +5590,130 @@
         );
 
         fs::remove_dir_all(base_dir).expect("cleanup formula cache fixture");
+    }
+
+    #[test]
+    fn calculation_report_classifies_formula_outcomes_by_cell() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: blank_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open calculation report workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("A2:H2".to_string())],
+                )
+                .expect("Range(A2:H2)"),
+        );
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        1,
+                        8,
+                        vec![
+                            OmValue::Text("=1+1".to_string()),
+                            OmValue::Text("=UNSUPPORTED.FUNCTION(1)".to_string()),
+                            OmValue::Text("='[Other.xlsx]Sheet1'!A1".to_string()),
+                            OmValue::Text("=E2+1".to_string()),
+                            OmValue::Text("=D2+1".to_string()),
+                            OmValue::Text("=RAND()".to_string()),
+                            OmValue::Text("=1/0".to_string()),
+                            OmValue::Text("=H2".to_string()),
+                        ],
+                    )
+                    .expect("calculation report formulas"),
+                ),
+                &[],
+            )
+            .expect("set calculation report formulas");
+        let sheet_id = runtime
+            .runtime_workbook(workbook)
+            .expect("calculation report runtime workbook")
+            .loaded
+            .state
+            .worksheets[0]
+            .id;
+        {
+            let worksheet = runtime
+                .runtime_workbook_mut(workbook)
+                .expect("calculation report runtime workbook")
+                .loaded
+                .state
+                .worksheet_data_for_sheet_mut(sheet_id)
+                .expect("calculation report worksheet");
+            worksheet
+                .cells
+                .get_mut(&(2, 2))
+                .expect("unsupported formula cell")
+                .value = CellValue::Number(77.0);
+            worksheet
+                .cells
+                .get_mut(&(2, 3))
+                .expect("external formula cell")
+                .value = CellValue::Number(88.0);
+            worksheet.dynamic_array_formulas.insert((2, 8));
+        }
+        let cell = |column| CalculationCell {
+            sheet_id,
+            row: 2,
+            column,
+        };
+
+        let report = runtime
+            .calculate_workbook_with_report(workbook)
+            .expect("calculate workbook with report");
+
+        assert_eq!(report.evaluated, vec![cell(1), cell(6)]);
+        assert_eq!(report.unsupported, vec![cell(2)]);
+        assert_eq!(report.external, vec![cell(3)]);
+        assert_eq!(report.circular, vec![cell(4), cell(5), cell(8)]);
+        assert_eq!(report.volatile, vec![cell(6)]);
+        assert_eq!(
+            report.errors,
+            vec![CalculationCellError {
+                cell: cell(7),
+                error: CellError::Div0,
+            }]
+        );
+        assert!(!report.is_complete());
+        let worksheet = runtime
+            .runtime_workbook(workbook)
+            .expect("calculated report runtime workbook")
+            .loaded
+            .state
+            .worksheet_data_for_sheet(sheet_id)
+            .expect("calculated report worksheet");
+        assert_eq!(
+            worksheet.cells.get(&(2, 2)).expect("unsupported cell").value,
+            CellValue::Number(77.0)
+        );
+        assert_eq!(
+            worksheet.cells.get(&(2, 3)).expect("external cell").value,
+            CellValue::Number(88.0)
+        );
+        assert_eq!(
+            worksheet
+                .cells
+                .get(&(2, 8))
+                .expect("dynamic circular cell")
+                .value,
+            CellValue::Error(CellError::Calc)
+        );
     }
 
     #[test]

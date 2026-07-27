@@ -16,6 +16,7 @@ static FORMULA_RANDOM_STATE: std::sync::atomic::AtomicU64 = std::sync::atomic::A
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum FormulaEvalError {
     Unsupported,
+    Circular,
     Null,
     Div0,
     Value,
@@ -56,6 +57,7 @@ impl FormulaEvalError {
     pub(super) fn into_cell_value(self) -> Option<CellValue> {
         match self {
             FormulaEvalError::Unsupported => None,
+            FormulaEvalError::Circular => Some(CellValue::Error(CellError::Calc)),
             FormulaEvalError::Null => Some(CellValue::Error(CellError::Null)),
             FormulaEvalError::Div0 => Some(CellValue::Error(CellError::Div0)),
             FormulaEvalError::Value => Some(CellValue::Error(CellError::Value)),
@@ -5587,6 +5589,7 @@ pub(super) fn worksheet_function_formula_name(member: &str) -> OmResult<String> 
 fn formula_eval_error_text(error: FormulaEvalError) -> &'static str {
     match error {
         FormulaEvalError::Unsupported => "#VALUE!",
+        FormulaEvalError::Circular => "#CALC!",
         FormulaEvalError::Null => "#NULL!",
         FormulaEvalError::Div0 => "#DIV/0!",
         FormulaEvalError::Value => "#VALUE!",
@@ -9117,28 +9120,36 @@ impl<'a> FormulaEvaluator<'a> {
         row: u32,
         col: u32,
     ) -> Option<CellValue> {
-        match self.evaluate_cell(sheet_id, row, col) {
+        match self.evaluate_formula_cell_result(sheet_id, row, col) {
             Ok(value) => Some(value),
             Err(error) => error.into_cell_value(),
         }
     }
 
-    pub(super) fn evaluate_dynamic_array_formula_cell(
+    pub(super) fn evaluate_formula_cell_result(
         &mut self,
         sheet_id: SheetId,
         row: u32,
         col: u32,
-    ) -> Option<FormulaArrayResult> {
+    ) -> Result<CellValue, FormulaEvalError> {
+        self.evaluate_cell(sheet_id, row, col)
+    }
+
+    pub(super) fn evaluate_dynamic_array_formula_cell_result(
+        &mut self,
+        sheet_id: SheetId,
+        row: u32,
+        col: u32,
+    ) -> Result<FormulaArrayResult, FormulaEvalError> {
         let formula = self
             .state
             .worksheet_data
             .get(&sheet_id)
             .and_then(|worksheet| worksheet.cells.get(&(row, col)))
-            .and_then(|cell| cell.formula.as_ref())?;
+            .and_then(|cell| cell.formula.as_ref())
+            .ok_or(FormulaEvalError::Unsupported)?;
         if !self.visiting.insert((sheet_id, row, col)) {
-            return Some(FormulaArrayResult::single(CellValue::Error(
-                CellError::Calc,
-            )));
+            return Err(FormulaEvalError::Circular);
         }
         let formula_text = if formula.is_r1c1 {
             convert_formula_r1c1_to_a1(&formula.text, row, col)
@@ -9150,21 +9161,25 @@ impl<'a> FormulaEvaluator<'a> {
             parser.parse_dynamic_array_formula()
         };
         let result = match result {
-            Ok(result) => Some(result),
-            Err(FormulaEvalError::Unsupported) => self
-                .evaluate_formula_text(sheet_id, &formula_text, Some((row, col)))
-                .map(FormulaArrayResult::single)
-                .ok()
-                .or_else(|| {
-                    let mut parser =
-                        FormulaParser::new(&formula_text, self, sheet_id, Some((row, col)));
-                    parser
-                        .parse_value_probe_formula()
-                        .ok()
-                        .and_then(formula_cell_value_from_probe)
-                        .map(FormulaArrayResult::single)
-                }),
-            Err(error) => error.into_cell_value().map(FormulaArrayResult::single),
+            Ok(result) => Ok(result),
+            Err(FormulaEvalError::Unsupported) => {
+                match self.evaluate_formula_text(sheet_id, &formula_text, Some((row, col))) {
+                    Ok(value) => Ok(FormulaArrayResult::single(value)),
+                    Err(FormulaEvalError::Unsupported) => {
+                        let mut parser =
+                            FormulaParser::new(&formula_text, self, sheet_id, Some((row, col)));
+                        parser
+                            .parse_value_probe_formula()
+                            .and_then(|probe| {
+                                formula_cell_value_from_probe(probe)
+                                    .ok_or(FormulaEvalError::Unsupported)
+                            })
+                            .map(FormulaArrayResult::single)
+                    }
+                    Err(error) => Err(error),
+                }
+            }
+            Err(error) => Err(error),
         };
         self.visiting.remove(&(sheet_id, row, col));
         result
@@ -9188,7 +9203,7 @@ impl<'a> FormulaEvaluator<'a> {
             return Ok(cell.value.clone());
         };
         if !self.visiting.insert((sheet_id, row, col)) {
-            return Err(FormulaEvalError::Calc);
+            return Err(FormulaEvalError::Circular);
         }
         let formula_text = if formula.is_r1c1 {
             convert_formula_r1c1_to_a1(&formula.text, row, col)
@@ -17603,7 +17618,7 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             FormulaEvalError::Field => Ok(10.0),
             FormulaEvalError::Blocked => Ok(11.0),
             FormulaEvalError::Unknown => Ok(12.0),
-            FormulaEvalError::Calc => Ok(14.0),
+            FormulaEvalError::Calc | FormulaEvalError::Circular => Ok(14.0),
             FormulaEvalError::Busy
             | FormulaEvalError::Connect
             | FormulaEvalError::Python

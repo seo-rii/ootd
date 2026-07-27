@@ -83,8 +83,11 @@ calculation, chart/pivot preservation, Windows Excel Oracle, CI와 문서 구조
 7. `OOTD-007` — 완료 (2026-07-27): scalar formula 재계산 결과가 기존 cache와 다를 때
    formula cell과 worksheet를 serialization dirty로 기록한다. precedent 변경 → Calculate →
    Save → reopen 회귀로 formula text와 새 cached `<v>`가 함께 보존됨을 고정했다.
-8. **진행 중 — `OOTD-008` + `OOTD-009`**: structured `CalculationReport`,
-   partial-calculation state와
+8. `OOTD-008` — 완료 (2026-07-27): public `CalculationReport`가 formula cell을
+   evaluated/unsupported/external/circular/volatile/error로 주소별 분류한다. unsupported와
+   external formula는 stale cache를 덮어쓰지 않으며, circular는 기존 `#CALC!` 결과와 별도
+   진단을 함께 제공한다.
+9. **진행 중 — `OOTD-009`**: report의 partial-calculation state와
    `calcPr`/calc-chain lifecycle을 연결한다.
 
 Wave 1 exit gate:

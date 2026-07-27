@@ -3,6 +3,8 @@ mod dispatch;
 mod persistence;
 mod recalculation;
 
+pub use recalculation::{CalculationCell, CalculationCellError, CalculationReport};
+
 use calc::{
     FormulaArrayResult, FormulaEvaluator, convert_formula_a1_to_r1c1,
     convert_formula_r1c1_to_a1, format_external_address_qualifier, format_formula_string_literal,
