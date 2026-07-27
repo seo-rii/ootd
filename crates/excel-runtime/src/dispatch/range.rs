@@ -7,8 +7,8 @@ use super::super::{
     render_range_text_value,
 };
 use office_common::{
-    CellValue, FormulaSource, GetRangeValuesSpec, OmArray, OmError, OmErrorCode, OmResult, OmValue,
-    RangeArea, RangeSet, Rect, SetRangeValuesSpec, SheetId, SheetScope, WorkbookHandle,
+    GetRangeValuesSpec, OmArray, OmError, OmErrorCode, OmResult, OmValue, RangeArea, RangeSet,
+    Rect, SetRangeValuesSpec, SheetId, SheetScope, WorkbookHandle,
 };
 
 impl ExcelRuntime {
@@ -794,95 +794,15 @@ impl ExcelRuntime {
                     member,
                     "FormulaR1C1" | "Formula2R1C1" | "FormulaR1C1Local" | "Formula2R1C1Local"
                 ) {
-                    if values.rows != rect.height() as usize || values.cols != rect.width() as usize
-                    {
-                        return Err(OmError::invalid_argument(format!(
-                            "range dimensions {}x{} do not match formula matrix {}x{}",
-                            rect.height(),
-                            rect.width(),
-                            values.rows,
-                            values.cols,
-                        )));
-                    }
-
-                    let mut updates = Vec::with_capacity(values.values.len());
-                    for row_offset in 0..values.rows {
-                        for col_offset in 0..values.cols {
-                            let row = rect.row_first + row_offset as u32;
-                            let col = rect.col_first + col_offset as u32;
-                            let value =
-                                values.values[row_offset * values.cols + col_offset].clone();
-                            let (cell_value, formula) = match value {
-                                OmValue::Text(text) => {
-                                    if let Some(formula_text) = text.strip_prefix('=') {
-                                        (
-                                            CellValue::Blank,
-                                            Some(FormulaSource {
-                                                text: formula_text.to_string(),
-                                                is_r1c1: true,
-                                            }),
-                                        )
-                                    } else {
-                                        (CellValue::Text(text), None)
-                                    }
-                                }
-                                other => (CellValue::try_from(other)?, None),
-                            };
-                            updates.push(((row, col), cell_value, formula));
-                        }
-                    }
-
-                    let runtime = self.runtime_workbook_mut(workbook)?;
-                    if runtime.read_only {
-                        return Err(OmError::new(
-                            OmErrorCode::InvalidState,
-                            "cannot modify a read-only workbook",
-                        ));
-                    }
-                    let worksheet = runtime
-                        .loaded
-                        .state
-                        .worksheet_data_for_sheet_mut(sheet_id)?;
-                    for (key, cell_value, formula) in updates {
-                        let is_dynamic_formula =
-                            matches!(member, "Formula2R1C1" | "Formula2R1C1Local")
-                                && formula.is_some();
-                        let unchanged = worksheet.cells.get(&key).is_some_and(|existing| {
-                            existing.value == cell_value
-                                && existing.formula == formula
-                                && worksheet.dynamic_array_formulas.contains(&key)
-                                    == is_dynamic_formula
-                        });
-                        if unchanged {
-                            continue;
-                        }
-                        worksheet.prepare_cell_for_edit(key);
-                        if let Some(existing) = worksheet.cells.get_mut(&key) {
-                            existing.value = cell_value;
-                            existing.formula = formula;
-                            if matches!(existing.value, CellValue::Blank)
-                                && existing.style_id.is_none()
-                                && existing.formula.is_none()
-                            {
-                                worksheet.cells.remove(&key);
-                            }
-                            worksheet.dirty = true;
-                            worksheet.dirty_cells.insert(key);
-                        } else if !matches!(cell_value, CellValue::Blank) || formula.is_some() {
-                            worksheet.cells.insert(
-                                key,
-                                excel_model::CellData {
-                                    value: cell_value,
-                                    formula,
-                                    style_id: None,
-                                },
-                            );
-                            worksheet.dirty = true;
-                            worksheet.dirty_cells.insert(key);
-                        }
-                        if is_dynamic_formula {
-                            worksheet.dynamic_array_formulas.insert(key);
-                        }
+                    let spec = SetRangeValuesSpec {
+                        workbook,
+                        range: self.range_ref(workbook, sheet_id, rect)?,
+                        values,
+                    };
+                    if matches!(member, "Formula2R1C1" | "Formula2R1C1Local") {
+                        self.set_range_dynamic_array_r1c1_formulas(spec)?;
+                    } else {
+                        self.set_range_r1c1_formulas(spec)?;
                     }
                 } else {
                     self.set_range_values(SetRangeValuesSpec {

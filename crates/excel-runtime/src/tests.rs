@@ -15,7 +15,7 @@
         CellError, CellValue, ExcelProfile, FileFormat, GetRangeValuesSpec, LoadOptions,
         ObjectHandle, OmArray, OmErrorCode, OmValue, OpenWorkbookSpec, RangeArea, RangeRef,
         RangeSet, Rect, ReferenceTarget, SaveWorkbookSpec, SetRangeValuesSpec, SheetId, SheetScope,
-        StyleId, WorkbookId,
+        StyleId, WorkbookHandle, WorkbookId,
     };
     use office_opc::{CompressionMethod, OpcPackage, OpcPart};
 
@@ -35335,6 +35335,245 @@
         assert_eq!(reopened_formula.value, CellValue::Blank);
 
         fs::remove_dir_all(&base_dir).expect("cleanup formula fixture");
+    }
+
+    fn runtime_with_sequence_spill() -> (
+        ExcelRuntime,
+        WorkbookHandle,
+        ObjectHandle,
+        SheetId,
+    ) {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let sheet_id = runtime.worksheets(workbook).expect("worksheets")[0].id;
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let anchor = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("J10".to_string())],
+                )
+                .expect("Range(J10)"),
+        );
+        runtime
+            .dispatch_set(
+                anchor,
+                "Formula2",
+                OmValue::Text("=SEQUENCE(2,2)".to_string()),
+                &[],
+            )
+            .expect("set 2x2 sequence spill");
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("calculate 2x2 sequence spill");
+
+        let worksheet = runtime
+            .workbook_state(workbook)
+            .expect("workbook state")
+            .worksheet_data_for_sheet(sheet_id)
+            .expect("worksheet data");
+        assert_eq!(
+            worksheet.spill_ranges.get(&(10, 10)),
+            Some(&Rect {
+                row_first: 10,
+                row_last: 11,
+                col_first: 10,
+                col_last: 11,
+            })
+        );
+        assert_eq!(worksheet.spill_owners.get(&(10, 11)), Some(&(10, 10)));
+        assert_eq!(worksheet.spill_owners.get(&(11, 10)), Some(&(10, 10)));
+        assert_eq!(worksheet.spill_owners.get(&(11, 11)), Some(&(10, 10)));
+
+        (runtime, workbook, active_sheet, sheet_id)
+    }
+
+    #[test]
+    fn range_r1c1_formula_batch_setters_reject_spill_children_atomically() {
+        for member in ["FormulaR1C1", "Formula2R1C1"] {
+            let (mut runtime, workbook, active_sheet, _) = runtime_with_sequence_spill();
+            let target = expect_object_handle(
+                runtime
+                    .dispatch_invoke(
+                        active_sheet,
+                        "Range",
+                        &[OmValue::Text("K9:K10".to_string())],
+                    )
+                    .expect("Range(K9:K10)"),
+            );
+            let before = runtime
+                .workbook_state(workbook)
+                .expect("workbook state before batch edit")
+                .clone();
+
+            let error = runtime
+                .dispatch_set(
+                    target,
+                    member,
+                    OmValue::Array(
+                        OmArray::new(
+                            2,
+                            1,
+                            vec![
+                                OmValue::Text("=R1C1".to_string()),
+                                OmValue::Text("=R1C2".to_string()),
+                            ],
+                        )
+                        .expect("R1C1 batch"),
+                    ),
+                    &[],
+                )
+                .expect_err("R1C1 batch touching spill child should fail");
+
+            assert_eq!(error.code, OmErrorCode::InvalidState, "{member}");
+            assert!(error.message.contains("R10C11"), "{member}: {error:?}");
+            assert!(error.message.contains("R10C10"), "{member}: {error:?}");
+            assert_eq!(
+                runtime
+                    .workbook_state(workbook)
+                    .expect("workbook state after batch edit"),
+                &before,
+                "{member} must not mutate the earlier normal cell",
+            );
+        }
+    }
+
+    #[test]
+    fn range_r1c1_formula_multi_area_setters_reject_spill_children_atomically() {
+        for member in ["FormulaR1C1", "Formula2R1C1"] {
+            let (mut runtime, workbook, active_sheet, _) = runtime_with_sequence_spill();
+            let target = expect_object_handle(
+                runtime
+                    .dispatch_invoke(
+                        active_sheet,
+                        "Range",
+                        &[OmValue::Text("A20,K10".to_string())],
+                    )
+                    .expect("Range(A20,K10)"),
+            );
+            let before = runtime
+                .workbook_state(workbook)
+                .expect("workbook state before multi-area edit")
+                .clone();
+
+            let error = runtime
+                .dispatch_set(
+                    target,
+                    member,
+                    OmValue::Text("=R1C1".to_string()),
+                    &[],
+                )
+                .expect_err("multi-area R1C1 edit touching spill child should fail");
+
+            assert_eq!(error.code, OmErrorCode::InvalidState, "{member}");
+            assert_eq!(
+                runtime
+                    .workbook_state(workbook)
+                    .expect("workbook state after multi-area edit"),
+                &before,
+                "{member} must not mutate the earlier area",
+            );
+        }
+    }
+
+    #[test]
+    fn range_r1c1_formula_setters_reject_direct_spill_child_edits() {
+        for member in ["FormulaR1C1", "Formula2R1C1"] {
+            let (mut runtime, workbook, active_sheet, _) = runtime_with_sequence_spill();
+            let child = expect_object_handle(
+                runtime
+                    .dispatch_invoke(
+                        active_sheet,
+                        "Range",
+                        &[OmValue::Text("K10".to_string())],
+                    )
+                    .expect("Range(K10)"),
+            );
+            let before = runtime
+                .workbook_state(workbook)
+                .expect("workbook state before direct edit")
+                .clone();
+
+            let error = runtime
+                .dispatch_set(
+                    child,
+                    member,
+                    OmValue::Text("=R1C1".to_string()),
+                    &[],
+                )
+                .expect_err("direct R1C1 spill child edit should fail");
+
+            assert_eq!(error.code, OmErrorCode::InvalidState, "{member}");
+            assert_eq!(
+                runtime
+                    .workbook_state(workbook)
+                    .expect("workbook state after direct edit"),
+                &before,
+                "{member}",
+            );
+        }
+    }
+
+    #[test]
+    fn range_r1c1_formula_anchor_edits_clear_previous_spill_extent() {
+        for member in ["FormulaR1C1", "Formula2R1C1"] {
+            let (mut runtime, workbook, active_sheet, sheet_id) = runtime_with_sequence_spill();
+            let anchor = expect_object_handle(
+                runtime
+                    .dispatch_invoke(
+                        active_sheet,
+                        "Range",
+                        &[OmValue::Text("J10".to_string())],
+                    )
+                    .expect("Range(J10)"),
+            );
+
+            runtime
+                .dispatch_set(
+                    anchor,
+                    member,
+                    OmValue::Text("=R1C1".to_string()),
+                    &[],
+                )
+                .expect("overwrite R1C1 spill anchor");
+
+            let state = runtime.workbook_state(workbook).expect("workbook state");
+            let worksheet = state
+                .worksheet_data_for_sheet(sheet_id)
+                .expect("worksheet data");
+            assert!(!worksheet.spill_ranges.contains_key(&(10, 10)), "{member}");
+            assert!(worksheet.spill_owners.is_empty(), "{member}");
+            for child in [(10, 11), (11, 10), (11, 11)] {
+                assert!(
+                    !worksheet.cells.contains_key(&child),
+                    "{member} left spill child {child:?}",
+                );
+            }
+            let formula = worksheet
+                .cells
+                .get(&(10, 10))
+                .and_then(|cell| cell.formula.as_ref())
+                .expect("replacement anchor formula");
+            assert_eq!(formula.text, "R1C1", "{member}");
+            assert!(formula.is_r1c1, "{member}");
+            assert_eq!(
+                worksheet.dynamic_array_formulas.contains(&(10, 10)),
+                member == "Formula2R1C1",
+                "{member}",
+            );
+        }
     }
 
     #[test]

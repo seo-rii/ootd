@@ -144,6 +144,9 @@ Completed slices:
   commands so a later child target cannot leave earlier cells partially mutated.
 - Characterized spill-anchor overwrite and clear: unstyled children are removed, styled children
   remain as blank shells, and owner/range/dynamic-formula metadata is cleared together.
+- Routed single- and multi-area R1C1/Formula2R1C1 assignments through the same model formula
+  command, removing two direct runtime mutation loops and extending the atomic child guard and
+  anchor cleanup to their local aliases.
 
 Next slices:
 

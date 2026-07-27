@@ -381,7 +381,7 @@ impl WorkbookState {
     }
 
     pub fn set_range_formulas(&mut self, range: &RangeRef, values: &OmArray) -> OmResult<()> {
-        self.set_range_formulas_impl(range, values, false)
+        self.set_range_formulas_impl(range, values, false, false)
     }
 
     pub fn set_range_dynamic_array_formulas(
@@ -389,7 +389,19 @@ impl WorkbookState {
         range: &RangeRef,
         values: &OmArray,
     ) -> OmResult<()> {
-        self.set_range_formulas_impl(range, values, true)
+        self.set_range_formulas_impl(range, values, true, false)
+    }
+
+    pub fn set_range_r1c1_formulas(&mut self, range: &RangeRef, values: &OmArray) -> OmResult<()> {
+        self.set_range_formulas_impl(range, values, false, true)
+    }
+
+    pub fn set_range_dynamic_array_r1c1_formulas(
+        &mut self,
+        range: &RangeRef,
+        values: &OmArray,
+    ) -> OmResult<()> {
+        self.set_range_formulas_impl(range, values, true, true)
     }
 
     fn set_range_formulas_impl(
@@ -397,6 +409,7 @@ impl WorkbookState {
         range: &RangeRef,
         values: &OmArray,
         dynamic_array: bool,
+        is_r1c1: bool,
     ) -> OmResult<()> {
         let (sheet_id, rects) = self.same_sheet_rects(range)?;
         let mut updates = Vec::new();
@@ -426,7 +439,7 @@ impl WorkbookState {
                                     CellValue::Blank,
                                     Some(FormulaSource {
                                         text: formula_text.to_string(),
-                                        is_r1c1: false,
+                                        is_r1c1,
                                     }),
                                 )
                             } else {
@@ -452,7 +465,7 @@ impl WorkbookState {
                             CellValue::Blank,
                             Some(FormulaSource {
                                 text: formula_text.to_string(),
-                                is_r1c1: false,
+                                is_r1c1,
                             }),
                         )
                     } else {

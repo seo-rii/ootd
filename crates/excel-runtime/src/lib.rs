@@ -2067,6 +2067,39 @@ impl ExcelRuntime {
             .set_range_dynamic_array_formulas(&spec.range, &spec.values)
     }
 
+    pub fn set_range_r1c1_formulas(&mut self, spec: SetRangeValuesSpec) -> OmResult<()> {
+        let runtime = self.runtime_workbook_mut(spec.workbook)?;
+        if runtime.read_only {
+            return Err(OmError::new(
+                OmErrorCode::InvalidState,
+                "cannot modify a read-only workbook",
+            ));
+        }
+
+        runtime
+            .loaded
+            .state
+            .set_range_r1c1_formulas(&spec.range, &spec.values)
+    }
+
+    pub fn set_range_dynamic_array_r1c1_formulas(
+        &mut self,
+        spec: SetRangeValuesSpec,
+    ) -> OmResult<()> {
+        let runtime = self.runtime_workbook_mut(spec.workbook)?;
+        if runtime.read_only {
+            return Err(OmError::new(
+                OmErrorCode::InvalidState,
+                "cannot modify a read-only workbook",
+            ));
+        }
+
+        runtime
+            .loaded
+            .state
+            .set_range_dynamic_array_r1c1_formulas(&spec.range, &spec.values)
+    }
+
     pub fn dispatch_get(
         &mut self,
         handle: ObjectHandle,
@@ -3680,109 +3713,15 @@ impl ExcelRuntime {
                                     | "FormulaR1C1Local"
                                     | "Formula2R1C1Local"
                             ) {
-                                if values.rows != 1 || values.cols != 1 {
-                                    return Err(OmError::unsupported(
-                                        "multi-area range R1C1 formula assignment currently supports scalar values only",
-                                    ));
-                                }
-                                let (cell_value, formula) = match values
-                                    .values
-                                    .into_iter()
-                                    .next()
-                                    .unwrap_or(OmValue::Empty)
-                                {
-                                    OmValue::Text(text) => {
-                                        if let Some(formula_text) = text.strip_prefix('=') {
-                                            (
-                                                CellValue::Blank,
-                                                Some(FormulaSource {
-                                                    text: formula_text.to_string(),
-                                                    is_r1c1: true,
-                                                }),
-                                            )
-                                        } else {
-                                            (CellValue::Text(text), None)
-                                        }
-                                    }
-                                    other => (CellValue::try_from(other)?, None),
+                                let spec = SetRangeValuesSpec {
+                                    workbook,
+                                    range: RangeRef::try_from(&range)?,
+                                    values,
                                 };
-                                let (sheet_id, rects) = Self::range_set_single_sheet_rects(&range)?;
-                                let mut updates = Vec::with_capacity(
-                                    rects
-                                        .iter()
-                                        .map(|rect| (rect.height() * rect.width()) as usize)
-                                        .sum(),
-                                );
-                                for rect in rects {
-                                    for row in rect.row_first..=rect.row_last {
-                                        for col in rect.col_first..=rect.col_last {
-                                            updates.push((
-                                                (row, col),
-                                                cell_value.clone(),
-                                                formula.clone(),
-                                            ));
-                                        }
-                                    }
-                                }
-
-                                let runtime = self.runtime_workbook_mut(workbook)?;
-                                if runtime.read_only {
-                                    return Err(OmError::new(
-                                        OmErrorCode::InvalidState,
-                                        "cannot modify a read-only workbook",
-                                    ));
-                                }
-                                let worksheet = runtime
-                                    .loaded
-                                    .state
-                                    .worksheet_data_for_sheet_mut(sheet_id)?;
-                                for (key, cell_value, formula) in updates {
-                                    let is_dynamic_formula = matches!(
-                                        member,
-                                        "Formula2R1C1" | "Formula2R1C1Local"
-                                    ) && formula.is_some();
-                                    let unchanged = worksheet.cells.get(&key).is_some_and(
-                                        |existing| {
-                                            existing.value == cell_value
-                                                && existing.formula == formula
-                                                && worksheet
-                                                    .dynamic_array_formulas
-                                                    .contains(&key)
-                                                    == is_dynamic_formula
-                                        },
-                                    );
-                                    if unchanged {
-                                        continue;
-                                    }
-                                    worksheet.prepare_cell_for_edit(key);
-                                    if let Some(existing) = worksheet.cells.get_mut(&key) {
-                                        existing.value = cell_value;
-                                        existing.formula = formula;
-                                        if matches!(existing.value, CellValue::Blank)
-                                            && existing.style_id.is_none()
-                                            && existing.formula.is_none()
-                                        {
-                                            worksheet.cells.remove(&key);
-                                        }
-                                        worksheet.dirty = true;
-                                        worksheet.dirty_cells.insert(key);
-                                    } else if !matches!(cell_value, CellValue::Blank)
-                                        || formula.is_some()
-                                    {
-                                        worksheet.cells.insert(
-                                            key,
-                                            excel_model::CellData {
-                                                value: cell_value,
-                                                formula,
-                                                style_id: None,
-                                            },
-                                        );
-                                        worksheet.dirty = true;
-                                        worksheet.dirty_cells.insert(key);
-                                    }
-                                    if is_dynamic_formula {
-                                        worksheet.dynamic_array_formulas.insert(key);
-                                    }
+                                if matches!(member, "Formula2R1C1" | "Formula2R1C1Local") {
+                                    self.set_range_dynamic_array_r1c1_formulas(spec)?;
+                                } else {
+                                    self.set_range_r1c1_formulas(spec)?;
                                 }
                             } else {
                                 self.set_range_values(SetRangeValuesSpec {
