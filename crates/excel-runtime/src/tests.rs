@@ -121430,12 +121430,12 @@
                     OmValue::Number(1.0),
                     OmValue::Number(1.0),
                     OmValue::Bool(false),
-                    OmValue::Number(65001.0),
-                    OmValue::Number(1.0),
-                    OmValue::Bool(true),
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Bool(false),
                 ],
             )
-            .expect("Workbook.SaveAs with optional arguments");
+            .expect("Workbook.SaveAs with explicit default optional arguments");
         assert_eq!(
             expect_number(
                 runtime
@@ -121575,6 +121575,134 @@
         );
 
         fs::remove_dir_all(&base_dir).expect("cleanup SaveAs format fixture");
+    }
+
+    #[test]
+    fn saveas_nonempty_password_and_other_nondefault_options_are_rejected_before_write() {
+        let mut runtime = ExcelRuntime::new();
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock")
+            .as_nanos();
+        let base_dir = std::env::temp_dir().join(format!("ootd-saveas-options-{unique}"));
+        fs::create_dir_all(&base_dir).expect("create SaveAs options fixture dir");
+        let source_path = base_dir.join("source.xlsx");
+        fs::write(&source_path, synthetic_workbook_bytes()).expect("write source workbook");
+
+        let workbooks = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "Workbooks", &[])
+                .expect("Workbooks"),
+        );
+        let workbook = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    workbooks,
+                    "Open",
+                    &[OmValue::Text(source_path.to_string_lossy().into_owned())],
+                )
+                .expect("Workbooks.Open"),
+        );
+        let expected_dirty_domains = runtime
+            .workbook_dirty_domains(WorkbookHandle(workbook))
+            .expect("initial SaveAs option dirty domains");
+        let unsupported_options = [
+            (
+                "Password",
+                2usize,
+                OmValue::Text("secret".to_string()),
+                "Workbook.SaveAs Password is not implemented for non-empty values",
+            ),
+            (
+                "WriteResPassword",
+                3usize,
+                OmValue::Text("write-secret".to_string()),
+                "Workbook.SaveAs WriteResPassword is not implemented for non-empty values",
+            ),
+            (
+                "ReadOnlyRecommended",
+                4usize,
+                OmValue::Bool(true),
+                "Workbook.SaveAs ReadOnlyRecommended=true is not implemented",
+            ),
+            (
+                "CreateBackup",
+                5usize,
+                OmValue::Bool(true),
+                "Workbook.SaveAs CreateBackup=true is not implemented",
+            ),
+            (
+                "AccessMode",
+                6usize,
+                OmValue::Number(2.0),
+                "Workbook.SaveAs AccessMode supports only xlNoChange (1)",
+            ),
+            (
+                "ConflictResolution",
+                7usize,
+                OmValue::Number(2.0),
+                "Workbook.SaveAs ConflictResolution supports only xlUserResolution (1)",
+            ),
+            (
+                "AddToMru",
+                8usize,
+                OmValue::Bool(true),
+                "Workbook.SaveAs AddToMru=true is not implemented",
+            ),
+            (
+                "TextCodepage",
+                9usize,
+                OmValue::Number(65001.0),
+                "Workbook.SaveAs TextCodepage is not supported when provided",
+            ),
+            (
+                "TextVisualLayout",
+                10usize,
+                OmValue::Number(1.0),
+                "Workbook.SaveAs TextVisualLayout is not supported when provided",
+            ),
+            (
+                "Local",
+                11usize,
+                OmValue::Bool(true),
+                "Workbook.SaveAs Local=true is not implemented",
+            ),
+        ];
+
+        for (label, index, value, expected_message) in unsupported_options {
+            let target_path = base_dir.join(format!("{label}.xlsx"));
+            let mut args = vec![OmValue::Missing; 12];
+            args[0] = OmValue::Text(target_path.to_string_lossy().into_owned());
+            args[index] = value;
+
+            let error = runtime
+                .dispatch_invoke(workbook, "SaveAs", &args)
+                .expect_err("non-default SaveAs option must fail closed");
+            assert_eq!(error.code, OmErrorCode::Unsupported, "{label}: {error:?}");
+            assert_eq!(error.message, expected_message, "{label}");
+            assert!(
+                !target_path.exists(),
+                "{label} must be rejected before writing a target"
+            );
+            assert_eq!(
+                runtime
+                    .workbook_dirty_domains(WorkbookHandle(workbook))
+                    .expect("SaveAs option dirty domains after rejection"),
+                expected_dirty_domains,
+                "{label}"
+            );
+            assert_eq!(
+                expect_text(
+                    runtime
+                        .dispatch_get(workbook, "FullName", &[])
+                        .expect("Workbook.FullName after SaveAs option rejection")
+                ),
+                source_path.to_string_lossy(),
+                "{label}"
+            );
+        }
+
+        fs::remove_dir_all(&base_dir).expect("cleanup SaveAs options fixture");
     }
 
     #[test]

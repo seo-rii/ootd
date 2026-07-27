@@ -15,6 +15,9 @@ use office_common::{
 use std::fs;
 use std::path::{Path, PathBuf};
 
+const XL_SAVE_AS_ACCESS_MODE_NO_CHANGE: i32 = 1;
+const XL_SAVE_CONFLICT_USER_RESOLUTION: i32 = 1;
+
 impl ExcelRuntime {
     pub(crate) fn dispatch_get_workbook(
         &mut self,
@@ -262,6 +265,67 @@ impl ExcelRuntime {
                 validate_optional_integer_arg(args, 9, "Workbook.SaveAs TextCodepage")?;
                 validate_optional_integer_arg(args, 10, "Workbook.SaveAs TextVisualLayout")?;
                 validate_optional_bool_arg(args, 11, "Workbook.SaveAs Local")?;
+                if matches!(args.get(2), Some(OmValue::Text(password)) if !password.is_empty()) {
+                    return Err(OmError::unsupported(
+                        "Workbook.SaveAs Password is not implemented for non-empty values",
+                    ));
+                }
+                if matches!(args.get(3), Some(OmValue::Text(password)) if !password.is_empty()) {
+                    return Err(OmError::unsupported(
+                        "Workbook.SaveAs WriteResPassword is not implemented for non-empty values",
+                    ));
+                }
+                if matches!(args.get(4), Some(OmValue::Bool(true))) {
+                    return Err(OmError::unsupported(
+                        "Workbook.SaveAs ReadOnlyRecommended=true is not implemented",
+                    ));
+                }
+                if matches!(args.get(5), Some(OmValue::Bool(true))) {
+                    return Err(OmError::unsupported(
+                        "Workbook.SaveAs CreateBackup=true is not implemented",
+                    ));
+                }
+                if matches!(
+                    args.get(6),
+                    Some(OmValue::Number(value))
+                        if *value as i32 != XL_SAVE_AS_ACCESS_MODE_NO_CHANGE
+                ) {
+                    return Err(OmError::unsupported(
+                        "Workbook.SaveAs AccessMode supports only xlNoChange (1)",
+                    ));
+                }
+                if matches!(
+                    args.get(7),
+                    Some(OmValue::Number(value))
+                        if *value as i32 != XL_SAVE_CONFLICT_USER_RESOLUTION
+                ) {
+                    return Err(OmError::unsupported(
+                        "Workbook.SaveAs ConflictResolution supports only xlUserResolution (1)",
+                    ));
+                }
+                if matches!(args.get(8), Some(OmValue::Bool(true))) {
+                    return Err(OmError::unsupported(
+                        "Workbook.SaveAs AddToMru=true is not implemented",
+                    ));
+                }
+                if args.get(9).is_some_and(|value| !om_value_is_omitted(value)) {
+                    return Err(OmError::unsupported(
+                        "Workbook.SaveAs TextCodepage is not supported when provided",
+                    ));
+                }
+                if args
+                    .get(10)
+                    .is_some_and(|value| !om_value_is_omitted(value))
+                {
+                    return Err(OmError::unsupported(
+                        "Workbook.SaveAs TextVisualLayout is not supported when provided",
+                    ));
+                }
+                if matches!(args.get(11), Some(OmValue::Bool(true))) {
+                    return Err(OmError::unsupported(
+                        "Workbook.SaveAs Local=true is not implemented",
+                    ));
+                }
                 let read_only = self.runtime_workbook(workbook)?.read_only;
                 let prepared = self.prepare_workbook_save(
                     workbook,

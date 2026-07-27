@@ -113,7 +113,12 @@ Wave 1 exit gate:
 
 ### Audit Wave 2 — Fail-Closed Public And Security Contracts
 
-1. `OOTD-010`: `Workbook.SaveAs`의 미지원 non-default optional argument를 거부한다.
+1. `OOTD-010` — 완료 (2026-07-27): `Workbook.SaveAs`의 Password,
+   WriteResPassword, ReadOnlyRecommended, CreateBackup, AccessMode, ConflictResolution,
+   AddToMru, TextCodepage, TextVisualLayout, Local을 type-check한 뒤, 생략과 실제 default
+   equivalent만 허용한다. 나머지는 package prepare/file write 전에 stable `Unsupported`로
+   거부하고 target/source identity/dirty domains 불변을 10-case matrix로 고정했다.
+   capability 표는 `docs/interfaces/workbook_save_as.md`에 있다.
 2. `OOTD-011`: `Workbooks.Open` optional argument별 behavior/unsupported matrix를 고정한다.
 3. `OOTD-012`: `LoadOptions`/`SaveOptions`를 실제 codec policy에 연결하거나 비공개화한다.
 4. `OOTD-013`: observable effect가 없는 workbook/worksheet method를 `Unsupported`로 바꾼다.
