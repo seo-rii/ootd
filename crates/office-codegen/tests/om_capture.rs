@@ -211,8 +211,9 @@ fn loads_source_registry_and_reports_enabled_test_corpus() {
 
 #[test]
 fn source_registry_rejects_malformed_identifier_fields() {
-    let registry_toml =
-        fs::read_to_string(repo_root().join("specs/sources.toml")).expect("source registry");
+    let registry_toml = fs::read_to_string(repo_root().join("specs/sources.toml"))
+        .expect("source registry")
+        .replace("\r\n", "\n");
 
     for (malformed_toml, expected_message) in [
         (
