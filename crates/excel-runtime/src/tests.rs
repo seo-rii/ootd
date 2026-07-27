@@ -114506,6 +114506,306 @@
     }
 
     #[test]
+    fn pivot_worksheet_rename_is_rejected_atomically() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = open_synthetic_pivot_workbook(&mut runtime);
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("pivot ActiveSheet"),
+        );
+        let before = runtime_workbook_persistence_snapshot(&runtime, workbook);
+
+        let error = runtime
+            .dispatch_set(
+                worksheet,
+                "Name",
+                OmValue::Text("Renamed".to_string()),
+                &[],
+            )
+            .expect_err("pivot worksheet rename must be rejected");
+
+        assert_eq!(error.code, OmErrorCode::Unsupported);
+        assert!(error.message.contains("pivot"));
+        assert_eq!(runtime_workbook_persistence_snapshot(&runtime, workbook), before);
+    }
+
+    #[test]
+    fn pivot_worksheet_copy_without_target_is_rejected_before_creating_workbook() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = open_synthetic_pivot_workbook(&mut runtime);
+        let application = runtime.root_application();
+        let workbooks = expect_object_handle(
+            runtime
+                .dispatch_get(application, "Workbooks", &[])
+                .expect("Application.Workbooks"),
+        );
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveSheet", &[])
+                .expect("pivot ActiveSheet"),
+        );
+        let before = runtime_workbook_persistence_snapshot(&runtime, workbook);
+
+        let error = runtime
+            .dispatch_invoke(worksheet, "Copy", &[])
+            .expect_err("pivot Worksheet.Copy must be rejected");
+
+        assert_eq!(error.code, OmErrorCode::Unsupported);
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(workbooks, "Count", &[])
+                    .expect("Workbooks.Count after rejected pivot copy")
+            ),
+            1.0
+        );
+        assert_eq!(runtime_workbook_persistence_snapshot(&runtime, workbook), before);
+    }
+
+    #[test]
+    fn pivot_worksheet_delete_is_rejected_atomically() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = open_synthetic_pivot_workbook(&mut runtime);
+        let application = runtime.root_application();
+        let pivot_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveSheet", &[])
+                .expect("pivot ActiveSheet"),
+        );
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("pivot Workbook.Worksheets"),
+        );
+        runtime
+            .dispatch_invoke(worksheets, "Add", &[])
+            .expect("add non-pivot worksheet");
+        runtime
+            .dispatch_set(application, "DisplayAlerts", OmValue::Bool(false), &[])
+            .expect("Application.DisplayAlerts = false");
+        let before = runtime_workbook_persistence_snapshot(&runtime, workbook);
+
+        let error = runtime
+            .dispatch_invoke(pivot_sheet, "Delete", &[])
+            .expect_err("pivot Worksheet.Delete must be rejected");
+
+        assert_eq!(error.code, OmErrorCode::Unsupported);
+        assert_eq!(runtime_workbook_persistence_snapshot(&runtime, workbook), before);
+    }
+
+    #[test]
+    fn pivot_worksheet_move_without_target_is_rejected_before_creating_workbook() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = open_synthetic_pivot_workbook(&mut runtime);
+        let application = runtime.root_application();
+        let workbooks = expect_object_handle(
+            runtime
+                .dispatch_get(application, "Workbooks", &[])
+                .expect("Application.Workbooks"),
+        );
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveSheet", &[])
+                .expect("pivot ActiveSheet"),
+        );
+        let before = runtime_workbook_persistence_snapshot(&runtime, workbook);
+
+        let error = runtime
+            .dispatch_invoke(worksheet, "Move", &[])
+            .expect_err("pivot Worksheet.Move without target must be rejected");
+
+        assert_eq!(error.code, OmErrorCode::Unsupported);
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(workbooks, "Count", &[])
+                    .expect("Workbooks.Count after rejected pivot move")
+            ),
+            1.0
+        );
+        assert_eq!(runtime_workbook_persistence_snapshot(&runtime, workbook), before);
+    }
+
+    #[test]
+    fn copy_and_move_into_pivot_workbook_are_rejected_atomically() {
+        let mut runtime = ExcelRuntime::new();
+        let source_workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open non-pivot source workbook");
+        let target_workbook = open_synthetic_pivot_workbook(&mut runtime);
+        let source_worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(source_workbook.0, "Worksheets", &[])
+                .expect("source Workbook.Worksheets"),
+        );
+        let target_worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(target_workbook.0, "Worksheets", &[])
+                .expect("target Workbook.Worksheets"),
+        );
+        let source_sheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(source_worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("source Worksheets.Item(1)"),
+        );
+        let target_sheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(target_worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("target Worksheets.Item(1)"),
+        );
+        let source_before = runtime_workbook_persistence_snapshot(&runtime, source_workbook);
+        let target_before = runtime_workbook_persistence_snapshot(&runtime, target_workbook);
+
+        for operation in ["Copy", "Move"] {
+            let error = match runtime.dispatch_invoke(
+                source_sheet,
+                operation,
+                &[OmValue::Missing, OmValue::Object(target_sheet)],
+            ) {
+                Ok(_) => panic!("Worksheet.{operation} into pivot target must fail"),
+                Err(error) => error,
+            };
+            assert_eq!(error.code, OmErrorCode::Unsupported, "{operation}");
+        }
+
+        assert_eq!(
+            runtime_workbook_persistence_snapshot(&runtime, source_workbook),
+            source_before,
+        );
+        assert_eq!(
+            runtime_workbook_persistence_snapshot(&runtime, target_workbook),
+            target_before,
+        );
+    }
+
+    #[test]
+    fn pivot_worksheet_move_within_workbook_is_preserved() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = open_synthetic_pivot_workbook(&mut runtime);
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("pivot Workbook.Worksheets"),
+        );
+        let pivot_sheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets, "Item", &[OmValue::Number(1.0)])
+                .expect("pivot Worksheets.Item(1)"),
+        );
+        let second_sheet = expect_object_handle(
+            runtime
+                .dispatch_invoke(worksheets, "Add", &[])
+                .expect("add second worksheet"),
+        );
+
+        runtime
+            .dispatch_invoke(
+                pivot_sheet,
+                "Move",
+                &[OmValue::Missing, OmValue::Object(second_sheet)],
+            )
+            .expect("move pivot worksheet within workbook");
+
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(pivot_sheet, "Index", &[])
+                    .expect("pivot sheet index after move")
+            ),
+            2.0
+        );
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save pivot workbook after same-workbook move");
+        let reopened = ExcelRuntime::new()
+            .codec
+            .load(saved.as_slice(), LoadOptions::default())
+            .expect("reopen pivot workbook after same-workbook move");
+        assert!(!reopened.support_parts.pivot_inventory.is_empty());
+        assert_eq!(
+            reopened
+                .state
+                .worksheets
+                .iter()
+                .map(|worksheet| worksheet.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Sheet2", "Sheet1"],
+        );
+    }
+
+    #[test]
+    fn pivot_worksheet_collection_lifecycle_is_rejected_before_mutation() {
+        for operation in ["Copy", "Move"] {
+            let mut runtime = ExcelRuntime::new();
+            let workbook = open_synthetic_pivot_workbook(&mut runtime);
+            let application = runtime.root_application();
+            let workbooks = expect_object_handle(
+                runtime
+                    .dispatch_get(application, "Workbooks", &[])
+                    .expect("Application.Workbooks"),
+            );
+            let worksheets = expect_object_handle(
+                runtime
+                    .dispatch_get(workbook.0, "Worksheets", &[])
+                    .expect("pivot Workbook.Worksheets"),
+            );
+            let before = runtime_workbook_persistence_snapshot(&runtime, workbook);
+            let before_created_index = runtime.next_created_workbook_index;
+
+            let error = match runtime.dispatch_invoke(worksheets, operation, &[]) {
+                Ok(_) => panic!("Worksheets.{operation} on pivot workbook must fail"),
+                Err(error) => error,
+            };
+
+            assert_eq!(error.code, OmErrorCode::Unsupported, "{operation}");
+            assert_eq!(runtime.next_created_workbook_index, before_created_index);
+            assert_eq!(
+                expect_number(
+                    runtime
+                        .dispatch_get(workbooks, "Count", &[])
+                        .expect("Workbooks.Count after rejected collection operation")
+                ),
+                1.0,
+                "{operation}",
+            );
+            assert_eq!(
+                runtime_workbook_persistence_snapshot(&runtime, workbook),
+                before,
+                "{operation}",
+            );
+        }
+
+        let mut runtime = ExcelRuntime::new();
+        let workbook = open_synthetic_pivot_workbook(&mut runtime);
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("pivot Workbook.Worksheets"),
+        );
+        let before = runtime_workbook_persistence_snapshot(&runtime, workbook);
+
+        let error = runtime
+            .dispatch_invoke(worksheets, "Delete", &[])
+            .expect_err("Worksheets.Delete on pivot workbook must fail");
+
+        assert_eq!(error.code, OmErrorCode::Unsupported);
+        assert_eq!(runtime_workbook_persistence_snapshot(&runtime, workbook), before);
+    }
+
+    #[test]
     fn worksheet_delete_removes_sheet_updates_selection_and_persists_on_save() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
@@ -121823,6 +122123,119 @@
         ]);
 
         package.to_bytes().expect("package bytes")
+    }
+
+    fn open_synthetic_pivot_workbook(runtime: &mut ExcelRuntime) -> WorkbookHandle {
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_pivot_graph_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open synthetic pivot workbook")
+    }
+
+    fn runtime_workbook_persistence_snapshot(
+        runtime: &ExcelRuntime,
+        workbook: WorkbookHandle,
+    ) -> (excel_model::WorkbookState, OpcPackage, bool) {
+        let runtime_workbook = runtime
+            .runtime_workbook(workbook)
+            .expect("runtime workbook persistence snapshot");
+        (
+            runtime_workbook.loaded.state.clone(),
+            runtime_workbook.loaded.package.clone(),
+            runtime_workbook.dirty,
+        )
+    }
+
+    fn synthetic_workbook_with_pivot_graph_bytes() -> Vec<u8> {
+        let mut package = OpcPackage::from_bytes(synthetic_workbook_bytes().as_slice())
+            .expect("base pivot workbook package");
+        let content_types = String::from_utf8(
+            package
+                .part("[Content_Types].xml")
+                .expect("content types")
+                .bytes
+                .clone(),
+        )
+        .expect("content types utf8")
+        .replace(
+            "</Types>",
+            r#"  <Override PartName="/xl/pivotTables/pivotTable1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.pivotTable+xml"/>
+  <Override PartName="/xl/pivotCache/pivotCacheDefinition1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.pivotCacheDefinition+xml"/>
+  <Override PartName="/xl/pivotCache/pivotCacheRecords1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.pivotCacheRecords+xml"/>
+</Types>"#,
+        );
+        package
+            .replace_part_bytes("[Content_Types].xml", content_types.into_bytes())
+            .expect("replace pivot content types");
+        package
+            .add_part(OpcPart {
+                name: "xl/worksheets/_rels/sheet1.xml.rels".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rIdPivotTable" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotTable" Target="../pivotTables/pivotTable1.xml"/>
+</Relationships>"#
+                    .to_vec(),
+            })
+            .expect("add pivot worksheet relationships");
+        package
+            .add_part(OpcPart {
+                name: "xl/pivotTables/pivotTable1.xml".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<pivotTableDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" name="PivotTable1" cacheId="1"/>"#
+                    .to_vec(),
+            })
+            .expect("add pivot table definition");
+        package
+            .add_part(OpcPart {
+                name: "xl/pivotTables/_rels/pivotTable1.xml.rels".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rIdPivotCache" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotCacheDefinition" Target="../pivotCache/pivotCacheDefinition1.xml"/>
+</Relationships>"#
+                    .to_vec(),
+            })
+            .expect("add pivot table relationships");
+        package
+            .add_part(OpcPart {
+                name: "xl/pivotCache/pivotCacheDefinition1.xml".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<pivotCacheDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" recordCount="1"/>"#
+                    .to_vec(),
+            })
+            .expect("add pivot cache definition");
+        package
+            .add_part(OpcPart {
+                name: "xl/pivotCache/_rels/pivotCacheDefinition1.xml.rels".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rIdPivotRecords" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotCacheRecords" Target="pivotCacheRecords1.xml"/>
+</Relationships>"#
+                    .to_vec(),
+            })
+            .expect("add pivot cache relationships");
+        package
+            .add_part(OpcPart {
+                name: "xl/pivotCache/pivotCacheRecords1.xml".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<pivotCacheRecords xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="1"><r><n v="1"/></r></pivotCacheRecords>"#
+                    .to_vec(),
+            })
+            .expect("add pivot cache records");
+
+        package.to_bytes().expect("synthetic pivot workbook bytes")
     }
 
     fn synthetic_workbook_with_filtered_chart_series_bytes() -> Vec<u8> {

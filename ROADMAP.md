@@ -191,11 +191,17 @@ Completed slices:
   serialization.
 - Proved synthetic clean save and unrelated cell edits retain the inventory, while changed parts,
   changed outgoing relationships, and dangling internal targets fail explicitly.
+- Added runtime preflight for the `Worksheet` and sheet-collection OM surfaces: rename, delete, and
+  copy are rejected when either involved workbook owns a preserved pivot graph; move to a new or
+  different workbook is rejected before allocation or mutation, while same-workbook reorder is
+  retained and passes save/reopen preservation.
 
 Next slices:
 
-- Define safe sheet rename/copy/move/delete and shared-cache ownership behavior.
-- Reject unsupported destructive mutations before changing model or package state.
+- Extend the conservative preflight to chart-driven indirect sheet lifecycle paths before allowing
+  them on pivot workbooks.
+- Replace blanket rejection with owner-aware sheet rename/copy/delete behavior only after a real
+  corpus proves shared-cache and relationship ownership semantics.
 - Replace duplicate raw cache-record snapshots with a bounded digest or shared backing after the
   preservation contract is stable.
 

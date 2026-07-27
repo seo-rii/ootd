@@ -31,13 +31,13 @@ contract-based until Milestone M1 pins the first behavioral Excel corpus.
 | Charts and drawings | Partial | Typed chart mutation and lossless-first relationship graph lifecycle cover a broad surface | Remain feature-frozen until PivotChart work; fix preservation regressions only |
 | Styles and themes | Preserve-only | Raw bytes and typed summaries are retained; general typed style allocation and mutation are incomplete | Corpus preservation before broader typed editing |
 | Macros and unsupported package parts | Preserve-only | OOXML macro-bearing variants and opaque parts are retained within the covered save paths | Real corpus and explicit capability matrix |
-| Pivot tables, caches, slicers, and timelines | Preserve-only | Known pivot/cache/slicer/timeline parts, related opaque closure, external targets, shared-cache incoming edges, raw bytes, content types, compression, and owner relationships are inventoried; clean and unrelated-cell saves are guarded | Conservative sheet lifecycle rejection, tracked real corpus, and Excel reopen without repair |
+| Pivot tables, caches, slicers, and timelines | Preserve-only | Known pivot/cache/slicer/timeline parts, related opaque closure, external targets, shared-cache incoming edges, raw bytes, content types, compression, and owner relationships are inventoried; clean and unrelated-cell saves are guarded; direct Worksheet and sheet-collection rename/copy/delete and cross-workbook move fail before mutation while same-workbook reorder is retained | Chart-driven indirect lifecycle preflight, tracked real corpus, and Excel reopen without repair |
 
 ## Verification Baseline
 
 - Rust MSRV: 1.88; development toolchain: 1.94.0.
 - Linux workspace tests: enabled in CI.
-- Current root test inventory: 683 `excel-runtime` tests and 2,838 `excel-xlsx` tests.
+- Current root test inventory: 690 `excel-runtime` tests and 2,838 `excel-xlsx` tests.
 - M2 boundary progress: the `excel-xlsx` and `excel-runtime` unit tests now live outside their
   library roots with test identities unchanged; calculation and recalculation/writeback are
   isolated; shared strings, relationships, and worksheet cell codec logic are isolated; Application,
@@ -60,7 +60,9 @@ contract-based until Milestone M1 pins the first behavioral Excel corpus.
 - M5 pivot preservation: the codec inventories seven known pivot package kinds plus their internal
   opaque closure, incoming/shared and outgoing/external relationships, content types, compression,
   and raw bytes. Save-time gates protect clean and unrelated-cell edits and reject drift or dangling
-  internal targets; typed pivot mutation and real Excel reopen evidence remain out of scope.
+  internal targets. Runtime preflight rejects unsafe direct Worksheet and sheet-collection
+  lifecycle operations atomically and preserves same-workbook reorder across save/reopen; indirect
+  chart-driven lifecycle, typed pivot mutation, and real Excel reopen evidence remain out of scope.
 - Behavioral Oracle foundation: Rust and .NET contracts, runtime adapter, differential gate bridge,
   COM runner, and watchdog are implemented and synthetic/fake-backed tests pass.
 - Real Excel behavioral cases: none pinned yet; the current Linux host cannot execute desktop Excel.

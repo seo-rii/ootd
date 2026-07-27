@@ -514,6 +514,10 @@ impl ExcelRuntime {
                 if sheet_ids.is_empty() {
                     return Ok(OmValue::Bool(true));
                 }
+                Self::ensure_pivot_sheet_lifecycle_supported(
+                    self.runtime_workbook(workbook)?,
+                    &format!("{collection_name}.Delete"),
+                )?;
                 self.ensure_sheet_block_can_be_deleted_from_workbook(
                     workbook,
                     sheet_ids.as_slice(),
@@ -539,20 +543,32 @@ impl ExcelRuntime {
                         format!("{collection_name} collection is empty"),
                     ));
                 }
-                if let Some((target_workbook, base_insertion_index)) = self
-                    .worksheet_placement_target(
-                        workbook,
-                        args.first(),
-                        args.get(1),
-                        &format!("{collection_name}.Copy"),
-                    )?
+                let operation = format!("{collection_name}.Copy");
+                let placement_target = self.worksheet_placement_target(
+                    workbook,
+                    args.first(),
+                    args.get(1),
+                    operation.as_str(),
+                )?;
+                Self::ensure_pivot_sheet_lifecycle_supported(
+                    self.runtime_workbook(workbook)?,
+                    operation.as_str(),
+                )?;
+                if let Some((target_workbook, _)) = placement_target
+                    && target_workbook != workbook
                 {
+                    Self::ensure_pivot_sheet_lifecycle_supported(
+                        self.runtime_workbook(target_workbook)?,
+                        operation.as_str(),
+                    )?;
+                }
+                if let Some((target_workbook, base_insertion_index)) = placement_target {
                     let copied_sheet_ids = self.copy_sheet_block_to_workbook(
                         workbook,
                         sheet_ids.as_slice(),
                         target_workbook,
                         base_insertion_index,
-                        &format!("{collection_name}.Copy"),
+                        operation.as_str(),
                     )?;
                     if let Some(active_sheet_id) = copied_sheet_ids.first().copied() {
                         self.set_selection(
@@ -567,7 +583,7 @@ impl ExcelRuntime {
                 self.create_workbook_from_sheet_block(
                     workbook,
                     sheet_ids.as_slice(),
-                    &format!("{collection_name}.Copy"),
+                    operation.as_str(),
                 )?;
                 Ok(OmValue::Empty)
             }
@@ -599,6 +615,23 @@ impl ExcelRuntime {
                         OmErrorCode::InvalidState,
                         "cannot modify a read-only workbook",
                     ));
+                }
+
+                if placement_target
+                    .as_ref()
+                    .is_none_or(|(target_workbook, _)| *target_workbook != workbook)
+                {
+                    let operation = format!("{collection_name}.Move");
+                    Self::ensure_pivot_sheet_lifecycle_supported(
+                        self.runtime_workbook(workbook)?,
+                        operation.as_str(),
+                    )?;
+                    if let Some((target_workbook, _)) = placement_target {
+                        Self::ensure_pivot_sheet_lifecycle_supported(
+                            self.runtime_workbook(target_workbook)?,
+                            operation.as_str(),
+                        )?;
+                    }
                 }
 
                 if let Some((target_workbook, base_insertion_index)) = placement_target {
@@ -1172,12 +1205,25 @@ impl ExcelRuntime {
                         "Worksheet.Copy accepts at most Before and After arguments",
                     ));
                 }
-                if let Some((target_workbook, insertion_index)) = self.worksheet_placement_target(
+                let placement_target = self.worksheet_placement_target(
                     workbook,
                     args.first(),
                     args.get(1),
                     "Worksheet.Copy",
-                )? {
+                )?;
+                Self::ensure_pivot_sheet_lifecycle_supported(
+                    self.runtime_workbook(workbook)?,
+                    "Worksheet.Copy",
+                )?;
+                if let Some((target_workbook, _)) = placement_target
+                    && target_workbook != workbook
+                {
+                    Self::ensure_pivot_sheet_lifecycle_supported(
+                        self.runtime_workbook(target_workbook)?,
+                        "Worksheet.Copy",
+                    )?;
+                }
+                if let Some((target_workbook, insertion_index)) = placement_target {
                     self.copy_basic_worksheet_to_workbook(
                         workbook,
                         sheet_id,
@@ -1206,6 +1252,10 @@ impl ExcelRuntime {
                         "Worksheet.Delete does not accept arguments",
                     ));
                 }
+                Self::ensure_pivot_sheet_lifecycle_supported(
+                    self.runtime_workbook(workbook)?,
+                    "Worksheet.Delete",
+                )?;
                 Ok(OmValue::Bool(
                     self.delete_worksheet(workbook, sheet_id, true)?,
                 ))

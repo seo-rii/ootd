@@ -3144,6 +3144,10 @@ impl ExcelRuntime {
                                 OmError::new(OmErrorCode::NotFound, "unknown worksheet")
                             })?;
                         if runtime.loaded.state.worksheets[worksheet_index].name != new_name {
+                            Self::ensure_pivot_sheet_lifecycle_supported(
+                                runtime,
+                                "Worksheet.Name",
+                            )?;
                             let old_worksheets = runtime.loaded.state.worksheets.clone();
                             runtime.loaded.state.worksheets[worksheet_index].name =
                                 new_name.clone();
@@ -18557,6 +18561,18 @@ impl ExcelRuntime {
             .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "unknown workbook handle"))
     }
 
+    fn ensure_pivot_sheet_lifecycle_supported(
+        runtime: &RuntimeWorkbook,
+        operation: &str,
+    ) -> OmResult<()> {
+        if runtime.loaded.support_parts.pivot_inventory.is_empty() {
+            return Ok(());
+        }
+        Err(OmError::unsupported(format!(
+            "{operation} is not supported while preserving a pivot package graph"
+        )))
+    }
+
     fn runtime_workbook_mut(&mut self, workbook: WorkbookHandle) -> OmResult<&mut RuntimeWorkbook> {
         let WorkbookHandle(ObjectHandle(handle_value)) = workbook;
         if self.stale_objects.contains(&handle_value) {
@@ -22356,6 +22372,10 @@ impl ExcelRuntime {
                     "cannot modify a read-only workbook",
                 ));
             }
+            Self::ensure_pivot_sheet_lifecycle_supported(
+                self.runtime_workbook(workbook)?,
+                "Worksheet.Move",
+            )?;
             let selection_rect = self
                 .selection
                 .filter(|selection| {
@@ -22386,6 +22406,14 @@ impl ExcelRuntime {
                     "cannot modify a read-only workbook",
                 ));
             }
+            Self::ensure_pivot_sheet_lifecycle_supported(
+                self.runtime_workbook(workbook)?,
+                "Worksheet.Move",
+            )?;
+            Self::ensure_pivot_sheet_lifecycle_supported(
+                self.runtime_workbook(target_workbook)?,
+                "Worksheet.Move",
+            )?;
             self.copy_basic_worksheet_to_workbook(
                 workbook,
                 sheet_id,
