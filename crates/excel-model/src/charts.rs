@@ -509,6 +509,8 @@ pub struct DrawingModel {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+// Keep the public variant payload shape stable while drawing models remain API data.
+#[allow(clippy::large_enum_variant)]
 pub enum DrawingObjectModel {
     ChartFrame(ChartObjectModel),
     UnsupportedRaw {
@@ -1562,10 +1564,11 @@ fn resolve_chart_source_defined_name(
                 areas.push(area);
             }
 
-            if !areas.is_empty() && areas.len() == parts.len() {
-                if let Ok(range) = RangeSet::new(workbook_id, areas) {
-                    return Some(ReferenceTarget::Range(range));
-                }
+            if !areas.is_empty()
+                && areas.len() == parts.len()
+                && let Ok(range) = RangeSet::new(workbook_id, areas)
+            {
+                return Some(ReferenceTarget::Range(range));
             }
         }
     } else if let Some(target) = resolve_chart_source_reference(

@@ -164,19 +164,14 @@ pub enum CellError {
     Unknown,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub enum CellValue {
+    #[default]
     Blank,
     Bool(bool),
     Number(f64),
     Text(String),
     Error(CellError),
-}
-
-impl Default for CellValue {
-    fn default() -> Self {
-        Self::Blank
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -201,7 +196,7 @@ pub struct OmArray {
 
 impl OmArray {
     pub fn new(rows: usize, cols: usize, values: Vec<OmValue>) -> OmResult<Self> {
-        if rows.checked_mul(cols).unwrap_or(usize::MAX) != values.len() {
+        if rows.saturating_mul(cols) != values.len() {
             return Err(OmError::invalid_argument(
                 "array dimensions do not match the number of values",
             ));

@@ -235,17 +235,17 @@ fn main() {
 
             if let Some(script_out_path) = powershell_script_out {
                 let script = plan.render_powershell_script();
-                if let Some(parent) = script_out_path.parent() {
-                    if !parent.as_os_str().is_empty() {
-                        fs::create_dir_all(parent).unwrap_or_else(|err| {
-                            eprintln!(
-                                "office-capture: failed to create {}: {}",
-                                parent.display(),
-                                err
-                            );
-                            std::process::exit(1);
-                        });
-                    }
+                if let Some(parent) = script_out_path.parent()
+                    && !parent.as_os_str().is_empty()
+                {
+                    fs::create_dir_all(parent).unwrap_or_else(|err| {
+                        eprintln!(
+                            "office-capture: failed to create {}: {}",
+                            parent.display(),
+                            err
+                        );
+                        std::process::exit(1);
+                    });
                 }
                 fs::write(&script_out_path, script).unwrap_or_else(|err| {
                     eprintln!(

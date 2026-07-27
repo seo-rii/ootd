@@ -79,7 +79,7 @@ pub enum DefinedNameKind {
     Unsupported,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DefinedNameMetadata {
     pub hidden: bool,
     pub builtin: Option<BuiltinName>,
@@ -94,24 +94,6 @@ pub struct DefinedNameMetadata {
     pub description: Option<String>,
     pub comment: Option<String>,
     pub custom_xml_attrs: BTreeMap<String, String>,
-}
-
-impl Default for DefinedNameMetadata {
-    fn default() -> Self {
-        Self {
-            hidden: false,
-            builtin: None,
-            function: false,
-            vb_procedure: false,
-            xlm: false,
-            function_group_id: None,
-            shortcut_key: None,
-            workbook_parameter: false,
-            description: None,
-            comment: None,
-            custom_xml_attrs: BTreeMap::new(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

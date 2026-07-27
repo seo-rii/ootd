@@ -1893,15 +1893,15 @@ impl DifferentialReport {
                     ),
                 });
             }
-            if let Some(surface) = &case.surface {
-                if !is_contract_identifier(surface) {
-                    return Err(DifferentialReportLoadError::Contract {
-                        message: format!(
-                            "differential report case {} surface {} must be an ASCII identifier",
-                            case.name, surface
-                        ),
-                    });
-                }
+            if let Some(surface) = &case.surface
+                && !is_contract_identifier(surface)
+            {
+                return Err(DifferentialReportLoadError::Contract {
+                    message: format!(
+                        "differential report case {} surface {} must be an ASCII identifier",
+                        case.name, surface
+                    ),
+                });
             }
             if case.member.as_deref().is_some_and(is_blank_contract_string) {
                 return Err(DifferentialReportLoadError::Contract {
@@ -1920,15 +1920,15 @@ impl DifferentialReport {
                     ),
                 });
             }
-            if let Some(member) = &case.member {
-                if !is_contract_identifier(member) {
-                    return Err(DifferentialReportLoadError::Contract {
-                        message: format!(
-                            "differential report case {} member {} must be an ASCII identifier",
-                            case.name, member
-                        ),
-                    });
-                }
+            if let Some(member) = &case.member
+                && !is_contract_identifier(member)
+            {
+                return Err(DifferentialReportLoadError::Contract {
+                    message: format!(
+                        "differential report case {} member {} must be an ASCII identifier",
+                        case.name, member
+                    ),
+                });
             }
             if case.member.is_some() && case.surface.is_none() {
                 return Err(DifferentialReportLoadError::Contract {
@@ -3312,6 +3312,7 @@ fn validate_capture_bundle_contract(
         }
     }
 
+    #[allow(clippy::collapsible_if)]
     if let Some(receipt) = manifest
         .get("executionReceipt")
         .and_then(|value| value.as_object())

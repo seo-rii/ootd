@@ -136,18 +136,13 @@ pub enum MemberKind {
     Event,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AccessMode {
+    #[default]
     Read,
     Write,
     Readwrite,
-}
-
-impl Default for AccessMode {
-    fn default() -> Self {
-        Self::Read
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

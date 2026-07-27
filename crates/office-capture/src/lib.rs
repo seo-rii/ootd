@@ -349,6 +349,7 @@ pub enum CaptureBundleCompletionError {
 }
 
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum CaptureDirectExecError {
     Io {
         action: &'static str,
@@ -439,6 +440,7 @@ impl CaptureExecutionReceipt {
     }
 }
 
+#[allow(clippy::result_large_err)]
 impl CaptureDirectExecStatus {
     pub fn from_json_str(input: &str) -> Result<Self, serde_json::Error> {
         serde_json::from_str(input)
@@ -929,6 +931,7 @@ impl CapturePlan {
         })
     }
 
+    #[allow(clippy::result_large_err)]
     pub fn run_execution_bundle(
         &self,
         host_root: impl AsRef<Path>,
@@ -2643,7 +2646,7 @@ mod tests {
                 writable_outputs[logical_name]
                     .as_str()
                     .expect("writable output path")
-                    .rsplit(|ch| ch == '\\' || ch == '/')
+                    .rsplit(['\\', '/'])
                     .next()
                     .expect("writable output file name")
                     .to_string()
@@ -3583,7 +3586,7 @@ mod tests {
             )
             .filter_map(|output| {
                 output
-                    .rsplit(|ch| ch == '\\' || ch == '/')
+                    .rsplit(['\\', '/'])
                     .next()
                     .filter(|file_name| pending_output_names.contains(*file_name))
                     .map(str::to_string)

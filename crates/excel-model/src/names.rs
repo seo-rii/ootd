@@ -137,10 +137,10 @@ impl DefinedNameTable {
     }
 
     pub fn lookup(&self, current_sheet: Option<SheetId>, name: &str) -> Option<&DefinedName> {
-        if let Some(sheet_id) = current_sheet {
-            if let Some(defined_name) = self.lookup_in_scope(NameScope::Worksheet(sheet_id), name) {
-                return Some(defined_name);
-            }
+        if let Some(sheet_id) = current_sheet
+            && let Some(defined_name) = self.lookup_in_scope(NameScope::Worksheet(sheet_id), name)
+        {
+            return Some(defined_name);
         }
 
         self.lookup_in_scope(NameScope::Workbook, name)
@@ -331,32 +331,29 @@ fn validate_defined_name(name: &str, mode: NameValidationMode) -> OmResult<()> {
                     .saturating_mul(26)
                     .saturating_add(u32::from(byte - b'A' + 1));
             }
-            if column_index <= 16_384 {
-                if let Ok(row_index) = row_part.parse::<u32>() {
-                    if (1..=1_048_576).contains(&row_index) {
-                        return Err(OmError::invalid_argument(format!(
-                            "defined name '{}' must not look like an A1 reference",
-                            name,
-                        )));
-                    }
-                }
-            }
-        }
-    }
-
-    if let Some(after_r) = upper.strip_prefix('R') {
-        if let Some((row_part, col_part)) = after_r.split_once('C') {
-            if !row_part.is_empty()
-                && !col_part.is_empty()
-                && row_part.bytes().all(|byte| byte.is_ascii_digit())
-                && col_part.bytes().all(|byte| byte.is_ascii_digit())
+            if column_index <= 16_384
+                && let Ok(row_index) = row_part.parse::<u32>()
+                && (1..=1_048_576).contains(&row_index)
             {
                 return Err(OmError::invalid_argument(format!(
-                    "defined name '{}' must not look like an R1C1 reference",
+                    "defined name '{}' must not look like an A1 reference",
                     name,
                 )));
             }
         }
+    }
+
+    if let Some(after_r) = upper.strip_prefix('R')
+        && let Some((row_part, col_part)) = after_r.split_once('C')
+        && !row_part.is_empty()
+        && !col_part.is_empty()
+        && row_part.bytes().all(|byte| byte.is_ascii_digit())
+        && col_part.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return Err(OmError::invalid_argument(format!(
+            "defined name '{}' must not look like an R1C1 reference",
+            name,
+        )));
     }
 
     Ok(())
@@ -668,8 +665,10 @@ mod tests {
     #[test]
     fn add_with_metadata_preserves_hidden_flag() {
         let mut table = DefinedNameTable::default();
-        let mut metadata = office_common::DefinedNameMetadata::default();
-        metadata.hidden = true;
+        let metadata = office_common::DefinedNameMetadata {
+            hidden: true,
+            ..Default::default()
+        };
 
         let id = table
             .add_with_metadata(

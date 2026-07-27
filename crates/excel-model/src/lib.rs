@@ -1706,8 +1706,8 @@ mod tests {
             worksheet.dirty_cells,
             BTreeSet::from([(1, 1), (1, 2), (2, 2)])
         );
-        assert!(worksheet.cells.get(&(1, 1)).is_none());
-        assert!(worksheet.cells.get(&(1, 2)).is_none());
+        assert!(!worksheet.cells.contains_key(&(1, 1)));
+        assert!(!worksheet.cells.contains_key(&(1, 2)));
         let styled_cell = worksheet.cells.get(&(2, 2)).expect("B2");
         assert_eq!(styled_cell.value, CellValue::Blank);
         assert!(styled_cell.formula.is_none());
