@@ -28,10 +28,13 @@ Active order:
 6. `OOTD-006`/`OOTD-045` complete (2026-07-27): all filesystem save APIs now use verified
    preparation, same-directory temporary write/flush/sync, atomic replace or create-new, and
    parent-directory sync before runtime commit; host-writer commit is success-gated too.
-7. **Active:** `OOTD-007`~`OOTD-009` persist formula caches and synchronize calculation metadata.
-8. Continue with fail-closed public/security contracts, QName/reference/parser invariants, then
+7. `OOTD-007` complete (2026-07-27): changed scalar formula results now mark their formula cells
+   serialization-dirty, and Calculate → Save → reopen persists both formula text and cached value.
+8. **Active:** `OOTD-008`/`OOTD-009` report partial calculation and synchronize calculation
+   metadata.
+9. Continue with fail-closed public/security contracts, QName/reference/parser invariants, then
    cell/formula fidelity.
-9. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
+10. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
    claiming practical chart/pivot/style parity.
 
 Every numbered work unit starts with a failing regression and lands as its own reviewable commit.

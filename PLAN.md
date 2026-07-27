@@ -80,8 +80,11 @@ calculation, chart/pivot preservation, Windows Excel Oracle, CI와 문서 구조
    parent sync 순서로 통합했다. replace 전 5단계와 replace 후 sync fault를 주입해 원본 또는
    새 output의 유효성, temporary cleanup, 열린 runtime의 dirty state 보존을 고정했다.
    host writer API도 write/flush 성공 뒤에만 새 baseline을 commit한다.
-7. `OOTD-007`: scalar formula cached value를 serialization dirty로 기록한다.
-8. `OOTD-008` + `OOTD-009`: structured `CalculationReport`, partial-calculation state와
+7. `OOTD-007` — 완료 (2026-07-27): scalar formula 재계산 결과가 기존 cache와 다를 때
+   formula cell과 worksheet를 serialization dirty로 기록한다. precedent 변경 → Calculate →
+   Save → reopen 회귀로 formula text와 새 cached `<v>`가 함께 보존됨을 고정했다.
+8. **진행 중 — `OOTD-008` + `OOTD-009`**: structured `CalculationReport`,
+   partial-calculation state와
    `calcPr`/calc-chain lifecycle을 연결한다.
 
 Wave 1 exit gate:

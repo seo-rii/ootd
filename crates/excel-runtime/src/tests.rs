@@ -5454,6 +5454,144 @@
     }
 
     #[test]
+    fn calculate_save_reopen_persists_formula_cached_value() {
+        let mut package =
+            OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("base formula package");
+        package
+            .replace_part_bytes(
+                "xl/worksheets/sheet1.xml",
+                br#"<?xml version="1.0" encoding="UTF-8"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <dimension ref="A1:B1"/>
+  <sheetData>
+    <row r="1">
+      <c r="A1"><v>42</v></c>
+      <c r="B1"><f>A1*2</f><v>84</v></c>
+    </row>
+  </sheetData>
+</worksheet>"#
+                    .to_vec(),
+            )
+            .expect("replace formula worksheet");
+        let source_bytes = package.to_bytes().expect("formula package bytes");
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        let base_dir = std::env::temp_dir().join(format!("ootd-formula-cache-save-{unique}"));
+        fs::create_dir_all(&base_dir).expect("create formula cache fixture dir");
+        let source_path = base_dir.join("source.xlsx");
+        fs::write(&source_path, source_bytes).expect("write formula cache fixture");
+
+        let mut runtime = ExcelRuntime::new();
+        let workbooks = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "Workbooks", &[])
+                .expect("Workbooks"),
+        );
+        let workbook = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    workbooks,
+                    "Open",
+                    &[OmValue::Text(
+                        source_path.to_string_lossy().into_owned(),
+                    )],
+                )
+                .expect("open formula cache fixture"),
+        );
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let a1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1".to_string())])
+                .expect("Range(A1)"),
+        );
+        let b1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B1".to_string())])
+                .expect("Range(B1)"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(b1, "Value2", &[])
+                    .expect("B1 cached value before Calculate")
+            ),
+            84.0
+        );
+
+        runtime
+            .dispatch_set(a1, "Value2", OmValue::Number(50.0), &[])
+            .expect("change formula precedent");
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate");
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(b1, "Value2", &[])
+                    .expect("B1 cached value after Calculate")
+            ),
+            100.0
+        );
+        runtime
+            .dispatch_invoke(workbook, "Save", &[])
+            .expect("Workbook.Save");
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbooks = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_runtime.root_application(), "Workbooks", &[])
+                .expect("reopened Workbooks"),
+        );
+        reopened_runtime
+            .dispatch_invoke(
+                reopened_workbooks,
+                "Open",
+                &[OmValue::Text(
+                    source_path.to_string_lossy().into_owned(),
+                )],
+            )
+            .expect("reopen formula cache fixture");
+        let reopened_sheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_runtime.root_application(), "ActiveSheet", &[])
+                .expect("reopened ActiveSheet"),
+        );
+        let reopened_b1 = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(
+                    reopened_sheet,
+                    "Range",
+                    &[OmValue::Text("B1".to_string())],
+                )
+                .expect("reopened Range(B1)"),
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_b1, "Value2", &[])
+                    .expect("reopened B1 cached value")
+            ),
+            100.0
+        );
+        assert_eq!(
+            expect_text(
+                reopened_runtime
+                    .dispatch_get(reopened_b1, "Formula", &[])
+                    .expect("reopened B1 formula")
+            ),
+            "=A1*2"
+        );
+
+        fs::remove_dir_all(base_dir).expect("cleanup formula cache fixture");
+    }
+
+    #[test]
     fn application_calculate_updates_basic_aggregate_functions() {
         let mut runtime = ExcelRuntime::new();
         runtime

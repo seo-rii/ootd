@@ -176,8 +176,14 @@ impl ExcelRuntime {
                 .state
                 .worksheet_data_for_sheet_mut(sheet_id)?;
             for ((row, col), value) in scalar_updates {
-                if let Some(cell) = worksheet.cells.get_mut(&(row, col)) {
+                let coordinates = (row, col);
+                if let Some(cell) = worksheet.cells.get_mut(&coordinates) {
+                    if cell.value == value {
+                        continue;
+                    }
                     cell.value = value;
+                    worksheet.dirty_cells.insert(coordinates);
+                    worksheet.dirty = true;
                 }
             }
         }
