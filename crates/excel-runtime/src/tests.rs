@@ -35401,6 +35401,100 @@
     }
 
     #[test]
+    fn formula_spill_reference_tracks_materialized_sequence_extent() {
+        let (mut runtime, workbook, active_sheet, sheet_id) = runtime_with_sequence_spill();
+        let sum = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("A20".to_string())],
+                )
+                .expect("Range(A20)"),
+        );
+
+        runtime
+            .dispatch_set(
+                sum,
+                "Formula",
+                OmValue::Text("=SUM(J10#)".to_string()),
+                &[],
+            )
+            .expect("set spill-range sum");
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("calculate spill-range sum");
+        assert_eq!(
+            runtime
+                .dispatch_get(sum, "Value2", &[])
+                .expect("2x2 spill-range sum"),
+            OmValue::Number(10.0),
+        );
+
+        let anchor = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("J10".to_string())],
+                )
+                .expect("Range(J10)"),
+        );
+        runtime
+            .dispatch_set(
+                anchor,
+                "Formula2",
+                OmValue::Text("=SEQUENCE(1,3,10,10)".to_string()),
+                &[],
+            )
+            .expect("replace sequence shape");
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("materialize replacement sequence");
+
+        let worksheet = runtime
+            .workbook_state(workbook)
+            .expect("workbook state")
+            .worksheet_data_for_sheet(sheet_id)
+            .expect("worksheet data");
+        assert_eq!(
+            worksheet.spill_ranges.get(&(10, 10)),
+            Some(&Rect {
+                row_first: 10,
+                row_last: 10,
+                col_first: 10,
+                col_last: 12,
+            })
+        );
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    runtime.root_application(),
+                    "Evaluate",
+                    &[OmValue::Text("=SUM(J10#)".to_string())],
+                )
+                .expect("evaluate resized spill range"),
+            OmValue::Number(60.0),
+        );
+    }
+
+    #[test]
+    fn formula_spill_reference_to_non_spill_anchor_returns_ref_error() {
+        let (mut runtime, _, _, _) = runtime_with_sequence_spill();
+
+        assert_eq!(
+            runtime
+                .dispatch_invoke(
+                    runtime.root_application(),
+                    "Evaluate",
+                    &[OmValue::Text("=SUM(A20#)".to_string())],
+                )
+                .expect("evaluate missing spill range"),
+            OmValue::Error(CellError::Ref),
+        );
+    }
+
+    #[test]
     fn range_r1c1_formula_batch_setters_reject_spill_children_atomically() {
         for member in ["FormulaR1C1", "Formula2R1C1"] {
             let (mut runtime, workbook, active_sheet, _) = runtime_with_sequence_spill();

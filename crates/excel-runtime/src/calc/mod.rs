@@ -21065,7 +21065,9 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if !saw_reference_char {
             return Ok(None);
         }
-        let next_is_boundary = self.input[cursor..]
+        let has_spill_operator = self.input[cursor..].starts_with('#');
+        let next_index = cursor + usize::from(has_spill_operator);
+        let next_is_boundary = self.input[next_index..]
             .chars()
             .next()
             .is_none_or(|ch| !ch.is_ascii_alphanumeric() && ch != '_' && ch != '.');
@@ -21073,10 +21075,27 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             return Ok(None);
         }
         let token = &self.input[start..cursor];
-        let Some(rect) = parse_rect_a1(token).ok() else {
+        let Some(mut rect) = parse_rect_a1(token).ok() else {
             return Ok(None);
         };
-        Ok(Some((sheet_id, rect, cursor)))
+        if has_spill_operator {
+            if rect.row_first != rect.row_last || rect.col_first != rect.col_last {
+                return Err(FormulaEvalError::Ref);
+            }
+            rect = self
+                .evaluator
+                .state
+                .worksheet_data
+                .get(&sheet_id)
+                .and_then(|worksheet| {
+                    worksheet
+                        .spill_ranges
+                        .get(&(rect.row_first, rect.col_first))
+                })
+                .copied()
+                .ok_or(FormulaEvalError::Ref)?;
+        }
+        Ok(Some((sheet_id, rect, next_index)))
     }
 
     fn try_parse_3d_reference(

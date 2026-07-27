@@ -151,6 +151,9 @@ Completed slices:
   emitted `t="array"`/`ref` metadata for new Formula2 spills, and removed stale array attributes
   when an anchor becomes an ordinary formula. Spill ranges remain authoritative even when a blank
   child has no cached cell node.
+- Added A1 spill-range references such as `J10#`, including explicit `#REF!` for non-spill anchors
+  and extent lookup after a materialized spill changes shape; dependency-aware recalculation of
+  downstream `#` formulas remains a separate slice.
 
 Next slices:
 
@@ -159,7 +162,8 @@ Next slices:
 - Introduce a common evaluation value model for scalar, array, reference, error, lambda, and
   omitted arguments.
 - Centralize scalar, aggregate, array, and reference coercion.
-- Complete `INDEX`, `INDIRECT`, `OFFSET`, `TRIMRANGE`, names, multi-area, 3D, `@`, and `#` semantics.
+- Complete `INDEX`, `INDIRECT`, `OFFSET`, `TRIMRANGE`, names, multi-area, 3D, `@`, and
+  dependency-aware `#` semantics.
 - Add dependency invalidation and cycle handling; validate dynamic-array extension metadata and
   save/reopen behavior against the pinned Excel Oracle profile.
 - Revalidate the existing 17 array functions before adding higher-order functions.
