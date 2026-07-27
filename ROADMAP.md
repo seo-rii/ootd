@@ -25,9 +25,10 @@ Active order:
 5. `OOTD-005` complete (2026-07-27): `Workbook.Close` now follows a 48-case headless state table;
    explicit save requires a real target, prompt-required closes fail without invalidating the
    workbook, and read-only close-save accepts only a create-new Filename.
-6. **Active:** `OOTD-006` makes Save/SaveAs/SaveCopyAs/Close durable, atomic, and transactional
-   through `OOTD-045`.
-7. `OOTD-007`~`OOTD-009` persist formula caches and synchronize calculation metadata.
+6. `OOTD-006`/`OOTD-045` complete (2026-07-27): all filesystem save APIs now use verified
+   preparation, same-directory temporary write/flush/sync, atomic replace or create-new, and
+   parent-directory sync before runtime commit; host-writer commit is success-gated too.
+7. **Active:** `OOTD-007`~`OOTD-009` persist formula caches and synchronize calculation metadata.
 8. Continue with fail-closed public/security contracts, QName/reference/parser invariants, then
    cell/formula fidelity.
 9. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before

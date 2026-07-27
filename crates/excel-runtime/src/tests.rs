@@ -11,6 +11,7 @@
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    use super::persistence::PersistenceFailurePoint;
     use office_common::{
         CellError, CellValue, ExcelProfile, FileFormat, GetRangeValuesSpec, LoadOptions,
         ObjectHandle, OmArray, OmErrorCode, OmValue, OpenWorkbookSpec, RangeArea, RangeRef,
@@ -42842,6 +42843,545 @@
         assert_eq!(reopened.state.worksheets[0].name, "SavedName");
 
         fs::remove_file(path).expect("cleanup fixture");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn workbook_save_atomically_replaces_the_source_file() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+        let mut runtime = ExcelRuntime::new();
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        let base_dir = std::env::temp_dir().join(format!("ootd-atomic-save-{unique}"));
+        fs::create_dir_all(&base_dir).expect("create atomic save fixture dir");
+        let source_path = base_dir.join("source.xlsx");
+        fs::write(&source_path, synthetic_workbook_bytes()).expect("write atomic save source");
+        fs::set_permissions(&source_path, fs::Permissions::from_mode(0o640))
+            .expect("set atomic save source permissions");
+        let original_inode = fs::metadata(&source_path)
+            .expect("atomic save source metadata")
+            .ino();
+
+        let workbooks = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "Workbooks", &[])
+                .expect("Workbooks"),
+        );
+        let workbook = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    workbooks,
+                    "Open",
+                    &[OmValue::Text(
+                        source_path.to_string_lossy().into_owned(),
+                    )],
+                )
+                .expect("open atomic save source"),
+        );
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        runtime
+            .dispatch_set(
+                active_sheet,
+                "Name",
+                OmValue::Text("AtomicallySaved".to_string()),
+                &[],
+            )
+            .expect("dirty atomic save source");
+
+        runtime
+            .dispatch_invoke(workbook, "Save", &[])
+            .expect("atomic Workbook.Save");
+
+        let replaced_inode = fs::metadata(&source_path)
+            .expect("replaced atomic save source metadata")
+            .ino();
+        assert_ne!(
+            replaced_inode, original_inode,
+            "Workbook.Save must replace rather than truncate the source inode"
+        );
+        assert_eq!(
+            fs::metadata(&source_path)
+                .expect("replaced atomic save source permissions")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o640,
+            "atomic replacement must preserve existing target permissions"
+        );
+        let reopened = ExcelRuntime::new()
+            .codec
+            .load(
+                &fs::read(&source_path).expect("read atomic save source"),
+                LoadOptions::default(),
+            )
+            .expect("reload atomic save source");
+        assert_eq!(reopened.state.worksheets[0].name, "AtomicallySaved");
+
+        fs::remove_dir_all(base_dir).expect("cleanup atomic save fixture");
+    }
+
+    #[test]
+    fn atomic_save_failure_preserves_original_and_dirty_state() {
+        for failure_point in [
+            PersistenceFailurePoint::CreateTemporary,
+            PersistenceFailurePoint::WriteTemporary,
+            PersistenceFailurePoint::FlushTemporary,
+            PersistenceFailurePoint::SyncTemporary,
+            PersistenceFailurePoint::ReplaceTarget,
+        ] {
+            let mut runtime = ExcelRuntime::new();
+            let unique = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("time")
+                .as_nanos();
+            let base_dir = std::env::temp_dir().join(format!(
+                "ootd-atomic-save-failure-{failure_point:?}-{unique}"
+            ));
+            fs::create_dir_all(&base_dir).expect("create atomic failure fixture dir");
+            let source_path = base_dir.join("source.xlsx");
+            let source_bytes = synthetic_workbook_bytes();
+            fs::write(&source_path, &source_bytes).expect("write atomic failure source");
+
+            let workbooks = expect_object_handle(
+                runtime
+                    .dispatch_get(runtime.root_application(), "Workbooks", &[])
+                    .expect("Workbooks"),
+            );
+            let workbook = expect_object_handle(
+                runtime
+                    .dispatch_invoke(
+                        workbooks,
+                        "Open",
+                        &[OmValue::Text(
+                            source_path.to_string_lossy().into_owned(),
+                        )],
+                    )
+                    .expect("open atomic failure source"),
+            );
+            let active_sheet = expect_object_handle(
+                runtime
+                    .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                    .expect("ActiveSheet"),
+            );
+            let dirty_name = format!("Dirty{failure_point:?}");
+            runtime
+                .dispatch_set(
+                    active_sheet,
+                    "Name",
+                    OmValue::Text(dirty_name.clone()),
+                    &[],
+                )
+                .expect("dirty atomic failure source");
+            runtime.persistence_failure_point = Some(failure_point);
+
+            let error = runtime
+                .dispatch_invoke(workbook, "Save", &[])
+                .expect_err("injected atomic Save failure");
+            assert_eq!(error.code, OmErrorCode::Io, "{failure_point:?}");
+            assert!(
+                error.message.contains(&format!("{failure_point:?}")),
+                "failure stage must be diagnosed: {error:?}"
+            );
+            assert_eq!(
+                fs::read(&source_path).expect("read source after atomic failure"),
+                source_bytes,
+                "{failure_point:?}"
+            );
+            assert_eq!(
+                expect_text(
+                    runtime
+                        .dispatch_get(active_sheet, "Name", &[])
+                        .expect("worksheet remains live after atomic failure")
+                ),
+                dirty_name,
+                "{failure_point:?}"
+            );
+            assert!(!expect_bool(
+                runtime
+                    .dispatch_get(workbook, "Saved", &[])
+                    .expect("dirty state after atomic failure")
+            ));
+            assert_eq!(
+                fs::read_dir(&base_dir)
+                    .expect("read atomic failure fixture dir")
+                    .count(),
+                1,
+                "temporary files must be cleaned after {failure_point:?}"
+            );
+
+            fs::remove_dir_all(base_dir).expect("cleanup atomic failure fixture");
+        }
+    }
+
+    #[test]
+    fn filesystem_save_apis_share_the_atomic_replace_boundary() {
+        #[derive(Clone, Copy, Debug)]
+        enum SaveApi {
+            Save,
+            SaveAs,
+            SaveCopyAs,
+            Close,
+        }
+
+        for save_api in [
+            SaveApi::Save,
+            SaveApi::SaveAs,
+            SaveApi::SaveCopyAs,
+            SaveApi::Close,
+        ] {
+            let mut runtime = ExcelRuntime::new();
+            let unique = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("time")
+                .as_nanos();
+            let base_dir =
+                std::env::temp_dir().join(format!("ootd-atomic-{save_api:?}-{unique}"));
+            fs::create_dir_all(&base_dir).expect("create atomic API fixture dir");
+            let source_path = base_dir.join("source.xlsx");
+            let target_path = base_dir.join("target.xlsx");
+            let source_bytes = synthetic_workbook_bytes();
+            let existing_target_bytes = b"existing target".to_vec();
+            fs::write(&source_path, &source_bytes).expect("write atomic API source");
+            if matches!(save_api, SaveApi::SaveAs | SaveApi::SaveCopyAs) {
+                fs::write(&target_path, &existing_target_bytes)
+                    .expect("write atomic API existing target");
+            }
+
+            let workbooks = expect_object_handle(
+                runtime
+                    .dispatch_get(runtime.root_application(), "Workbooks", &[])
+                    .expect("Workbooks"),
+            );
+            let workbook = expect_object_handle(
+                runtime
+                    .dispatch_invoke(
+                        workbooks,
+                        "Open",
+                        &[OmValue::Text(
+                            source_path.to_string_lossy().into_owned(),
+                        )],
+                    )
+                    .expect("open atomic API source"),
+            );
+            let active_sheet = expect_object_handle(
+                runtime
+                    .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                    .expect("ActiveSheet"),
+            );
+            let dirty_name = format!("Dirty{save_api:?}");
+            runtime
+                .dispatch_set(
+                    active_sheet,
+                    "Name",
+                    OmValue::Text(dirty_name.clone()),
+                    &[],
+                )
+                .expect("dirty atomic API workbook");
+            runtime.persistence_failure_point = Some(PersistenceFailurePoint::ReplaceTarget);
+
+            let result = match save_api {
+                SaveApi::Save => runtime.dispatch_invoke(workbook, "Save", &[]),
+                SaveApi::SaveAs => runtime.dispatch_invoke(
+                    workbook,
+                    "SaveAs",
+                    &[OmValue::Text(
+                        target_path.to_string_lossy().into_owned(),
+                    )],
+                ),
+                SaveApi::SaveCopyAs => runtime.dispatch_invoke(
+                    workbook,
+                    "SaveCopyAs",
+                    &[OmValue::Text(
+                        target_path.to_string_lossy().into_owned(),
+                    )],
+                ),
+                SaveApi::Close => {
+                    runtime.dispatch_invoke(workbook, "Close", &[OmValue::Bool(true)])
+                }
+            };
+            let error = result.expect_err("injected atomic API replace failure");
+            assert_eq!(error.code, OmErrorCode::Io, "{save_api:?}");
+            assert!(
+                error
+                    .message
+                    .contains(&format!("{:?}", PersistenceFailurePoint::ReplaceTarget)),
+                "{save_api:?}: {error:?}"
+            );
+            assert_eq!(
+                fs::read(&source_path).expect("read atomic API source after failure"),
+                source_bytes,
+                "{save_api:?}"
+            );
+            if matches!(save_api, SaveApi::SaveAs | SaveApi::SaveCopyAs) {
+                assert_eq!(
+                    fs::read(&target_path).expect("read atomic API target after failure"),
+                    existing_target_bytes,
+                    "{save_api:?}"
+                );
+            }
+            assert_eq!(
+                expect_text(
+                    runtime
+                        .dispatch_get(active_sheet, "Name", &[])
+                        .expect("worksheet remains live after atomic API failure")
+                ),
+                dirty_name,
+                "{save_api:?}"
+            );
+            assert!(!expect_bool(
+                runtime
+                    .dispatch_get(workbook, "Saved", &[])
+                    .expect("dirty state after atomic API failure")
+            ));
+
+            fs::remove_dir_all(base_dir).expect("cleanup atomic API fixture");
+        }
+    }
+
+    #[test]
+    fn post_replace_sync_failure_keeps_valid_output_and_dirty_runtime_state() {
+        let mut runtime = ExcelRuntime::new();
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        let base_dir = std::env::temp_dir().join(format!("ootd-post-replace-sync-{unique}"));
+        fs::create_dir_all(&base_dir).expect("create post-replace sync fixture dir");
+        let source_path = base_dir.join("source.xlsx");
+        fs::write(&source_path, synthetic_workbook_bytes())
+            .expect("write post-replace sync source");
+
+        let workbooks = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "Workbooks", &[])
+                .expect("Workbooks"),
+        );
+        let workbook = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    workbooks,
+                    "Open",
+                    &[OmValue::Text(
+                        source_path.to_string_lossy().into_owned(),
+                    )],
+                )
+                .expect("open post-replace sync source"),
+        );
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        runtime
+            .dispatch_set(
+                active_sheet,
+                "Name",
+                OmValue::Text("PostReplaceValid".to_string()),
+                &[],
+            )
+            .expect("dirty post-replace sync source");
+        runtime.persistence_failure_point =
+            Some(PersistenceFailurePoint::SyncParentDirectory);
+
+        let error = runtime
+            .dispatch_invoke(workbook, "Save", &[])
+            .expect_err("injected parent-directory sync failure");
+        assert_eq!(error.code, OmErrorCode::Io);
+        assert!(
+            error
+                .message
+                .contains(&format!("{:?}", PersistenceFailurePoint::SyncParentDirectory))
+        );
+        let reopened_after_error = ExcelRuntime::new()
+            .codec
+            .load(
+                &fs::read(&source_path).expect("read replaced output after sync failure"),
+                LoadOptions::default(),
+            )
+            .expect("replaced output remains valid after sync failure");
+        assert_eq!(
+            reopened_after_error.state.worksheets[0].name,
+            "PostReplaceValid"
+        );
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(workbook, "Saved", &[])
+                .expect("dirty state after parent-directory sync failure")
+        ));
+
+        runtime
+            .dispatch_invoke(workbook, "Save", &[])
+            .expect("retry Save after one-shot sync failure");
+        assert!(expect_bool(
+            runtime
+                .dispatch_get(workbook, "Saved", &[])
+                .expect("Saved after retry")
+        ));
+
+        fs::remove_dir_all(base_dir).expect("cleanup post-replace sync fixture");
+    }
+
+    #[test]
+    fn host_stream_save_commits_snapshot_only_after_writer_success() {
+        struct RejectingWriter;
+        struct RejectingFlushWriter {
+            bytes: Vec<u8>,
+        }
+
+        impl std::io::Write for RejectingWriter {
+            fn write(&mut self, _buffer: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::BrokenPipe,
+                    "injected host stream failure",
+                ))
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        impl std::io::Write for RejectingFlushWriter {
+            fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+                self.bytes.extend_from_slice(buffer);
+                Ok(buffer.len())
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::BrokenPipe,
+                    "injected host stream flush failure",
+                ))
+            }
+        }
+
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open host stream workbook");
+        let application = runtime.root_application();
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(application, "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let a1 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1".to_string())])
+                .expect("Range(A1)"),
+        );
+        let b2 = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B2".to_string())])
+                .expect("Range(B2)"),
+        );
+        runtime
+            .dispatch_set(
+                a1,
+                "Value2",
+                OmValue::Text("first stream save".to_string()),
+                &[],
+            )
+            .expect("set A1 before host stream failure");
+        let save_spec = SaveWorkbookSpec {
+            format: FileFormat::Xlsx,
+            profile: ExcelProfile::Excel365,
+            lossless: true,
+        };
+
+        let error = runtime
+            .save_workbook_to_writer(workbook, save_spec.clone(), &mut RejectingWriter)
+            .expect_err("host stream failure must abort snapshot commit");
+        assert_eq!(error.code, OmErrorCode::Io);
+        assert!(error.message.contains("injected host stream failure"));
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("dirty state after host stream failure")
+        ));
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(a1, "Value2", &[])
+                    .expect("A1 remains live after host stream failure")
+            ),
+            "first stream save"
+        );
+
+        let mut rejecting_flush_writer = RejectingFlushWriter { bytes: Vec::new() };
+        let flush_error = runtime
+            .save_workbook_to_writer(
+                workbook,
+                save_spec.clone(),
+                &mut rejecting_flush_writer,
+            )
+            .expect_err("host stream flush failure must abort snapshot commit");
+        assert_eq!(flush_error.code, OmErrorCode::Io);
+        assert!(
+            flush_error
+                .message
+                .contains("injected host stream flush failure")
+        );
+        assert!(!rejecting_flush_writer.bytes.is_empty());
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("dirty state after host stream flush failure")
+        ));
+
+        let mut first_output = Vec::new();
+        runtime
+            .save_workbook_to_writer(workbook, save_spec.clone(), &mut first_output)
+            .expect("first successful host stream save");
+        assert!(expect_bool(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Saved after successful host stream save")
+        ));
+
+        runtime
+            .dispatch_set(
+                b2,
+                "Value2",
+                OmValue::Text("second stream save".to_string()),
+                &[],
+            )
+            .expect("set B2 after first host stream save");
+        let mut second_output = Vec::new();
+        runtime
+            .save_workbook_to_writer(workbook, save_spec, &mut second_output)
+            .expect("second successful host stream save");
+        let reopened = ExcelRuntime::new()
+            .codec
+            .load(&second_output, LoadOptions::default())
+            .expect("reload second host stream output");
+        let sheet_id = reopened.state.worksheets[0].id;
+        let cells = &reopened
+            .state
+            .worksheet_data
+            .get(&sheet_id)
+            .expect("host stream output worksheet data")
+            .cells;
+        assert_eq!(
+            cells.get(&(1, 1)).expect("saved A1").value,
+            CellValue::Text("first stream save".to_string())
+        );
+        assert_eq!(
+            cells.get(&(2, 2)).expect("saved B2").value,
+            CellValue::Text("second stream save".to_string())
+        );
     }
 
     #[test]

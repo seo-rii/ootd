@@ -75,9 +75,11 @@ calculation, chart/pivot preservation, Windows Excel Oracle, CI와 문서 구조
    DisplayAlerts의 48개 조합을 상태표로 고정했다. 명시적 save는 실제 target이 있어야
    닫히며, prompt callback이 없는 headless runtime은 alert가 활성화된 dirty close에서
    stable 오류를 반환한다. read-only close-save는 create-new Filename만 허용한다.
-6. `OOTD-006` + `OOTD-045`: 모든 저장 API를
-   `prepare → durable same-directory replace → commit snapshot` transaction으로 통합하고
-   fault injection을 추가한다.
+6. `OOTD-006` + `OOTD-045` — 완료 (2026-07-27): Save/SaveAs/SaveCopyAs/Close(save)를
+   verified prepare → same-directory temporary write/flush/sync → atomic replace/create-new →
+   parent sync 순서로 통합했다. replace 전 5단계와 replace 후 sync fault를 주입해 원본 또는
+   새 output의 유효성, temporary cleanup, 열린 runtime의 dirty state 보존을 고정했다.
+   host writer API도 write/flush 성공 뒤에만 새 baseline을 commit한다.
 7. `OOTD-007`: scalar formula cached value를 serialization dirty로 기록한다.
 8. `OOTD-008` + `OOTD-009`: structured `CalculationReport`, partial-calculation state와
    `calcPr`/calc-chain lifecycle을 연결한다.

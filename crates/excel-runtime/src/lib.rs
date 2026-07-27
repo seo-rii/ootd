@@ -1,5 +1,6 @@
 mod calc;
 mod dispatch;
+mod persistence;
 mod recalculation;
 
 use calc::{
@@ -50,7 +51,7 @@ use regex::RegexBuilder;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::io::Cursor;
+use std::io::{Cursor, Write};
 use std::path::{Path, PathBuf};
 
 const ROOT_APPLICATION_HANDLE_VALUE: u64 = 0;
@@ -1313,6 +1314,8 @@ pub struct ExcelRuntime {
     workbooks: BTreeMap<u64, RuntimeWorkbook>,
     objects: BTreeMap<u64, RuntimeObjectKind>,
     stale_objects: BTreeSet<u64>,
+    #[cfg(test)]
+    persistence_failure_point: Option<persistence::PersistenceFailurePoint>,
 }
 
 impl ExcelRuntime {
@@ -1361,6 +1364,8 @@ impl ExcelRuntime {
             workbooks: BTreeMap::new(),
             objects,
             stale_objects: BTreeSet::new(),
+            #[cfg(test)]
+            persistence_failure_point: None,
         }
     }
 
@@ -1530,6 +1535,7 @@ impl ExcelRuntime {
         Ok(workbook_handle)
     }
 
+    /// Serializes a workbook snapshot without changing its runtime save baseline.
     pub fn save_workbook(
         &self,
         workbook: WorkbookHandle,
@@ -1545,6 +1551,30 @@ impl ExcelRuntime {
         )
     }
 
+    /// Writes a verified workbook snapshot and commits it as the next baseline only after the
+    /// host writer accepts and flushes every byte.
+    pub fn save_workbook_to_writer<W: Write + ?Sized>(
+        &mut self,
+        workbook: WorkbookHandle,
+        spec: SaveWorkbookSpec,
+        writer: &mut W,
+    ) -> OmResult<()> {
+        let prepared = self.prepare_workbook_save(workbook, spec)?;
+        writer.write_all(&prepared.bytes).map_err(|error| {
+            OmError::new(
+                OmErrorCode::Io,
+                format!("failed to write workbook stream: {error}"),
+            )
+        })?;
+        writer.flush().map_err(|error| {
+            OmError::new(
+                OmErrorCode::Io,
+                format!("failed to flush workbook stream: {error}"),
+            )
+        })?;
+        self.commit_workbook_save_baseline(workbook, prepared.next_loaded, None, None)
+    }
+
     fn prepare_workbook_save(
         &self,
         workbook: WorkbookHandle,
@@ -1558,6 +1588,17 @@ impl ExcelRuntime {
                 lossless: spec.lossless,
             },
         )
+    }
+
+    fn take_persistence_failure_point(&mut self) -> Option<persistence::PersistenceFailurePoint> {
+        #[cfg(test)]
+        {
+            self.persistence_failure_point.take()
+        }
+        #[cfg(not(test))]
+        {
+            None
+        }
     }
 
     fn materialized_workbook_for_save(

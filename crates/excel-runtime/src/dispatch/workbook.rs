@@ -7,12 +7,12 @@ use super::super::{
     validate_optional_integer_arg, validate_optional_text_arg, validate_print_out_args,
     validate_print_preview_args,
 };
+use crate::persistence::{AtomicWriteMode, durable_atomic_write};
 use office_common::{
     ExcelProfile, FileFormat, ObjectHandle, OmError, OmErrorCode, OmResult, OmValue,
     OpenWorkbookSpec, SaveWorkbookSpec, WorkbookHandle,
 };
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 impl ExcelRuntime {
@@ -188,7 +188,14 @@ impl ExcelRuntime {
                         lossless: true,
                     },
                 )?;
-                fs::write(&path, &prepared.bytes).map_err(|error| {
+                let failure_point = self.take_persistence_failure_point();
+                durable_atomic_write(
+                    &path,
+                    &prepared.bytes,
+                    AtomicWriteMode::Replace,
+                    failure_point,
+                )
+                .map_err(|error| {
                     OmError::new(
                         OmErrorCode::Io,
                         format!("failed to write workbook {}: {error}", path.display()),
@@ -264,18 +271,19 @@ impl ExcelRuntime {
                         lossless: true,
                     },
                 )?;
-                if read_only {
-                    let write_result = fs::OpenOptions::new()
-                        .write(true)
-                        .create_new(true)
-                        .open(&path)
-                        .and_then(|mut file| file.write_all(&prepared.bytes));
-                    write_result.map_err(|error| {
-                        if error.kind() == std::io::ErrorKind::AlreadyExists {
+                let write_mode = if read_only {
+                    AtomicWriteMode::CreateNew
+                } else {
+                    AtomicWriteMode::Replace
+                };
+                let failure_point = self.take_persistence_failure_point();
+                durable_atomic_write(&path, &prepared.bytes, write_mode, failure_point).map_err(
+                    |error| {
+                        if read_only && error.kind() == std::io::ErrorKind::AlreadyExists {
                             OmError::invalid_state(
                                 "Workbook.SaveAs for a read-only workbook requires a new filename",
                             )
-                        } else {
+                        } else if read_only {
                             OmError::new(
                                 OmErrorCode::Io,
                                 format!(
@@ -283,16 +291,14 @@ impl ExcelRuntime {
                                     path.display()
                                 ),
                             )
+                        } else {
+                            OmError::new(
+                                OmErrorCode::Io,
+                                format!("failed to write workbook {}: {error}", path.display()),
+                            )
                         }
-                    })?;
-                } else {
-                    fs::write(&path, &prepared.bytes).map_err(|error| {
-                        OmError::new(
-                            OmErrorCode::Io,
-                            format!("failed to write workbook {}: {error}", path.display()),
-                        )
-                    })?;
-                }
+                    },
+                )?;
                 let display_name = path
                     .file_name()
                     .and_then(|value| value.to_str())
@@ -325,7 +331,7 @@ impl ExcelRuntime {
                 };
                 let format = self.workbook_model(workbook)?.format;
                 let read_only = self.runtime_workbook(workbook)?.read_only;
-                let bytes = self.save_workbook(
+                let prepared = self.prepare_workbook_save(
                     workbook,
                     SaveWorkbookSpec {
                         format,
@@ -333,18 +339,19 @@ impl ExcelRuntime {
                         lossless: true,
                     },
                 )?;
-                if read_only {
-                    let write_result = fs::OpenOptions::new()
-                        .write(true)
-                        .create_new(true)
-                        .open(&path)
-                        .and_then(|mut file| file.write_all(&bytes));
-                    write_result.map_err(|error| {
-                        if error.kind() == std::io::ErrorKind::AlreadyExists {
+                let write_mode = if read_only {
+                    AtomicWriteMode::CreateNew
+                } else {
+                    AtomicWriteMode::Replace
+                };
+                let failure_point = self.take_persistence_failure_point();
+                durable_atomic_write(&path, &prepared.bytes, write_mode, failure_point).map_err(
+                    |error| {
+                        if read_only && error.kind() == std::io::ErrorKind::AlreadyExists {
                             OmError::invalid_state(
                                 "Workbook.SaveCopyAs for a read-only workbook requires a new filename",
                             )
-                        } else {
+                        } else if read_only {
                             OmError::new(
                                 OmErrorCode::Io,
                                 format!(
@@ -352,16 +359,17 @@ impl ExcelRuntime {
                                     path.display()
                                 ),
                             )
+                        } else {
+                            OmError::new(
+                                OmErrorCode::Io,
+                                format!(
+                                    "failed to write workbook copy {}: {error}",
+                                    path.display()
+                                ),
+                            )
                         }
-                    })?;
-                } else {
-                    fs::write(&path, &bytes).map_err(|error| {
-                        OmError::new(
-                            OmErrorCode::Io,
-                            format!("failed to write workbook copy {}: {error}", path.display()),
-                        )
-                    })?;
-                }
+                    },
+                )?;
                 Ok(OmValue::Empty)
             }
             "RefreshAll" => {
@@ -455,7 +463,7 @@ impl ExcelRuntime {
                         Some(format) => format,
                         None => self.workbook_model(workbook)?.format,
                     };
-                    let bytes = self.save_workbook(
+                    let prepared = self.prepare_workbook_save(
                         workbook,
                         SaveWorkbookSpec {
                             format,
@@ -463,29 +471,32 @@ impl ExcelRuntime {
                             lossless: true,
                         },
                     )?;
-                    if read_only {
-                        let write_result = fs::OpenOptions::new()
-                            .write(true)
-                            .create_new(true)
-                            .open(&save_path)
-                            .and_then(|mut file| file.write_all(&bytes));
-                        write_result.map_err(|error| {
-                            if error.kind() == std::io::ErrorKind::AlreadyExists {
-                                OmError::invalid_state(
-                                    "Workbook.Close for a read-only workbook requires a new Filename",
-                                )
-                            } else {
-                                OmError::new(
-                                    OmErrorCode::Io,
-                                    format!(
-                                        "failed to write read-only workbook {}: {error}",
-                                        save_path.display()
-                                    ),
-                                )
-                            }
-                        })?;
+                    let write_mode = if read_only {
+                        AtomicWriteMode::CreateNew
                     } else {
-                        fs::write(&save_path, &bytes).map_err(|error| {
+                        AtomicWriteMode::Replace
+                    };
+                    let failure_point = self.take_persistence_failure_point();
+                    durable_atomic_write(
+                        &save_path,
+                        &prepared.bytes,
+                        write_mode,
+                        failure_point,
+                    )
+                    .map_err(|error| {
+                        if read_only && error.kind() == std::io::ErrorKind::AlreadyExists {
+                            OmError::invalid_state(
+                                "Workbook.Close for a read-only workbook requires a new Filename",
+                            )
+                        } else if read_only {
+                            OmError::new(
+                                OmErrorCode::Io,
+                                format!(
+                                    "failed to write read-only workbook {}: {error}",
+                                    save_path.display()
+                                ),
+                            )
+                        } else {
                             OmError::new(
                                 OmErrorCode::Io,
                                 format!(
@@ -493,8 +504,8 @@ impl ExcelRuntime {
                                     save_path.display()
                                 ),
                             )
-                        })?;
-                    }
+                        }
+                    })?;
                 }
                 self.close_workbook(workbook)?;
                 Ok(OmValue::Empty)
