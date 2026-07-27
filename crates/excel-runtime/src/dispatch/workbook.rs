@@ -167,6 +167,15 @@ impl ExcelRuntime {
                         "Workbook.Save does not accept arguments",
                     ));
                 }
+                let path = self
+                    .runtime_workbook(workbook)?
+                    .source_path
+                    .clone()
+                    .ok_or_else(|| {
+                        OmError::invalid_state(
+                            "Workbook.Save requires a source path; use Workbook.SaveAs",
+                        )
+                    })?;
                 let format = self.workbook_model(workbook)?.format;
                 let prepared = self.prepare_workbook_save(
                     workbook,
@@ -176,15 +185,13 @@ impl ExcelRuntime {
                         lossless: true,
                     },
                 )?;
-                if let Some(path) = self.runtime_workbook(workbook)?.source_path.clone() {
-                    fs::write(&path, &prepared.bytes).map_err(|error| {
-                        OmError::new(
-                            OmErrorCode::Io,
-                            format!("failed to write workbook {}: {error}", path.display()),
-                        )
-                    })?;
-                    self.commit_workbook_save_baseline(workbook, prepared.next_loaded, None, None)?;
-                }
+                fs::write(&path, &prepared.bytes).map_err(|error| {
+                    OmError::new(
+                        OmErrorCode::Io,
+                        format!("failed to write workbook {}: {error}", path.display()),
+                    )
+                })?;
+                self.commit_workbook_save_baseline(workbook, prepared.next_loaded, None, None)?;
                 Ok(OmValue::Empty)
             }
             "SaveAs" => {

@@ -34225,6 +34225,80 @@
     }
 
     #[test]
+    fn save_without_source_path_fails() {
+        let mut runtime = ExcelRuntime::new();
+        let workbooks = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "Workbooks", &[])
+                .expect("Workbooks"),
+        );
+        let workbook = expect_object_handle(
+            runtime
+                .dispatch_invoke(workbooks, "Add", &[])
+                .expect("Workbooks.Add"),
+        );
+
+        let clean_error = runtime
+            .dispatch_invoke(workbook, "Save", &[])
+            .expect_err("Workbook.Save without a source path must fail");
+        assert_eq!(clean_error.code, OmErrorCode::InvalidState);
+        assert_eq!(
+            clean_error.message,
+            "Workbook.Save requires a source path; use Workbook.SaveAs"
+        );
+        assert!(
+            runtime
+                .runtime_workbook(WorkbookHandle(workbook))
+                .expect("workbook remains open after failed clean Save")
+                .source_path
+                .is_none()
+        );
+
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let first_cell = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1".to_string())])
+                .expect("Range(A1)"),
+        );
+        runtime
+            .dispatch_set(
+                first_cell,
+                "Value2",
+                OmValue::Text("not discarded".to_string()),
+                &[],
+            )
+            .expect("set A1 before failed Save");
+
+        let dirty_error = runtime
+            .dispatch_invoke(workbook, "Save", &[])
+            .expect_err("dirty Workbook.Save without a source path must fail");
+        assert_eq!(dirty_error, clean_error);
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(workbook, "Saved", &[])
+                .expect("Workbook.Saved after failed Save")
+        ));
+        assert_eq!(
+            runtime
+                .dispatch_get(first_cell, "Value2", &[])
+                .expect("A1 remains available after failed Save"),
+            OmValue::Text("not discarded".to_string())
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(workbooks, "Count", &[])
+                    .expect("Workbooks.Count after failed Save")
+            ),
+            1.0
+        );
+    }
+
+    #[test]
     fn workbook_dispatch_methods_validate_argument_counts() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
@@ -42231,6 +42305,13 @@
     #[test]
     fn workbook_close_rejects_stale_object_handles() {
         let mut runtime = ExcelRuntime::new();
+        let target_path = std::env::temp_dir().join(format!(
+            "ootd-stale-handles-{}.xlsx",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock")
+                .as_nanos()
+        ));
         let workbook = runtime
             .open_workbook(OpenWorkbookSpec {
                 bytes: synthetic_workbook_bytes(),
@@ -42257,8 +42338,12 @@
         );
 
         runtime
-            .dispatch_invoke(active_workbook, "Save", &[])
-            .expect("Save");
+            .dispatch_invoke(
+                active_workbook,
+                "SaveAs",
+                &[OmValue::Text(target_path.to_string_lossy().into_owned())],
+            )
+            .expect("SaveAs");
         runtime
             .dispatch_invoke(active_workbook, "Close", &[])
             .expect("Close");
@@ -42307,6 +42392,7 @@
         );
 
         assert!(runtime.workbook_model(workbook).is_err());
+        fs::remove_file(target_path).expect("cleanup stale-handle SaveAs target");
     }
 
     #[test]

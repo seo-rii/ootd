@@ -64,7 +64,9 @@ calculation, chart/pivot preservation, Windows Excel Oracle, CI와 문서 구조
    mutation은 실제 변경일 때만 prompt 상태를 올리고, no-op assignment는 clean 상태를
    유지한다. `OOTD-046`의 formula-cache/package-graph 등 나머지 dirty-domain 분해는
    후속 work unit으로 남는다.
-3. `OOTD-003`: source path가 없는 `Workbook.Save`를 stable error로 거부한다.
+3. `OOTD-003` — 완료 (2026-07-27): source path가 없는 `Workbook.Save`는 serialization
+   전에 stable `InvalidState` 오류로 `SaveAs`를 요구한다. clean/dirty workbook 모두
+   열린 상태와 prompt/semantic state를 유지한다.
 4. `OOTD-004`: read-only source overwrite를 거부하고 SaveAs/SaveCopyAs 정책을 고정한다.
 5. `OOTD-005`: dirty/source/SaveChanges/Filename/DisplayAlerts close state table을 구현한다.
 6. `OOTD-006` + `OOTD-045`: 모든 저장 API를
