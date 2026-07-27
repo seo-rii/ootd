@@ -15,6 +15,11 @@ pub struct LoadLimits {
     pub max_entry_uncompressed_bytes: u64,
     pub max_total_uncompressed_bytes: u64,
     pub max_compression_ratio: u64,
+    pub max_xml_depth: usize,
+    pub max_xml_events: usize,
+    pub max_xml_text_bytes: u64,
+    pub max_xml_attribute_bytes: u64,
+    pub max_xml_attributes_per_element: usize,
 }
 
 impl Default for LoadLimits {
@@ -26,6 +31,11 @@ impl Default for LoadLimits {
             max_entry_uncompressed_bytes: 64 * 1024 * 1024,
             max_total_uncompressed_bytes: 256 * 1024 * 1024,
             max_compression_ratio: 1_000,
+            max_xml_depth: 256,
+            max_xml_events: 5_000_000,
+            max_xml_text_bytes: 32 * 1024 * 1024,
+            max_xml_attribute_bytes: 16 * 1024 * 1024,
+            max_xml_attributes_per_element: 256,
         }
     }
 }
@@ -176,9 +186,16 @@ impl OpcPackage {
         }
 
         if let Some(content_types_xml) = content_types_xml {
+            preflight_xml_part("[Content_Types].xml", &content_types_xml, &limits)?;
             let manifest = parse_content_types(&content_types_xml)?;
             for part in &mut parts {
                 part.content_type = manifest.resolve(&part.name);
+            }
+        }
+
+        for part in &parts {
+            if is_xml_bearing_part(&part.name, part.content_type.as_deref()) {
+                preflight_xml_part(&part.name, &part.bytes, &limits)?;
             }
         }
 
@@ -303,6 +320,251 @@ fn resource_limit_error(label: &str, actual: u64, maximum: u64) -> OmError {
     OmError::resource_limit(format!(
         "OPC ZIP {label} limit exceeded: {actual} > {maximum}"
     ))
+}
+
+fn is_xml_bearing_part(part_name: &str, content_type: Option<&str>) -> bool {
+    let has_xml_extension = part_name
+        .rsplit_once('.')
+        .map(|(_, extension)| {
+            extension.eq_ignore_ascii_case("xml")
+                || extension.eq_ignore_ascii_case("rels")
+                || extension.eq_ignore_ascii_case("vml")
+        })
+        .unwrap_or(false);
+    has_xml_extension || content_type.is_some_and(content_type_is_xml)
+}
+
+fn content_type_is_xml(content_type: &str) -> bool {
+    let media_type = content_type
+        .split_once(';')
+        .map(|(media_type, _)| media_type)
+        .unwrap_or(content_type)
+        .trim();
+    media_type.eq_ignore_ascii_case("application/xml")
+        || media_type.eq_ignore_ascii_case("text/xml")
+        || media_type
+            .get(media_type.len().saturating_sub(4)..)
+            .is_some_and(|suffix| suffix.eq_ignore_ascii_case("+xml"))
+}
+
+fn preflight_xml_part(part_name: &str, xml: &[u8], limits: &LoadLimits) -> OmResult<()> {
+    let mut reader = Reader::from_reader(Cursor::new(xml));
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+    let mut depth = 0_usize;
+    let mut event_count = 0_usize;
+    let mut text_bytes = 0_u64;
+    let mut attribute_bytes = 0_u64;
+    let mut root_seen = false;
+
+    loop {
+        let event = reader
+            .read_event_into(&mut buffer)
+            .map_err(|error| xml_part_parse_error(part_name, error))?;
+        if matches!(event, Event::Eof) {
+            if depth != 0 {
+                return Err(xml_part_parse_error(
+                    part_name,
+                    format!("document ended with {depth} unclosed element(s)"),
+                ));
+            }
+            if !root_seen {
+                return Err(xml_part_parse_error(
+                    part_name,
+                    "document has no root element",
+                ));
+            }
+            break;
+        }
+
+        event_count = event_count.checked_add(1).ok_or_else(|| {
+            xml_resource_limit_error(
+                part_name,
+                "XML events",
+                u64::MAX,
+                limits.max_xml_events as u64,
+            )
+        })?;
+        if event_count > limits.max_xml_events {
+            return Err(xml_resource_limit_error(
+                part_name,
+                "XML events",
+                event_count as u64,
+                limits.max_xml_events as u64,
+            ));
+        }
+
+        match event {
+            event @ (Event::Start(_) | Event::Empty(_)) => {
+                let (element, remains_open) = match event {
+                    Event::Start(element) => (element, true),
+                    Event::Empty(element) => (element, false),
+                    _ => unreachable!("matched XML element event"),
+                };
+                let element_depth = depth.checked_add(1).ok_or_else(|| {
+                    xml_resource_limit_error(
+                        part_name,
+                        "XML depth",
+                        u64::MAX,
+                        limits.max_xml_depth as u64,
+                    )
+                })?;
+                if element_depth > limits.max_xml_depth {
+                    return Err(xml_resource_limit_error(
+                        part_name,
+                        "XML depth",
+                        element_depth as u64,
+                        limits.max_xml_depth as u64,
+                    ));
+                }
+                if depth == 0 {
+                    if root_seen {
+                        return Err(xml_part_parse_error(
+                            part_name,
+                            "document has more than one root element",
+                        ));
+                    }
+                    root_seen = true;
+                }
+
+                let mut attributes_on_element = 0_usize;
+                for attribute in element.attributes() {
+                    let attribute =
+                        attribute.map_err(|error| xml_part_parse_error(part_name, error))?;
+                    attributes_on_element =
+                        attributes_on_element.checked_add(1).ok_or_else(|| {
+                            xml_resource_limit_error(
+                                part_name,
+                                "XML attributes per element",
+                                u64::MAX,
+                                limits.max_xml_attributes_per_element as u64,
+                            )
+                        })?;
+                    if attributes_on_element > limits.max_xml_attributes_per_element {
+                        return Err(xml_resource_limit_error(
+                            part_name,
+                            "XML attributes per element",
+                            attributes_on_element as u64,
+                            limits.max_xml_attributes_per_element as u64,
+                        ));
+                    }
+
+                    let current_attribute_bytes = attribute
+                        .key
+                        .as_ref()
+                        .len()
+                        .checked_add(attribute.value.as_ref().len())
+                        .and_then(|bytes| u64::try_from(bytes).ok())
+                        .unwrap_or(u64::MAX);
+                    attribute_bytes = attribute_bytes
+                        .checked_add(current_attribute_bytes)
+                        .ok_or_else(|| {
+                            xml_resource_limit_error(
+                                part_name,
+                                "XML attribute bytes",
+                                u64::MAX,
+                                limits.max_xml_attribute_bytes,
+                            )
+                        })?;
+                    if attribute_bytes > limits.max_xml_attribute_bytes {
+                        return Err(xml_resource_limit_error(
+                            part_name,
+                            "XML attribute bytes",
+                            attribute_bytes,
+                            limits.max_xml_attribute_bytes,
+                        ));
+                    }
+                    attribute
+                        .decode_and_unescape_value(reader.decoder())
+                        .map_err(|error| xml_part_parse_error(part_name, error))?;
+                }
+
+                if remains_open {
+                    depth = element_depth;
+                }
+            }
+            Event::End(_) => {
+                if depth == 0 {
+                    return Err(xml_part_parse_error(
+                        part_name,
+                        "closing element has no matching start element",
+                    ));
+                }
+                depth -= 1;
+            }
+            Event::Text(text) => {
+                let raw_text: &[u8] = text.as_ref();
+                let current_text_bytes = u64::try_from(raw_text.len()).unwrap_or(u64::MAX);
+                text_bytes = text_bytes.checked_add(current_text_bytes).ok_or_else(|| {
+                    xml_resource_limit_error(
+                        part_name,
+                        "XML text bytes",
+                        u64::MAX,
+                        limits.max_xml_text_bytes,
+                    )
+                })?;
+                if text_bytes > limits.max_xml_text_bytes {
+                    return Err(xml_resource_limit_error(
+                        part_name,
+                        "XML text bytes",
+                        text_bytes,
+                        limits.max_xml_text_bytes,
+                    ));
+                }
+                text.xml_content()
+                    .map_err(|error| xml_part_parse_error(part_name, error))?;
+                if depth == 0 && !raw_text.iter().all(u8::is_ascii_whitespace) {
+                    return Err(xml_part_parse_error(
+                        part_name,
+                        "non-whitespace text appears outside the root element",
+                    ));
+                }
+            }
+            Event::CData(text) => {
+                let raw_text: &[u8] = text.as_ref();
+                let current_text_bytes = u64::try_from(raw_text.len()).unwrap_or(u64::MAX);
+                text_bytes = text_bytes.checked_add(current_text_bytes).ok_or_else(|| {
+                    xml_resource_limit_error(
+                        part_name,
+                        "XML text bytes",
+                        u64::MAX,
+                        limits.max_xml_text_bytes,
+                    )
+                })?;
+                if text_bytes > limits.max_xml_text_bytes {
+                    return Err(xml_resource_limit_error(
+                        part_name,
+                        "XML text bytes",
+                        text_bytes,
+                        limits.max_xml_text_bytes,
+                    ));
+                }
+                text.xml_content()
+                    .map_err(|error| xml_part_parse_error(part_name, error))?;
+                if depth == 0 {
+                    return Err(xml_part_parse_error(
+                        part_name,
+                        "CDATA appears outside the root element",
+                    ));
+                }
+            }
+            _ => {}
+        }
+
+        buffer.clear();
+    }
+
+    Ok(())
+}
+
+fn xml_resource_limit_error(part_name: &str, label: &str, actual: u64, maximum: u64) -> OmError {
+    OmError::resource_limit(format!(
+        "OPC {label} limit exceeded in {part_name}: {actual} > {maximum}"
+    ))
+}
+
+fn xml_part_parse_error(part_name: &str, error: impl std::fmt::Display) -> OmError {
+    OmError::parse(format!("invalid XML OPC part {part_name}: {error}"))
 }
 
 fn preflight_zip_entry_count(bytes: &[u8]) -> OmResult<u64> {
@@ -1119,6 +1381,7 @@ mod tests {
             max_entry_uncompressed_bytes: 5,
             max_total_uncompressed_bytes: 5,
             max_compression_ratio: 1,
+            ..LoadLimits::default()
         };
 
         let package = OpcPackage::from_bytes_with_limits(&bytes, limits)
@@ -1126,6 +1389,165 @@ mod tests {
 
         assert_eq!(package.parts().len(), 1);
         assert_eq!(package.parts()[0].bytes, b"12345");
+    }
+
+    #[test]
+    fn bounded_load_rejects_xml_depth_over_limit() {
+        let bytes = zip_bytes(&[(
+            "xl/workbook.xml",
+            CompressionMethod::Stored,
+            b"<root><first><second/></first></root>",
+        )]);
+        let limits = LoadLimits {
+            max_xml_depth: 2,
+            ..LoadLimits::default()
+        };
+
+        let error =
+            OpcPackage::from_bytes_with_limits(&bytes, limits).expect_err("deep XML should fail");
+
+        assert_eq!(error.code, OmErrorCode::ResourceLimit);
+        assert!(error.message.contains("XML depth"));
+    }
+
+    #[test]
+    fn bounded_load_rejects_xml_event_count_over_limit() {
+        let bytes = zip_bytes(&[(
+            "xl/workbook.xml",
+            CompressionMethod::Stored,
+            b"<root><first/><second/></root>",
+        )]);
+        let limits = LoadLimits {
+            max_xml_events: 3,
+            ..LoadLimits::default()
+        };
+
+        let error = OpcPackage::from_bytes_with_limits(&bytes, limits)
+            .expect_err("XML event flood should fail");
+
+        assert_eq!(error.code, OmErrorCode::ResourceLimit);
+        assert!(error.message.contains("XML events"));
+    }
+
+    #[test]
+    fn bounded_load_rejects_cumulative_xml_text_and_cdata_over_limit() {
+        let bytes = zip_bytes(&[(
+            "xl/workbook.xml",
+            CompressionMethod::Stored,
+            b"<root>abc<![CDATA[def]]></root>",
+        )]);
+        let limits = LoadLimits {
+            max_xml_text_bytes: 5,
+            ..LoadLimits::default()
+        };
+
+        let error = OpcPackage::from_bytes_with_limits(&bytes, limits)
+            .expect_err("large XML text should fail");
+
+        assert_eq!(error.code, OmErrorCode::ResourceLimit);
+        assert!(error.message.contains("XML text bytes"));
+    }
+
+    #[test]
+    fn bounded_load_rejects_xml_attribute_budgets_over_limit() {
+        let bytes = zip_bytes(&[(
+            "xl/workbook.xml",
+            CompressionMethod::Stored,
+            br#"<root first="123" second="456"/>"#,
+        )]);
+        let byte_error = OpcPackage::from_bytes_with_limits(
+            &bytes,
+            LoadLimits {
+                max_xml_attribute_bytes: 16,
+                ..LoadLimits::default()
+            },
+        )
+        .expect_err("large XML attributes should fail");
+        let count_error = OpcPackage::from_bytes_with_limits(
+            &bytes,
+            LoadLimits {
+                max_xml_attributes_per_element: 1,
+                ..LoadLimits::default()
+            },
+        )
+        .expect_err("many XML attributes should fail");
+
+        assert_eq!(byte_error.code, OmErrorCode::ResourceLimit);
+        assert!(byte_error.message.contains("XML attribute bytes"));
+        assert_eq!(count_error.code, OmErrorCode::ResourceLimit);
+        assert!(count_error.message.contains("XML attributes per element"));
+    }
+
+    #[test]
+    fn bounded_load_accepts_xml_values_exactly_at_each_limit() {
+        let bytes = zip_bytes(&[(
+            "xl/workbook.xml",
+            CompressionMethod::Stored,
+            br#"<root a="x">text</root>"#,
+        )]);
+        let limits = LoadLimits {
+            max_xml_depth: 1,
+            max_xml_events: 3,
+            max_xml_text_bytes: 4,
+            max_xml_attribute_bytes: 2,
+            max_xml_attributes_per_element: 1,
+            ..LoadLimits::default()
+        };
+
+        let package = OpcPackage::from_bytes_with_limits(&bytes, limits)
+            .expect("exact XML limits should be accepted");
+
+        assert_eq!(package.parts().len(), 1);
+    }
+
+    #[test]
+    fn load_rejects_malformed_xml_bearing_part_extensions() {
+        for name in [
+            "xl/workbook.xml",
+            "xl/_rels/workbook.xml.rels",
+            "xl/drawings/vmlDrawing1.vml",
+        ] {
+            let bytes = zip_bytes(&[(name, CompressionMethod::Stored, b"<root>")]);
+            let error =
+                OpcPackage::from_bytes(&bytes).expect_err("unclosed XML element should fail");
+
+            assert_eq!(error.code, OmErrorCode::Parse, "name: {name}");
+            assert!(error.message.contains(name), "name: {name}");
+        }
+    }
+
+    #[test]
+    fn load_preflights_parts_with_xml_content_types() {
+        let bytes = zip_bytes(&[
+            (
+                "[Content_Types].xml",
+                CompressionMethod::Stored,
+                br#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/custom/item.bin" ContentType="application/vnd.example.data+xml"/></Types>"#,
+            ),
+            ("custom/item.bin", CompressionMethod::Stored, b"<root>"),
+        ]);
+
+        let error = OpcPackage::from_bytes(&bytes)
+            .expect_err("XML content type should trigger well-formedness preflight");
+
+        assert_eq!(error.code, OmErrorCode::Parse);
+        assert!(error.message.contains("custom/item.bin"));
+    }
+
+    #[test]
+    fn load_preserves_non_xml_opaque_parts_without_xml_preflight() {
+        let bytes = zip_bytes(&[(
+            "custom/item.bin",
+            CompressionMethod::Stored,
+            b"<not-closed>",
+        )]);
+
+        let package = OpcPackage::from_bytes(&bytes).expect("opaque binary part should load");
+
+        assert_eq!(
+            package.part("custom/item.bin").expect("opaque part").bytes,
+            b"<not-closed>"
+        );
     }
 
     #[test]

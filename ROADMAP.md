@@ -111,9 +111,11 @@ Completed slices:
 - Made relationship parsing fail closed for missing required attributes, duplicate IDs, unknown
   target modes, malformed percent encodings, and internal targets that escape the package root or
   cannot identify a canonical part.
+- Added shared ingress preflight for extension- and content-type-identified XML parts, with bounded
+  depth, event count, text/CDATA bytes, cumulative attribute bytes, and attributes per element;
+  malformed XML is rejected before specialized codecs expose partial state.
 
 - Enforce formatting, strict Clippy, MSRV, Linux stable, and Windows portability jobs.
-- Apply shared XML depth, event, text, attribute, and collection budgets.
 - Add dependency/license policy, property tests, scheduled fuzzing, and benchmark trends.
 
 Exit criteria:

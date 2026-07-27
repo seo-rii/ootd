@@ -20753,8 +20753,9 @@
                 CommonLoadOptions::default(),
             )
             .expect_err("load should fail when theme part is empty");
-        assert_eq!(error.code, OmErrorCode::InvalidState);
-        assert!(error.message.contains("theme part is empty"));
+        assert_eq!(error.code, OmErrorCode::Parse);
+        assert!(error.message.contains("xl/theme/theme1.xml"));
+        assert!(error.message.contains("document has no root element"));
     }
 
     #[test]
@@ -21309,8 +21310,9 @@
                 CommonLoadOptions::default(),
             )
             .expect_err("load should fail when styles part is empty");
-        assert_eq!(error.code, OmErrorCode::InvalidState);
-        assert!(error.message.contains("styles part is empty"));
+        assert_eq!(error.code, OmErrorCode::Parse);
+        assert!(error.message.contains("xl/styles.xml"));
+        assert!(error.message.contains("document has no root element"));
     }
 
     #[test]
