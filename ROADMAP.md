@@ -19,12 +19,15 @@ Active order:
    prompt-versus-serialization slice of `OOTD-046`; its remaining dirty domains stay open.
 3. `OOTD-003` complete (2026-07-27): `Workbook.Save` now fails before serialization with a
    stable `InvalidState` error when no source path exists.
-4. **Active:** `OOTD-004`~`OOTD-006` make Save/SaveAs/SaveCopyAs/Close read-only-safe, durable,
-   atomic, and transactional through `OOTD-045`.
-5. `OOTD-007`~`OOTD-009` persist formula caches and synchronize calculation metadata.
-6. Continue with fail-closed public/security contracts, QName/reference/parser invariants, then
+4. `OOTD-004` complete (2026-07-27): read-only `Save` cannot overwrite its source;
+   `SaveAs`/`SaveCopyAs` accept only create-new targets, with `SaveAs` detaching to a writable
+   source and `SaveCopyAs` preserving read-only identity.
+5. **Active:** `OOTD-005`~`OOTD-006` make Save/SaveAs/SaveCopyAs/Close durable, atomic, and
+   transactional through `OOTD-045`.
+6. `OOTD-007`~`OOTD-009` persist formula caches and synchronize calculation metadata.
+7. Continue with fail-closed public/security contracts, QName/reference/parser invariants, then
    cell/formula fidelity.
-7. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
+8. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
    claiming practical chart/pivot/style parity.
 
 Every numbered work unit starts with a failing regression and lands as its own reviewable commit.

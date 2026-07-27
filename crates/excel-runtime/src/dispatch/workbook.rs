@@ -12,6 +12,7 @@ use office_common::{
     OpenWorkbookSpec, SaveWorkbookSpec, WorkbookHandle,
 };
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 impl ExcelRuntime {
@@ -167,15 +168,17 @@ impl ExcelRuntime {
                         "Workbook.Save does not accept arguments",
                     ));
                 }
-                let path = self
-                    .runtime_workbook(workbook)?
-                    .source_path
-                    .clone()
-                    .ok_or_else(|| {
-                        OmError::invalid_state(
-                            "Workbook.Save requires a source path; use Workbook.SaveAs",
-                        )
-                    })?;
+                let runtime = self.runtime_workbook(workbook)?;
+                let path = runtime.source_path.clone().ok_or_else(|| {
+                    OmError::invalid_state(
+                        "Workbook.Save requires a source path; use Workbook.SaveAs",
+                    )
+                })?;
+                if runtime.read_only {
+                    return Err(OmError::invalid_state(
+                        "Workbook.Save cannot overwrite a read-only workbook; use Workbook.SaveAs or Workbook.SaveCopyAs with a new filename",
+                    ));
+                }
                 let format = self.workbook_model(workbook)?.format;
                 let prepared = self.prepare_workbook_save(
                     workbook,
@@ -252,6 +255,7 @@ impl ExcelRuntime {
                 validate_optional_integer_arg(args, 9, "Workbook.SaveAs TextCodepage")?;
                 validate_optional_integer_arg(args, 10, "Workbook.SaveAs TextVisualLayout")?;
                 validate_optional_bool_arg(args, 11, "Workbook.SaveAs Local")?;
+                let read_only = self.runtime_workbook(workbook)?.read_only;
                 let prepared = self.prepare_workbook_save(
                     workbook,
                     SaveWorkbookSpec {
@@ -260,12 +264,35 @@ impl ExcelRuntime {
                         lossless: true,
                     },
                 )?;
-                fs::write(&path, &prepared.bytes).map_err(|error| {
-                    OmError::new(
-                        OmErrorCode::Io,
-                        format!("failed to write workbook {}: {error}", path.display()),
-                    )
-                })?;
+                if read_only {
+                    let write_result = fs::OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .open(&path)
+                        .and_then(|mut file| file.write_all(&prepared.bytes));
+                    write_result.map_err(|error| {
+                        if error.kind() == std::io::ErrorKind::AlreadyExists {
+                            OmError::invalid_state(
+                                "Workbook.SaveAs for a read-only workbook requires a new filename",
+                            )
+                        } else {
+                            OmError::new(
+                                OmErrorCode::Io,
+                                format!(
+                                    "failed to write read-only workbook {}: {error}",
+                                    path.display()
+                                ),
+                            )
+                        }
+                    })?;
+                } else {
+                    fs::write(&path, &prepared.bytes).map_err(|error| {
+                        OmError::new(
+                            OmErrorCode::Io,
+                            format!("failed to write workbook {}: {error}", path.display()),
+                        )
+                    })?;
+                }
                 let display_name = path
                     .file_name()
                     .and_then(|value| value.to_str())
@@ -277,6 +304,9 @@ impl ExcelRuntime {
                     Some(path),
                     display_name,
                 )?;
+                if read_only {
+                    self.runtime_workbook_mut(workbook)?.read_only = false;
+                }
                 Ok(OmValue::Empty)
             }
             "SaveCopyAs" => {
@@ -294,6 +324,7 @@ impl ExcelRuntime {
                     }
                 };
                 let format = self.workbook_model(workbook)?.format;
+                let read_only = self.runtime_workbook(workbook)?.read_only;
                 let bytes = self.save_workbook(
                     workbook,
                     SaveWorkbookSpec {
@@ -302,12 +333,35 @@ impl ExcelRuntime {
                         lossless: true,
                     },
                 )?;
-                fs::write(&path, &bytes).map_err(|error| {
-                    OmError::new(
-                        OmErrorCode::Io,
-                        format!("failed to write workbook copy {}: {error}", path.display()),
-                    )
-                })?;
+                if read_only {
+                    let write_result = fs::OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .open(&path)
+                        .and_then(|mut file| file.write_all(&bytes));
+                    write_result.map_err(|error| {
+                        if error.kind() == std::io::ErrorKind::AlreadyExists {
+                            OmError::invalid_state(
+                                "Workbook.SaveCopyAs for a read-only workbook requires a new filename",
+                            )
+                        } else {
+                            OmError::new(
+                                OmErrorCode::Io,
+                                format!(
+                                    "failed to write read-only workbook copy {}: {error}",
+                                    path.display()
+                                ),
+                            )
+                        }
+                    })?;
+                } else {
+                    fs::write(&path, &bytes).map_err(|error| {
+                        OmError::new(
+                            OmErrorCode::Io,
+                            format!("failed to write workbook copy {}: {error}", path.display()),
+                        )
+                    })?;
+                }
                 Ok(OmValue::Empty)
             }
             "RefreshAll" => {

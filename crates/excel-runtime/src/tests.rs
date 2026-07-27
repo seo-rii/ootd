@@ -42845,6 +42845,167 @@
     }
 
     #[test]
+    fn read_only_save_never_overwrites_source() {
+        let mut runtime = ExcelRuntime::new();
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        let base_dir = std::env::temp_dir().join(format!("ootd-read-only-save-{unique}"));
+        fs::create_dir_all(&base_dir).expect("create read-only save fixture dir");
+        let source_path = base_dir.join("source.xlsx");
+        let existing_path = base_dir.join("existing.xlsx");
+        let copy_path = base_dir.join("copy.xlsx");
+        let save_as_path = base_dir.join("saved-as.xlsx");
+        let source_bytes = synthetic_workbook_bytes();
+        let existing_bytes = b"existing target must remain unchanged".to_vec();
+        fs::write(&source_path, &source_bytes).expect("write read-only source");
+        fs::write(&existing_path, &existing_bytes).expect("write existing target");
+
+        let workbooks = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "Workbooks", &[])
+                .expect("Workbooks"),
+        );
+        let workbook = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    workbooks,
+                    "Open",
+                    &[
+                        OmValue::Text(source_path.to_string_lossy().into_owned()),
+                        OmValue::Missing,
+                        OmValue::Bool(true),
+                    ],
+                )
+                .expect("Workbooks.Open ReadOnly"),
+        );
+
+        let save_error = runtime
+            .dispatch_invoke(workbook, "Save", &[])
+            .expect_err("read-only Workbook.Save must fail");
+        assert_eq!(save_error.code, OmErrorCode::InvalidState);
+        assert_eq!(
+            save_error.message,
+            "Workbook.Save cannot overwrite a read-only workbook; use Workbook.SaveAs or Workbook.SaveCopyAs with a new filename"
+        );
+        assert_eq!(
+            fs::read(&source_path).expect("read source after rejected Save"),
+            source_bytes
+        );
+
+        for (member, path) in [
+            ("SaveAs", source_path.as_path()),
+            ("SaveCopyAs", source_path.as_path()),
+            ("SaveAs", existing_path.as_path()),
+            ("SaveCopyAs", existing_path.as_path()),
+        ] {
+            let error = runtime
+                .dispatch_invoke(
+                    workbook,
+                    member,
+                    &[OmValue::Text(path.to_string_lossy().into_owned())],
+                )
+                .expect_err("read-only save APIs must not replace existing files");
+            assert_eq!(error.code, OmErrorCode::InvalidState);
+            assert_eq!(
+                error.message,
+                format!("Workbook.{member} for a read-only workbook requires a new filename")
+            );
+        }
+        assert_eq!(
+            fs::read(&source_path).expect("read source after rejected existing targets"),
+            source_bytes
+        );
+        assert_eq!(
+            fs::read(&existing_path).expect("read existing target after rejected saves"),
+            existing_bytes
+        );
+
+        runtime
+            .dispatch_invoke(
+                workbook,
+                "SaveCopyAs",
+                &[OmValue::Text(copy_path.to_string_lossy().into_owned())],
+            )
+            .expect("read-only Workbook.SaveCopyAs to a new target");
+        ExcelRuntime::new()
+            .codec
+            .load(
+                &fs::read(&copy_path).expect("read read-only SaveCopyAs target"),
+                LoadOptions::default(),
+            )
+            .expect("reload read-only SaveCopyAs target");
+        assert!(expect_bool(
+            runtime
+                .dispatch_get(workbook, "ReadOnly", &[])
+                .expect("Workbook.ReadOnly after SaveCopyAs")
+        ));
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(workbook, "FullName", &[])
+                    .expect("Workbook.FullName after SaveCopyAs")
+            ),
+            source_path.to_string_lossy()
+        );
+
+        runtime
+            .dispatch_invoke(
+                workbook,
+                "SaveAs",
+                &[OmValue::Text(
+                    save_as_path.to_string_lossy().into_owned(),
+                )],
+            )
+            .expect("read-only Workbook.SaveAs to a new target");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(workbook, "ReadOnly", &[])
+                .expect("Workbook.ReadOnly after SaveAs")
+        ));
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(workbook, "FullName", &[])
+                    .expect("Workbook.FullName after SaveAs")
+            ),
+            save_as_path.to_string_lossy()
+        );
+
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet after read-only SaveAs"),
+        );
+        runtime
+            .dispatch_set(
+                active_sheet,
+                "Name",
+                OmValue::Text("WritableAfterSaveAs".to_string()),
+                &[],
+            )
+            .expect("mutate detached SaveAs workbook");
+        runtime
+            .dispatch_invoke(workbook, "Save", &[])
+            .expect("Save detached writable workbook");
+        let reopened = ExcelRuntime::new()
+            .codec
+            .load(
+                &fs::read(&save_as_path).expect("read detached SaveAs target"),
+                LoadOptions::default(),
+            )
+            .expect("reload detached SaveAs target");
+        assert_eq!(reopened.state.worksheets[0].name, "WritableAfterSaveAs");
+        assert_eq!(
+            fs::read(&source_path).expect("read original after detached Save"),
+            source_bytes
+        );
+
+        fs::remove_dir_all(base_dir).expect("cleanup read-only save fixture");
+    }
+
+    #[test]
     fn worksheet_name_dispatch_renames_sheet_and_persists_on_save() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime

@@ -67,7 +67,10 @@ calculation, chart/pivot preservation, Windows Excel Oracle, CI와 문서 구조
 3. `OOTD-003` — 완료 (2026-07-27): source path가 없는 `Workbook.Save`는 serialization
    전에 stable `InvalidState` 오류로 `SaveAs`를 요구한다. clean/dirty workbook 모두
    열린 상태와 prompt/semantic state를 유지한다.
-4. `OOTD-004`: read-only source overwrite를 거부하고 SaveAs/SaveCopyAs 정책을 고정한다.
+4. `OOTD-004` — 완료 (2026-07-27): read-only `Workbook.Save`를 거부하고 원본을
+   overwrite하지 않는다. `SaveAs`/`SaveCopyAs`는 OS-level create-new로 새 filename만
+   허용한다. `SaveCopyAs`는 read-only source identity를 유지하고, 성공한 `SaveAs`는 새
+   writable source로 분리된다.
 5. `OOTD-005`: dirty/source/SaveChanges/Filename/DisplayAlerts close state table을 구현한다.
 6. `OOTD-006` + `OOTD-045`: 모든 저장 API를
    `prepare → durable same-directory replace → commit snapshot` transaction으로 통합하고
