@@ -47,7 +47,8 @@ contract-based until Milestone M1 pins the first behavioral Excel corpus.
 - M3 input safety: default OPC ZIP loading is resource-bounded; canonical part identities are
   enforced across load/mutation/save; relationship attributes, IDs, target modes, and internal
   targets fail closed; XML-bearing parts receive a shared bounded well-formedness preflight.
-- Formatting, strict Clippy, MSRV, and Windows jobs: scheduled for M3.
+- CI portability: Ubuntu Rust 1.94, Ubuntu MSRV Rust 1.88, and Windows Rust 1.94 run as independent
+  test lanes; formatting and strict Clippy remain staged M3 debt.
 - Behavioral Oracle foundation: Rust and .NET contracts, runtime adapter, differential gate bridge,
   COM runner, and watchdog are implemented and synthetic/fake-backed tests pass.
 - Real Excel behavioral cases: none pinned yet; the current Linux host cannot execute desktop Excel.

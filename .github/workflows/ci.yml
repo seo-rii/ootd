@@ -17,14 +17,39 @@ concurrency:
 jobs:
   checks:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 45
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
 
       - name: Install Rust toolchain
-        run: rustup toolchain install 1.94.0 --profile minimal --component rustfmt --component clippy
+        run: rustup toolchain install 1.94.0 --profile minimal
 
       - name: Run tests
-        run: cargo test --workspace --locked --quiet
+        run: rustup run 1.94.0 cargo test --workspace --locked --quiet
+
+  portability:
+    name: Portability (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: ubuntu-msrv
+            os: ubuntu-latest
+            rust: 1.88.0
+          - name: windows
+            os: windows-latest
+            rust: 1.94.0
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        run: rustup toolchain install ${{ matrix.rust }} --profile minimal
+
+      - name: Run tests
+        run: rustup run ${{ matrix.rust }} cargo test --workspace --locked --quiet

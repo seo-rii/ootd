@@ -114,8 +114,11 @@ Completed slices:
 - Added shared ingress preflight for extension- and content-type-identified XML parts, with bounded
   depth, event count, text/CDATA bytes, cumulative attribute bytes, and attributes per element;
   malformed XML is rejected before specialized codecs expose partial state.
+- Split CI portability coverage into explicit Ubuntu Rust 1.94, Ubuntu MSRV Rust 1.88, and Windows
+  Rust 1.94 test lanes; the general Windows lane has no desktop Excel dependency.
 
-- Enforce formatting, strict Clippy, MSRV, Linux stable, and Windows portability jobs.
+- Add a bounded formatting gate and ratchet strict Clippy without promoting existing monolith debt
+  to unrelated-change failures.
 - Add dependency/license policy, property tests, scheduled fuzzing, and benchmark trends.
 
 Exit criteria:
