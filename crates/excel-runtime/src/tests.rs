@@ -22,6 +22,13 @@
     };
     use office_opc::{CompressionMethod, OpcPackage, OpcPart};
 
+    mod encrypted_ooxml_fixture {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/support/encrypted_ooxml.rs"
+        ));
+    }
+
     fn expect_object_handle(value: OmValue) -> ObjectHandle {
         match value {
             OmValue::Object(handle) => handle,
@@ -43661,6 +43668,104 @@
                 "{label} must be rejected without filesystem mutation"
             );
         }
+    }
+
+    #[test]
+    fn encrypted_ooxml_open_is_classified_and_password_is_never_ignored() {
+        let encrypted = encrypted_ooxml_fixture::compound_file_with_streams(&[
+            "EncryptionInfo",
+            "EncryptedPackage",
+        ]);
+        let mut runtime = ExcelRuntime::new();
+
+        let direct_error = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: encrypted.clone(),
+                format_hint: None,
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect_err("direct encrypted OOXML open must fail closed");
+        assert_eq!(
+            direct_error.code,
+            OmErrorCode::EncryptedWorkbookUnsupported
+        );
+        assert_eq!(
+            direct_error.message,
+            "encrypted OOXML compound-file containers are not supported"
+        );
+
+        let path = std::env::temp_dir().join(format!(
+            "ootd-runtime-encrypted-ooxml-{}-{}.xlsx",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("time")
+                .as_nanos()
+        ));
+        fs::write(&path, encrypted).expect("write encrypted OOXML fixture");
+        let workbooks = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "Workbooks", &[])
+                .expect("Application.Workbooks"),
+        );
+        let path_value = OmValue::Text(path.to_string_lossy().into_owned());
+
+        for (label, args) in [
+            ("omitted password", vec![path_value.clone()]),
+            (
+                "empty password",
+                vec![
+                    path_value.clone(),
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Text(String::new()),
+                ],
+            ),
+        ] {
+            let error = runtime
+                .dispatch_invoke(workbooks, "Open", &args)
+                .expect_err("encrypted OOXML Workbooks.Open must fail closed");
+            assert_eq!(
+                error.code,
+                OmErrorCode::EncryptedWorkbookUnsupported,
+                "{label}"
+            );
+            assert_eq!(
+                error.message,
+                "encrypted OOXML compound-file containers are not supported",
+                "{label}"
+            );
+        }
+
+        let nonempty_password_error = runtime
+            .dispatch_invoke(
+                workbooks,
+                "Open",
+                &[
+                    path_value,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Text("secret".to_string()),
+                ],
+            )
+            .expect_err("non-empty Workbooks.Open Password must not be ignored");
+        assert_eq!(nonempty_password_error.code, OmErrorCode::Unsupported);
+        assert_eq!(
+            nonempty_password_error.message,
+            "Workbooks.Open Password is not implemented for non-empty values"
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(workbooks, "Count", &[])
+                    .expect("Workbooks.Count after encrypted open failures")
+            ),
+            0.0
+        );
+        fs::remove_file(path).expect("remove encrypted OOXML fixture");
     }
 
     #[test]

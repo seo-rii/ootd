@@ -136,7 +136,13 @@ Wave 1 exit gate:
    위장하지 않고, export/print artifact와 workbook state를 만들거나 바꾸지 않음을
    20-surface matrix로 고정했다. capability 표는
    `docs/interfaces/unsupported_execution_methods.md`에 있다.
-5. `OOTD-062`: CFB/encrypted OOXML 탐지와 Password fail-closed 1단계를 구현한다.
+5. `OOTD-062` — 1단계 완료 (2026-07-27): CFB v3/v4 header와 DIFAT/FAT/directory
+   chain을 입력 sector 수로 제한해 검사하고, root + non-empty `EncryptionInfo` +
+   `EncryptedPackage` stream이 모두 있는 container만
+   `EncryptedWorkbookUnsupported`로 분류한다. legacy/부분 CFB 오인 방지, direct open,
+   `Workbooks.Open`의 omitted/empty/non-empty Password 경계를 고정했다. Agile Encryption
+   decrypt/encrypt, verifier/integrity와 encrypted SaveAs corpus는 2단계로 열려 있다.
+   세부 계약은 `docs/interfaces/encrypted_ooxml.md`에 있다.
 6. `OOTD-063`: signed package mutation의 refuse 또는 explicit strip+audit 정책을 구현한다.
 7. `OOTD-022` + `OOTD-064`: VBA, XLM, ActiveX, OLE, custom UI 전체 relationship closure에
    preserve/strip/refuse 정책을 적용한다.

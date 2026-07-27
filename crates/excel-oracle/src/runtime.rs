@@ -312,6 +312,7 @@ fn observe_om_error(error: OmError) -> ObservedError {
         OmErrorCode::Io => CanonicalErrorKind::Io,
         OmErrorCode::Parse => CanonicalErrorKind::Parse,
         OmErrorCode::ResourceLimit => CanonicalErrorKind::ResourceLimit,
+        OmErrorCode::EncryptedWorkbookUnsupported => CanonicalErrorKind::Unsupported,
         OmErrorCode::Calculation => CanonicalErrorKind::Calculation,
         OmErrorCode::External => CanonicalErrorKind::External,
     };
@@ -324,6 +325,7 @@ fn observe_om_error(error: OmError) -> ObservedError {
         OmErrorCode::Io => "io",
         OmErrorCode::Parse => "parse",
         OmErrorCode::ResourceLimit => "resourceLimit",
+        OmErrorCode::EncryptedWorkbookUnsupported => "encryptedWorkbookUnsupported",
         OmErrorCode::Calculation => "calculation",
         OmErrorCode::External => "external",
     };

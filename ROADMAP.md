@@ -55,9 +55,13 @@ Active order:
    spelling, fixed-format export, and print methods now retain argument/object validation but
    return stable `Unsupported` when no execution backend is configured; valid calls no longer
    return false `Empty` success or create output artifacts.
-15. **Active:** continue Wave 2 security fail-closed work at encrypted OOXML detection
-   (`OOTD-062`), then signature/active-content/external-link policy.
-16. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
+15. `OOTD-062` stage 1 complete (2026-07-27): bounded CFB v3/v4 FAT/directory discovery
+   recognizes only containers with both required encrypted-OOXML streams and returns a dedicated
+   `EncryptedWorkbookUnsupported` error before ZIP parsing. Legacy and partial compound files are
+   not misclassified; Password arguments remain fail-closed. Agile Encryption remains open.
+16. **Active:** continue Wave 2 security policy at signed package mutation (`OOTD-063`), then
+   active-content closure and external-link policy.
+17. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
    claiming practical chart/pivot/style parity.
 
 Every numbered work unit starts with a failing regression and lands as its own reviewable commit.

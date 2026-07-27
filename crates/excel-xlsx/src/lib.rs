@@ -30,11 +30,13 @@ use quick_xml::{NsReader, Reader, Writer};
 
 mod chart_encoder;
 mod chart_graph;
+mod encryption;
 mod pivot;
 mod relationships;
 mod shared_strings;
 mod worksheet;
 
+use encryption::is_encrypted_ooxml_compound_file;
 use relationships::{
     RelationshipEntry, normalize_relationship_target, parse_relationship_entries,
     parse_relationship_entries_with_options, parse_workbook_relationship_entries,
@@ -1351,6 +1353,9 @@ pub struct ChartOpaqueRelationshipSummary {
 
 impl XlsxCodec {
     pub fn sniff(&self, input: &[u8]) -> bool {
+        if is_encrypted_ooxml_compound_file(input) {
+            return false;
+        }
         let Ok(package) = OpcPackage::from_bytes(input) else {
             return false;
         };
@@ -1367,6 +1372,11 @@ impl XlsxCodec {
         if !options.read_calc_chain {
             return Err(OmError::unsupported(
                 "XlsxCodec::load requires read_calc_chain=true",
+            ));
+        }
+        if is_encrypted_ooxml_compound_file(input) {
+            return Err(OmError::encrypted_workbook_unsupported(
+                "encrypted OOXML compound-file containers are not supported",
             ));
         }
         let package = OpcPackage::from_bytes(input)?;

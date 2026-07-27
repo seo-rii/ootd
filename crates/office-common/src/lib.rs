@@ -24,6 +24,7 @@ pub enum OmErrorCode {
     Io,
     Parse,
     ResourceLimit,
+    EncryptedWorkbookUnsupported,
     Calculation,
     External,
 }
@@ -60,6 +61,10 @@ impl OmError {
 
     pub fn resource_limit(message: impl Into<String>) -> Self {
         Self::new(OmErrorCode::ResourceLimit, message)
+    }
+
+    pub fn encrypted_workbook_unsupported(message: impl Into<String>) -> Self {
+        Self::new(OmErrorCode::EncryptedWorkbookUnsupported, message)
     }
 
     pub fn unsupported(message: impl Into<String>) -> Self {

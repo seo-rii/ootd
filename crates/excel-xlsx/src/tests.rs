@@ -33,6 +33,13 @@
     };
     use office_opc::{CompressionMethod, OpcPart};
 
+    mod encrypted_ooxml_fixture {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/support/encrypted_ooxml.rs"
+        ));
+    }
+
     fn synthetic_comment_part_summary(
         authors: Vec<String>,
         comments: Vec<WorksheetCommentSummary>,
@@ -127,6 +134,92 @@
             assert_eq!(error.code, OmErrorCode::Unsupported);
             assert_eq!(error.message, expected_message);
         }
+    }
+
+    #[test]
+    fn encrypted_ooxml_compound_container_is_classified_before_zip_parsing() {
+        let codec = XlsxCodec;
+        for (label, encrypted) in [
+            (
+                "CFB v3",
+                encrypted_ooxml_fixture::compound_file_with_streams(&[
+                    "EncryptionInfo",
+                    "EncryptedPackage",
+                ]),
+            ),
+            (
+                "CFB v4 case-insensitive names",
+                encrypted_ooxml_fixture::version_4_compound_file_with_streams(&[
+                    "encryptioninfo",
+                    "encryptedpackage",
+                ]),
+            ),
+        ] {
+            assert!(!codec.sniff(&encrypted), "{label}");
+            let error = codec
+                .load(&encrypted, CommonLoadOptions::default())
+                .expect_err("encrypted OOXML must fail with its dedicated capability error");
+            assert_eq!(
+                error.code,
+                OmErrorCode::EncryptedWorkbookUnsupported,
+                "{label}"
+            );
+            assert_eq!(
+                error.message,
+                "encrypted OOXML compound-file containers are not supported",
+                "{label}"
+            );
+        }
+    }
+
+    #[test]
+    fn other_compound_containers_are_not_misclassified_as_encrypted_ooxml() {
+        let codec = XlsxCodec;
+        for (label, stream_names) in [
+            ("legacy workbook", &["Workbook"][..]),
+            ("encryption info only", &["EncryptionInfo"][..]),
+            ("encrypted package only", &["EncryptedPackage"][..]),
+        ] {
+            let input = encrypted_ooxml_fixture::compound_file_with_streams(stream_names);
+            let error = codec
+                .load(&input, CommonLoadOptions::default())
+                .expect_err("non-OOXML compound input must not load as a workbook");
+            assert_ne!(
+                error.code,
+                OmErrorCode::EncryptedWorkbookUnsupported,
+                "{label}"
+            );
+        }
+
+        let mut looping_directory =
+            encrypted_ooxml_fixture::compound_file_with_streams(&[
+                "EncryptionInfo",
+                "EncryptedPackage",
+            ]);
+        let fat_offset = looping_directory.len() - 512;
+        looping_directory[fat_offset..fat_offset + 4].copy_from_slice(&0_u32.to_le_bytes());
+        let error = codec
+            .load(&looping_directory, CommonLoadOptions::default())
+            .expect_err("a looping CFB directory chain must not be classified");
+        assert_ne!(
+            error.code,
+            OmErrorCode::EncryptedWorkbookUnsupported
+        );
+
+        let mut orphaned_streams =
+            encrypted_ooxml_fixture::compound_file_with_streams(&[
+                "EncryptionInfo",
+                "EncryptedPackage",
+            ]);
+        orphaned_streams[512 + 76..512 + 80]
+            .copy_from_slice(&0xffff_ffff_u32.to_le_bytes());
+        let error = codec
+            .load(&orphaned_streams, CommonLoadOptions::default())
+            .expect_err("orphan encryption stream entries must not classify the container");
+        assert_ne!(
+            error.code,
+            OmErrorCode::EncryptedWorkbookUnsupported
+        );
     }
 
     #[test]
