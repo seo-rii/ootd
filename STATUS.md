@@ -27,7 +27,7 @@ contract-based until Milestone M1 pins the first behavioral Excel corpus.
 | XLSX load/save | Partial | No-op and targeted dirty-save preservation have broad synthetic regression coverage | Tracked real-world corpus, bounded parsing, and Excel reopen without repair |
 | Runtime object model | Partial | Application, workbook, worksheet, range, names, selection, clipboard, and chart-related dispatch are available | Generated member coverage and behavioral Oracle cases |
 | Scalar formula calculation | Partial | Broad deterministic function coverage exists behind an internal `calc` module, including Evaluate and Calculate paths; its value/coercion model is not yet unified | Shared coercion/reference model and Excel differential corpus |
-| Formula2 and dynamic arrays | Partial | Seventeen array functions produce two-dimensional spill results; model value, A1/R1C1 formula families, and `ClearContents` commands reject spill-child batches atomically and anchor edits clear owned extents | Remaining runtime mutation paths, `@`/`#`, dependency order, XLSX metadata, and Oracle agreement |
+| Formula2 and dynamic arrays | Partial | Seventeen array functions produce two-dimensional spill results; model value, A1/R1C1 formula families, and `ClearContents` commands reject spill-child batches atomically; worksheet array formula metadata now restores and writes spill anchor/extent state across synthetic save/reopen | Remaining runtime mutation paths, `@`/`#`, dependency order, Excel-specific dynamic-array extension metadata, and Oracle agreement |
 | Charts and drawings | Partial | Typed chart mutation and lossless-first relationship graph lifecycle cover a broad surface | Remain feature-frozen until PivotChart work; fix preservation regressions only |
 | Styles and themes | Preserve-only | Raw bytes and typed summaries are retained; general typed style allocation and mutation are incomplete | Corpus preservation before broader typed editing |
 | Macros and unsupported package parts | Preserve-only | OOXML macro-bearing variants and opaque parts are retained within the covered save paths | Real corpus and explicit capability matrix |
@@ -54,7 +54,9 @@ contract-based until Milestone M1 pins the first behavioral Excel corpus.
 - M4 spill lifecycle: model value, A1/R1C1 formula families, and `ClearContents` commands preflight
   all targets and reject spill children without partial mutation; single- and multi-area R1C1
   runtime dispatch now uses the same model command, and anchor edits atomically clear their current
-  owned extent.
+  owned extent. Worksheet `t="array"`/`ref` metadata restores spill ranges on load, is emitted for
+  newly calculated Formula2 extents, and is removed when an anchor becomes an ordinary formula;
+  real Excel dynamic-array extension metadata remains Oracle-gated.
 - Behavioral Oracle foundation: Rust and .NET contracts, runtime adapter, differential gate bridge,
   COM runner, and watchdog are implemented and synthetic/fake-backed tests pass.
 - Real Excel behavioral cases: none pinned yet; the current Linux host cannot execute desktop Excel.

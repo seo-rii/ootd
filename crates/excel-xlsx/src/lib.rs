@@ -1294,17 +1294,18 @@ impl XlsxCodec {
                         },
                     );
                 } else {
+                    let parsed_cells =
+                        parse_worksheet_cells(sheet_part.bytes.as_slice(), &shared_strings)?;
                     worksheet_data.insert(
                         worksheet.id,
                         WorksheetData {
-                            cells: parse_worksheet_cells(
-                                sheet_part.bytes.as_slice(),
-                                &shared_strings,
-                            )?,
+                            cells: parsed_cells.cells,
                             source_xml: sheet_part.bytes.clone(),
                             dirty: false,
                             dirty_cells: Default::default(),
-                            ..WorksheetData::default()
+                            dynamic_array_formulas: parsed_cells.dynamic_array_formulas,
+                            spill_ranges: parsed_cells.spill_ranges,
+                            spill_owners: parsed_cells.spill_owners,
                         },
                     );
                     worksheet_support_parts.insert(

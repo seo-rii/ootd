@@ -159,7 +159,8 @@
 </worksheet>"#,
             &shared_strings,
         )
-        .expect("worksheet cells");
+        .expect("worksheet cells")
+        .cells;
 
         assert_eq!(
             cells.get(&(1, 1)).expect("A1").value,
@@ -232,7 +233,8 @@
 </worksheet>"#,
             &[],
         )
-        .expect("worksheet cells");
+        .expect("worksheet cells")
+        .cells;
 
         assert!(!cells.contains_key(&(1, 1)));
         assert_eq!(
@@ -281,7 +283,8 @@
 </worksheet>"#,
             &[],
         )
-        .expect("worksheet cells");
+        .expect("worksheet cells")
+        .cells;
 
         assert_eq!(
             cells.get(&(2, 3)).expect("C2"),
@@ -332,7 +335,8 @@
 </worksheet>"#,
             &[],
         )
-        .expect("worksheet cells");
+        .expect("worksheet cells")
+        .cells;
 
         assert_eq!(
             cells.get(&(3, 4)).expect("D3"),
@@ -361,7 +365,8 @@
 </worksheet>"#,
             &[],
         )
-        .expect("worksheet cells");
+        .expect("worksheet cells")
+        .cells;
 
         assert_eq!(
             cells.get(&(4, 1)).expect("A4").value,
@@ -50799,6 +50804,170 @@
         assert!(b1_start < c1_start);
         assert!(c1_start < d1_start);
         assert!(d1_start < opaque_start);
+    }
+
+    #[test]
+    fn dynamic_array_metadata_load_restores_spill_lifecycle() {
+        let codec = XlsxCodec;
+        let mut loaded = codec
+            .load(
+                workbook_with_dynamic_array_formula_bytes().as_slice(),
+                CommonLoadOptions::default(),
+            )
+            .expect("load dynamic-array workbook");
+        let sheet_id = loaded.state.worksheets[0].id;
+        let worksheet = loaded
+            .state
+            .worksheet_data_for_sheet(sheet_id)
+            .expect("dynamic-array worksheet");
+
+        assert!(worksheet.dynamic_array_formulas.contains(&(10, 10)));
+        assert_eq!(
+            worksheet.spill_ranges.get(&(10, 10)),
+            Some(&Rect {
+                row_first: 10,
+                row_last: 11,
+                col_first: 10,
+                col_last: 11,
+            })
+        );
+        assert_eq!(worksheet.spill_owners.get(&(10, 11)), Some(&(10, 10)));
+        assert_eq!(worksheet.spill_owners.get(&(11, 10)), Some(&(10, 10)));
+        assert_eq!(worksheet.spill_owners.get(&(11, 11)), None);
+
+        let before = loaded.state.clone();
+        let error = loaded
+            .state
+            .set_range_values(
+                &office_common::RangeRef::single_cell(WorkbookId(0), sheet_id, 11, 11),
+                &office_common::OmArray::scalar(OmValue::Number(99.0)),
+            )
+            .expect_err("reopened spill child should remain protected");
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert_eq!(loaded.state, before);
+    }
+
+    #[test]
+    fn dynamic_array_metadata_save_reopen_preserves_new_spill() {
+        let codec = XlsxCodec;
+        let mut loaded = codec
+            .load(
+                synthetic_workbook_bytes().as_slice(),
+                CommonLoadOptions::default(),
+            )
+            .expect("load workbook");
+        let sheet_id = loaded.state.worksheets[0].id;
+        let anchor = (10, 10);
+        let spill_rect = Rect {
+            row_first: 10,
+            row_last: 11,
+            col_first: 10,
+            col_last: 11,
+        };
+        loaded
+            .state
+            .set_range_dynamic_array_formulas(
+                &office_common::RangeRef::single_cell(
+                    WorkbookId(0),
+                    sheet_id,
+                    anchor.0,
+                    anchor.1,
+                ),
+                &office_common::OmArray::scalar(OmValue::Text(
+                    "=SEQUENCE(2,2)".to_string(),
+                )),
+            )
+            .expect("set dynamic-array formula");
+        let worksheet = loaded
+            .state
+            .worksheet_data_for_sheet_mut(sheet_id)
+            .expect("dynamic-array worksheet");
+        worksheet
+            .cells
+            .get_mut(&anchor)
+            .expect("spill anchor")
+            .value = CellValue::Number(1.0);
+        for (key, value) in [
+            ((10, 11), 2.0),
+            ((11, 10), 3.0),
+            ((11, 11), 4.0),
+        ] {
+            worksheet.cells.insert(
+                key,
+                CellData {
+                    value: CellValue::Number(value),
+                    formula: None,
+                    style_id: None,
+                },
+            );
+            worksheet.spill_owners.insert(key, anchor);
+            worksheet.dirty_cells.insert(key);
+        }
+        worksheet.spill_ranges.insert(anchor, spill_rect);
+        worksheet.dirty = true;
+
+        let saved = codec
+            .save(&loaded, office_common::SaveOptions::default())
+            .expect("save dynamic-array workbook");
+        let saved_package = OpcPackage::from_bytes(saved.as_slice()).expect("saved package");
+        let sheet_xml = std::str::from_utf8(
+            saved_package
+                .part("xl/worksheets/sheet1.xml")
+                .expect("saved worksheet")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved worksheet utf8");
+        assert!(
+            sheet_xml.contains(r#"<f t="array" ref="J10:K11">SEQUENCE(2,2)</f>"#),
+            "{sheet_xml}",
+        );
+
+        let reopened = codec
+            .load(saved.as_slice(), CommonLoadOptions::default())
+            .expect("reopen dynamic-array workbook");
+        let reopened_worksheet = reopened
+            .state
+            .worksheet_data_for_sheet(sheet_id)
+            .expect("reopened worksheet");
+        assert!(reopened_worksheet.dynamic_array_formulas.contains(&anchor));
+        assert_eq!(reopened_worksheet.spill_ranges.get(&anchor), Some(&spill_rect));
+        assert_eq!(reopened_worksheet.spill_owners.get(&(11, 11)), Some(&anchor));
+    }
+
+    #[test]
+    fn dynamic_array_metadata_overwrite_removes_stale_array_attributes() {
+        let codec = XlsxCodec;
+        let mut loaded = codec
+            .load(
+                workbook_with_dynamic_array_formula_bytes().as_slice(),
+                CommonLoadOptions::default(),
+            )
+            .expect("load dynamic-array workbook");
+        let sheet_id = loaded.state.worksheets[0].id;
+        loaded
+            .state
+            .set_range_formulas(
+                &office_common::RangeRef::single_cell(WorkbookId(0), sheet_id, 10, 10),
+                &office_common::OmArray::scalar(OmValue::Text("=1+1".to_string())),
+            )
+            .expect("replace spill anchor with ordinary formula");
+
+        let saved = codec
+            .save(&loaded, office_common::SaveOptions::default())
+            .expect("save overwritten spill anchor");
+        let saved_package = OpcPackage::from_bytes(saved.as_slice()).expect("saved package");
+        let sheet_xml = std::str::from_utf8(
+            saved_package
+                .part("xl/worksheets/sheet1.xml")
+                .expect("saved worksheet")
+                .bytes
+                .as_slice(),
+        )
+        .expect("saved worksheet utf8");
+        assert!(sheet_xml.contains(r#"<c r="J10"><f>1+1</f></c>"#), "{sheet_xml}");
+        assert!(!sheet_xml.contains(r#"t="array""#), "{sheet_xml}");
+        assert!(!sheet_xml.contains(r#"ref="J10:K11""#), "{sheet_xml}");
     }
 
     #[test]
@@ -115305,6 +115474,28 @@
         ]);
 
         package.to_bytes().expect("package bytes")
+    }
+
+    fn workbook_with_dynamic_array_formula_bytes() -> Vec<u8> {
+        let mut package = OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("package");
+        let sheet_xml = std::str::from_utf8(
+            package
+                .part("xl/worksheets/sheet1.xml")
+                .expect("worksheet")
+                .bytes
+                .as_slice(),
+        )
+        .expect("worksheet utf8")
+        .replace(
+            "  </sheetData>",
+            r#"    <row r="10"><c r="J10"><f t="array" ref="J10:K11">SEQUENCE(2,2)</f><v>1</v></c><c r="K10"><v>2</v></c></row>
+    <row r="11"><c r="J11"><v>3</v></c></row>
+  </sheetData>"#,
+        );
+        package
+            .replace_part_bytes("xl/worksheets/sheet1.xml", sheet_xml.into_bytes())
+            .expect("replace worksheet");
+        package.to_bytes().expect("dynamic-array workbook bytes")
     }
 
     fn workbook_with_self_closing_sheet_data_bytes() -> Vec<u8> {

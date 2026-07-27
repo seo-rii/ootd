@@ -48,12 +48,22 @@ impl WorksheetData {
         keys: impl IntoIterator<Item = (u32, u32)>,
     ) -> OmResult<()> {
         for key in keys {
-            if let Some(anchor) = self.spill_owners.get(&key) {
+            let anchor = self.spill_owners.get(&key).copied().or_else(|| {
+                self.spill_ranges.iter().find_map(|(anchor, spill_range)| {
+                    (key != *anchor
+                        && key.0 >= spill_range.row_first
+                        && key.0 <= spill_range.row_last
+                        && key.1 >= spill_range.col_first
+                        && key.1 <= spill_range.col_last)
+                        .then_some(*anchor)
+                })
+            });
+            if let Some(anchor) = anchor {
                 return Err(OmError::new(
                     OmErrorCode::InvalidState,
                     format!(
                         "cannot edit spill child R{}C{}; spill anchor is R{}C{}",
-                        key.0, key.1, anchor.0, anchor.1
+                        key.0, key.1, anchor.0, anchor.1,
                     ),
                 ));
             }

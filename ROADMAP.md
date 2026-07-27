@@ -147,6 +147,10 @@ Completed slices:
 - Routed single- and multi-area R1C1/Formula2R1C1 assignments through the same model formula
   command, removing two direct runtime mutation loops and extending the atomic child guard and
   anchor cleanup to their local aliases.
+- Reconstructed array-formula anchor, extent, and materialized child ownership from worksheet XML,
+  emitted `t="array"`/`ref` metadata for new Formula2 spills, and removed stale array attributes
+  when an anchor becomes an ordinary formula. Spill ranges remain authoritative even when a blank
+  child has no cached cell node.
 
 Next slices:
 
@@ -156,7 +160,8 @@ Next slices:
   omitted arguments.
 - Centralize scalar, aggregate, array, and reference coercion.
 - Complete `INDEX`, `INDIRECT`, `OFFSET`, `TRIMRANGE`, names, multi-area, 3D, `@`, and `#` semantics.
-- Add dependency invalidation, cycle handling, and dynamic-array XLSX save/reopen metadata.
+- Add dependency invalidation and cycle handling; validate dynamic-array extension metadata and
+  save/reopen behavior against the pinned Excel Oracle profile.
 - Revalidate the existing 17 array functions before adding higher-order functions.
 
 Exit criteria for every supported function:

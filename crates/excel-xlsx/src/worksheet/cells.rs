@@ -1,7 +1,9 @@
 use super::super::{WorksheetSupportParts, io_error, xml_error};
 
 use excel_model::{CellData, WorksheetData};
-use office_common::{CellError, CellValue, FormulaSource, OmError, OmErrorCode, OmResult, StyleId};
+use office_common::{
+    CellError, CellValue, FormulaSource, OmError, OmErrorCode, OmResult, Rect, StyleId,
+};
 use quick_xml::escape::partial_escape;
 use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::{Reader, Writer};
@@ -116,11 +118,13 @@ pub(crate) fn parse_cell_reference(
 pub(crate) fn parse_worksheet_cells(
     worksheet_xml: &[u8],
     shared_strings: &[String],
-) -> OmResult<BTreeMap<(u32, u32), CellData>> {
+) -> OmResult<ParsedWorksheetCells> {
     let mut reader = Reader::from_reader(Cursor::new(worksheet_xml));
     reader.config_mut().trim_text(false);
     let mut buffer = Vec::new();
     let mut cells = BTreeMap::new();
+    let mut dynamic_array_formulas = BTreeSet::new();
+    let mut spill_ranges = BTreeMap::new();
     let mut current_row = None;
     let mut current_field = None;
     let mut current_cell: Option<(
@@ -131,6 +135,7 @@ pub(crate) fn parse_worksheet_cells(
         String,
         String,
         String,
+        Option<Rect>,
     )> = None;
 
     loop {
@@ -182,6 +187,7 @@ pub(crate) fn parse_worksheet_cells(
                     String::new(),
                     String::new(),
                     String::new(),
+                    None,
                 ));
             }
             Ok(Event::Empty(element)) if element.name().as_ref() == b"c" => {
@@ -218,13 +224,72 @@ pub(crate) fn parse_worksheet_cells(
                 }
             }
             Ok(Event::Start(element)) if element.name().as_ref() == b"f" => {
+                let mut formula_type = None;
+                let mut formula_reference = None;
+                for attr in element.attributes() {
+                    let attr = attr.map_err(xml_error)?;
+                    let value = attr
+                        .decode_and_unescape_value(reader.decoder())
+                        .map_err(xml_error)?
+                        .into_owned();
+                    match attr.key.as_ref() {
+                        b"t" => formula_type = Some(value),
+                        b"ref" => formula_reference = Some(value),
+                        _ => {}
+                    }
+                }
+                if formula_type.as_deref() == Some("array") {
+                    let formula_reference = formula_reference.ok_or_else(|| {
+                        OmError::new(
+                            OmErrorCode::Parse,
+                            "array formula is missing its spill range reference",
+                        )
+                    })?;
+                    let normalized = formula_reference.replace('$', "");
+                    let (first, last) = normalized.split_once(':').map_or(
+                        (normalized.as_str(), normalized.as_str()),
+                        |(first, last)| (first, last),
+                    );
+                    let (row_first, col_first) = parse_cell_reference(first, None)?;
+                    let (row_last, col_last) = parse_cell_reference(last, None)?;
+                    if row_first > row_last || col_first > col_last {
+                        return Err(OmError::new(
+                            OmErrorCode::Parse,
+                            format!("invalid array formula spill range: {formula_reference}"),
+                        ));
+                    }
+                    let spill_range = Rect {
+                        row_first,
+                        row_last,
+                        col_first,
+                        col_last,
+                    };
+                    let Some((row, col, _, _, _, _, _, current_spill_range)) =
+                        current_cell.as_mut()
+                    else {
+                        return Err(OmError::new(
+                            OmErrorCode::Parse,
+                            "array formula is not contained by a worksheet cell",
+                        ));
+                    };
+                    if (*row, *col) != (row_first, col_first) {
+                        return Err(OmError::new(
+                            OmErrorCode::Parse,
+                            format!(
+                                "array formula anchor {} is not the top-left of {formula_reference}",
+                                cell_reference(*row, *col),
+                            ),
+                        ));
+                    }
+                    *current_spill_range = Some(spill_range);
+                }
                 current_field = Some("formula");
             }
             Ok(Event::Start(element)) if element.name().as_ref() == b"v" => {
                 current_field = Some("value");
             }
             Ok(Event::Start(element)) if element.name().as_ref() == b"t" => {
-                if let Some((_, _, cell_type, _, _, _, _)) = &current_cell {
+                if let Some((_, _, cell_type, _, _, _, _, _)) = &current_cell {
                     if cell_type.as_deref() == Some("inlineStr") {
                         current_field = Some("inline");
                     }
@@ -258,7 +323,7 @@ pub(crate) fn parse_worksheet_cells(
                 }
             }
             Ok(Event::End(element)) if element.name().as_ref() == b"c" => {
-                if let Some((row, col, cell_type, style_id, formula, value, inline)) =
+                if let Some((row, col, cell_type, style_id, formula, value, inline, spill_range)) =
                     current_cell.take()
                 {
                     let cell_value = match cell_type.as_deref() {
@@ -300,6 +365,25 @@ pub(crate) fn parse_worksheet_cells(
                             },
                         );
                     }
+                    if let Some(spill_range) = spill_range {
+                        let anchor = (row, col);
+                        if spill_ranges.values().any(|existing: &Rect| {
+                            existing.row_first <= spill_range.row_last
+                                && spill_range.row_first <= existing.row_last
+                                && existing.col_first <= spill_range.col_last
+                                && spill_range.col_first <= existing.col_last
+                        }) {
+                            return Err(OmError::new(
+                                OmErrorCode::Parse,
+                                format!(
+                                    "overlapping array formula spill range at {}",
+                                    cell_reference(row, col),
+                                ),
+                            ));
+                        }
+                        dynamic_array_formulas.insert(anchor);
+                        spill_ranges.insert(anchor, spill_range);
+                    }
                 }
             }
             Ok(Event::Eof) => break,
@@ -309,7 +393,35 @@ pub(crate) fn parse_worksheet_cells(
         buffer.clear();
     }
 
-    Ok(cells)
+    let mut spill_owners = BTreeMap::new();
+    for &cell in cells.keys() {
+        for (&anchor, spill_range) in &spill_ranges {
+            if cell != anchor
+                && cell.0 >= spill_range.row_first
+                && cell.0 <= spill_range.row_last
+                && cell.1 >= spill_range.col_first
+                && cell.1 <= spill_range.col_last
+            {
+                spill_owners.insert(cell, anchor);
+                break;
+            }
+        }
+    }
+
+    Ok(ParsedWorksheetCells {
+        cells,
+        dynamic_array_formulas,
+        spill_ranges,
+        spill_owners,
+    })
+}
+
+#[derive(Debug)]
+pub(crate) struct ParsedWorksheetCells {
+    pub(crate) cells: BTreeMap<(u32, u32), CellData>,
+    pub(crate) dynamic_array_formulas: BTreeSet<(u32, u32)>,
+    pub(crate) spill_ranges: BTreeMap<(u32, u32), Rect>,
+    pub(crate) spill_owners: BTreeMap<(u32, u32), (u32, u32)>,
 }
 
 pub(crate) fn rewrite_worksheet_xml(
@@ -976,6 +1088,57 @@ pub(crate) fn rewrite_worksheet_xml(
             .write_event(Event::Start(cell_tag))
             .map_err(xml_error)?;
 
+        let coordinates = (row_index, col_index);
+        let is_dynamic_array_formula = worksheet.dynamic_array_formulas.contains(&coordinates);
+        let spill_reference = is_dynamic_array_formula.then(|| {
+            let spill_range = worksheet
+                .spill_ranges
+                .get(&coordinates)
+                .copied()
+                .unwrap_or(Rect::single_cell(row_index, col_index));
+            let first = cell_reference(spill_range.row_first, spill_range.col_first);
+            let last = cell_reference(spill_range.row_last, spill_range.col_last);
+            if first == last {
+                first
+            } else {
+                format!("{first}:{last}")
+            }
+        });
+        let write_formula_xml =
+            |writer: &mut Writer<Cursor<Vec<u8>>>, formula: &FormulaSource| -> OmResult<()> {
+                let mut formula_tag = BytesStart::new("f");
+                if let Some(attributes) = formula_templates.get(&coordinates) {
+                    for (key, value) in attributes {
+                        if is_dynamic_array_formula && matches!(key.as_str(), "t" | "ref" | "si") {
+                            continue;
+                        }
+                        if !is_dynamic_array_formula
+                            && worksheet.dirty_cells.contains(&coordinates)
+                            && matches!(key.as_str(), "t" | "ref" | "si" | "aca")
+                        {
+                            continue;
+                        }
+                        formula_tag.push_attribute((key.as_str(), value.as_str()));
+                    }
+                }
+                if let Some(spill_reference) = spill_reference.as_deref() {
+                    formula_tag.push_attribute(("t", "array"));
+                    formula_tag.push_attribute(("ref", spill_reference));
+                }
+                writer
+                    .write_event(Event::Start(formula_tag))
+                    .map_err(xml_error)?;
+                writer
+                    .write_event(Event::Text(BytesText::from_escaped(partial_escape(
+                        formula.text.as_str(),
+                    ))))
+                    .map_err(xml_error)?;
+                writer
+                    .write_event(Event::End(BytesEnd::new("f")))
+                    .map_err(xml_error)?;
+                Ok(())
+            };
+
         let mut wrote_formula = false;
         let mut wrote_value = false;
         let mut wrote_inline_string = false;
@@ -987,24 +1150,7 @@ pub(crate) fn rewrite_worksheet_xml(
                     }
                     CellContentSegment::Formula => {
                         if let Some(formula) = &cell.formula {
-                            let mut formula_tag = BytesStart::new("f");
-                            if let Some(attributes) = formula_templates.get(&(row_index, col_index))
-                            {
-                                for (key, value) in attributes {
-                                    formula_tag.push_attribute((key.as_str(), value.as_str()));
-                                }
-                            }
-                            writer
-                                .write_event(Event::Start(formula_tag))
-                                .map_err(xml_error)?;
-                            writer
-                                .write_event(Event::Text(BytesText::from_escaped(partial_escape(
-                                    formula.text.as_str(),
-                                ))))
-                                .map_err(xml_error)?;
-                            writer
-                                .write_event(Event::End(BytesEnd::new("f")))
-                                .map_err(xml_error)?;
+                            write_formula_xml(writer, formula)?;
                             wrote_formula = true;
                         }
                     }
@@ -1118,23 +1264,7 @@ pub(crate) fn rewrite_worksheet_xml(
         }
 
         if !wrote_formula && let Some(formula) = &cell.formula {
-            let mut formula_tag = BytesStart::new("f");
-            if let Some(attributes) = formula_templates.get(&(row_index, col_index)) {
-                for (key, value) in attributes {
-                    formula_tag.push_attribute((key.as_str(), value.as_str()));
-                }
-            }
-            writer
-                .write_event(Event::Start(formula_tag))
-                .map_err(xml_error)?;
-            writer
-                .write_event(Event::Text(BytesText::from_escaped(partial_escape(
-                    formula.text.as_str(),
-                ))))
-                .map_err(xml_error)?;
-            writer
-                .write_event(Event::End(BytesEnd::new("f")))
-                .map_err(xml_error)?;
+            write_formula_xml(writer, formula)?;
         }
         if !wrote_value && !wrote_inline_string {
             match &cell.value {
