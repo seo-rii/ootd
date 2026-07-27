@@ -48,7 +48,9 @@ contract-based until Milestone M1 pins the first behavioral Excel corpus.
   enforced across load/mutation/save; relationship attributes, IDs, target modes, and internal
   targets fail closed; XML-bearing parts receive a shared bounded well-formedness preflight.
 - CI portability: Ubuntu Rust 1.94, Ubuntu MSRV Rust 1.88, and Windows Rust 1.94 run as independent
-  test lanes; formatting and strict Clippy remain staged M3 debt.
+  test lanes. A bounded rustfmt gate covers 40 tracked files with four guarded monolith exceptions;
+  strict Clippy is enforced for the six foundational/model crates, while runtime/XLSX warnings
+  remain staged M3 debt.
 - Behavioral Oracle foundation: Rust and .NET contracts, runtime adapter, differential gate bridge,
   COM runner, and watchdog are implemented and synthetic/fake-backed tests pass.
 - Real Excel behavioral cases: none pinned yet; the current Linux host cannot execute desktop Excel.

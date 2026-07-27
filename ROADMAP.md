@@ -116,9 +116,13 @@ Completed slices:
   malformed XML is rejected before specialized codecs expose partial state.
 - Split CI portability coverage into explicit Ubuntu Rust 1.94, Ubuntu MSRV Rust 1.88, and Windows
   Rust 1.94 test lanes; the general Windows lane has no desktop Excel dependency.
+- Added a bounded per-file rustfmt gate for 40 tracked Rust files, with four reviewed monolith
+  exceptions guarded by path, minimum size, and individual growth ceilings.
+- Enabled strict `-D warnings` Clippy for `office-idl`, `office-common`, `office-codegen`,
+  `office-capture`, `office-opc`, and `excel-model` after clearing their existing warnings.
 
-- Add a bounded formatting gate and ratchet strict Clippy without promoting existing monolith debt
-  to unrelated-change failures.
+- Ratchet strict Clippy across `excel-runtime` and `excel-xlsx`, and shrink the reviewed rustfmt
+  exception set as M2 extraction continues.
 - Add dependency/license policy, property tests, scheduled fuzzing, and benchmark trends.
 
 Exit criteria:

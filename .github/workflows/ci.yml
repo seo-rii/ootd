@@ -15,6 +15,32 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Install Rust quality toolchain
+        run: rustup toolchain install 1.94.0 --profile minimal --component rustfmt --component clippy
+
+      - name: Test quality gate contracts
+        run: python3 -m unittest scripts/tests/test_*.py
+
+      - name: Check bounded Rust formatting
+        env:
+          RUSTUP_TOOLCHAIN: 1.94.0
+        run: ./scripts/check_rustfmt.py
+
+      - name: Run foundational strict Clippy
+        run: >-
+          rustup run 1.94.0 cargo clippy
+          -p office-idl -p office-common -p office-codegen
+          -p office-capture -p office-opc -p excel-model
+          --all-targets --all-features -- -D warnings
+
   checks:
     runs-on: ubuntu-latest
     timeout-minutes: 45
