@@ -134,3 +134,24 @@ fn names_dispatch_is_grouped_by_object_surface() {
     }
     assert!(!names.contains("use super::super::*;"));
 }
+
+#[test]
+fn range_dispatch_helpers_are_grouped_by_object_surface() {
+    let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let library = fs::read_to_string(crate_root.join("src/lib.rs")).expect("read library root");
+    let range = fs::read_to_string(crate_root.join("src/dispatch/range.rs"))
+        .expect("read Range dispatch module");
+
+    for method in [
+        "dispatch_get_range",
+        "dispatch_get_range_set",
+        "dispatch_get_areas",
+        "dispatch_invoke_areas",
+        "range_set_address",
+        "dispatch_set_range",
+    ] {
+        assert!(range.contains(&format!("fn {method}(")));
+        assert!(!library.contains(&format!("fn {method}(")));
+    }
+    assert!(!range.contains("use super::super::*;"));
+}

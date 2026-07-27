@@ -81,8 +81,11 @@ Completed slices:
   shared sheet copy/move/delete lifecycle helpers in the runtime core.
 - Grouped Names collection and Name object get/invoke dispatch with explicit model, formula, and
   metadata dependencies.
+- Grouped Range and Areas get/set/helper dispatch by object surface; the inline Range method arm in
+  the public invoke router remains a separately characterized follow-up.
 
-- Apply the object-surface dispatch pattern to range and chart objects.
+- Apply the object-surface dispatch pattern to chart objects, then characterize inline router arms
+  before extracting them.
 
 Exit criteria:
 
