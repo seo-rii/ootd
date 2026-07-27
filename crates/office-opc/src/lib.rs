@@ -1,7 +1,7 @@
 use office_common::{OmError, OmErrorCode, OmResult};
 use quick_xml::Reader;
 use quick_xml::events::Event;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Cursor, Read, Write};
 pub use zip::CompressionMethod;
 use zip::write::SimpleFileOptions;
@@ -76,6 +76,7 @@ impl OpcPackage {
         )?;
 
         let mut declared_total = 0_u64;
+        let mut part_identities = BTreeSet::new();
         for index in 0..archive.len() {
             let file = archive.by_index(index).map_err(zip_error)?;
             ensure_within_limit(
@@ -85,6 +86,13 @@ impl OpcPackage {
             )?;
             if file.is_dir() {
                 continue;
+            }
+            let canonical_name = canonical_part_name(file.name(), OmErrorCode::Parse)?;
+            if !part_identities.insert(canonical_name.identity.clone()) {
+                return Err(OmError::parse(format!(
+                    "duplicate OPC part identity: {}",
+                    canonical_name.spelling
+                )));
             }
 
             let uncompressed_bytes = file.size();
@@ -156,7 +164,7 @@ impl OpcPackage {
                 actual_total,
                 limits.max_total_uncompressed_bytes,
             )?;
-            if name == "[Content_Types].xml" {
+            if part_identity_key(&name).as_deref() == Some("[content_types].xml") {
                 content_types_xml = Some(part_bytes.clone());
             }
             parts.push(OpcPart {
@@ -180,10 +188,20 @@ impl OpcPackage {
     pub fn to_bytes(&self) -> OmResult<Vec<u8>> {
         let cursor = Cursor::new(Vec::new());
         let mut writer = ZipWriter::new(cursor);
+        let mut identities = BTreeSet::new();
 
         for part in &self.parts {
+            let canonical_name = canonical_part_name(&part.name, OmErrorCode::InvalidArgument)?;
+            if !identities.insert(canonical_name.identity) {
+                return Err(OmError::invalid_argument(format!(
+                    "duplicate OPC part identity: {}",
+                    canonical_name.spelling
+                )));
+            }
             let options = SimpleFileOptions::default().compression_method(part.compression);
-            writer.start_file(&part.name, options).map_err(zip_error)?;
+            writer
+                .start_file(&canonical_name.spelling, options)
+                .map_err(zip_error)?;
             writer.write_all(&part.bytes).map_err(io_error)?;
         }
 
@@ -192,13 +210,19 @@ impl OpcPackage {
     }
 
     pub fn contains(&self, name: &str) -> bool {
-        let normalized = name.trim_start_matches('/');
-        self.parts.iter().any(|part| part.name == normalized)
+        let Some(identity) = part_identity_key(name) else {
+            return false;
+        };
+        self.parts
+            .iter()
+            .any(|part| part_identity_key(&part.name).as_deref() == Some(identity.as_str()))
     }
 
     pub fn part(&self, name: &str) -> Option<&OpcPart> {
-        let normalized = name.trim_start_matches('/');
-        self.parts.iter().find(|part| part.name == normalized)
+        let identity = part_identity_key(name)?;
+        self.parts
+            .iter()
+            .find(|part| part_identity_key(&part.name).as_deref() == Some(identity.as_str()))
     }
 
     pub fn parts(&self) -> &[OpcPart] {
@@ -206,15 +230,17 @@ impl OpcPackage {
     }
 
     pub fn replace_part_bytes(&mut self, name: &str, bytes: Vec<u8>) -> OmResult<()> {
-        let normalized = name.trim_start_matches('/');
+        let canonical_name = canonical_part_name(name, OmErrorCode::InvalidArgument)?;
         let part = self
             .parts
             .iter_mut()
-            .find(|part| part.name == normalized)
+            .find(|part| {
+                part_identity_key(&part.name).as_deref() == Some(canonical_name.identity.as_str())
+            })
             .ok_or_else(|| {
                 OmError::new(
                     OmErrorCode::NotFound,
-                    format!("OPC part not found: {normalized}"),
+                    format!("OPC part not found: {}", canonical_name.spelling),
                 )
             })?;
         part.bytes = bytes;
@@ -222,21 +248,28 @@ impl OpcPackage {
     }
 
     pub fn add_part(&mut self, mut part: OpcPart) -> OmResult<()> {
-        part.name = normalize_part_name(&part.name)?;
-        if self.parts.iter().any(|existing| existing.name == part.name) {
-            return Err(OmError::new(
-                OmErrorCode::InvalidArgument,
-                format!("OPC part already exists: {}", part.name),
-            ));
+        let canonical_name = canonical_part_name(&part.name, OmErrorCode::InvalidArgument)?;
+        for existing in &self.parts {
+            let existing_name = canonical_part_name(&existing.name, OmErrorCode::InvalidArgument)?;
+            if existing_name.identity == canonical_name.identity {
+                return Err(OmError::new(
+                    OmErrorCode::InvalidArgument,
+                    format!("OPC part already exists: {}", canonical_name.spelling),
+                ));
+            }
         }
+        part.name = canonical_name.spelling;
         self.parts.push(part);
         Ok(())
     }
 
     pub fn remove_part(&mut self, name: &str) -> bool {
-        let normalized = name.trim_start_matches('/');
+        let Some(identity) = part_identity_key(name) else {
+            return false;
+        };
         let original_len = self.parts.len();
-        self.parts.retain(|part| part.name != normalized);
+        self.parts
+            .retain(|part| part_identity_key(&part.name).as_deref() != Some(identity.as_str()));
         self.parts.len() != original_len
     }
 }
@@ -334,7 +367,7 @@ struct ContentTypesManifest {
 
 impl ContentTypesManifest {
     fn resolve(&self, part_name: &str) -> Option<String> {
-        let override_key = format!("/{}", part_name.trim_start_matches('/'));
+        let override_key = part_identity_key(part_name)?;
         if let Some(content_type) = self.overrides.get(&override_key) {
             return Some(content_type.clone());
         }
@@ -346,15 +379,114 @@ impl ContentTypesManifest {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CanonicalPartName {
+    spelling: String,
+    identity: String,
+}
+
 fn normalize_part_name(name: &str) -> OmResult<String> {
-    let normalized = name.trim_start_matches('/').to_string();
-    if normalized.is_empty() || normalized.ends_with('/') {
-        return Err(OmError::new(
-            OmErrorCode::Parse,
-            format!("invalid OPC part name: {name}"),
-        ));
+    Ok(canonical_part_name(name, OmErrorCode::Parse)?.spelling)
+}
+
+fn part_identity_key(name: &str) -> Option<String> {
+    canonical_part_name(name, OmErrorCode::InvalidArgument)
+        .ok()
+        .map(|name| name.identity)
+}
+
+fn canonical_part_name(name: &str, error_code: OmErrorCode) -> OmResult<CanonicalPartName> {
+    let spelling = name.strip_prefix('/').unwrap_or(name);
+    let invalid = |reason: &str| {
+        OmError::new(
+            error_code,
+            format!("invalid OPC part name {name:?}: {reason}"),
+        )
+    };
+    if spelling.is_empty() {
+        return Err(invalid("name is empty"));
     }
-    Ok(normalized)
+    if spelling.starts_with('/') || spelling.ends_with('/') {
+        return Err(invalid("leading or trailing slash"));
+    }
+    if spelling
+        .chars()
+        .any(|ch| ch.is_control() || matches!(ch, '\\' | '?' | '#' | ':'))
+    {
+        return Err(invalid("forbidden URI character"));
+    }
+
+    let mut identity_segments = Vec::new();
+    for segment in spelling.split('/') {
+        if segment.is_empty() {
+            return Err(invalid("empty path segment"));
+        }
+        let identity_segment = canonical_part_segment_identity(segment)
+            .ok_or_else(|| invalid("malformed or forbidden percent encoding"))?;
+        if matches!(identity_segment.as_str(), "." | "..") {
+            return Err(invalid("dot path segment"));
+        }
+        if identity_segment.ends_with('.') {
+            return Err(invalid("path segment ends with a dot"));
+        }
+        identity_segments.push(identity_segment);
+    }
+
+    Ok(CanonicalPartName {
+        spelling: spelling.to_string(),
+        identity: identity_segments.join("/"),
+    })
+}
+
+fn canonical_part_segment_identity(segment: &str) -> Option<String> {
+    let bytes = segment.as_bytes();
+    let mut identity = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] != b'%' {
+            let byte = bytes[index];
+            identity.push(if byte.is_ascii_uppercase() {
+                byte.to_ascii_lowercase()
+            } else {
+                byte
+            });
+            index += 1;
+            continue;
+        }
+
+        let high = decode_hex(*bytes.get(index + 1)?)?;
+        let low = decode_hex(*bytes.get(index + 2)?)?;
+        let decoded = (high << 4) | low;
+        if decoded == 0 || decoded.is_ascii_control() || matches!(decoded, b'/' | b'\\') {
+            return None;
+        }
+        if decoded.is_ascii_alphanumeric() || matches!(decoded, b'-' | b'.' | b'_' | b'~') {
+            identity.push(decoded.to_ascii_lowercase());
+        } else {
+            identity.push(b'%');
+            identity.push(encode_hex(high));
+            identity.push(encode_hex(low));
+        }
+        index += 3;
+    }
+    String::from_utf8(identity).ok()
+}
+
+fn decode_hex(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn encode_hex(nibble: u8) -> u8 {
+    match nibble {
+        0..=9 => b'0' + nibble,
+        10..=15 => b'A' + nibble - 10,
+        _ => unreachable!("hex nibble"),
+    }
 }
 
 fn parse_content_types(xml: &[u8]) -> OmResult<ContentTypesManifest> {
@@ -402,7 +534,17 @@ fn parse_content_types(xml: &[u8]) -> OmResult<ContentTypesManifest> {
                             }
                         }
                         if let (Some(part_name), Some(content_type)) = (part_name, content_type) {
-                            manifest.overrides.insert(part_name, content_type);
+                            let canonical_name =
+                                canonical_part_name(&part_name, OmErrorCode::Parse)?;
+                            if manifest
+                                .overrides
+                                .insert(canonical_name.identity, content_type)
+                                .is_some()
+                            {
+                                return Err(OmError::parse(format!(
+                                    "duplicate OPC content type override: {part_name}"
+                                )));
+                            }
                         }
                     }
                     _ => {}
@@ -1002,6 +1144,111 @@ mod tests {
 
         assert_eq!(error.code, OmErrorCode::Parse);
         assert!(error.message.contains("duplicate ZIP entry name"));
+    }
+
+    #[test]
+    fn load_rejects_noncanonical_opc_part_names() {
+        for name in [
+            "xl/../evil.xml",
+            "xl//evil.xml",
+            "xl\\evil.xml",
+            "xl/workbook.xml.",
+            "xl/%GG.xml",
+            "xl/%2F.xml",
+            "xl/item.xml#fragment",
+            "xl/item.xml?query",
+            "https:evil.xml",
+        ] {
+            let bytes = zip_bytes(&[(name, CompressionMethod::Stored, b"opaque")]);
+            let error =
+                OpcPackage::from_bytes(&bytes).expect_err("noncanonical OPC part name should fail");
+
+            assert_eq!(error.code, OmErrorCode::Parse, "name: {name}");
+            assert!(error.message.contains("OPC part name"), "name: {name}");
+        }
+    }
+
+    #[test]
+    fn load_rejects_case_or_percent_equivalent_part_identities() {
+        for second_name in ["XL/WORKBOOK.XML", "xl/%77orkbook.xml"] {
+            let bytes = zip_bytes(&[
+                ("xl/workbook.xml", CompressionMethod::Stored, b"first"),
+                (second_name, CompressionMethod::Stored, b"second"),
+            ]);
+            let error = OpcPackage::from_bytes(&bytes)
+                .expect_err("equivalent OPC part identities should fail");
+
+            assert_eq!(error.code, OmErrorCode::Parse, "name: {second_name}");
+            assert!(error.message.contains("duplicate OPC part identity"));
+        }
+    }
+
+    #[test]
+    fn part_lookup_and_add_are_case_insensitive() {
+        let mut package = OpcPackage::new(vec![OpcPart {
+            name: "xl/workbook.xml".to_string(),
+            content_type: Some("application/xml".to_string()),
+            compression: CompressionMethod::Stored,
+            bytes: b"<workbook/>".to_vec(),
+        }]);
+
+        assert!(package.contains("/XL/WORKBOOK.XML"));
+        assert!(package.part("xl/%77orkbook.xml").is_some());
+
+        let error = package
+            .add_part(OpcPart {
+                name: "XL/WORKBOOK.XML".to_string(),
+                content_type: Some("application/xml".to_string()),
+                compression: CompressionMethod::Stored,
+                bytes: b"<other/>".to_vec(),
+            })
+            .expect_err("case-equivalent duplicate should fail");
+        assert_eq!(error.code, OmErrorCode::InvalidArgument);
+    }
+
+    #[test]
+    fn content_type_override_lookup_uses_canonical_part_identity() {
+        let package = OpcPackage::new(vec![
+            OpcPart {
+                name: "[Content_Types].xml".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/XL/WORKBOOK.XML" ContentType="application/workbook"/></Types>"#.to_vec(),
+            },
+            OpcPart {
+                name: "xl/workbook.xml".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: b"<workbook/>".to_vec(),
+            },
+        ]);
+
+        let reparsed = OpcPackage::from_bytes(&package.to_bytes().expect("package bytes"))
+            .expect("package parse");
+
+        assert_eq!(
+            reparsed
+                .part("xl/workbook.xml")
+                .and_then(|part| part.content_type.as_deref()),
+            Some("application/workbook")
+        );
+    }
+
+    #[test]
+    fn serialization_revalidates_infallibly_constructed_packages() {
+        let package = OpcPackage::new(vec![OpcPart {
+            name: "xl/../evil.xml".to_string(),
+            content_type: None,
+            compression: CompressionMethod::Stored,
+            bytes: b"opaque".to_vec(),
+        }]);
+
+        let error = package
+            .to_bytes()
+            .expect_err("invalid in-memory part name should not serialize");
+
+        assert_eq!(error.code, OmErrorCode::InvalidArgument);
+        assert!(error.message.contains("OPC part name"));
     }
 
     fn zip_bytes(entries: &[(&str, CompressionMethod, &[u8])]) -> Vec<u8> {

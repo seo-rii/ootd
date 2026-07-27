@@ -105,9 +105,12 @@ Completed slices:
 - Added an explicit `from_bytes_with_limits` override path and structured `ResourceLimit` errors;
   the default `from_bytes` path is bounded and preflights EOCD/ZIP64 entry counts before opening the
   central directory.
+- Added canonical, ASCII-case-insensitive OPC part identities across load, lookup, mutation,
+  content-type override resolution, and serialization; ambiguous case/percent-encoding duplicates
+  and non-canonical URI spellings are rejected before package state is exposed.
 
 - Enforce formatting, strict Clippy, MSRV, Linux stable, and Windows portability jobs.
-- Add canonical OPC part/relationship identity and duplicate rejection.
+- Add strict relationship target/identity validation and duplicate relationship-ID rejection.
 - Apply shared XML depth, event, text, attribute, and collection budgets.
 - Add dependency/license policy, property tests, scheduled fuzzing, and benchmark trends.
 
