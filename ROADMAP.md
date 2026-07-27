@@ -83,9 +83,10 @@ Completed slices:
   metadata dependencies.
 - Grouped Range and Areas get/set/helper dispatch by object surface; the inline Range method arm in
   the public invoke router remains a separately characterized follow-up.
+- Grouped the chart-family helper surface, including ChartObjects, chart children, axes, legends,
+  groups, series, labels, and points, in one explicit-dependency module.
 
-- Apply the object-surface dispatch pattern to chart objects, then characterize inline router arms
-  before extracting them.
+- Characterize and extract the remaining inline object arms from the public get/set/invoke routers.
 
 Exit criteria:
 

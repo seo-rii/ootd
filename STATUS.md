@@ -42,8 +42,8 @@ contract-based until Milestone M1 pins the first behavioral Excel corpus.
   library roots with test identities unchanged; calculation and recalculation/writeback are
   isolated; shared strings, relationships, and worksheet cell codec logic are isolated; Application,
   Workbook/Workbooks, WorksheetFunction, and Worksheet/sheet-collection dispatch are grouped by
-  object surface; Names/Name and Range/Areas helpers are also isolated, with chart helpers and
-  inline public-router arms still to be split.
+  object surface; Names/Name, Range/Areas, and the chart-family helper surface are also isolated;
+  inline public-router arms remain as the final M2 dispatch debt.
 - Formatting, strict Clippy, MSRV, and Windows jobs: scheduled for M3.
 - Behavioral Oracle foundation: Rust and .NET contracts, runtime adapter, differential gate bridge,
   COM runner, and watchdog are implemented and synthetic/fake-backed tests pass.

@@ -1,4 +1,5 @@
 mod application;
+mod chart;
 mod names;
 mod range;
 mod workbook;

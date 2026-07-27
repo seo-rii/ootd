@@ -155,3 +155,24 @@ fn range_dispatch_helpers_are_grouped_by_object_surface() {
     }
     assert!(!range.contains("use super::super::*;"));
 }
+
+#[test]
+fn chart_dispatch_helpers_are_grouped_by_object_surface() {
+    let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let library = fs::read_to_string(crate_root.join("src/lib.rs")).expect("read library root");
+    let chart = fs::read_to_string(crate_root.join("src/dispatch/chart.rs"))
+        .expect("read chart-family dispatch module");
+
+    for method in [
+        "dispatch_get_chart_objects",
+        "dispatch_invoke_chart_objects",
+        "dispatch_get_chart",
+        "dispatch_get_axis",
+        "dispatch_get_series",
+        "dispatch_get_point",
+    ] {
+        assert!(chart.contains(&format!("fn {method}(")));
+        assert!(!library.contains(&format!("fn {method}(")));
+    }
+    assert!(!chart.contains("use super::super::*;"));
+}
