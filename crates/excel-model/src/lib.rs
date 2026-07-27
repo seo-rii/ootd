@@ -43,6 +43,24 @@ pub struct WorksheetData {
 }
 
 impl WorksheetData {
+    fn ensure_spill_children_are_not_edited(
+        &self,
+        keys: impl IntoIterator<Item = (u32, u32)>,
+    ) -> OmResult<()> {
+        for key in keys {
+            if let Some(anchor) = self.spill_owners.get(&key) {
+                return Err(OmError::new(
+                    OmErrorCode::InvalidState,
+                    format!(
+                        "cannot edit spill child R{}C{}; spill anchor is R{}C{}",
+                        key.0, key.1, anchor.0, anchor.1
+                    ),
+                ));
+            }
+        }
+        Ok(())
+    }
+
     pub fn prepare_cell_for_edit(&mut self, key: (u32, u32)) {
         self.spill_owners.remove(&key);
         if self.spill_ranges.contains_key(&key) {
@@ -322,6 +340,7 @@ impl WorkbookState {
         }
 
         let worksheet = self.worksheet_data_for_sheet_mut(sheet_id)?;
+        worksheet.ensure_spill_children_are_not_edited(updates.iter().map(|(key, _)| *key))?;
         for (key, value) in updates {
             let unchanged = worksheet.cells.get(&key).is_some_and(|existing| {
                 existing.value == value
@@ -458,6 +477,7 @@ impl WorkbookState {
         }
 
         let worksheet = self.worksheet_data_for_sheet_mut(sheet_id)?;
+        worksheet.ensure_spill_children_are_not_edited(updates.iter().map(|(key, _, _)| *key))?;
         for (key, cell_value, formula) in updates {
             let is_dynamic_formula = dynamic_array && formula.is_some();
             let unchanged = worksheet.cells.get(&key).is_some_and(|existing| {
@@ -503,6 +523,10 @@ impl WorkbookState {
     pub fn clear_range_contents(&mut self, range: &RangeRef) -> OmResult<()> {
         let (sheet_id, rects) = self.same_sheet_rects(range)?;
         let worksheet = self.worksheet_data_for_sheet_mut(sheet_id)?;
+        worksheet.ensure_spill_children_are_not_edited(rects.iter().flat_map(|rect| {
+            (rect.row_first..=rect.row_last)
+                .flat_map(move |row| (rect.col_first..=rect.col_last).map(move |col| (row, col)))
+        }))?;
         for rect in rects {
             for row in rect.row_first..=rect.row_last {
                 for col in rect.col_first..=rect.col_last {
@@ -684,6 +708,49 @@ mod tests {
             chart_sheets: BTreeMap::new(),
             opaque_parts: Vec::new(),
         }
+    }
+
+    fn seed_two_by_two_spill(state: &mut WorkbookState) {
+        let anchor = (3, 3);
+        let worksheet = state
+            .worksheet_data_for_sheet_mut(SheetId(3))
+            .expect("worksheet data");
+        worksheet.cells.insert(
+            anchor,
+            CellData {
+                value: CellValue::Number(1.0),
+                formula: Some(FormulaSource {
+                    text: "SEQUENCE(2,2)".to_string(),
+                    is_r1c1: false,
+                }),
+                style_id: None,
+            },
+        );
+        for (key, value, style_id) in [
+            ((3, 4), 2.0, None),
+            ((4, 3), 3.0, None),
+            ((4, 4), 4.0, Some(StyleId(17))),
+        ] {
+            worksheet.cells.insert(
+                key,
+                CellData {
+                    value: CellValue::Number(value),
+                    formula: None,
+                    style_id,
+                },
+            );
+            worksheet.spill_owners.insert(key, anchor);
+        }
+        worksheet.dynamic_array_formulas.insert(anchor);
+        worksheet.spill_ranges.insert(
+            anchor,
+            Rect {
+                row_first: 3,
+                row_last: 4,
+                col_first: 3,
+                col_last: 4,
+            },
+        );
     }
 
     fn formula_source(text: &str) -> FormulaSource {
@@ -1645,6 +1712,143 @@ mod tests {
                 })
             );
         }
+    }
+
+    #[test]
+    fn set_range_values_rejects_spill_child_edits_atomically() {
+        let mut state = sample_state();
+        seed_two_by_two_spill(&mut state);
+        let before = state
+            .worksheet_data_for_sheet(SheetId(3))
+            .expect("worksheet data")
+            .clone();
+
+        let error = state
+            .set_range_values(
+                &RangeRef {
+                    workbook_id: WorkbookId(7),
+                    scope: SheetScope::Single(SheetId(3)),
+                    areas: vec![Rect::single_cell(5, 1), Rect::single_cell(4, 4)],
+                },
+                &OmArray::scalar(OmValue::Number(99.0)),
+            )
+            .expect_err("spill child value edit should fail");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("R4C4"));
+        assert!(error.message.contains("R3C3"));
+        assert_eq!(
+            state
+                .worksheet_data_for_sheet(SheetId(3))
+                .expect("worksheet data"),
+            &before
+        );
+    }
+
+    #[test]
+    fn set_range_formulas_rejects_unchanged_spill_child_edits_atomically() {
+        let mut state = sample_state();
+        seed_two_by_two_spill(&mut state);
+        let before = state
+            .worksheet_data_for_sheet(SheetId(3))
+            .expect("worksheet data")
+            .clone();
+
+        let error = state
+            .set_range_formulas(
+                &RangeRef {
+                    workbook_id: WorkbookId(7),
+                    scope: SheetScope::Single(SheetId(3)),
+                    areas: vec![Rect::single_cell(5, 2), Rect::single_cell(4, 4)],
+                },
+                &OmArray::scalar(OmValue::Number(4.0)),
+            )
+            .expect_err("spill child formula edit should fail");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert_eq!(
+            state
+                .worksheet_data_for_sheet(SheetId(3))
+                .expect("worksheet data"),
+            &before
+        );
+    }
+
+    #[test]
+    fn clear_range_contents_rejects_spill_child_edits_atomically() {
+        let mut state = sample_state();
+        seed_two_by_two_spill(&mut state);
+        let before = state
+            .worksheet_data_for_sheet(SheetId(3))
+            .expect("worksheet data")
+            .clone();
+
+        let error = state
+            .clear_range_contents(&RangeRef {
+                workbook_id: WorkbookId(7),
+                scope: SheetScope::Single(SheetId(3)),
+                areas: vec![Rect::single_cell(1, 1), Rect::single_cell(4, 4)],
+            })
+            .expect_err("spill child clear should fail");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert_eq!(
+            state
+                .worksheet_data_for_sheet(SheetId(3))
+                .expect("worksheet data"),
+            &before
+        );
+    }
+
+    #[test]
+    fn setting_spill_anchor_value_clears_owned_extent() {
+        let mut state = sample_state();
+        seed_two_by_two_spill(&mut state);
+
+        state
+            .set_range_values(
+                &RangeRef::single_cell(WorkbookId(7), SheetId(3), 3, 3),
+                &OmArray::scalar(OmValue::Number(99.0)),
+            )
+            .expect("overwrite spill anchor");
+
+        let worksheet = state
+            .worksheet_data_for_sheet(SheetId(3))
+            .expect("worksheet data");
+        let anchor = worksheet.cells.get(&(3, 3)).expect("anchor");
+        assert_eq!(anchor.value, CellValue::Number(99.0));
+        assert!(anchor.formula.is_none());
+        assert!(!worksheet.cells.contains_key(&(3, 4)));
+        assert!(!worksheet.cells.contains_key(&(4, 3)));
+        let styled_child = worksheet.cells.get(&(4, 4)).expect("styled child shell");
+        assert_eq!(styled_child.value, CellValue::Blank);
+        assert_eq!(styled_child.style_id, Some(StyleId(17)));
+        assert!(worksheet.dynamic_array_formulas.is_empty());
+        assert!(worksheet.spill_ranges.is_empty());
+        assert!(worksheet.spill_owners.is_empty());
+    }
+
+    #[test]
+    fn clearing_spill_anchor_clears_owned_extent() {
+        let mut state = sample_state();
+        seed_two_by_two_spill(&mut state);
+
+        state
+            .clear_range_contents(&RangeRef::single_cell(WorkbookId(7), SheetId(3), 3, 3))
+            .expect("clear spill anchor");
+
+        let worksheet = state
+            .worksheet_data_for_sheet(SheetId(3))
+            .expect("worksheet data");
+        assert!(!worksheet.cells.contains_key(&(3, 3)));
+        assert!(!worksheet.cells.contains_key(&(3, 4)));
+        assert!(!worksheet.cells.contains_key(&(4, 3)));
+        let styled_child = worksheet.cells.get(&(4, 4)).expect("styled child shell");
+        assert_eq!(styled_child.value, CellValue::Blank);
+        assert_eq!(styled_child.style_id, Some(StyleId(17)));
+        assert!(worksheet.dynamic_array_formulas.is_empty());
+        assert!(worksheet.spill_ranges.is_empty());
+        assert!(worksheet.spill_owners.is_empty());
     }
 
     #[test]

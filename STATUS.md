@@ -27,7 +27,7 @@ contract-based until Milestone M1 pins the first behavioral Excel corpus.
 | XLSX load/save | Partial | No-op and targeted dirty-save preservation have broad synthetic regression coverage | Tracked real-world corpus, bounded parsing, and Excel reopen without repair |
 | Runtime object model | Partial | Application, workbook, worksheet, range, names, selection, clipboard, and chart-related dispatch are available | Generated member coverage and behavioral Oracle cases |
 | Scalar formula calculation | Partial | Broad deterministic function coverage exists behind an internal `calc` module, including Evaluate and Calculate paths; its value/coercion model is not yet unified | Shared coercion/reference model and Excel differential corpus |
-| Formula2 and dynamic arrays | Partial | Seventeen array functions produce two-dimensional spill results with basic obstruction and recalculation handling | Full spill mutation lifecycle, `@`/`#`, dependency order, XLSX metadata, and Oracle agreement |
+| Formula2 and dynamic arrays | Partial | Seventeen array functions produce two-dimensional spill results; model value/formula/ClearContents commands now reject spill-child batches atomically and anchor edits clear owned extents | Remaining runtime mutation paths, `@`/`#`, dependency order, XLSX metadata, and Oracle agreement |
 | Charts and drawings | Partial | Typed chart mutation and lossless-first relationship graph lifecycle cover a broad surface | Remain feature-frozen until PivotChart work; fix preservation regressions only |
 | Styles and themes | Preserve-only | Raw bytes and typed summaries are retained; general typed style allocation and mutation are incomplete | Corpus preservation before broader typed editing |
 | Macros and unsupported package parts | Preserve-only | OOXML macro-bearing variants and opaque parts are retained within the covered save paths | Real corpus and explicit capability matrix |
@@ -51,6 +51,9 @@ contract-based until Milestone M1 pins the first behavioral Excel corpus.
   test lanes. A bounded rustfmt gate covers 40 tracked files with four guarded monolith exceptions;
   strict Clippy is enforced for the six foundational/model crates, while runtime/XLSX warnings
   remain staged M3 debt.
+- M4 spill lifecycle: model value, A1 formula/Formula2, and `ClearContents` commands preflight all
+  targets and reject spill children without partial mutation; anchor edits atomically clear their
+  current owned extent.
 - Behavioral Oracle foundation: Rust and .NET contracts, runtime adapter, differential gate bridge,
   COM runner, and watchdog are implemented and synthetic/fake-backed tests pass.
 - Real Excel behavioral cases: none pinned yet; the current Linux host cannot execute desktop Excel.

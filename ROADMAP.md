@@ -96,7 +96,7 @@ Exit criteria:
 
 ### M3 — CI And Untrusted Input Safety
 
-Status: in progress; independent slices may run alongside M1 and M2.
+Status: core exit criteria complete; continuous hardening remains below.
 
 Completed slices:
 
@@ -121,6 +121,8 @@ Completed slices:
 - Enabled strict `-D warnings` Clippy for `office-idl`, `office-common`, `office-codegen`,
   `office-capture`, `office-opc`, and `excel-model` after clearing their existing warnings.
 
+Continuous hardening:
+
 - Ratchet strict Clippy across `excel-runtime` and `excel-xlsx`, and shrink the reviewed rustfmt
   exception set as M2 extraction continues.
 - Add dependency/license policy, property tests, scheduled fuzzing, and benchmark trends.
@@ -134,7 +136,16 @@ Exit criteria:
 
 ### M4 — Formula2 Foundation
 
-Status: pending M1 evidence and M2 calculation boundaries.
+Status: in progress on mutation invariants; real Excel evidence remains an external M1 dependency.
+
+Completed slices:
+
+- Added whole-batch spill-child preflight to model value, A1 formula/Formula2, and `ClearContents`
+  commands so a later child target cannot leave earlier cells partially mutated.
+- Characterized spill-anchor overwrite and clear: unstyled children are removed, styled children
+  remain as blank shells, and owner/range/dynamic-formula metadata is cleared together.
+
+Next slices:
 
 - Route all cell mutations through invariant-preserving model commands.
 - Make spill replacement and obstruction atomic across all mutation paths.
