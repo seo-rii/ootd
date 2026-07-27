@@ -87,8 +87,14 @@ calculation, chart/pivot preservation, Windows Excel Oracle, CI와 문서 구조
    evaluated/unsupported/external/circular/volatile/error로 주소별 분류한다. unsupported와
    external formula는 stale cache를 덮어쓰지 않으며, circular는 기존 `#CALC!` 결과와 별도
    진단을 함께 제공한다.
-9. **진행 중 — `OOTD-009`**: report의 partial-calculation state와
-   `calcPr`/calc-chain lifecycle을 연결한다.
+9. `OOTD-009` — 완료 (2026-07-27): `calcPr`의 mode/state/calcId를 typed state로
+   복원하고, 미계산·부분 계산은 `calcId=0`, `calcCompleted=0`,
+   `fullCalcOnLoad=1`, `forceFullCalc=1`로 Excel 재계산을 강제한다. 완전 계산은
+   cache 완료 flag를 기록하며, calculation-input digest가 이후 mutation으로 달라지면
+   완료 snapshot을 재사용하지 않는다. 모든 재작성 경로는 stale calc chain을 제거하고
+   원본 manual/autoNoTable mode와 알 수 없는 `calcPr` attribute를 보존한다.
+10. **진행 중 — `OOTD-046`**: prompt/semantic/serialization/formula-cache/package-graph
+    dirty domain을 명시적으로 분리한다.
 
 Wave 1 exit gate:
 

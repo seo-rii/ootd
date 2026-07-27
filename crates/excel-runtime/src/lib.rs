@@ -31,7 +31,8 @@ use excel_xlsx::{
     ChartSupportRelationshipBinding, LoadedXlsxWorkbook, PendingChartRelationshipGraph,
     PendingDrawingRelationshipGraph, PendingPackagePart, PendingPackageRelationship,
     PreparedXlsxSave, SheetDrawingSupportParts, WorksheetSupportParts, XlsxCodec,
-    encode_chart_model_xml, materialize_state_only_chart_graphs,
+    WorkbookCalculationMode, WorkbookCalculationState, encode_chart_model_xml,
+    materialize_state_only_chart_graphs,
 };
 use office_codegen::{OmFocusSurfaceRegistry, build_focus_surface_registry_from_json};
 use office_common::{
@@ -66,6 +67,23 @@ const EXCEL_MAX_COLUMN_INDEX: u32 = 16_384;
 const XL_CALCULATION_AUTOMATIC: i32 = -4105;
 const XL_CALCULATION_MANUAL: i32 = -4135;
 const XL_CALCULATION_SEMIAUTOMATIC: i32 = 2;
+
+fn workbook_calculation_mode_from_xl(value: i32) -> WorkbookCalculationMode {
+    match value {
+        XL_CALCULATION_MANUAL => WorkbookCalculationMode::Manual,
+        XL_CALCULATION_SEMIAUTOMATIC => WorkbookCalculationMode::AutomaticExceptDataTables,
+        _ => WorkbookCalculationMode::Automatic,
+    }
+}
+
+fn xl_calculation_from_workbook_mode(mode: WorkbookCalculationMode) -> i32 {
+    match mode {
+        WorkbookCalculationMode::Automatic => XL_CALCULATION_AUTOMATIC,
+        WorkbookCalculationMode::AutomaticExceptDataTables => XL_CALCULATION_SEMIAUTOMATIC,
+        WorkbookCalculationMode::Manual => XL_CALCULATION_MANUAL,
+    }
+}
+
 const XL_SHEET_VISIBLE: i32 = -1;
 const XL_SHEET_HIDDEN: i32 = 0;
 const XL_SHEET_VERY_HIDDEN: i32 = 2;
@@ -625,6 +643,12 @@ const PINNED_OM_TEMPLATE_JSON: &str = include_str!(concat!(
 #[cfg(test)]
 const FORMULA_IMPLEMENTATION_SOURCE: &str = include_str!("calc/mod.rs");
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RuntimeCalculationSnapshot {
+    input_digest: [u8; 32],
+    state: WorkbookCalculationState,
+}
+
 #[derive(Debug)]
 struct RuntimeWorkbook {
     loaded: LoadedXlsxWorkbook,
@@ -632,6 +656,7 @@ struct RuntimeWorkbook {
     read_only: bool,
     source_path: Option<PathBuf>,
     prompt_dirty: bool,
+    calculation_snapshot: Option<RuntimeCalculationSnapshot>,
 }
 
 impl RuntimeWorkbook {
@@ -1285,6 +1310,7 @@ pub struct ExcelRuntime {
     root_application: ObjectHandle,
     display_alerts: bool,
     calculation: i32,
+    calculation_mode_overridden: bool,
     default_chart_type: ChartType,
     screen_updating: bool,
     enable_events: bool,
@@ -1335,6 +1361,7 @@ impl ExcelRuntime {
             root_application: ObjectHandle(ROOT_APPLICATION_HANDLE_VALUE),
             display_alerts: true,
             calculation: XL_CALCULATION_AUTOMATIC,
+            calculation_mode_overridden: false,
             default_chart_type: ChartType::Bar,
             screen_updating: true,
             enable_events: true,
@@ -1502,6 +1529,14 @@ impl ExcelRuntime {
         self.next_handle += 1;
         let workbook_id = WorkbookId(handle_value);
         loaded.state.assign_workbook_id(workbook_id);
+        if self.calculation_mode_overridden {
+            loaded
+                .calculation_properties
+                .set_mode(workbook_calculation_mode_from_xl(self.calculation));
+        } else if self.workbooks.is_empty() {
+            self.calculation =
+                xl_calculation_from_workbook_mode(loaded.calculation_properties.mode());
+        }
         let workbook_handle = WorkbookHandle(ObjectHandle(handle_value));
         let default_selection = loaded
             .state
@@ -1522,6 +1557,7 @@ impl ExcelRuntime {
                 read_only: spec.read_only,
                 source_path,
                 prompt_dirty: false,
+                calculation_snapshot: None,
             },
         );
         self.objects.insert(
@@ -1611,6 +1647,14 @@ impl ExcelRuntime {
         let runtime = self.runtime_workbook(workbook)?;
         let mut loaded = self.loaded_workbook_for_save_format(runtime, spec.format)?;
         loaded = materialize_state_only_chart_graphs(loaded)?;
+        if let Some(calculation_snapshot) = runtime.calculation_snapshot
+            && calculation_snapshot.input_digest
+                == recalculation::calculation_input_digest(&runtime.loaded.state)
+        {
+            loaded
+                .calculation_properties
+                .request_state(calculation_snapshot.state);
+        }
         if !runtime.chart_support_part_sources.is_empty() {
             let mut used_part_names = loaded
                 .package
@@ -2944,6 +2988,11 @@ impl ExcelRuntime {
                             ));
                         }
                         self.calculation = calculation;
+                        self.calculation_mode_overridden = true;
+                        let mode = workbook_calculation_mode_from_xl(calculation);
+                        for runtime in self.workbooks.values_mut() {
+                            runtime.loaded.calculation_properties.set_mode(mode);
+                        }
                         Ok(())
                     }
                     "ScreenUpdating" => {
@@ -10883,6 +10932,10 @@ impl ExcelRuntime {
                             for rect in rects {
                                 self.calculate_sheet_formulas(workbook, sheet_id, Some(rect))?;
                             }
+                            self.record_calculation_snapshot(
+                                workbook,
+                                WorkbookCalculationState::PartiallyCalculated,
+                            )?;
                             return Ok(OmValue::Empty);
                         }
                         "Select" => {
@@ -14138,6 +14191,10 @@ impl ExcelRuntime {
                             ));
                         }
                         self.calculate_sheet_formulas(workbook, sheet_id, Some(rect))?;
+                        self.record_calculation_snapshot(
+                            workbook,
+                            WorkbookCalculationState::PartiallyCalculated,
+                        )?;
                         Ok(OmValue::Empty)
                     }
                     "ClearContents" => {

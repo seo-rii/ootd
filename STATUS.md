@@ -24,9 +24,9 @@ contract-based until Milestone M1 pins the first behavioral Excel corpus.
 | Behavioral Excel oracle | Partial | Typed cases, exact-byte run manifests, comparison/gate bridge, `ExcelRuntime` adapter, .NET contract tests, and an isolated COM runner/watchdog exist; no real Excel observation is pinned | Execute twice on the pinned Windows/Excel profile and commit the first required corpus |
 | OPC package loading | Partial | ZIP parts and opaque bytes are retained; default loading enforces finite ZIP and XML depth/event/text/attribute budgets; canonical part identities and strict relationship parsing reject ambiguous duplicates, root escapes, invalid modes, malformed URIs, and malformed XML | M3 CI portability gates, property/fuzz coverage, and dependency policy |
 | Workbook and worksheet model | Partial | Workbook, sheet, cell, name, chart, drawing, and basic dynamic-array state are modeled | Oracle-backed mutation and save/reopen cases |
-| XLSX load/save | Partial | No-op and targeted dirty-save preservation have broad synthetic regression coverage; filesystem saves use verified preparation, same-directory durable temporary files, atomic replace/create-new, and post-write baseline commit; read-only Save cannot overwrite its source | Tracked real-world corpus and Excel reopen without repair |
-| Runtime object model | Partial | Application, workbook, worksheet, range, names, selection, clipboard, and chart-related dispatch are available; `Workbook.Saved` uses prompt-only state, pathless `Workbook.Save` fails closed, and `Workbook.Close` has a deterministic headless save/discard/prompt state table | Complete dirty-domain taxonomy, generated member coverage, and behavioral Oracle cases |
-| Scalar formula calculation | Partial | Broad deterministic function coverage exists behind an internal `calc` module; changed results are serialized as cached values, and a public report classifies evaluated, unsupported, external, circular, volatile, and Excel-error cells by address without overwriting unresolved caches | Shared coercion/reference model, calc metadata synchronization, and Excel differential corpus |
+| XLSX load/save | Partial | No-op and targeted dirty-save preservation have broad synthetic regression coverage; filesystem saves use verified preparation, same-directory durable temporary files, atomic replace/create-new, and post-write baseline commit; calculation-state rewrites update `calcPr` and remove stale calc chains; read-only Save cannot overwrite its source | Tracked real-world corpus and Excel reopen without repair |
+| Runtime object model | Partial | Application, workbook, worksheet, range, names, selection, clipboard, and chart-related dispatch are available; `Workbook.Saved` uses prompt-only state, pathless `Workbook.Save` fails closed, `Workbook.Close` has a deterministic headless state table, and workbook calculation mode is synchronized with `Application.Calculation` | Complete dirty-domain taxonomy, generated member coverage, and behavioral Oracle cases |
+| Scalar formula calculation | Partial | Broad deterministic function coverage exists behind an internal `calc` module; changed results are serialized as cached values, a public report classifies address-level outcomes without overwriting unresolved caches, and complete/partial/uncomputed states drive coherent `calcPr` metadata | Shared coercion/reference model and Excel differential corpus |
 | Formula2 and dynamic arrays | Partial | Seventeen array functions produce two-dimensional spill results; model value, A1/R1C1 formula families, and `ClearContents` commands reject spill-child batches atomically; worksheet array formula metadata restores and writes spill state across synthetic save/reopen; A1 `anchor#` resolves a materialized extent, and scalar dependents recalculate after dynamic materialization | Remaining runtime mutation paths, `@`, dynamic-to-dynamic dependency order/cycles, Excel-specific dynamic-array extension metadata, and Oracle agreement |
 | Charts and drawings | Partial | Typed chart mutation and lossless-first relationship graph lifecycle cover a broad surface | Remain feature-frozen until PivotChart work; fix preservation regressions only |
 | Styles and themes | Preserve-only | Raw bytes and typed summaries are retained; general typed style allocation and mutation are incomplete | Corpus preservation before broader typed editing |
@@ -37,7 +37,7 @@ contract-based until Milestone M1 pins the first behavioral Excel corpus.
 
 - Rust MSRV: 1.88; development toolchain: 1.94.0.
 - Linux workspace tests: enabled in CI.
-- Current root test inventory: 706 `excel-runtime` tests and 2,838 `excel-xlsx` tests.
+- Current root test inventory: 708 `excel-runtime` tests and 2,838 `excel-xlsx` tests.
 - M2 boundary progress: the `excel-xlsx` and `excel-runtime` unit tests now live outside their
   library roots with test identities unchanged; calculation and recalculation/writeback are
   isolated; shared strings, relationships, and worksheet cell codec logic are isolated; Application,
@@ -85,6 +85,13 @@ contract-based until Milestone M1 pins the first behavioral Excel corpus.
   addresses for evaluated, unsupported, external-workbook, circular, volatile, and Excel-error
   outcomes. Unsupported and external formulas retain their previous cached values; volatile is an
   overlapping annotation, and unresolved categories make the report incomplete.
+- Calculation metadata lifecycle: `calcPr` mode, source `calcId`, and cache-completion state are
+  parsed into typed codec state. A complete workbook calculation records completed caches; partial
+  or uncomputed inputs set `calcId=0` and force full recalculation on load. A SHA-256 digest of
+  formula inputs prevents a completed snapshot from surviving later cell/name/sheet/date-system
+  mutations. Rewritten calculation state removes calc-chain part/relationship/content-type
+  artifacts, preserves unknown `calcPr` attributes, and inserts a missing element before later
+  workbook extension children.
 - M5 pivot preservation: the codec inventories seven known pivot package kinds plus their internal
   opaque closure, incoming/shared and outgoing/external relationships, content types, compression,
   and raw bytes. Save-time gates protect clean and unrelated-cell edits and reject drift or dangling

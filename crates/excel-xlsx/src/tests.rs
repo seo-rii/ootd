@@ -14494,7 +14494,7 @@
     }
 
     #[test]
-    fn dirty_save_preserves_workbook_part_bytes() {
+    fn dirty_save_adds_only_recalculation_metadata_to_workbook_part() {
         let codec = XlsxCodec;
         let input = workbook_with_styles_and_theme_bytes();
         let original_package = OpcPackage::from_bytes(&input).expect("original package");
@@ -14514,12 +14514,32 @@
             .save(&loaded, office_common::SaveOptions::default())
             .expect("dirty save workbook");
         let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
-
-        assert_eq!(
+        let mut saved_workbook_xml = String::from_utf8(
             saved_package
                 .part("xl/workbook.xml")
                 .expect("saved workbook part")
-                .bytes,
+                .bytes
+                .clone(),
+        )
+        .expect("saved workbook utf8");
+        let calc_pr_start = saved_workbook_xml
+            .find("<calcPr")
+            .expect("inserted calcPr start");
+        let calc_pr_end = calc_pr_start
+            + saved_workbook_xml[calc_pr_start..]
+                .find("/>")
+                .expect("inserted calcPr end")
+            + 2;
+        let calc_pr = saved_workbook_xml[calc_pr_start..calc_pr_end].to_string();
+        saved_workbook_xml.replace_range(calc_pr_start..calc_pr_end, "");
+
+        assert!(calc_pr.contains(r#"calcMode="auto""#));
+        assert!(calc_pr.contains(r#"calcId="0""#));
+        assert!(calc_pr.contains(r#"calcCompleted="0""#));
+        assert!(calc_pr.contains(r#"fullCalcOnLoad="1""#));
+        assert!(calc_pr.contains(r#"forceFullCalc="1""#));
+        assert_eq!(
+            saved_workbook_xml.into_bytes(),
             original_package
                 .part("xl/workbook.xml")
                 .expect("original workbook part")
@@ -14552,7 +14572,6 @@
         for part_name in [
             "[Content_Types].xml",
             "_rels/.rels",
-            "xl/workbook.xml",
             WORKBOOK_RELS_PART_NAME,
             "xl/styles.xml",
             "xl/theme/theme1.xml",
@@ -14566,10 +14585,20 @@
                     .part(part_name)
                     .expect("original unmodified part")
                     .bytes,
-                "{part_name} should be byte-preserved when only sheet1.xml is dirty"
+                "{part_name} should be byte-preserved when only worksheet and calculation metadata are dirty"
             );
         }
 
+        assert_ne!(
+            saved_package
+                .part("xl/workbook.xml")
+                .expect("saved calculation metadata part")
+                .bytes,
+            original_package
+                .part("xl/workbook.xml")
+                .expect("original calculation metadata part")
+                .bytes
+        );
         assert_ne!(
             saved_package
                 .part("xl/worksheets/sheet1.xml")

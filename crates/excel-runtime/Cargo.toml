@@ -15,4 +15,5 @@ office-idl = { path = "../office-idl" }
 office-opc = { path = "../office-opc" }
 quick-xml.workspace = true
 regex = "1"
+sha2 = "0.10"
 tempfile = "3"

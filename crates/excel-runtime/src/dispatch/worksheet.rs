@@ -1,10 +1,11 @@
 use super::super::{
     EXCEL_MAX_COLUMN_INDEX, EXCEL_MAX_ROW_INDEX, ExcelRuntime, RangeProjection, RuntimeNamesScope,
-    RuntimeObjectKind, RuntimeSheetCollectionKind, WORKBOOK_PART_NAME, XL_CREATOR_CODE,
-    XL_SHEET_TYPE_CHART, XL_SHEET_TYPE_DIALOG_SHEET, XL_SHEET_TYPE_EXCEL4_MACRO_SHEET,
-    XL_SHEET_TYPE_WORKSHEET, coerce_evaluate_expression_arg, coerce_optional_bool_arg,
-    coerce_positive_index, coerce_u32_arg, om_value_is_omitted, parse_cells_args, parse_rect_a1,
-    reorder_workbook_sheet_entries, sheet_visibility_to_excel_value, validate_check_spelling_args,
+    RuntimeObjectKind, RuntimeSheetCollectionKind, WORKBOOK_PART_NAME, WorkbookCalculationState,
+    XL_CREATOR_CODE, XL_SHEET_TYPE_CHART, XL_SHEET_TYPE_DIALOG_SHEET,
+    XL_SHEET_TYPE_EXCEL4_MACRO_SHEET, XL_SHEET_TYPE_WORKSHEET, coerce_evaluate_expression_arg,
+    coerce_optional_bool_arg, coerce_positive_index, coerce_u32_arg, om_value_is_omitted,
+    parse_cells_args, parse_rect_a1, reorder_workbook_sheet_entries,
+    sheet_visibility_to_excel_value, validate_check_spelling_args,
     validate_export_as_fixed_format_args, validate_optional_integer_arg,
     validate_optional_text_arg, validate_print_out_args, validate_print_preview_args,
 };
@@ -1179,6 +1180,10 @@ impl ExcelRuntime {
                 }
                 self.ensure_grid_worksheet(workbook, sheet_id, "Worksheet.Calculate")?;
                 self.calculate_sheet_formulas(workbook, sheet_id, None)?;
+                self.record_calculation_snapshot(
+                    workbook,
+                    WorkbookCalculationState::PartiallyCalculated,
+                )?;
                 Ok(OmValue::Empty)
             }
             "Evaluate" => {

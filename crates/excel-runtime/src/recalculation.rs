@@ -1,8 +1,11 @@
 use super::calc::FormulaEvalError;
 use super::{
-    EXCEL_MAX_COLUMN_INDEX, EXCEL_MAX_ROW_INDEX, ExcelRuntime, FormulaArrayResult, FormulaEvaluator,
+    EXCEL_MAX_COLUMN_INDEX, EXCEL_MAX_ROW_INDEX, ExcelRuntime, FormulaArrayResult,
+    FormulaEvaluator, RuntimeCalculationSnapshot, WorkbookCalculationState,
 };
+use excel_model::WorkbookState;
 use office_common::{CellError, CellValue, ObjectHandle, OmResult, Rect, SheetId, WorkbookHandle};
+use sha2::{Digest, Sha256};
 
 /// A one-based formula-cell address within a runtime workbook.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -41,7 +44,139 @@ impl CalculationReport {
     }
 }
 
+pub(super) fn calculation_input_digest(state: &WorkbookState) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    let update_bytes = |digest: &mut Sha256, value: &[u8]| {
+        digest.update(u64::try_from(value.len()).unwrap_or(u64::MAX).to_le_bytes());
+        digest.update(value);
+    };
+
+    digest.update([u8::from(state.model.date1904)]);
+    digest.update(
+        u64::try_from(state.worksheets.len())
+            .unwrap_or(u64::MAX)
+            .to_le_bytes(),
+    );
+    for worksheet in &state.worksheets {
+        digest.update(worksheet.id.0.to_le_bytes());
+        update_bytes(&mut digest, worksheet.name.as_bytes());
+        digest.update([match worksheet.kind {
+            office_common::SheetKind::Worksheet => 0,
+            office_common::SheetKind::ChartSheet => 1,
+            office_common::SheetKind::MacroSheet => 2,
+            office_common::SheetKind::DialogSheet => 3,
+        }]);
+        digest.update([match worksheet.visibility {
+            office_common::SheetVisibility::Visible => 0,
+            office_common::SheetVisibility::Hidden => 1,
+            office_common::SheetVisibility::VeryHidden => 2,
+        }]);
+    }
+    digest.update(
+        u64::try_from(state.worksheet_data.len())
+            .unwrap_or(u64::MAX)
+            .to_le_bytes(),
+    );
+    for (sheet_id, worksheet) in &state.worksheet_data {
+        digest.update(sheet_id.0.to_le_bytes());
+        digest.update(
+            u64::try_from(worksheet.cells.len())
+                .unwrap_or(u64::MAX)
+                .to_le_bytes(),
+        );
+        for (&(row, column), cell) in &worksheet.cells {
+            digest.update(row.to_le_bytes());
+            digest.update(column.to_le_bytes());
+            match &cell.value {
+                CellValue::Blank => digest.update([0]),
+                CellValue::Number(value) => {
+                    digest.update([1]);
+                    digest.update(value.to_bits().to_le_bytes());
+                }
+                CellValue::Text(value) => {
+                    digest.update([2]);
+                    update_bytes(&mut digest, value.as_bytes());
+                }
+                CellValue::Bool(value) => digest.update([3, u8::from(*value)]),
+                CellValue::Error(value) => digest.update([4, *value as u8]),
+            }
+            if let Some(formula) = &cell.formula {
+                digest.update([1, u8::from(formula.is_r1c1)]);
+                update_bytes(&mut digest, formula.text.as_bytes());
+            } else {
+                digest.update([0]);
+            }
+        }
+        digest.update(
+            u64::try_from(worksheet.dynamic_array_formulas.len())
+                .unwrap_or(u64::MAX)
+                .to_le_bytes(),
+        );
+        for &(row, column) in &worksheet.dynamic_array_formulas {
+            digest.update(row.to_le_bytes());
+            digest.update(column.to_le_bytes());
+        }
+        digest.update(
+            u64::try_from(worksheet.spill_ranges.len())
+                .unwrap_or(u64::MAX)
+                .to_le_bytes(),
+        );
+        for (&(row, column), spill) in &worksheet.spill_ranges {
+            digest.update(row.to_le_bytes());
+            digest.update(column.to_le_bytes());
+            digest.update(spill.row_first.to_le_bytes());
+            digest.update(spill.row_last.to_le_bytes());
+            digest.update(spill.col_first.to_le_bytes());
+            digest.update(spill.col_last.to_le_bytes());
+        }
+        digest.update(
+            u64::try_from(worksheet.spill_owners.len())
+                .unwrap_or(u64::MAX)
+                .to_le_bytes(),
+        );
+        for (&(row, column), &(owner_row, owner_column)) in &worksheet.spill_owners {
+            digest.update(row.to_le_bytes());
+            digest.update(column.to_le_bytes());
+            digest.update(owner_row.to_le_bytes());
+            digest.update(owner_column.to_le_bytes());
+        }
+    }
+    digest.update(
+        u64::try_from(state.defined_names.len())
+            .unwrap_or(u64::MAX)
+            .to_le_bytes(),
+    );
+    for defined_name in state.defined_names.iter() {
+        digest.update(defined_name.id.0.to_le_bytes());
+        match defined_name.scope {
+            office_common::NameScope::Workbook => digest.update([0]),
+            office_common::NameScope::Worksheet(sheet_id) => {
+                digest.update([1]);
+                digest.update(sheet_id.0.to_le_bytes());
+            }
+        }
+        update_bytes(&mut digest, defined_name.display_name.as_bytes());
+        digest.update([u8::from(defined_name.refers_to.is_r1c1)]);
+        update_bytes(&mut digest, defined_name.refers_to.text.as_bytes());
+    }
+    digest.finalize().into()
+}
+
 impl ExcelRuntime {
+    pub(super) fn record_calculation_snapshot(
+        &mut self,
+        workbook: WorkbookHandle,
+        state: WorkbookCalculationState,
+    ) -> OmResult<()> {
+        let input_digest = calculation_input_digest(&self.runtime_workbook(workbook)?.loaded.state);
+        self.runtime_workbook_mut(workbook)?.calculation_snapshot =
+            Some(RuntimeCalculationSnapshot {
+                input_digest,
+                state,
+            });
+        Ok(())
+    }
+
     pub(super) fn calculate_all_open_workbooks(&mut self) -> OmResult<()> {
         let workbooks = self
             .workbooks
@@ -85,6 +220,14 @@ impl ExcelRuntime {
             report.volatile.extend(sheet_report.volatile);
             report.errors.extend(sheet_report.errors);
         }
+        self.record_calculation_snapshot(
+            workbook,
+            if report.is_complete() {
+                WorkbookCalculationState::FullyCalculated
+            } else {
+                WorkbookCalculationState::PartiallyCalculated
+            },
+        )?;
         Ok(report)
     }
 

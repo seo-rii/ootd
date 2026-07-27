@@ -5,7 +5,8 @@
         XL_CALCULATION_SEMIAUTOMATIC, XL_COLUMN_SEPARATOR, XL_COUNTRY_CODE, XL_CURRENCY_CODE,
         XL_CURRENCY_DIGITS, XL_DATE_SEPARATOR, XL_DECIMAL_SEPARATOR, XL_LIST_SEPARATOR, XL_R1C1,
         XL_ROW_SEPARATOR, XL_THOUSANDS_SEPARATOR, XL_TIME_SEPARATOR, XL_UPPER_CASE_COLUMN_LETTER,
-        XL_UPPER_CASE_ROW_LETTER, blank_workbook_bytes, formula_complex_from_text, supports_format,
+        XL_UPPER_CASE_ROW_LETTER, WorkbookCalculationMode, WorkbookCalculationState,
+        blank_workbook_bytes, formula_complex_from_text, supports_format,
         worksheet_relationships_part_uri_for,
     };
     use excel_model::{ChartDataLabelPosition, ChartSheetBinding, ChartType, DrawingObjectModel};
@@ -5714,6 +5715,343 @@
                 .value,
             CellValue::Error(CellError::Calc)
         );
+    }
+
+    #[test]
+    fn calculation_metadata_distinguishes_uncomputed_complete_and_partial_manual_workbooks() {
+        let fixture = || {
+            let mut package = OpcPackage::from_bytes(&synthetic_calc_chain_workbook_bytes())
+                .expect("base calculation metadata package");
+            let workbook_xml = String::from_utf8(
+                package
+                    .part("xl/workbook.xml")
+                    .expect("base workbook xml")
+                    .bytes
+                    .clone(),
+            )
+            .expect("base workbook xml utf8")
+            .replace(
+                "</workbook>",
+                r#"  <calcPr calcMode="manual" calcId="191029" calcCompleted="1" fullCalcOnLoad="0" forceFullCalc="0" customCalcAttr="keep"/>
+</workbook>"#,
+            );
+            package
+                .replace_part_bytes("xl/workbook.xml", workbook_xml.into_bytes())
+                .expect("replace calculation metadata");
+            package
+                .to_bytes()
+                .expect("calculation metadata fixture bytes")
+        };
+        let set_formula = |runtime: &mut ExcelRuntime, precedent_value: f64, formula: &str| {
+            let active_sheet = expect_object_handle(
+                runtime
+                    .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                    .expect("ActiveSheet"),
+            );
+            let precedent = expect_object_handle(
+                runtime
+                    .dispatch_invoke(
+                        active_sheet,
+                        "Range",
+                        &[OmValue::Text("A1".to_string())],
+                    )
+                    .expect("Range(A1)"),
+            );
+            runtime
+                .dispatch_set(
+                    precedent,
+                    "Value2",
+                    OmValue::Number(precedent_value),
+                    &[],
+                )
+                .expect("set A1 precedent");
+            let formula_cell = expect_object_handle(
+                runtime
+                    .dispatch_invoke(
+                        active_sheet,
+                        "Range",
+                        &[OmValue::Text("B1".to_string())],
+                    )
+                    .expect("Range(B1)"),
+            );
+            runtime
+                .dispatch_set(
+                    formula_cell,
+                    "Formula",
+                    OmValue::Text(formula.to_string()),
+                    &[],
+                )
+                .expect("set B1 formula");
+        };
+        let save = |runtime: &ExcelRuntime, workbook: WorkbookHandle| {
+            runtime
+                .save_workbook(
+                    workbook,
+                    SaveWorkbookSpec {
+                        format: FileFormat::Xlsx,
+                        profile: ExcelProfile::Excel365,
+                        lossless: true,
+                    },
+                )
+                .expect("save calculation metadata workbook")
+        };
+        let assert_metadata = |bytes: &[u8], calculation_mode: &str, calculated: bool| {
+            let package = OpcPackage::from_bytes(bytes).expect("saved calculation package");
+            let workbook_xml = String::from_utf8(
+                package
+                    .part("xl/workbook.xml")
+                    .expect("saved workbook xml")
+                    .bytes
+                    .clone(),
+            )
+            .expect("saved workbook xml utf8");
+            assert!(workbook_xml.contains(&format!(r#"calcMode="{calculation_mode}""#)));
+            assert!(workbook_xml.contains(r#"calcId="0""#));
+            assert!(workbook_xml.contains(if calculated {
+                r#"calcCompleted="1""#
+            } else {
+                r#"calcCompleted="0""#
+            }));
+            assert!(workbook_xml.contains(if calculated {
+                r#"fullCalcOnLoad="0""#
+            } else {
+                r#"fullCalcOnLoad="1""#
+            }));
+            assert!(workbook_xml.contains(if calculated {
+                r#"forceFullCalc="0""#
+            } else {
+                r#"forceFullCalc="1""#
+            }));
+            assert!(workbook_xml.contains(r#"customCalcAttr="keep""#));
+            assert!(!package.contains("xl/calcChain.xml"));
+            let reopened = ExcelRuntime::new()
+                .codec
+                .load(bytes, LoadOptions::default())
+                .expect("reopen calculation metadata workbook");
+            assert_eq!(
+                reopened.calculation_properties.mode(),
+                match calculation_mode {
+                    "auto" => WorkbookCalculationMode::Automatic,
+                    "autoNoTable" => WorkbookCalculationMode::AutomaticExceptDataTables,
+                    "manual" => WorkbookCalculationMode::Manual,
+                    _ => panic!("unexpected calculation mode"),
+                }
+            );
+            assert_eq!(
+                reopened.calculation_properties.state(),
+                if calculated {
+                    WorkbookCalculationState::FullyCalculated
+                } else {
+                    WorkbookCalculationState::RecalculationRequired
+                }
+            );
+            assert_eq!(reopened.calculation_properties.source_calc_id(), Some(0));
+        };
+
+        let mut uncomputed_runtime = ExcelRuntime::new();
+        let uncomputed_workbook = uncomputed_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: fixture(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open uncomputed workbook");
+        let source_calculation_properties = &uncomputed_runtime
+            .runtime_workbook(uncomputed_workbook)
+            .expect("uncomputed runtime workbook")
+            .loaded
+            .calculation_properties;
+        assert_eq!(
+            source_calculation_properties.mode(),
+            WorkbookCalculationMode::Manual
+        );
+        assert_eq!(
+            source_calculation_properties.state(),
+            WorkbookCalculationState::FullyCalculated
+        );
+        assert_eq!(source_calculation_properties.source_calc_id(), Some(191029));
+        assert_eq!(
+            expect_number(
+                uncomputed_runtime
+                    .dispatch_get(
+                        uncomputed_runtime.root_application(),
+                        "Calculation",
+                        &[],
+                    )
+                    .expect("manual Application.Calculation")
+            ),
+            f64::from(XL_CALCULATION_MANUAL)
+        );
+        set_formula(&mut uncomputed_runtime, 2.0, "=A1+1");
+        assert_metadata(
+            &save(&uncomputed_runtime, uncomputed_workbook),
+            "manual",
+            false,
+        );
+        uncomputed_runtime
+            .dispatch_set(
+                uncomputed_runtime.root_application(),
+                "Calculation",
+                OmValue::Number(f64::from(XL_CALCULATION_AUTOMATIC)),
+                &[],
+            )
+            .expect("Application.Calculation = xlCalculationAutomatic");
+        assert_metadata(
+            &save(&uncomputed_runtime, uncomputed_workbook),
+            "auto",
+            false,
+        );
+        uncomputed_runtime
+            .dispatch_set(
+                uncomputed_runtime.root_application(),
+                "Calculation",
+                OmValue::Number(f64::from(XL_CALCULATION_SEMIAUTOMATIC)),
+                &[],
+            )
+            .expect("Application.Calculation = xlCalculationSemiautomatic");
+        assert_metadata(
+            &save(&uncomputed_runtime, uncomputed_workbook),
+            "autoNoTable",
+            false,
+        );
+
+        let mut complete_runtime = ExcelRuntime::new();
+        let complete_workbook = complete_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: fixture(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open complete workbook");
+        set_formula(&mut complete_runtime, 2.0, "=A1+1");
+        assert!(
+            complete_runtime
+                .calculate_workbook_with_report(complete_workbook)
+                .expect("calculate complete workbook")
+                .is_complete()
+        );
+        assert_metadata(
+            &save(&complete_runtime, complete_workbook),
+            "manual",
+            true,
+        );
+        set_formula(&mut complete_runtime, 3.0, "=A1+1");
+        assert_metadata(
+            &save(&complete_runtime, complete_workbook),
+            "manual",
+            false,
+        );
+
+        let mut partial_runtime = ExcelRuntime::new();
+        let partial_workbook = partial_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: fixture(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open partial workbook");
+        set_formula(
+            &mut partial_runtime,
+            2.0,
+            "=UNSUPPORTED.FUNCTION(A1)",
+        );
+        let partial_report = partial_runtime
+            .calculate_workbook_with_report(partial_workbook)
+            .expect("calculate partial workbook");
+        assert!(!partial_report.is_complete());
+        assert_eq!(partial_report.unsupported.len(), 1);
+        assert_metadata(
+            &save(&partial_runtime, partial_workbook),
+            "manual",
+            false,
+        );
+    }
+
+    #[test]
+    fn calculation_metadata_inserts_calc_pr_before_workbook_extensions() {
+        let mut package = OpcPackage::from_bytes(&synthetic_calc_chain_workbook_bytes())
+            .expect("base extension calculation package");
+        let workbook_xml = String::from_utf8(
+            package
+                .part("xl/workbook.xml")
+                .expect("base extension workbook xml")
+                .bytes
+                .clone(),
+        )
+        .expect("base extension workbook xml utf8")
+        .replace(
+            "</workbook>",
+            r#"  <extLst><ext uri="urn:ootd:preserve"/></extLst>
+</workbook>"#,
+        );
+        package
+            .replace_part_bytes("xl/workbook.xml", workbook_xml.into_bytes())
+            .expect("replace extension workbook xml");
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: package.to_bytes().expect("extension calculation fixture"),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open extension calculation workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let precedent = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("A1".to_string())],
+                )
+                .expect("Range(A1)"),
+        );
+        runtime
+            .dispatch_set(precedent, "Value2", OmValue::Number(99.0), &[])
+            .expect("change formula precedent");
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("save extension calculation workbook");
+        let saved_package =
+            OpcPackage::from_bytes(&saved).expect("saved extension calculation package");
+        let saved_workbook_xml = String::from_utf8(
+            saved_package
+                .part("xl/workbook.xml")
+                .expect("saved extension workbook xml")
+                .bytes
+                .clone(),
+        )
+        .expect("saved extension workbook xml utf8");
+        let calc_pr_position = saved_workbook_xml
+            .find("<calcPr")
+            .expect("inserted calcPr");
+        let extension_position = saved_workbook_xml
+            .find("<extLst")
+            .expect("preserved extLst");
+
+        assert!(calc_pr_position < extension_position);
+        assert!(saved_workbook_xml.contains(r#"calcMode="auto""#));
+        assert!(saved_workbook_xml.contains(r#"calcId="0""#));
+        assert!(saved_workbook_xml.contains(r#"calcCompleted="0""#));
+        assert!(saved_workbook_xml.contains(r#"fullCalcOnLoad="1""#));
+        assert!(saved_workbook_xml.contains(r#"forceFullCalc="1""#));
+        assert!(saved_workbook_xml.contains(r#"uri="urn:ootd:preserve""#));
+        assert!(!saved_package.contains("xl/calcChain.xml"));
     }
 
     #[test]

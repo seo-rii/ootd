@@ -33,10 +33,15 @@ Active order:
 8. `OOTD-008` complete (2026-07-27): a public typed report classifies evaluated, unsupported,
    external, circular, volatile, and Excel-error formula cells by address while preserving
    unresolved cached values.
-9. **Active:** `OOTD-009` synchronizes partial calculation with `calcPr` and calc-chain metadata.
-10. Continue with fail-closed public/security contracts, QName/reference/parser invariants, then
+9. `OOTD-009` complete (2026-07-27): typed `calcPr` state now distinguishes complete,
+   partial, and uncomputed caches; calculation-input digests prevent reuse after later edits,
+   manual/automatic mode is synchronized, and every rewritten calculation state removes stale
+   calc-chain artifacts.
+10. **Active:** `OOTD-046` separates prompt, semantic, serialization, formula-cache, and
+   package-graph dirty domains.
+11. Continue with fail-closed public/security contracts, QName/reference/parser invariants, then
    cell/formula fidelity.
-11. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
+12. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
    claiming practical chart/pivot/style parity.
 
 Every numbered work unit starts with a failing regression and lands as its own reviewable commit.

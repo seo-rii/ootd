@@ -3245,6 +3245,7 @@ mod tests {
                 },
             ]),
             detected_format: FileFormat::Xlsx,
+            calculation_properties: Default::default(),
             support_parts: Default::default(),
             worksheet_support_parts: BTreeMap::new(),
             sheet_drawing_support_parts: BTreeMap::new(),

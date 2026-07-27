@@ -95,11 +95,103 @@ type ThemeExtLevel8Names = Vec<Vec<Vec<Vec<Vec<Vec<Vec<Vec<String>>>>>>>>;
 type ThemeExtLevel8AttrMaps = Vec<Vec<Vec<Vec<Vec<Vec<Vec<Vec<BTreeMap<String, String>>>>>>>>>;
 type ThemeExtLevel8Texts = Vec<Vec<Vec<Vec<Vec<Vec<Vec<Vec<Option<String>>>>>>>>>;
 
+/// Workbook calculation mode persisted through the SpreadsheetML `calcPr` element.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WorkbookCalculationMode {
+    #[default]
+    Automatic,
+    AutomaticExceptDataTables,
+    Manual,
+}
+
+impl WorkbookCalculationMode {
+    fn parse(value: &str) -> OmResult<Self> {
+        match value {
+            "auto" => Ok(Self::Automatic),
+            "autoNoTable" => Ok(Self::AutomaticExceptDataTables),
+            "manual" => Ok(Self::Manual),
+            _ => Err(OmError::new(
+                OmErrorCode::Parse,
+                format!("unsupported workbook calculation mode: {value}"),
+            )),
+        }
+    }
+
+    fn as_ooxml(self) -> &'static str {
+        match self {
+            Self::Automatic => "auto",
+            Self::AutomaticExceptDataTables => "autoNoTable",
+            Self::Manual => "manual",
+        }
+    }
+}
+
+/// Whether cached formula results are complete or require Excel recalculation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkbookCalculationState {
+    FullyCalculated,
+    PartiallyCalculated,
+    RecalculationRequired,
+}
+
+/// Parsed calculation properties plus any calculation state requested for the next save.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkbookCalculationProperties {
+    mode: WorkbookCalculationMode,
+    source_state: WorkbookCalculationState,
+    source_calc_id: Option<u32>,
+    requested_state: Option<WorkbookCalculationState>,
+    mode_dirty: bool,
+}
+
+impl Default for WorkbookCalculationProperties {
+    fn default() -> Self {
+        Self {
+            mode: WorkbookCalculationMode::Automatic,
+            source_state: WorkbookCalculationState::FullyCalculated,
+            source_calc_id: None,
+            requested_state: None,
+            mode_dirty: false,
+        }
+    }
+}
+
+impl WorkbookCalculationProperties {
+    /// Returns the workbook calculation mode parsed from or requested for `calcPr`.
+    pub fn mode(&self) -> WorkbookCalculationMode {
+        self.mode
+    }
+
+    /// Returns the requested calculation state, or the state inferred from the source package.
+    pub fn state(&self) -> WorkbookCalculationState {
+        self.requested_state.unwrap_or(self.source_state)
+    }
+
+    /// Returns the calculation engine identifier found in the source package.
+    pub fn source_calc_id(&self) -> Option<u32> {
+        self.source_calc_id
+    }
+
+    /// Requests a calculation mode update on the next save.
+    pub fn set_mode(&mut self, mode: WorkbookCalculationMode) {
+        if self.mode != mode {
+            self.mode = mode;
+            self.mode_dirty = true;
+        }
+    }
+
+    /// Requests calculation-state metadata for the next save.
+    pub fn request_state(&mut self, state: WorkbookCalculationState) {
+        self.requested_state = Some(state);
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct LoadedXlsxWorkbook {
     pub state: WorkbookState,
     pub package: OpcPackage,
     pub detected_format: FileFormat,
+    pub calculation_properties: WorkbookCalculationProperties,
     pub support_parts: WorkbookSupportParts,
     pub worksheet_support_parts: BTreeMap<SheetId, WorksheetSupportParts>,
     pub sheet_drawing_support_parts: BTreeMap<SheetId, SheetDrawingSupportParts>,
@@ -1279,6 +1371,7 @@ impl XlsxCodec {
         let parsed_workbook = parse_workbook(workbook_part.bytes.as_slice(), &relationships)?;
         let date1904 = parsed_workbook.date1904;
         let is_addin = parsed_workbook.is_addin;
+        let calculation_properties = parsed_workbook.calculation_properties;
         let worksheets = parsed_workbook.worksheets;
         let defined_names = parsed_workbook.defined_names;
         let shared_strings = package
@@ -1374,6 +1467,7 @@ impl XlsxCodec {
             state,
             package,
             detected_format,
+            calculation_properties,
             support_parts,
             worksheet_support_parts,
             sheet_drawing_support_parts,
@@ -1414,19 +1508,40 @@ impl XlsxCodec {
             .bytes
             .clone();
         let saved_workbook = parse_workbook(workbook_xml.as_slice(), &BTreeMap::new())?;
+        let has_dirty_worksheets = workbook
+            .state
+            .worksheet_data
+            .values()
+            .any(|worksheet| worksheet.dirty);
+        let worksheet_structure_changed =
+            saved_workbook.worksheets.len() != workbook.state.worksheets.len()
+                || saved_workbook
+                    .worksheets
+                    .iter()
+                    .zip(&workbook.state.worksheets)
+                    .any(|(saved, current)| {
+                        saved.id != current.id
+                            || saved.name != current.name
+                            || saved.visibility != current.visibility
+                    });
+        let calculation_inputs_changed = has_dirty_worksheets
+            || saved_workbook.date1904 != workbook.state.model.date1904
+            || workbook.state.defined_names.is_dirty()
+            || worksheet_structure_changed;
+        let effective_calculation_state = workbook
+            .calculation_properties
+            .requested_state
+            .or_else(|| {
+                calculation_inputs_changed
+                    .then_some(WorkbookCalculationState::RecalculationRequired)
+            });
+        let rewrite_calculation_properties =
+            workbook.calculation_properties.mode_dirty || effective_calculation_state.is_some();
         if saved_workbook.date1904 != workbook.state.model.date1904
             || saved_workbook.is_addin != workbook.state.model.is_addin
             || workbook.state.defined_names.is_dirty()
-            || saved_workbook.worksheets.len() != workbook.state.worksheets.len()
-            || saved_workbook
-                .worksheets
-                .iter()
-                .zip(&workbook.state.worksheets)
-                .any(|(saved, current)| {
-                    saved.id != current.id
-                        || saved.name != current.name
-                        || saved.visibility != current.visibility
-                })
+            || worksheet_structure_changed
+            || rewrite_calculation_properties
         {
             let mut reader = Reader::from_reader(Cursor::new(workbook_xml.as_slice()));
             reader.config_mut().trim_text(false);
@@ -1435,6 +1550,8 @@ impl XlsxCodec {
             let rewrite_defined_names = workbook.state.defined_names.is_dirty();
             let mut skip_defined_names_depth = 0usize;
             let mut wrote_defined_names = false;
+            let mut wrote_calc_pr = false;
+            let mut workbook_depth = 0usize;
             let rewrite_sheet_element = |element: &BytesStart<'_>,
                                          decoder: quick_xml::encoding::Decoder|
              -> OmResult<BytesStart<'static>> {
@@ -1508,24 +1625,134 @@ impl XlsxCodec {
                 }
                 Ok(rewritten)
             };
+            let rewrite_calc_pr_element = |element: &BytesStart<'_>,
+                                           decoder: quick_xml::encoding::Decoder|
+             -> OmResult<BytesStart<'static>> {
+                let mut rewritten =
+                    BytesStart::new(String::from_utf8_lossy(element.name().as_ref()).into_owned());
+                for attr in element.attributes() {
+                    let attr = attr.map_err(xml_error)?;
+                    let key = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
+                    if key == "calcMode"
+                        || (effective_calculation_state.is_some()
+                            && matches!(
+                                key.as_str(),
+                                "calcId"
+                                    | "calcCompleted"
+                                    | "fullCalcOnLoad"
+                                    | "forceFullCalc"
+                            ))
+                    {
+                        continue;
+                    }
+                    let value = attr
+                        .decode_and_unescape_value(decoder)
+                        .map_err(xml_error)?
+                        .into_owned();
+                    rewritten.push_attribute((key.as_str(), value.as_str()));
+                }
+                rewritten.push_attribute((
+                    "calcMode",
+                    workbook.calculation_properties.mode.as_ooxml(),
+                ));
+                if let Some(state) = effective_calculation_state {
+                    rewritten.push_attribute(("calcId", "0"));
+                    match state {
+                        WorkbookCalculationState::FullyCalculated => {
+                            rewritten.push_attribute(("calcCompleted", "1"));
+                            rewritten.push_attribute(("fullCalcOnLoad", "0"));
+                            rewritten.push_attribute(("forceFullCalc", "0"));
+                        }
+                        WorkbookCalculationState::PartiallyCalculated
+                        | WorkbookCalculationState::RecalculationRequired => {
+                            rewritten.push_attribute(("calcCompleted", "0"));
+                            rewritten.push_attribute(("fullCalcOnLoad", "1"));
+                            rewritten.push_attribute(("forceFullCalc", "1"));
+                        }
+                    }
+                }
+                Ok(rewritten)
+            };
+            let write_new_calc_pr =
+                |writer: &mut Writer<Cursor<Vec<u8>>>,
+                 decoder: quick_xml::encoding::Decoder|
+                 -> OmResult<()> {
+                    let calc_pr =
+                        rewrite_calc_pr_element(&BytesStart::new("calcPr"), decoder)?;
+                    writer.write_event(Event::Empty(calc_pr)).map_err(xml_error)
+                };
+
+            let follows_calc_pr = |name: &[u8]| {
+                matches!(
+                    name,
+                    b"oleSize"
+                        | b"customWorkbookViews"
+                        | b"pivotCaches"
+                        | b"smartTagPr"
+                        | b"smartTagTypes"
+                        | b"webPublishing"
+                        | b"fileRecoveryPr"
+                        | b"webPublishObjects"
+                        | b"extLst"
+                )
+            };
 
             loop {
-                match reader.read_event_into(&mut buffer) {
-                    Ok(Event::Start(element))
+                let event = match reader.read_event_into(&mut buffer) {
+                    Ok(event) => event,
+                    Err(error) => return Err(xml_error(error)),
+                };
+                if matches!(&event, Event::Eof) {
+                    break;
+                }
+                let enters_element = matches!(&event, Event::Start(_));
+                let exits_element = matches!(&event, Event::End(_));
+                let at_workbook_child = workbook_depth == 1;
+                let closes_workbook = at_workbook_child
+                    && matches!(
+                        &event,
+                        Event::End(element) if element.name().as_ref() == b"workbook"
+                    );
+                let insert_before_following_element = at_workbook_child
+                    && matches!(
+                        &event,
+                        Event::Start(element) | Event::Empty(element)
+                            if follows_calc_pr(element.name().as_ref())
+                    );
+                if rewrite_calculation_properties
+                    && !saved_workbook.has_calc_pr
+                    && !wrote_calc_pr
+                    && insert_before_following_element
+                {
+                    write_new_calc_pr(&mut writer, reader.decoder())?;
+                    wrote_calc_pr = true;
+                }
+                if rewrite_calculation_properties
+                    && !saved_workbook.has_calc_pr
+                    && !wrote_calc_pr
+                    && closes_workbook
+                    && (!rewrite_defined_names || wrote_defined_names)
+                {
+                    write_new_calc_pr(&mut writer, reader.decoder())?;
+                    wrote_calc_pr = true;
+                }
+
+                match event {
+                    Event::Start(element)
                         if rewrite_defined_names && element.name().as_ref() == b"definedNames" =>
                     {
                         skip_defined_names_depth = 1;
                     }
-                    Ok(Event::Empty(element))
+                    Event::Empty(element)
                         if rewrite_defined_names && element.name().as_ref() == b"definedNames" => {}
-                    Ok(Event::Start(_)) if skip_defined_names_depth > 0 => {
+                    Event::Start(_) if skip_defined_names_depth > 0 => {
                         skip_defined_names_depth += 1;
                     }
-                    Ok(Event::End(_)) if skip_defined_names_depth > 0 => {
+                    Event::End(_) if skip_defined_names_depth > 0 => {
                         skip_defined_names_depth -= 1;
                     }
-                    Ok(_) if skip_defined_names_depth > 0 => {}
-                    Ok(Event::Start(element)) if element.name().as_ref() == b"workbook" => {
+                    _ if skip_defined_names_depth > 0 => {}
+                    Event::Start(element) if element.name().as_ref() == b"workbook" => {
                         writer
                             .write_event(Event::Start(element.into_owned()))
                             .map_err(xml_error)?;
@@ -1544,31 +1771,55 @@ impl XlsxCodec {
                                 .map_err(xml_error)?;
                         }
                     }
-                    Ok(Event::Start(element)) if element.name().as_ref() == b"workbookPr" => writer
+                    Event::Start(element) if element.name().as_ref() == b"workbookPr" => writer
                         .write_event(Event::Start(rewrite_workbook_pr_element(
                             &element,
                             reader.decoder(),
                         )?))
                         .map_err(xml_error)?,
-                    Ok(Event::Empty(element)) if element.name().as_ref() == b"workbookPr" => writer
+                    Event::Empty(element) if element.name().as_ref() == b"workbookPr" => writer
                         .write_event(Event::Empty(rewrite_workbook_pr_element(
                             &element,
                             reader.decoder(),
                         )?))
                         .map_err(xml_error)?,
-                    Ok(Event::Start(element)) if element.name().as_ref() == b"sheet" => writer
+                    Event::Start(element)
+                        if rewrite_calculation_properties
+                            && element.name().as_ref() == b"calcPr" =>
+                    {
+                        writer
+                            .write_event(Event::Start(rewrite_calc_pr_element(
+                                &element,
+                                reader.decoder(),
+                            )?))
+                            .map_err(xml_error)?;
+                        wrote_calc_pr = true;
+                    }
+                    Event::Empty(element)
+                        if rewrite_calculation_properties
+                            && element.name().as_ref() == b"calcPr" =>
+                    {
+                        writer
+                            .write_event(Event::Empty(rewrite_calc_pr_element(
+                                &element,
+                                reader.decoder(),
+                            )?))
+                            .map_err(xml_error)?;
+                        wrote_calc_pr = true;
+                    }
+                    Event::Start(element) if element.name().as_ref() == b"sheet" => writer
                         .write_event(Event::Start(rewrite_sheet_element(
                             &element,
                             reader.decoder(),
                         )?))
                         .map_err(xml_error)?,
-                    Ok(Event::Empty(element)) if element.name().as_ref() == b"sheet" => writer
+                    Event::Empty(element) if element.name().as_ref() == b"sheet" => writer
                         .write_event(Event::Empty(rewrite_sheet_element(
                             &element,
                             reader.decoder(),
                         )?))
                         .map_err(xml_error)?,
-                    Ok(Event::End(element))
+                    Event::End(element)
                         if rewrite_defined_names && element.name().as_ref() == b"sheets" =>
                     {
                         writer
@@ -1581,7 +1832,7 @@ impl XlsxCodec {
                         )?;
                         wrote_defined_names = true;
                     }
-                    Ok(Event::End(element))
+                    Event::End(element)
                         if rewrite_defined_names
                             && !wrote_defined_names
                             && element.name().as_ref() == b"workbook" =>
@@ -1592,13 +1843,23 @@ impl XlsxCodec {
                             &workbook.state.worksheets,
                         )?;
                         wrote_defined_names = true;
+                        if rewrite_calculation_properties
+                            && !saved_workbook.has_calc_pr
+                            && !wrote_calc_pr
+                        {
+                            write_new_calc_pr(&mut writer, reader.decoder())?;
+                            wrote_calc_pr = true;
+                        }
                         writer
                             .write_event(Event::End(element.into_owned()))
                             .map_err(xml_error)?;
                     }
-                    Ok(Event::Eof) => break,
-                    Ok(event) => writer.write_event(event.into_owned()).map_err(xml_error)?,
-                    Err(error) => return Err(xml_error(error)),
+                    event => writer.write_event(event.into_owned()).map_err(xml_error)?,
+                }
+                if enters_element {
+                    workbook_depth += 1;
+                } else if exits_element {
+                    workbook_depth = workbook_depth.saturating_sub(1);
                 }
                 buffer.clear();
             }
@@ -2068,8 +2329,6 @@ impl XlsxCodec {
                 )?;
             }
         }
-        let has_dirty_worksheets = !dirty_worksheet_ids.is_empty();
-
         for worksheet in &workbook.state.worksheets {
             if !dirty_worksheet_ids.contains(&worksheet.id) {
                 continue;
@@ -2088,7 +2347,7 @@ impl XlsxCodec {
             package.replace_part_bytes(part_uri, bytes)?;
         }
 
-        if has_dirty_worksheets {
+        if has_dirty_worksheets || effective_calculation_state.is_some() {
             invalidate_calc_chain_artifacts(&mut package)?;
         }
 
@@ -2794,6 +3053,8 @@ struct ParsedWorkbook {
     date1904: bool,
     is_addin: bool,
     has_workbook_pr: bool,
+    has_calc_pr: bool,
+    calculation_properties: WorkbookCalculationProperties,
     worksheets: Vec<WorksheetModel>,
     defined_names: DefinedNameTable,
 }
@@ -2825,6 +3086,12 @@ fn parse_workbook(
     let mut date1904 = false;
     let mut is_addin = false;
     let mut has_workbook_pr = false;
+    let mut has_calc_pr = false;
+    let mut calculation_mode = WorkbookCalculationMode::Automatic;
+    let mut calculation_id = None;
+    let mut calculation_completed = None;
+    let mut full_calculation_on_load = None;
+    let mut force_full_calculation = None;
     let mut worksheets = Vec::new();
     let mut defined_name_records = Vec::<ParsedDefinedNameRecord>::new();
     let mut current_defined_name = None::<ParsedDefinedNameRecord>;
@@ -2870,6 +3137,41 @@ fn parse_workbook(
                         date1904 = parse_ooxml_bool(value.as_str())?;
                     } else if attr.key.as_ref() == b"isAddin" {
                         is_addin = parse_ooxml_bool(value.as_str())?;
+                    }
+                }
+            }
+            Ok(Event::Start(element)) | Ok(Event::Empty(element))
+                if element.name().as_ref() == b"calcPr" =>
+            {
+                has_calc_pr = true;
+                for attr in element.attributes() {
+                    let attr = attr.map_err(xml_error)?;
+                    let value = attr
+                        .decode_and_unescape_value(reader.decoder())
+                        .map_err(xml_error)?
+                        .into_owned();
+                    match attr.key.as_ref() {
+                        b"calcMode" => {
+                            calculation_mode = WorkbookCalculationMode::parse(value.as_str())?
+                        }
+                        b"calcId" => {
+                            calculation_id = Some(value.parse::<u32>().map_err(|_| {
+                                OmError::new(
+                                    OmErrorCode::Parse,
+                                    format!("invalid workbook calculation id: {value}"),
+                                )
+                            })?)
+                        }
+                        b"calcCompleted" => {
+                            calculation_completed = Some(parse_ooxml_bool(value.as_str())?)
+                        }
+                        b"fullCalcOnLoad" => {
+                            full_calculation_on_load = Some(parse_ooxml_bool(value.as_str())?)
+                        }
+                        b"forceFullCalc" => {
+                            force_full_calculation = Some(parse_ooxml_bool(value.as_str())?)
+                        }
+                        _ => {}
                     }
                 }
             }
@@ -2967,10 +3269,27 @@ fn parse_workbook(
         ));
     }
 
+    let source_calculation_state =
+        if full_calculation_on_load == Some(true) || force_full_calculation == Some(true) {
+            WorkbookCalculationState::RecalculationRequired
+        } else if calculation_completed == Some(false) {
+            WorkbookCalculationState::PartiallyCalculated
+        } else {
+            WorkbookCalculationState::FullyCalculated
+        };
+
     Ok(ParsedWorkbook {
         date1904,
         is_addin,
         has_workbook_pr,
+        has_calc_pr,
+        calculation_properties: WorkbookCalculationProperties {
+            mode: calculation_mode,
+            source_state: source_calculation_state,
+            source_calc_id: calculation_id,
+            requested_state: None,
+            mode_dirty: false,
+        },
         worksheets,
         defined_names,
     })

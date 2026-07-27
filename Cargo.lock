@@ -199,6 +199,7 @@ dependencies = [
  "office-opc",
  "quick-xml",
  "regex",
+ "sha2",
  "tempfile",
 ]
 
