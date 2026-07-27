@@ -326,9 +326,25 @@ pub trait OfficeSession {
     fn root_application(&self) -> ObjectHandle;
     fn resolve(&self, handle: ObjectHandle) -> OmResult<&dyn OmObject>;
     fn resolve_mut(&mut self, handle: ObjectHandle) -> OmResult<&mut dyn OmObject>;
-    fn dispatch_get(&self, handle: ObjectHandle, member: &str, args: &[OmValue]) -> OmResult<OmValue>;
-    fn dispatch_set(&mut self, handle: ObjectHandle, member: &str, value: OmValue, args: &[OmValue]) -> OmResult<()>;
-    fn dispatch_invoke(&mut self, handle: ObjectHandle, member: &str, args: &[OmValue]) -> OmResult<OmValue>;
+    fn dispatch_get(
+        &self,
+        handle: ObjectHandle,
+        member: &str,
+        args: &[OmValue],
+    ) -> OmResult<OmValue>;
+    fn dispatch_set(
+        &mut self,
+        handle: ObjectHandle,
+        member: &str,
+        value: OmValue,
+        args: &[OmValue],
+    ) -> OmResult<()>;
+    fn dispatch_invoke(
+        &mut self,
+        handle: ObjectHandle,
+        member: &str,
+        args: &[OmValue],
+    ) -> OmResult<OmValue>;
 }
 
 pub trait WorkbookContract {
@@ -358,7 +374,11 @@ pub trait RangeContract {
 pub trait ExcelHost {
     fn create_workbook(&mut self) -> OmResult<WorkbookHandle>;
     fn open_workbook(&mut self, spec: OpenWorkbookSpec) -> OmResult<WorkbookHandle>;
-    fn save_workbook(&mut self, workbook: WorkbookHandle, spec: SaveWorkbookSpec) -> OmResult<Vec<u8>>;
+    fn save_workbook(
+        &mut self,
+        workbook: WorkbookHandle,
+        spec: SaveWorkbookSpec,
+    ) -> OmResult<Vec<u8>>;
     fn close_workbook(&mut self, workbook: WorkbookHandle, save: bool) -> OmResult<()>;
 
     fn calculate(&mut self, scope: CalcScope) -> OmResult<CalcReport>;
@@ -375,8 +395,20 @@ pub trait WorkbookQuery {
 }
 
 pub trait WorkbookMutation {
-    fn set_value(&mut self, sheet_id: SheetId, row: u32, col: u32, value: CellValue) -> OmResult<()>;
-    fn set_formula(&mut self, sheet_id: SheetId, row: u32, col: u32, formula: FormulaSource) -> OmResult<()>;
+    fn set_value(
+        &mut self,
+        sheet_id: SheetId,
+        row: u32,
+        col: u32,
+        value: CellValue,
+    ) -> OmResult<()>;
+    fn set_formula(
+        &mut self,
+        sheet_id: SheetId,
+        row: u32,
+        col: u32,
+        formula: FormulaSource,
+    ) -> OmResult<()>;
     fn apply_style(&mut self, target: &RangeRef, style_id: StyleId) -> OmResult<()>;
     fn insert_rows(&mut self, sheet_id: SheetId, before: u32, count: u32) -> OmResult<()>;
     fn insert_columns(&mut self, sheet_id: SheetId, before: u32, count: u32) -> OmResult<()>;
@@ -390,7 +422,12 @@ pub trait FormulaParser {
 }
 
 pub trait ReferenceBinder {
-    fn bind(&self, workbook_id: WorkbookId, anchor: CellRef, ast: &FormulaAst) -> OmResult<BoundFormula>;
+    fn bind(
+        &self,
+        workbook_id: WorkbookId,
+        anchor: CellRef,
+        ast: &FormulaAst,
+    ) -> OmResult<BoundFormula>;
 }
 
 pub trait CalcEngine {
@@ -430,7 +467,12 @@ pub trait WasmFacade {
     fn load_xlsx(&mut self, bytes: &[u8]) -> OmResult<WorkbookHandle>;
     fn save_xlsx(&mut self, workbook: WorkbookHandle) -> OmResult<Vec<u8>>;
     fn get_range_values(&self, workbook: WorkbookHandle, range: RangeRef) -> OmResult<OmArray>;
-    fn set_range_values(&mut self, workbook: WorkbookHandle, range: RangeRef, values: OmArray) -> OmResult<()>;
+    fn set_range_values(
+        &mut self,
+        workbook: WorkbookHandle,
+        range: RangeRef,
+        values: OmArray,
+    ) -> OmResult<()>;
     fn calculate_workbook(&mut self, workbook: WorkbookHandle) -> OmResult<CalcReport>;
     fn render_sheet_svg(&self, spec: RenderSpec) -> OmResult<String>;
 }

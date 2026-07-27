@@ -1,6 +1,4 @@
-use super::{
-    APPLICATION_VERSION, EXCEL_MAX_COLUMN_INDEX, EXCEL_MAX_ROW_INDEX, xml_local_name,
-};
+use super::{APPLICATION_VERSION, EXCEL_MAX_COLUMN_INDEX, EXCEL_MAX_ROW_INDEX, xml_local_name};
 use excel_model::WorkbookState;
 use office_common::{
     CellError, CellValue, DefinedNameId, FormulaSource, NameScope, OmError, OmErrorCode, OmResult,
