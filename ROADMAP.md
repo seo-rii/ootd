@@ -48,9 +48,12 @@ Active order:
 12. `OOTD-011` complete (2026-07-27): `Workbooks.Open` now exposes a complete argument matrix;
    read-only is implemented, omitted/zero UpdateLinks is an explicit offline policy, and thirteen
    unsupported option classes fail before filesystem read.
-13. **Active:** continue fail-closed contracts at `OOTD-012`, then QName/reference/parser
+13. `OOTD-012` complete (2026-07-27): codec load/save options now accept only the implemented
+   Excel365 lossless-preservation policy; other profiles, unknown-part dropping, calc-chain
+   skipping, and lossy save fail before parse/serialization.
+14. **Active:** continue fail-closed contracts at `OOTD-013`, then QName/reference/parser
    invariants and cell/formula fidelity.
-14. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
+15. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
    claiming practical chart/pivot/style parity.
 
 Every numbered work unit starts with a failing regression and lands as its own reviewable commit.

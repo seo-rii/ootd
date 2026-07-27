@@ -19,6 +19,7 @@ Some detailed implementation notes currently remain in Korean because they were 
 - [Workbook dirty domains](interfaces/workbook_dirty_domains.md): prompt, semantic, serialization, calculation-cache, and package-graph state transitions.
 - [Workbook.SaveAs capability contract](interfaces/workbook_save_as.md): supported defaults and fail-closed optional arguments.
 - [Workbooks.Open capability contract](interfaces/workbooks_open.md): read-only behavior, offline link policy, and fail-closed optional arguments.
+- [XLSX codec option contract](interfaces/xlsx_codec_options.md): supported profile/preservation modes and fail-closed alternatives.
 - [Behavioral Excel Oracle protocol](test-protocols/behavioral_excel_oracle.md): typed cases, run manifests, desktop Excel execution, and differential gates.
 
 ## Spec Intake And Contracts

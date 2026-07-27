@@ -125,7 +125,11 @@ Wave 1 exit gate:
    MRU/local, repair/extract 옵션은 생략/default-equivalent만 허용하며 non-default는
    filesystem read 전에 stable `Unsupported`로 거부한다. 13-case matrix와 capability 표는
    `docs/interfaces/workbooks_open.md`에 있다.
-3. `OOTD-012`: `LoadOptions`/`SaveOptions`를 실제 codec policy에 연결하거나 비공개화한다.
+3. `OOTD-012` — 완료 (2026-07-27): codec option은 현재 검증된
+   `Excel365 + preserve_unknown_parts=true + read_calc_chain=true + lossless=true` 조합만
+   허용한다. Excel2016/2021 profile, unknown-part drop, calc-chain skip, lossy save는
+   package parse/serialization 전에 stable `Unsupported`로 거부한다. 각 field/profile의
+   관찰 가능한 결과와 capability 표는 `docs/interfaces/xlsx_codec_options.md`에 있다.
 4. `OOTD-013`: observable effect가 없는 workbook/worksheet method를 `Unsupported`로 바꾼다.
 5. `OOTD-062`: CFB/encrypted OOXML 탐지와 Password fail-closed 1단계를 구현한다.
 6. `OOTD-063`: signed package mutation의 refuse 또는 explicit strip+audit 정책을 구현한다.

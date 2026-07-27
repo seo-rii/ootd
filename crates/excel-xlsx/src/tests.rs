@@ -25,10 +25,11 @@
         resolve_chart_source_reference,
     };
     use office_common::{
-        CellError, CellMarker, CellValue, ChartId, ChartObjectId, DrawingAnchor, Emu,
+        CellError, CellMarker, CellValue, ChartId, ChartObjectId, DrawingAnchor, Emu, ExcelProfile,
         FormulaSource, LoadOptions as CommonLoadOptions, NameScope, NameValidationMode,
-        ObjectPlacement, OmErrorCode, OmValue, Rect, ReferenceTarget, SheetId, SheetKind,
-        SheetScope, SheetVisibility, StyleId, TwoCellAnchor, WorkbookId, WorksheetModel,
+        ObjectPlacement, OmErrorCode, OmValue, Rect, ReferenceTarget,
+        SaveOptions as CommonSaveOptions, SheetId, SheetKind, SheetScope, SheetVisibility, StyleId,
+        TwoCellAnchor, WorkbookId, WorksheetModel,
     };
     use office_opc::{CompressionMethod, OpcPart};
 
@@ -45,6 +46,86 @@
             comment_list_attr_map: None,
             authors,
             comments,
+        }
+    }
+
+    #[test]
+    fn codec_options_fail_closed_when_policy_is_not_implemented() {
+        let codec = XlsxCodec;
+        let invalid_package = b"not an OOXML package";
+        let unsupported_load_options = [
+            (
+                CommonLoadOptions {
+                    profile: ExcelProfile::Excel2016,
+                    ..CommonLoadOptions::default()
+                },
+                "XlsxCodec::load supports only the Excel365 profile",
+            ),
+            (
+                CommonLoadOptions {
+                    profile: ExcelProfile::Excel2021,
+                    ..CommonLoadOptions::default()
+                },
+                "XlsxCodec::load supports only the Excel365 profile",
+            ),
+            (
+                CommonLoadOptions {
+                    preserve_unknown_parts: false,
+                    ..CommonLoadOptions::default()
+                },
+                "XlsxCodec::load requires preserve_unknown_parts=true",
+            ),
+            (
+                CommonLoadOptions {
+                    read_calc_chain: false,
+                    ..CommonLoadOptions::default()
+                },
+                "XlsxCodec::load requires read_calc_chain=true",
+            ),
+        ];
+        for (options, expected_message) in unsupported_load_options {
+            let error = codec
+                .load(invalid_package, options)
+                .expect_err("unsupported load option must fail before package parsing");
+            assert_eq!(error.code, OmErrorCode::Unsupported);
+            assert_eq!(error.message, expected_message);
+        }
+
+        let loaded = codec
+            .load(
+                synthetic_workbook_bytes().as_slice(),
+                CommonLoadOptions::default(),
+            )
+            .expect("load workbook for SaveOptions policy");
+        let unsupported_save_options = [
+            (
+                CommonSaveOptions {
+                    profile: ExcelProfile::Excel2016,
+                    ..CommonSaveOptions::default()
+                },
+                "XlsxCodec::save supports only the Excel365 profile",
+            ),
+            (
+                CommonSaveOptions {
+                    profile: ExcelProfile::Excel2021,
+                    ..CommonSaveOptions::default()
+                },
+                "XlsxCodec::save supports only the Excel365 profile",
+            ),
+            (
+                CommonSaveOptions {
+                    lossless: false,
+                    ..CommonSaveOptions::default()
+                },
+                "XlsxCodec::save requires lossless=true",
+            ),
+        ];
+        for (options, expected_message) in unsupported_save_options {
+            let error = codec
+                .save(&loaded, options)
+                .expect_err("unsupported save option must fail before serialization");
+            assert_eq!(error.code, OmErrorCode::Unsupported);
+            assert_eq!(error.message, expected_message);
         }
     }
 

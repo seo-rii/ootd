@@ -17,10 +17,10 @@ use excel_model::{
 use excel_model::CellData;
 use office_common::{
     AbsoluteAnchor, CellError, CellMarker, CellValue, ChartId, ChartObjectId, DefinedName,
-    DefinedNameId, DrawingAnchor, DrawingId, DrawingObjectId, Emu, FileFormat, FormulaSource,
-    LoadOptions, NameScope, NameValidationMode, ObjectPlacement, OmArray, OmError, OmErrorCode,
-    OmResult, OmValue, OpaquePart, PointEmu, ReferenceTarget, SaveOptions, SheetId, SheetKind,
-    SheetVisibility, SizeEmu, TwoCellAnchor, WorkbookId, WorkbookModel, WorksheetModel,
+    DefinedNameId, DrawingAnchor, DrawingId, DrawingObjectId, Emu, ExcelProfile, FileFormat,
+    FormulaSource, LoadOptions, NameScope, NameValidationMode, ObjectPlacement, OmArray, OmError,
+    OmErrorCode, OmResult, OmValue, OpaquePart, PointEmu, ReferenceTarget, SaveOptions, SheetId,
+    SheetKind, SheetVisibility, SizeEmu, TwoCellAnchor, WorkbookId, WorkbookModel, WorksheetModel,
 };
 use office_opc::{CompressionMethod, OpcPackage};
 use quick_xml::escape::partial_escape;
@@ -251,6 +251,15 @@ pub struct PendingPackagePart {
 
 #[derive(Debug, Clone, Default)]
 pub struct XlsxCodec;
+
+fn ensure_supported_codec_profile(profile: ExcelProfile, operation: &str) -> OmResult<()> {
+    if profile != ExcelProfile::Excel365 {
+        return Err(OmError::unsupported(format!(
+            "{operation} supports only the Excel365 profile"
+        )));
+    }
+    Ok(())
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct WorkbookSupportParts {
@@ -1348,7 +1357,18 @@ impl XlsxCodec {
         self.is_workbook_package(&package)
     }
 
-    pub fn load(&self, input: &[u8], _options: LoadOptions) -> OmResult<LoadedXlsxWorkbook> {
+    pub fn load(&self, input: &[u8], options: LoadOptions) -> OmResult<LoadedXlsxWorkbook> {
+        ensure_supported_codec_profile(options.profile, "XlsxCodec::load")?;
+        if !options.preserve_unknown_parts {
+            return Err(OmError::unsupported(
+                "XlsxCodec::load requires preserve_unknown_parts=true",
+            ));
+        }
+        if !options.read_calc_chain {
+            return Err(OmError::unsupported(
+                "XlsxCodec::load requires read_calc_chain=true",
+            ));
+        }
         let package = OpcPackage::from_bytes(input)?;
         if !self.is_workbook_package(&package) {
             return Err(OmError::new(
@@ -1481,7 +1501,13 @@ impl XlsxCodec {
         })
     }
 
-    pub fn save(&self, workbook: &LoadedXlsxWorkbook, _options: SaveOptions) -> OmResult<Vec<u8>> {
+    pub fn save(&self, workbook: &LoadedXlsxWorkbook, options: SaveOptions) -> OmResult<Vec<u8>> {
+        ensure_supported_codec_profile(options.profile, "XlsxCodec::save")?;
+        if !options.lossless {
+            return Err(OmError::unsupported(
+                "XlsxCodec::save requires lossless=true",
+            ));
+        }
         ensure_support_parts_present(&workbook.package, &workbook.support_parts)?;
         ensure_pivot_package_inventory_preserved(
             &workbook.package,
