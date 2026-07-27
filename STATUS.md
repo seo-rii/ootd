@@ -3,7 +3,7 @@
 This document is the current source of truth for implementation and verification status.
 `PLAN.md` remains the historical implementation log, while `ROADMAP.md` defines active work.
 
-Baseline date: 2026-07-26.
+Baseline date: 2026-07-27.
 
 ## Status Vocabulary
 
@@ -24,7 +24,7 @@ contract-based until Milestone M1 pins the first behavioral Excel corpus.
 | Behavioral Excel oracle | Partial | Typed cases, exact-byte run manifests, comparison/gate bridge, `ExcelRuntime` adapter, .NET contract tests, and an isolated COM runner/watchdog exist; no real Excel observation is pinned | Execute twice on the pinned Windows/Excel profile and commit the first required corpus |
 | OPC package loading | Partial | ZIP parts and opaque bytes are retained; default loading enforces finite ZIP and XML depth/event/text/attribute budgets; canonical part identities and strict relationship parsing reject ambiguous duplicates, root escapes, invalid modes, malformed URIs, and malformed XML | M3 CI portability gates, property/fuzz coverage, and dependency policy |
 | Workbook and worksheet model | Partial | Workbook, sheet, cell, name, chart, drawing, and basic dynamic-array state are modeled | Oracle-backed mutation and save/reopen cases |
-| XLSX load/save | Partial | No-op and targeted dirty-save preservation have broad synthetic regression coverage | Tracked real-world corpus, bounded parsing, and Excel reopen without repair |
+| XLSX load/save | Partial | No-op and targeted dirty-save preservation have broad synthetic regression coverage; successful Save/SaveAs commits the verified output package and worksheet sources as the next baseline while retaining runtime identities | Durable atomic replace/fault injection, tracked real-world corpus, and Excel reopen without repair |
 | Runtime object model | Partial | Application, workbook, worksheet, range, names, selection, clipboard, and chart-related dispatch are available | Generated member coverage and behavioral Oracle cases |
 | Scalar formula calculation | Partial | Broad deterministic function coverage exists behind an internal `calc` module, including Evaluate and Calculate paths; its value/coercion model is not yet unified | Shared coercion/reference model and Excel differential corpus |
 | Formula2 and dynamic arrays | Partial | Seventeen array functions produce two-dimensional spill results; model value, A1/R1C1 formula families, and `ClearContents` commands reject spill-child batches atomically; worksheet array formula metadata restores and writes spill state across synthetic save/reopen; A1 `anchor#` resolves a materialized extent, and scalar dependents recalculate after dynamic materialization | Remaining runtime mutation paths, `@`, dynamic-to-dynamic dependency order/cycles, Excel-specific dynamic-array extension metadata, and Oracle agreement |
@@ -37,7 +37,7 @@ contract-based until Milestone M1 pins the first behavioral Excel corpus.
 
 - Rust MSRV: 1.88; development toolchain: 1.94.0.
 - Linux workspace tests: enabled in CI.
-- Current root test inventory: 690 `excel-runtime` tests and 2,838 `excel-xlsx` tests.
+- Current root test inventory: 693 `excel-runtime` tests and 2,838 `excel-xlsx` tests.
 - M2 boundary progress: the `excel-xlsx` and `excel-runtime` unit tests now live outside their
   library roots with test identities unchanged; calculation and recalculation/writeback are
   isolated; shared strings, relationships, and worksheet cell codec logic are isolated; Application,
@@ -48,7 +48,7 @@ contract-based until Milestone M1 pins the first behavioral Excel corpus.
   enforced across load/mutation/save; relationship attributes, IDs, target modes, and internal
   targets fail closed; XML-bearing parts receive a shared bounded well-formedness preflight.
 - CI portability: Ubuntu Rust 1.94, Ubuntu MSRV Rust 1.88, and Windows Rust 1.94 run as independent
-  test lanes. A bounded rustfmt gate covers 40 tracked files with four guarded monolith exceptions;
+  test lanes. A bounded rustfmt gate covers 41 tracked files with four guarded monolith exceptions;
   strict Clippy is enforced for the six foundational/model crates, while runtime/XLSX warnings
   remain staged M3 debt.
 - M4 spill lifecycle: model value, A1/R1C1 formula families, and `ClearContents` commands preflight

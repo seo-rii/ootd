@@ -12,8 +12,9 @@ and new chart families remain frozen even when an older milestone below lists th
 
 Active order:
 
-1. `OOTD-001` commit every successful save as the next package/source baseline.
-2. `OOTD-002`/`OOTD-046` separate prompt state from serialization dirty domains.
+1. `OOTD-001` complete (2026-07-27): successful Save/SaveAs now commits the verified output as
+   the next package/source baseline without replacing live model identities.
+2. **Active:** `OOTD-002`/`OOTD-046` separate prompt state from serialization dirty domains.
 3. `OOTD-003`~`OOTD-006` make Save/SaveAs/SaveCopyAs/Close target-aware, read-only-safe, durable,
    atomic, and transactional through `OOTD-045`.
 4. `OOTD-007`~`OOTD-009` persist formula caches and synchronize calculation metadata.

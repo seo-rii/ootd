@@ -33778,6 +33778,330 @@
     }
 
     #[test]
+    fn sequential_save_commits_previous_cell_edits() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let first_cell = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1".to_string())])
+                .expect("Range(A1)"),
+        );
+        let second_cell = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B2".to_string())])
+                .expect("Range(B2)"),
+        );
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock")
+            .as_nanos();
+        let base_dir = std::env::temp_dir().join(format!("ootd-sequential-save-{unique}"));
+        fs::create_dir_all(&base_dir).expect("create sequential save fixture dir");
+        let target_path = base_dir.join("sequential.xlsx");
+
+        runtime
+            .dispatch_set(
+                first_cell,
+                "Value2",
+                OmValue::Text("first save".to_string()),
+                &[],
+            )
+            .expect("set A1 before first save");
+        runtime
+            .dispatch_invoke(
+                workbook.0,
+                "SaveAs",
+                &[OmValue::Text(target_path.to_string_lossy().into_owned())],
+            )
+            .expect("first Workbook.SaveAs");
+
+        runtime
+            .dispatch_set(
+                second_cell,
+                "Value2",
+                OmValue::Text("second save".to_string()),
+                &[],
+            )
+            .expect("set B2 through handle retained across SaveAs");
+        runtime
+            .dispatch_invoke(workbook.0, "Save", &[])
+            .expect("second Workbook.Save");
+
+        let reopened = ExcelRuntime::new()
+            .codec
+            .load(
+                &fs::read(&target_path).expect("read sequentially saved workbook"),
+                LoadOptions::default(),
+            )
+            .expect("reopen sequentially saved workbook");
+        let sheet_id = reopened.state.worksheets[0].id;
+        assert_eq!(
+            reopened.state.cell(sheet_id, 1, 1).map(|cell| &cell.value),
+            Some(&CellValue::Text("first save".to_string()))
+        );
+        assert_eq!(
+            reopened.state.cell(sheet_id, 2, 2).map(|cell| &cell.value),
+            Some(&CellValue::Text("second save".to_string()))
+        );
+
+        fs::remove_dir_all(&base_dir).expect("cleanup sequential save fixture");
+    }
+
+    #[test]
+    fn sequential_save_commits_defined_name_edits() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let names = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Names", &[])
+                .expect("Workbook.Names"),
+        );
+        let name = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    names,
+                    "Add",
+                    &[
+                        OmValue::Text("FirstSavedName".to_string()),
+                        OmValue::Text("=Sheet1!$A$1".to_string()),
+                    ],
+                )
+                .expect("Names.Add before first save"),
+        );
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let second_cell = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B2".to_string())])
+                .expect("Range(B2)"),
+        );
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock")
+            .as_nanos();
+        let base_dir =
+            std::env::temp_dir().join(format!("ootd-sequential-save-name-{unique}"));
+        fs::create_dir_all(&base_dir).expect("create sequential name fixture dir");
+        let target_path = base_dir.join("sequential-name.xlsx");
+
+        runtime
+            .dispatch_invoke(
+                workbook.0,
+                "SaveAs",
+                &[OmValue::Text(target_path.to_string_lossy().into_owned())],
+            )
+            .expect("first Workbook.SaveAs");
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(name, "Name", &[])
+                    .expect("Name handle retained across SaveAs")
+            ),
+            "FirstSavedName"
+        );
+
+        runtime
+            .dispatch_set(
+                second_cell,
+                "Value2",
+                OmValue::Text("second save".to_string()),
+                &[],
+            )
+            .expect("set B2 after saving defined name");
+        runtime
+            .dispatch_invoke(workbook.0, "Save", &[])
+            .expect("second Workbook.Save");
+
+        let reopened = ExcelRuntime::new()
+            .codec
+            .load(
+                &fs::read(&target_path).expect("read sequentially saved name workbook"),
+                LoadOptions::default(),
+            )
+            .expect("reopen sequentially saved name workbook");
+        let saved_name = reopened
+            .state
+            .defined_names
+            .lookup_in_scope(
+                office_common::NameScope::Workbook,
+                "FirstSavedName",
+            )
+            .expect("defined name from first save");
+        assert_eq!(saved_name.refers_to.text, "Sheet1!$A$1");
+
+        fs::remove_dir_all(&base_dir).expect("cleanup sequential name fixture");
+    }
+
+    #[test]
+    fn sequential_save_commits_chart_and_drawing_edits() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with embedded chart");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(active_sheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let chart_title = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "ChartTitle", &[])
+                .expect("Chart.ChartTitle"),
+        );
+        let second_cell = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("B2".to_string())])
+                .expect("Range(B2)"),
+        );
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock")
+            .as_nanos();
+        let base_dir =
+            std::env::temp_dir().join(format!("ootd-sequential-save-chart-{unique}"));
+        fs::create_dir_all(&base_dir).expect("create sequential chart fixture dir");
+        let target_path = base_dir.join("sequential-chart.xlsx");
+
+        runtime
+            .dispatch_set(
+                chart_title,
+                "Text",
+                OmValue::Text("First Saved Chart Title".to_string()),
+                &[],
+            )
+            .expect("set chart title before first save");
+        runtime
+            .dispatch_set(chart_object, "Left", OmValue::Number(8.0), &[])
+            .expect("set drawing position before first save");
+        runtime
+            .dispatch_invoke(
+                workbook.0,
+                "SaveAs",
+                &[OmValue::Text(target_path.to_string_lossy().into_owned())],
+            )
+            .expect("first Workbook.SaveAs");
+        assert_eq!(
+            expect_text(
+                runtime
+                    .dispatch_get(chart_title, "Text", &[])
+                    .expect("ChartTitle handle retained across SaveAs")
+            ),
+            "First Saved Chart Title"
+        );
+
+        runtime
+            .dispatch_set(
+                second_cell,
+                "Value2",
+                OmValue::Text("second save".to_string()),
+                &[],
+            )
+            .expect("set B2 after saving chart and drawing");
+        runtime
+            .dispatch_invoke(workbook.0, "Save", &[])
+            .expect("second Workbook.Save");
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        let reopened_workbook = reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: fs::read(&target_path).expect("read sequentially saved chart workbook"),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen sequentially saved chart workbook");
+        let reopened_sheet = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("reopened Worksheets(1)"),
+        );
+        let reopened_chart_objects = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_sheet, "ChartObjects", &[])
+                .expect("reopened Worksheet.ChartObjects"),
+        );
+        let reopened_chart_object = expect_object_handle(
+            reopened_runtime
+                .dispatch_invoke(
+                    reopened_chart_objects,
+                    "Item",
+                    &[OmValue::Number(1.0)],
+                )
+                .expect("reopened ChartObjects.Item(1)"),
+        );
+        let reopened_chart = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart_object, "Chart", &[])
+                .expect("reopened ChartObject.Chart"),
+        );
+        let reopened_title = expect_object_handle(
+            reopened_runtime
+                .dispatch_get(reopened_chart, "ChartTitle", &[])
+                .expect("reopened Chart.ChartTitle"),
+        );
+        assert_eq!(
+            expect_text(
+                reopened_runtime
+                    .dispatch_get(reopened_title, "Text", &[])
+                    .expect("reopened ChartTitle.Text")
+            ),
+            "First Saved Chart Title"
+        );
+        assert_eq!(
+            expect_number(
+                reopened_runtime
+                    .dispatch_get(reopened_chart_object, "Left", &[])
+                    .expect("reopened ChartObject.Left")
+            ),
+            8.0
+        );
+
+        fs::remove_dir_all(&base_dir).expect("cleanup sequential chart fixture");
+    }
+
+    #[test]
     fn workbooks_add_dispatch_creates_blank_unsaved_workbook_and_updates_active_context() {
         let mut runtime = ExcelRuntime::new();
         let unique = std::time::SystemTime::now()

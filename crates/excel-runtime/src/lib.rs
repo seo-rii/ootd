@@ -27,8 +27,8 @@ use excel_model::{
 use excel_xlsx::{
     ChartSupportRelationshipBinding, LoadedXlsxWorkbook, PendingChartRelationshipGraph,
     PendingDrawingRelationshipGraph, PendingPackagePart, PendingPackageRelationship,
-    SheetDrawingSupportParts, WorksheetSupportParts, XlsxCodec, encode_chart_model_xml,
-    materialize_state_only_chart_graphs,
+    PreparedXlsxSave, SheetDrawingSupportParts, WorksheetSupportParts, XlsxCodec,
+    encode_chart_model_xml, materialize_state_only_chart_graphs,
 };
 use office_codegen::{OmFocusSurfaceRegistry, build_focus_surface_registry_from_json};
 use office_common::{
@@ -1525,6 +1525,36 @@ impl ExcelRuntime {
         workbook: WorkbookHandle,
         spec: SaveWorkbookSpec,
     ) -> OmResult<Vec<u8>> {
+        let loaded = self.materialized_workbook_for_save(workbook, &spec)?;
+        self.codec.save(
+            &loaded,
+            SaveOptions {
+                profile: spec.profile,
+                lossless: spec.lossless,
+            },
+        )
+    }
+
+    fn prepare_workbook_save(
+        &self,
+        workbook: WorkbookHandle,
+        spec: SaveWorkbookSpec,
+    ) -> OmResult<PreparedXlsxSave> {
+        let loaded = self.materialized_workbook_for_save(workbook, &spec)?;
+        self.codec.prepare_save(
+            &loaded,
+            SaveOptions {
+                profile: spec.profile,
+                lossless: spec.lossless,
+            },
+        )
+    }
+
+    fn materialized_workbook_for_save(
+        &self,
+        workbook: WorkbookHandle,
+        spec: &SaveWorkbookSpec,
+    ) -> OmResult<LoadedXlsxWorkbook> {
         let runtime = self.runtime_workbook(workbook)?;
         let mut loaded = self.loaded_workbook_for_save_format(runtime, spec.format)?;
         loaded = materialize_state_only_chart_graphs(loaded)?;
@@ -1883,13 +1913,7 @@ impl ExcelRuntime {
                 }
             }
         }
-        self.codec.save(
-            &loaded,
-            SaveOptions {
-                profile: spec.profile,
-                lossless: spec.lossless,
-            },
-        )
+        Ok(loaded)
     }
 
     fn loaded_workbook_for_save_format(
@@ -27926,6 +27950,25 @@ impl ExcelRuntime {
             }
         }
         Ok(())
+    }
+
+    fn commit_workbook_save_baseline(
+        &mut self,
+        workbook: WorkbookHandle,
+        next_loaded: LoadedXlsxWorkbook,
+        source_path: Option<PathBuf>,
+        display_name: Option<String>,
+    ) -> OmResult<()> {
+        let runtime = self.runtime_workbook_mut(workbook)?;
+        runtime.loaded = next_loaded;
+        runtime.chart_support_part_sources.clear();
+        if let Some(source_path) = source_path {
+            runtime.source_path = Some(source_path);
+        }
+        if let Some(display_name) = display_name {
+            runtime.loaded.state.model.display_name = display_name;
+        }
+        self.clear_workbook_dirty_state(workbook)
     }
 
     fn invalidate_workbook_calc_chain(&mut self, workbook: WorkbookHandle) -> OmResult<bool> {

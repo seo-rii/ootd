@@ -107,6 +107,12 @@ pub struct LoadedXlsxWorkbook {
     pub pending_chart_relationship_graphs: BTreeMap<ChartId, PendingChartRelationshipGraph>,
 }
 
+#[derive(Debug, Clone)]
+pub struct PreparedXlsxSave {
+    pub bytes: Vec<u8>,
+    pub next_loaded: LoadedXlsxWorkbook,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingDrawingRelationshipGraph {
     pub source_drawing_part_uri: String,
@@ -2717,6 +2723,47 @@ impl XlsxCodec {
         )?;
 
         package.to_bytes()
+    }
+
+    pub fn prepare_save(
+        &self,
+        workbook: &LoadedXlsxWorkbook,
+        options: SaveOptions,
+    ) -> OmResult<PreparedXlsxSave> {
+        let materialized = materialize_state_only_chart_graphs(workbook.clone())?;
+        let profile = options.profile;
+        let bytes = self.save(&materialized, options)?;
+        let mut next_loaded = self.load(
+            &bytes,
+            LoadOptions {
+                profile,
+                preserve_unknown_parts: true,
+                read_calc_chain: true,
+            },
+        )?;
+        let mut next_state = materialized.state;
+        for (sheet_id, worksheet_data) in &mut next_state.worksheet_data {
+            let saved_worksheet_data = next_loaded
+                .state
+                .worksheet_data
+                .get(sheet_id)
+                .ok_or_else(|| {
+                    OmError::new(
+                        OmErrorCode::InvalidState,
+                        format!(
+                            "saved workbook is missing worksheet data for sheet {}",
+                            sheet_id.0
+                        ),
+                    )
+                })?;
+            worksheet_data
+                .source_xml
+                .clone_from(&saved_worksheet_data.source_xml);
+        }
+        next_state.opaque_parts = std::mem::take(&mut next_loaded.state.opaque_parts);
+        next_loaded.state = next_state;
+
+        Ok(PreparedXlsxSave { bytes, next_loaded })
     }
 
     fn is_workbook_package(&self, package: &OpcPackage) -> bool {

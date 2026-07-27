@@ -3,8 +3,7 @@ use super::super::{
     RuntimeSheetTemplate, XL_OPEN_XML_STRICT_WORKBOOK, XL_OPEN_XML_TEMPLATE,
     XL_OPEN_XML_TEMPLATE_MACRO_ENABLED, XL_OPEN_XML_WORKBOOK, XL_OPEN_XML_WORKBOOK_MACRO_ENABLED,
     file_format_from_path, file_format_to_excel_value, om_value_is_omitted,
-    retag_loaded_workbook_format, validate_check_spelling_args,
-    validate_export_as_fixed_format_args, validate_optional_bool_arg,
+    validate_check_spelling_args, validate_export_as_fixed_format_args, validate_optional_bool_arg,
     validate_optional_integer_arg, validate_optional_text_arg, validate_print_out_args,
     validate_print_preview_args,
 };
@@ -191,7 +190,7 @@ impl ExcelRuntime {
                     ));
                 }
                 let format = self.workbook_model(workbook)?.format;
-                let bytes = self.save_workbook(
+                let prepared = self.prepare_workbook_save(
                     workbook,
                     SaveWorkbookSpec {
                         format,
@@ -199,14 +198,14 @@ impl ExcelRuntime {
                         lossless: true,
                     },
                 )?;
-                if let Some(path) = self.runtime_workbook(workbook)?.source_path.as_ref() {
-                    fs::write(path, &bytes).map_err(|error| {
+                if let Some(path) = self.runtime_workbook(workbook)?.source_path.clone() {
+                    fs::write(&path, &prepared.bytes).map_err(|error| {
                         OmError::new(
                             OmErrorCode::Io,
                             format!("failed to write workbook {}: {error}", path.display()),
                         )
                     })?;
-                    self.clear_workbook_dirty_state(workbook)?;
+                    self.commit_workbook_save_baseline(workbook, prepared.next_loaded, None, None)?;
                 }
                 Ok(OmValue::Empty)
             }
@@ -268,7 +267,7 @@ impl ExcelRuntime {
                 validate_optional_integer_arg(args, 9, "Workbook.SaveAs TextCodepage")?;
                 validate_optional_integer_arg(args, 10, "Workbook.SaveAs TextVisualLayout")?;
                 validate_optional_bool_arg(args, 11, "Workbook.SaveAs Local")?;
-                let bytes = self.save_workbook(
+                let prepared = self.prepare_workbook_save(
                     workbook,
                     SaveWorkbookSpec {
                         format,
@@ -276,7 +275,7 @@ impl ExcelRuntime {
                         lossless: true,
                     },
                 )?;
-                fs::write(&path, &bytes).map_err(|error| {
+                fs::write(&path, &prepared.bytes).map_err(|error| {
                     OmError::new(
                         OmErrorCode::Io,
                         format!("failed to write workbook {}: {error}", path.display()),
@@ -287,15 +286,12 @@ impl ExcelRuntime {
                     .and_then(|value| value.to_str())
                     .filter(|value| !value.is_empty())
                     .map(str::to_owned);
-                {
-                    let runtime = self.runtime_workbook_mut(workbook)?;
-                    runtime.source_path = Some(path);
-                    runtime.loaded = retag_loaded_workbook_format(&runtime.loaded, format)?;
-                    if let Some(display_name) = display_name {
-                        runtime.loaded.state.model.display_name = display_name;
-                    }
-                }
-                self.clear_workbook_dirty_state(workbook)?;
+                self.commit_workbook_save_baseline(
+                    workbook,
+                    prepared.next_loaded,
+                    Some(path),
+                    display_name,
+                )?;
                 Ok(OmValue::Empty)
             }
             "SaveCopyAs" => {

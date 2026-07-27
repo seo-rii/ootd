@@ -55,8 +55,9 @@ calculation, chart/pivot preservation, Windows Excel Oracle, CI와 문서 구조
 
 새 편집 기능은 이 wave의 release blocker가 닫힐 때까지 확대하지 않는다.
 
-1. `OOTD-001`: Save/SaveAs 성공 결과를 runtime baseline으로 commit한다. cell, defined name,
-   chart, drawing의 두 번 연속 저장을 모두 검증한다.
+1. `OOTD-001` — 완료 (2026-07-27): Save/SaveAs의 durable output을 codec으로 다시
+   검증·적재한 뒤 runtime baseline으로 commit한다. cell, defined name, chart, drawing의
+   두 번 연속 저장과 기존 object handle 보존 회귀를 고정했다.
 2. `OOTD-002` + `OOTD-046`: `Saved`/prompt 상태와 semantic, serialization, formula-cache,
    package-graph dirty domain을 분리한다.
 3. `OOTD-003`: source path가 없는 `Workbook.Save`를 stable error로 거부한다.
