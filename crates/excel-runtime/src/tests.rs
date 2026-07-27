@@ -43366,21 +43366,21 @@
                         OmValue::Text(path.to_string_lossy().into_owned()),
                         OmValue::Number(0.0),
                         OmValue::Bool(true),
-                        OmValue::Number(6.0),
-                        OmValue::Text("password".to_string()),
-                        OmValue::Text("write-res-password".to_string()),
-                        OmValue::Bool(true),
-                        OmValue::Number(1.0),
-                        OmValue::Text(",".to_string()),
+                        OmValue::Missing,
+                        OmValue::Text(String::new()),
+                        OmValue::Text(String::new()),
+                        OmValue::Bool(false),
+                        OmValue::Missing,
+                        OmValue::Missing,
                         OmValue::Bool(false),
                         OmValue::Bool(false),
-                        OmValue::Number(0.0),
+                        OmValue::Missing,
                         OmValue::Bool(false),
-                        OmValue::Bool(true),
+                        OmValue::Bool(false),
                         OmValue::Number(0.0),
                     ],
                 )
-                .expect("Workbooks.Open with optional arguments"),
+                .expect("Workbooks.Open with explicit default optional arguments"),
         );
         assert!(expect_bool(
             runtime
@@ -43537,6 +43537,130 @@
         );
 
         fs::remove_file(path).expect("cleanup fixture");
+    }
+
+    #[test]
+    fn open_corruptload_nondefault_and_other_options_are_rejected_before_read() {
+        let mut runtime = ExcelRuntime::new();
+        let missing_path = std::env::temp_dir().join(format!(
+            "ootd-open-options-missing-{}-{}.xlsx",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("time")
+                .as_nanos()
+        ));
+        assert!(!missing_path.exists());
+        let workbooks = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "Workbooks", &[])
+                .expect("Workbooks"),
+        );
+        let unsupported_options = [
+            (
+                "UpdateLinks",
+                1usize,
+                OmValue::Number(3.0),
+                "Workbooks.Open UpdateLinks supports only disabled link updates (0 or false)",
+            ),
+            (
+                "Format",
+                3usize,
+                OmValue::Number(6.0),
+                "Workbooks.Open Format is not supported when provided",
+            ),
+            (
+                "Password",
+                4usize,
+                OmValue::Text("secret".to_string()),
+                "Workbooks.Open Password is not implemented for non-empty values",
+            ),
+            (
+                "WriteResPassword",
+                5usize,
+                OmValue::Text("write-secret".to_string()),
+                "Workbooks.Open WriteResPassword is not implemented for non-empty values",
+            ),
+            (
+                "IgnoreReadOnlyRecommended",
+                6usize,
+                OmValue::Bool(true),
+                "Workbooks.Open IgnoreReadOnlyRecommended=true is not implemented",
+            ),
+            (
+                "Origin",
+                7usize,
+                OmValue::Number(2.0),
+                "Workbooks.Open Origin is not supported when provided",
+            ),
+            (
+                "Delimiter",
+                8usize,
+                OmValue::Text(",".to_string()),
+                "Workbooks.Open Delimiter is not supported when provided",
+            ),
+            (
+                "Editable",
+                9usize,
+                OmValue::Bool(true),
+                "Workbooks.Open Editable=true is not implemented",
+            ),
+            (
+                "Notify",
+                10usize,
+                OmValue::Bool(true),
+                "Workbooks.Open Notify=true is not implemented",
+            ),
+            (
+                "Converter",
+                11usize,
+                OmValue::Number(1.0),
+                "Workbooks.Open Converter is not supported when provided",
+            ),
+            (
+                "AddToMru",
+                12usize,
+                OmValue::Bool(true),
+                "Workbooks.Open AddToMru=true is not implemented",
+            ),
+            (
+                "Local",
+                13usize,
+                OmValue::Bool(true),
+                "Workbooks.Open Local=true is not implemented",
+            ),
+            (
+                "CorruptLoad",
+                14usize,
+                OmValue::Number(1.0),
+                "Workbooks.Open CorruptLoad supports only xlNormalLoad (0)",
+            ),
+        ];
+
+        for (label, index, value, expected_message) in unsupported_options {
+            let mut args = vec![OmValue::Missing; 15];
+            args[0] = OmValue::Text(missing_path.to_string_lossy().into_owned());
+            args[index] = value;
+
+            let error = runtime
+                .dispatch_invoke(workbooks, "Open", &args)
+                .expect_err("non-default Workbooks.Open option must fail closed");
+            assert_eq!(error.code, OmErrorCode::Unsupported, "{label}: {error:?}");
+            assert_eq!(error.message, expected_message, "{label}");
+            assert_eq!(
+                expect_number(
+                    runtime
+                        .dispatch_get(workbooks, "Count", &[])
+                        .expect("Workbooks.Count after rejected Open")
+                ),
+                0.0,
+                "{label}"
+            );
+            assert!(
+                !missing_path.exists(),
+                "{label} must be rejected without filesystem mutation"
+            );
+        }
     }
 
     #[test]

@@ -45,9 +45,12 @@ Active order:
 11. `OOTD-010` complete (2026-07-27): `Workbook.SaveAs` accepts only implemented arguments or
    omission-equivalent defaults; ten unsupported option classes now fail before package
    preparation or file creation with stable diagnostics and unchanged runtime state.
-12. **Active:** continue fail-closed contracts at `OOTD-011`, then QName/reference/parser
+12. `OOTD-011` complete (2026-07-27): `Workbooks.Open` now exposes a complete argument matrix;
+   read-only is implemented, omitted/zero UpdateLinks is an explicit offline policy, and thirteen
+   unsupported option classes fail before filesystem read.
+13. **Active:** continue fail-closed contracts at `OOTD-012`, then QName/reference/parser
    invariants and cell/formula fidelity.
-13. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
+14. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
    claiming practical chart/pivot/style parity.
 
 Every numbered work unit starts with a failing regression and lands as its own reviewable commit.

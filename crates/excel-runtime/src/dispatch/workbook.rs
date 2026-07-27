@@ -17,6 +17,8 @@ use std::path::{Path, PathBuf};
 
 const XL_SAVE_AS_ACCESS_MODE_NO_CHANGE: i32 = 1;
 const XL_SAVE_CONFLICT_USER_RESOLUTION: i32 = 1;
+const WORKBOOK_OPEN_UPDATE_LINKS_NEVER: i32 = 0;
+const XL_CORRUPT_LOAD_NORMAL: i32 = 0;
 
 impl ExcelRuntime {
     pub(crate) fn dispatch_get_workbook(
@@ -675,6 +677,83 @@ impl ExcelRuntime {
                 validate_optional_bool_arg(args, 12, "Workbooks.Open AddToMru")?;
                 validate_optional_bool_arg(args, 13, "Workbooks.Open Local")?;
                 validate_optional_integer_arg(args, 14, "Workbooks.Open CorruptLoad")?;
+                if matches!(args.get(1), Some(OmValue::Bool(true)))
+                    || matches!(
+                        args.get(1),
+                        Some(OmValue::Number(value))
+                            if *value as i32 != WORKBOOK_OPEN_UPDATE_LINKS_NEVER
+                    )
+                {
+                    return Err(OmError::unsupported(
+                        "Workbooks.Open UpdateLinks supports only disabled link updates (0 or false)",
+                    ));
+                }
+                if args.get(3).is_some_and(|value| !om_value_is_omitted(value)) {
+                    return Err(OmError::unsupported(
+                        "Workbooks.Open Format is not supported when provided",
+                    ));
+                }
+                if matches!(args.get(4), Some(OmValue::Text(password)) if !password.is_empty()) {
+                    return Err(OmError::unsupported(
+                        "Workbooks.Open Password is not implemented for non-empty values",
+                    ));
+                }
+                if matches!(args.get(5), Some(OmValue::Text(password)) if !password.is_empty()) {
+                    return Err(OmError::unsupported(
+                        "Workbooks.Open WriteResPassword is not implemented for non-empty values",
+                    ));
+                }
+                if matches!(args.get(6), Some(OmValue::Bool(true))) {
+                    return Err(OmError::unsupported(
+                        "Workbooks.Open IgnoreReadOnlyRecommended=true is not implemented",
+                    ));
+                }
+                if args.get(7).is_some_and(|value| !om_value_is_omitted(value)) {
+                    return Err(OmError::unsupported(
+                        "Workbooks.Open Origin is not supported when provided",
+                    ));
+                }
+                if args.get(8).is_some_and(|value| !om_value_is_omitted(value)) {
+                    return Err(OmError::unsupported(
+                        "Workbooks.Open Delimiter is not supported when provided",
+                    ));
+                }
+                if matches!(args.get(9), Some(OmValue::Bool(true))) {
+                    return Err(OmError::unsupported(
+                        "Workbooks.Open Editable=true is not implemented",
+                    ));
+                }
+                if matches!(args.get(10), Some(OmValue::Bool(true))) {
+                    return Err(OmError::unsupported(
+                        "Workbooks.Open Notify=true is not implemented",
+                    ));
+                }
+                if args
+                    .get(11)
+                    .is_some_and(|value| !om_value_is_omitted(value))
+                {
+                    return Err(OmError::unsupported(
+                        "Workbooks.Open Converter is not supported when provided",
+                    ));
+                }
+                if matches!(args.get(12), Some(OmValue::Bool(true))) {
+                    return Err(OmError::unsupported(
+                        "Workbooks.Open AddToMru=true is not implemented",
+                    ));
+                }
+                if matches!(args.get(13), Some(OmValue::Bool(true))) {
+                    return Err(OmError::unsupported(
+                        "Workbooks.Open Local=true is not implemented",
+                    ));
+                }
+                if matches!(
+                    args.get(14),
+                    Some(OmValue::Number(value)) if *value as i32 != XL_CORRUPT_LOAD_NORMAL
+                ) {
+                    return Err(OmError::unsupported(
+                        "Workbooks.Open CorruptLoad supports only xlNormalLoad (0)",
+                    ));
+                }
                 let bytes = fs::read(path).map_err(|error| {
                     OmError::new(
                         OmErrorCode::Io,

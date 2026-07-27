@@ -119,7 +119,12 @@ Wave 1 exit gate:
    equivalent만 허용한다. 나머지는 package prepare/file write 전에 stable `Unsupported`로
    거부하고 target/source identity/dirty domains 불변을 10-case matrix로 고정했다.
    capability 표는 `docs/interfaces/workbook_save_as.md`에 있다.
-2. `OOTD-011`: `Workbooks.Open` optional argument별 behavior/unsupported matrix를 고정한다.
+2. `OOTD-011` — 완료 (2026-07-27): `Workbooks.Open`의 `ReadOnly`는 실제 runtime/save
+   policy에 연결하고, UpdateLinks는 생략/0/false를 offline no-update로 고정했다. Format,
+   password, write reservation, read-only recommendation, text import, editable/notify/converter,
+   MRU/local, repair/extract 옵션은 생략/default-equivalent만 허용하며 non-default는
+   filesystem read 전에 stable `Unsupported`로 거부한다. 13-case matrix와 capability 표는
+   `docs/interfaces/workbooks_open.md`에 있다.
 3. `OOTD-012`: `LoadOptions`/`SaveOptions`를 실제 codec policy에 연결하거나 비공개화한다.
 4. `OOTD-013`: observable effect가 없는 workbook/worksheet method를 `Unsupported`로 바꾼다.
 5. `OOTD-062`: CFB/encrypted OOXML 탐지와 Password fail-closed 1단계를 구현한다.
