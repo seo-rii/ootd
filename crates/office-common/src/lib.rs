@@ -25,6 +25,7 @@ pub enum OmErrorCode {
     Parse,
     ResourceLimit,
     EncryptedWorkbookUnsupported,
+    SignedPackageMutationUnsupported,
     Calculation,
     External,
 }
@@ -65,6 +66,10 @@ impl OmError {
 
     pub fn encrypted_workbook_unsupported(message: impl Into<String>) -> Self {
         Self::new(OmErrorCode::EncryptedWorkbookUnsupported, message)
+    }
+
+    pub fn signed_package_mutation_unsupported(message: impl Into<String>) -> Self {
+        Self::new(OmErrorCode::SignedPackageMutationUnsupported, message)
     }
 
     pub fn unsupported(message: impl Into<String>) -> Self {

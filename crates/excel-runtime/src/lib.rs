@@ -2218,6 +2218,17 @@ impl ExcelRuntime {
         Ok(&self.runtime_workbook(workbook)?.loaded.state.opaque_parts)
     }
 
+    pub fn workbook_has_digital_signature_artifacts(
+        &self,
+        workbook: WorkbookHandle,
+    ) -> OmResult<bool> {
+        Ok(self
+            .runtime_workbook(workbook)?
+            .loaded
+            .digital_signature_inventory()
+            .has_artifacts())
+    }
+
     pub fn is_read_only(&self, workbook: WorkbookHandle) -> OmResult<bool> {
         Ok(self.runtime_workbook(workbook)?.read_only)
     }

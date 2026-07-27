@@ -59,9 +59,13 @@ Active order:
    recognizes only containers with both required encrypted-OOXML streams and returns a dedicated
    `EncryptedWorkbookUnsupported` error before ZIP parsing. Legacy and partial compound files are
    not misclassified; Password arguments remain fail-closed. Agile Encryption remains open.
-16. **Active:** continue Wave 2 security policy at signed package mutation (`OOTD-063`), then
-   active-content closure and external-link policy.
-17. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
+16. `OOTD-063` complete (2026-07-27): load exposes a source signature-artifact inventory and
+   every codec/runtime/filesystem/host-writer rewrite refuses both linked and orphan OPC signature
+   artifacts before output. Manual package replacement cannot bypass the source policy; signature
+   verification, explicit strip+audit, and re-signing remain unsupported.
+17. **Active:** continue Wave 2 security policy at active-content closure (`OOTD-022` +
+   `OOTD-064`), then external-link policy.
+18. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
    claiming practical chart/pivot/style parity.
 
 Every numbered work unit starts with a failing regression and lands as its own reviewable commit.

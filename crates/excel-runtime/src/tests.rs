@@ -29,6 +29,13 @@
         ));
     }
 
+    mod signed_ooxml_fixture {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/support/signed_ooxml.rs"
+        ));
+    }
+
     fn expect_object_handle(value: OmValue) -> ObjectHandle {
         match value {
             OmValue::Object(handle) => handle,
@@ -43766,6 +43773,148 @@
             0.0
         );
         fs::remove_file(path).expect("remove encrypted OOXML fixture");
+    }
+
+    #[test]
+    fn signed_workbook_rewrite_paths_fail_closed_without_output_or_state_loss() {
+        let signed_bytes = signed_ooxml_fixture::package_with_fake_digital_signature(
+            &synthetic_workbook_bytes(),
+        );
+        let unique = format!(
+            "{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("time")
+                .as_nanos()
+        );
+        let source_path =
+            std::env::temp_dir().join(format!("ootd-runtime-signed-source-{unique}.xlsx"));
+        let save_as_path =
+            std::env::temp_dir().join(format!("ootd-runtime-signed-save-as-{unique}.xlsx"));
+        let copy_path =
+            std::env::temp_dir().join(format!("ootd-runtime-signed-copy-{unique}.xlsx"));
+        let close_path =
+            std::env::temp_dir().join(format!("ootd-runtime-signed-close-{unique}.xlsx"));
+        fs::write(&source_path, &signed_bytes).expect("write signed workbook fixture");
+
+        let mut runtime = ExcelRuntime::new();
+        let workbooks = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "Workbooks", &[])
+                .expect("Application.Workbooks"),
+        );
+        let workbook_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    workbooks,
+                    "Open",
+                    &[OmValue::Text(
+                        source_path.to_string_lossy().into_owned(),
+                    )],
+                )
+                .expect("open signed workbook"),
+        );
+        let workbook = WorkbookHandle(workbook_object);
+        assert!(
+            runtime
+                .workbook_has_digital_signature_artifacts(workbook)
+                .expect("signature inventory")
+        );
+
+        let workbook_id = runtime.workbook_model(workbook).expect("workbook model").id;
+        let sheet_id = runtime.worksheets(workbook).expect("worksheets")[0].id;
+        runtime
+            .set_range_values(SetRangeValuesSpec {
+                workbook,
+                range: RangeRef::single_cell(workbook_id, sheet_id, 1, 1),
+                values: OmArray::scalar(OmValue::Number(43.0)),
+            })
+            .expect("edit signed workbook in memory");
+        let expected_error_message =
+            "XlsxCodec::save refuses to rewrite packages containing OPC digital-signature artifacts";
+        let save_spec = SaveWorkbookSpec {
+            format: FileFormat::Xlsx,
+            profile: ExcelProfile::Excel365,
+            lossless: true,
+        };
+
+        let direct_error = runtime
+            .save_workbook(workbook, save_spec.clone())
+            .expect_err("direct save must reject signed packages");
+        assert_eq!(
+            direct_error.code,
+            OmErrorCode::SignedPackageMutationUnsupported
+        );
+        assert_eq!(direct_error.message, expected_error_message);
+
+        let mut writer = Vec::new();
+        let writer_error = runtime
+            .save_workbook_to_writer(workbook, save_spec, &mut writer)
+            .expect_err("host writer save must reject signed packages");
+        assert_eq!(
+            writer_error.code,
+            OmErrorCode::SignedPackageMutationUnsupported
+        );
+        assert_eq!(writer_error.message, expected_error_message);
+        assert!(writer.is_empty());
+
+        for (member, args, target) in [
+            ("Save", Vec::new(), None),
+            (
+                "SaveAs",
+                vec![OmValue::Text(
+                    save_as_path.to_string_lossy().into_owned(),
+                )],
+                Some(save_as_path.as_path()),
+            ),
+            (
+                "SaveCopyAs",
+                vec![OmValue::Text(copy_path.to_string_lossy().into_owned())],
+                Some(copy_path.as_path()),
+            ),
+            (
+                "Close",
+                vec![
+                    OmValue::Bool(true),
+                    OmValue::Text(close_path.to_string_lossy().into_owned()),
+                ],
+                Some(close_path.as_path()),
+            ),
+        ] {
+            let error = runtime
+                .dispatch_invoke(workbook_object, member, &args)
+                .expect_err("public rewrite path must reject signed packages");
+            assert_eq!(
+                error.code,
+                OmErrorCode::SignedPackageMutationUnsupported,
+                "{member}"
+            );
+            assert_eq!(error.message, expected_error_message, "{member}");
+            if let Some(target) = target {
+                assert!(!target.exists(), "{member} must not create an output");
+            }
+        }
+
+        assert_eq!(
+            fs::read(&source_path).expect("read original signed workbook"),
+            signed_bytes
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(workbooks, "Count", &[])
+                    .expect("Workbooks.Count after rejected Close")
+            ),
+            1.0
+        );
+        let dirty = runtime
+            .workbook_dirty_domains(workbook)
+            .expect("dirty domains after rejected saves");
+        assert!(dirty.prompt_dirty);
+        assert!(dirty.semantic_dirty);
+        assert!(dirty.serialization_dirty);
+        fs::remove_file(source_path).expect("remove signed workbook fixture");
     }
 
     #[test]

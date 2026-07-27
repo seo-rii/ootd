@@ -30,6 +30,7 @@ use quick_xml::{NsReader, Reader, Writer};
 
 mod chart_encoder;
 mod chart_graph;
+mod digital_signature;
 mod encryption;
 mod pivot;
 mod relationships;
@@ -37,6 +38,8 @@ mod shared_strings;
 mod worksheet;
 
 use encryption::is_encrypted_ooxml_compound_file;
+pub use digital_signature::DigitalSignatureInventory;
+use digital_signature::collect_digital_signature_inventory;
 use relationships::{
     RelationshipEntry, normalize_relationship_target, parse_relationship_entries,
     parse_relationship_entries_with_options, parse_workbook_relationship_entries,
@@ -204,6 +207,13 @@ pub struct LoadedXlsxWorkbook {
     pub sheet_drawing_support_parts: BTreeMap<SheetId, SheetDrawingSupportParts>,
     pub pending_drawing_relationship_graphs: BTreeMap<DrawingId, PendingDrawingRelationshipGraph>,
     pub pending_chart_relationship_graphs: BTreeMap<ChartId, PendingChartRelationshipGraph>,
+    digital_signature_inventory: DigitalSignatureInventory,
+}
+
+impl LoadedXlsxWorkbook {
+    pub fn digital_signature_inventory(&self) -> &DigitalSignatureInventory {
+        &self.digital_signature_inventory
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1386,6 +1396,7 @@ impl XlsxCodec {
                 "input is not an OOXML workbook package",
             ));
         }
+        let digital_signature_inventory = collect_digital_signature_inventory(&package)?;
 
         let workbook_part = package.part("xl/workbook.xml").ok_or_else(|| {
             OmError::new(
@@ -1508,6 +1519,7 @@ impl XlsxCodec {
             sheet_drawing_support_parts,
             pending_drawing_relationship_graphs: BTreeMap::new(),
             pending_chart_relationship_graphs: BTreeMap::new(),
+            digital_signature_inventory,
         })
     }
 
@@ -1516,6 +1528,15 @@ impl XlsxCodec {
         if !options.lossless {
             return Err(OmError::unsupported(
                 "XlsxCodec::save requires lossless=true",
+            ));
+        }
+        let current_digital_signature_inventory =
+            collect_digital_signature_inventory(&workbook.package)?;
+        if workbook.digital_signature_inventory.has_artifacts()
+            || current_digital_signature_inventory.has_artifacts()
+        {
+            return Err(OmError::signed_package_mutation_unsupported(
+                "XlsxCodec::save refuses to rewrite packages containing OPC digital-signature artifacts",
             ));
         }
         ensure_support_parts_present(&workbook.package, &workbook.support_parts)?;

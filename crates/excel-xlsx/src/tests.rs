@@ -40,6 +40,13 @@
         ));
     }
 
+    mod signed_ooxml_fixture {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/support/signed_ooxml.rs"
+        ));
+    }
+
     fn synthetic_comment_part_summary(
         authors: Vec<String>,
         comments: Vec<WorksheetCommentSummary>,
@@ -219,6 +226,125 @@
         assert_ne!(
             error.code,
             OmErrorCode::EncryptedWorkbookUnsupported
+        );
+    }
+
+    #[test]
+    fn signed_package_inventory_is_visible_and_clean_or_dirty_save_fails_closed() {
+        let codec = XlsxCodec;
+        let signed_bytes = signed_ooxml_fixture::package_with_fake_digital_signature(
+            &synthetic_workbook_bytes(),
+        );
+        let mut loaded = codec
+            .load(&signed_bytes, CommonLoadOptions::default())
+            .expect("signed workbook remains readable");
+        let inventory = loaded.digital_signature_inventory();
+
+        assert!(inventory.has_artifacts());
+        assert_eq!(
+            inventory.part_uris(),
+            &[
+                "_xmlsignatures/_rels/origin.sigs.rels".to_string(),
+                "_xmlsignatures/origin.sigs".to_string(),
+                "_xmlsignatures/sig1.xml".to_string(),
+            ]
+        );
+        assert_eq!(
+            inventory.relationship_part_uris(),
+            &[
+                "_rels/.rels".to_string(),
+                "_xmlsignatures/_rels/origin.sigs.rels".to_string(),
+            ]
+        );
+
+        for label in ["clean", "dirty"] {
+            if label == "dirty" {
+                loaded.state.insert_cell(
+                    SheetId(1),
+                    1,
+                    1,
+                    CellData {
+                        value: CellValue::Number(42.0),
+                        formula: None,
+                        style_id: None,
+                    },
+                );
+            }
+            let error = codec
+                .save(&loaded, CommonSaveOptions::default())
+                .expect_err("signed package rewrite must fail closed");
+            assert_eq!(
+                error.code,
+                OmErrorCode::SignedPackageMutationUnsupported,
+                "{label}"
+            );
+            assert_eq!(
+                error.message,
+                "XlsxCodec::save refuses to rewrite packages containing OPC digital-signature artifacts",
+                "{label}"
+            );
+        }
+
+        loaded.package =
+            OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("unsigned replacement");
+        let error = codec
+            .save(&loaded, CommonSaveOptions::default())
+            .expect_err("manual package replacement must not bypass source signature policy");
+        assert_eq!(
+            error.code,
+            OmErrorCode::SignedPackageMutationUnsupported
+        );
+
+        let mut unsigned = codec
+            .load(
+                synthetic_workbook_bytes().as_slice(),
+                CommonLoadOptions::default(),
+            )
+            .expect("load unsigned workbook");
+        unsigned
+            .package
+            .add_part(OpcPart {
+                name: "_xmlsignatures/late-artifact.bin".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: vec![1, 2, 3],
+            })
+            .expect("add current-package signature artifact");
+        let error = codec
+            .save(&unsigned, CommonSaveOptions::default())
+            .expect_err("current package signature artifacts must be re-scanned");
+        assert_eq!(
+            error.code,
+            OmErrorCode::SignedPackageMutationUnsupported
+        );
+    }
+
+    #[test]
+    fn orphan_signature_content_type_also_blocks_package_rewrite() {
+        let codec = XlsxCodec;
+        let signed_bytes = signed_ooxml_fixture::package_with_orphan_signature_part(
+            &synthetic_workbook_bytes(),
+        );
+        let loaded = codec
+            .load(&signed_bytes, CommonLoadOptions::default())
+            .expect("workbook with an orphan signature artifact remains readable");
+
+        assert_eq!(
+            loaded.digital_signature_inventory().part_uris(),
+            &["custom/orphan-signature.xml".to_string()]
+        );
+        assert!(
+            loaded
+                .digital_signature_inventory()
+                .relationship_part_uris()
+                .is_empty()
+        );
+        let error = codec
+            .save(&loaded, CommonSaveOptions::default())
+            .expect_err("orphan signature artifacts must not survive a silent rewrite");
+        assert_eq!(
+            error.code,
+            OmErrorCode::SignedPackageMutationUnsupported
         );
     }
 

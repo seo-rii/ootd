@@ -22,6 +22,7 @@ Some detailed implementation notes currently remain in Korean because they were 
 - [XLSX codec option contract](interfaces/xlsx_codec_options.md): supported profile/preservation modes and fail-closed alternatives.
 - [Unsupported execution method contract](interfaces/unsupported_execution_methods.md): refresh, spelling, fixed-format export, and print methods without configured backends.
 - [Encrypted OOXML capability contract](interfaces/encrypted_ooxml.md): bounded CFB detection, dedicated open error, and remaining encryption scope.
+- [OPC digital signature policy](interfaces/digital_signatures.md): artifact inventory and fail-closed package rewrite behavior.
 - [Behavioral Excel Oracle protocol](test-protocols/behavioral_excel_oracle.md): typed cases, run manifests, desktop Excel execution, and differential gates.
 
 ## Spec Intake And Contracts
