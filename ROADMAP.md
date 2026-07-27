@@ -77,8 +77,10 @@ Completed slices:
   leaving shared formula evaluation and operation routers in their current ownership.
 - Grouped WorksheetFunction dispatch with its exclusive scalar/array/range argument rendering
   helpers, keeping formula evaluation itself in the calculation boundary.
+- Grouped Worksheet and sheet-collection get/invoke dispatch by object surface while retaining
+  shared sheet copy/move/delete lifecycle helpers in the runtime core.
 
-- Apply the object-surface dispatch pattern to worksheet, range, names, and chart objects.
+- Apply the object-surface dispatch pattern to range, names, and chart objects.
 
 Exit criteria:
 
