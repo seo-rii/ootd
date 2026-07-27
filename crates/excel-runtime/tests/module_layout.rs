@@ -75,3 +75,24 @@ fn workbook_dispatch_is_grouped_by_object_surface() {
     }
     assert!(!workbook.contains("use super::super::*;"));
 }
+
+#[test]
+fn worksheet_function_dispatch_is_grouped_by_object_surface() {
+    let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let library = fs::read_to_string(crate_root.join("src/lib.rs")).expect("read library root");
+    let worksheet_function =
+        fs::read_to_string(crate_root.join("src/dispatch/worksheet_function.rs"))
+            .expect("read WorksheetFunction dispatch module");
+
+    for method in [
+        "dispatch_get_worksheet_function",
+        "dispatch_invoke_worksheet_function",
+        "worksheet_function_formula_arg",
+        "worksheet_function_array_literal",
+        "worksheet_function_range_reference_text",
+    ] {
+        assert!(worksheet_function.contains(&format!("fn {method}(")));
+        assert!(!library.contains(&format!("fn {method}(")));
+    }
+    assert!(!worksheet_function.contains("use super::super::*;"));
+}

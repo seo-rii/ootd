@@ -75,6 +75,8 @@ Completed slices:
   establishing the extraction pattern for the remaining runtime objects.
 - Grouped Workbook and Workbooks collection get/invoke dispatch in the same object-surface pattern,
   leaving shared formula evaluation and operation routers in their current ownership.
+- Grouped WorksheetFunction dispatch with its exclusive scalar/array/range argument rendering
+  helpers, keeping formula evaluation itself in the calculation boundary.
 
 - Apply the object-surface dispatch pattern to worksheet, range, names, and chart objects.
 
