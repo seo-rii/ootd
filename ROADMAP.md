@@ -14,8 +14,10 @@ Active order:
 
 1. `OOTD-001` complete (2026-07-27): successful Save/SaveAs now commits the verified output as
    the next package/source baseline without replacing live model identities.
-2. **Active:** `OOTD-002`/`OOTD-046` separate prompt state from serialization dirty domains.
-3. `OOTD-003`~`OOTD-006` make Save/SaveAs/SaveCopyAs/Close target-aware, read-only-safe, durable,
+2. `OOTD-002` complete (2026-07-27): `Workbook.Saved` now controls an independent prompt state;
+   it no longer clears serializable worksheet/name/chart/drawing deltas. This also lands the
+   prompt-versus-serialization slice of `OOTD-046`; its remaining dirty domains stay open.
+3. **Active:** `OOTD-003`~`OOTD-006` make Save/SaveAs/SaveCopyAs/Close target-aware, read-only-safe, durable,
    atomic, and transactional through `OOTD-045`.
 4. `OOTD-007`~`OOTD-009` persist formula caches and synchronize calculation metadata.
 5. Continue with fail-closed public/security contracts, QName/reference/parser invariants, then

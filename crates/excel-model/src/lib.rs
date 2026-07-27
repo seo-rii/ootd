@@ -72,11 +72,17 @@ impl WorksheetData {
     }
 
     pub fn prepare_cell_for_edit(&mut self, key: (u32, u32)) {
-        self.spill_owners.remove(&key);
-        if self.spill_ranges.contains_key(&key) {
+        self.prepare_cell_for_edit_with_change(key);
+    }
+
+    fn prepare_cell_for_edit_with_change(&mut self, key: (u32, u32)) -> bool {
+        let removed_spill_owner = self.spill_owners.remove(&key).is_some();
+        let removed_spill_range = self.spill_ranges.contains_key(&key);
+        if removed_spill_range {
             self.clear_owned_spill(key);
         }
-        self.dynamic_array_formulas.remove(&key);
+        let removed_dynamic_formula = self.dynamic_array_formulas.remove(&key);
+        removed_spill_owner || removed_spill_range || removed_dynamic_formula
     }
 
     pub fn clear_owned_spill(&mut self, anchor: (u32, u32)) {
@@ -300,6 +306,14 @@ impl WorkbookState {
     }
 
     pub fn set_range_values(&mut self, range: &RangeRef, values: &OmArray) -> OmResult<()> {
+        self.set_range_values_with_change(range, values).map(|_| ())
+    }
+
+    pub fn set_range_values_with_change(
+        &mut self,
+        range: &RangeRef,
+        values: &OmArray,
+    ) -> OmResult<bool> {
         let (sheet_id, rects) = self.same_sheet_rects(range)?;
         let mut updates = Vec::new();
 
@@ -351,6 +365,7 @@ impl WorkbookState {
 
         let worksheet = self.worksheet_data_for_sheet_mut(sheet_id)?;
         worksheet.ensure_spill_children_are_not_edited(updates.iter().map(|(key, _)| *key))?;
+        let mut changed = false;
         for (key, value) in updates {
             let unchanged = worksheet.cells.get(&key).is_some_and(|existing| {
                 existing.value == value
@@ -361,7 +376,7 @@ impl WorkbookState {
             if unchanged {
                 continue;
             }
-            worksheet.prepare_cell_for_edit(key);
+            let metadata_changed = worksheet.prepare_cell_for_edit_with_change(key);
             if let Some(existing) = worksheet.cells.get_mut(&key) {
                 existing.value = value;
                 existing.formula = None;
@@ -370,6 +385,7 @@ impl WorkbookState {
                 }
                 worksheet.dirty = true;
                 worksheet.dirty_cells.insert(key);
+                changed = true;
                 continue;
             }
 
@@ -384,13 +400,27 @@ impl WorkbookState {
                 );
                 worksheet.dirty = true;
                 worksheet.dirty_cells.insert(key);
+                changed = true;
+            } else if metadata_changed {
+                worksheet.dirty = true;
+                worksheet.dirty_cells.insert(key);
+                changed = true;
             }
         }
 
-        Ok(())
+        Ok(changed)
     }
 
     pub fn set_range_formulas(&mut self, range: &RangeRef, values: &OmArray) -> OmResult<()> {
+        self.set_range_formulas_with_change(range, values)
+            .map(|_| ())
+    }
+
+    pub fn set_range_formulas_with_change(
+        &mut self,
+        range: &RangeRef,
+        values: &OmArray,
+    ) -> OmResult<bool> {
         self.set_range_formulas_impl(range, values, false, false)
     }
 
@@ -399,10 +429,28 @@ impl WorkbookState {
         range: &RangeRef,
         values: &OmArray,
     ) -> OmResult<()> {
+        self.set_range_dynamic_array_formulas_with_change(range, values)
+            .map(|_| ())
+    }
+
+    pub fn set_range_dynamic_array_formulas_with_change(
+        &mut self,
+        range: &RangeRef,
+        values: &OmArray,
+    ) -> OmResult<bool> {
         self.set_range_formulas_impl(range, values, true, false)
     }
 
     pub fn set_range_r1c1_formulas(&mut self, range: &RangeRef, values: &OmArray) -> OmResult<()> {
+        self.set_range_r1c1_formulas_with_change(range, values)
+            .map(|_| ())
+    }
+
+    pub fn set_range_r1c1_formulas_with_change(
+        &mut self,
+        range: &RangeRef,
+        values: &OmArray,
+    ) -> OmResult<bool> {
         self.set_range_formulas_impl(range, values, false, true)
     }
 
@@ -411,6 +459,15 @@ impl WorkbookState {
         range: &RangeRef,
         values: &OmArray,
     ) -> OmResult<()> {
+        self.set_range_dynamic_array_r1c1_formulas_with_change(range, values)
+            .map(|_| ())
+    }
+
+    pub fn set_range_dynamic_array_r1c1_formulas_with_change(
+        &mut self,
+        range: &RangeRef,
+        values: &OmArray,
+    ) -> OmResult<bool> {
         self.set_range_formulas_impl(range, values, true, true)
     }
 
@@ -420,7 +477,7 @@ impl WorkbookState {
         values: &OmArray,
         dynamic_array: bool,
         is_r1c1: bool,
-    ) -> OmResult<()> {
+    ) -> OmResult<bool> {
         let (sheet_id, rects) = self.same_sheet_rects(range)?;
         let mut updates = Vec::new();
 
@@ -501,6 +558,7 @@ impl WorkbookState {
 
         let worksheet = self.worksheet_data_for_sheet_mut(sheet_id)?;
         worksheet.ensure_spill_children_are_not_edited(updates.iter().map(|(key, _, _)| *key))?;
+        let mut changed = false;
         for (key, cell_value, formula) in updates {
             let is_dynamic_formula = dynamic_array && formula.is_some();
             let unchanged = worksheet.cells.get(&key).is_some_and(|existing| {
@@ -511,7 +569,7 @@ impl WorkbookState {
             if unchanged {
                 continue;
             }
-            worksheet.prepare_cell_for_edit(key);
+            let metadata_changed = worksheet.prepare_cell_for_edit_with_change(key);
             if let Some(existing) = worksheet.cells.get_mut(&key) {
                 existing.value = cell_value;
                 existing.formula = formula;
@@ -523,6 +581,7 @@ impl WorkbookState {
                 }
                 worksheet.dirty = true;
                 worksheet.dirty_cells.insert(key);
+                changed = true;
             } else if !matches!(cell_value, CellValue::Blank) || formula.is_some() {
                 worksheet.cells.insert(
                     key,
@@ -534,22 +593,32 @@ impl WorkbookState {
                 );
                 worksheet.dirty = true;
                 worksheet.dirty_cells.insert(key);
+                changed = true;
+            } else if metadata_changed {
+                worksheet.dirty = true;
+                worksheet.dirty_cells.insert(key);
+                changed = true;
             }
             if is_dynamic_formula {
                 worksheet.dynamic_array_formulas.insert(key);
             }
         }
 
-        Ok(())
+        Ok(changed)
     }
 
     pub fn clear_range_contents(&mut self, range: &RangeRef) -> OmResult<()> {
+        self.clear_range_contents_with_change(range).map(|_| ())
+    }
+
+    pub fn clear_range_contents_with_change(&mut self, range: &RangeRef) -> OmResult<bool> {
         let (sheet_id, rects) = self.same_sheet_rects(range)?;
         let worksheet = self.worksheet_data_for_sheet_mut(sheet_id)?;
         worksheet.ensure_spill_children_are_not_edited(rects.iter().flat_map(|rect| {
             (rect.row_first..=rect.row_last)
                 .flat_map(move |row| (rect.col_first..=rect.col_last).map(move |col| (row, col)))
         }))?;
+        let mut changed_any = false;
         for rect in rects {
             for row in rect.row_first..=rect.row_last {
                 for col in rect.col_first..=rect.col_last {
@@ -580,6 +649,7 @@ impl WorkbookState {
                     }
 
                     if changed {
+                        changed_any = true;
                         if remove {
                             worksheet.cells.remove(&key);
                         }
@@ -590,7 +660,7 @@ impl WorkbookState {
             }
         }
 
-        Ok(())
+        Ok(changed_any)
     }
 
     fn worksheet_data(&mut self, sheet_id: SheetId) -> &mut WorksheetData {

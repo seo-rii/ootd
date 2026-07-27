@@ -84809,7 +84809,7 @@
             ),
             f64::from(super::XL_BAR_CLUSTERED)
         );
-        assert!(!runtime.runtime_workbook(workbook).unwrap().dirty);
+        assert!(!runtime.runtime_workbook(workbook).unwrap().prompt_dirty);
     }
 
     #[test]
@@ -117539,7 +117539,12 @@
                 .len(),
             1
         );
-        assert!(!runtime.runtime_workbook(source_workbook).unwrap().dirty);
+        assert!(
+            !runtime
+                .runtime_workbook(source_workbook)
+                .unwrap()
+                .prompt_dirty
+        );
         let reopened = ExcelRuntime::new()
             .codec
             .load(&saved, LoadOptions::default())
@@ -117627,8 +117632,18 @@
                 .len(),
             1
         );
-        assert!(!runtime.runtime_workbook(target_workbook).unwrap().dirty);
-        assert!(!runtime.runtime_workbook(source_workbook).unwrap().dirty);
+        assert!(
+            !runtime
+                .runtime_workbook(target_workbook)
+                .unwrap()
+                .prompt_dirty
+        );
+        assert!(
+            !runtime
+                .runtime_workbook(source_workbook)
+                .unwrap()
+                .prompt_dirty
+        );
     }
 
     #[test]
@@ -118024,8 +118039,18 @@
                 .len(),
             1
         );
-        assert!(!runtime.runtime_workbook(target_workbook).unwrap().dirty);
-        assert!(!runtime.runtime_workbook(source_workbook).unwrap().dirty);
+        assert!(
+            !runtime
+                .runtime_workbook(target_workbook)
+                .unwrap()
+                .prompt_dirty
+        );
+        assert!(
+            !runtime
+                .runtime_workbook(source_workbook)
+                .unwrap()
+                .prompt_dirty
+        );
     }
 
     #[test]
@@ -118192,8 +118217,13 @@
             .expect("target workbook after rejected copy");
         assert_eq!(target_runtime.loaded.state.worksheets.len(), 1);
         assert!(target_runtime.loaded.pending_chart_relationship_graphs.is_empty());
-        assert!(!target_runtime.dirty);
-        assert!(!runtime.runtime_workbook(source_workbook).unwrap().dirty);
+        assert!(!target_runtime.prompt_dirty);
+        assert!(
+            !runtime
+                .runtime_workbook(source_workbook)
+                .unwrap()
+                .prompt_dirty
+        );
     }
 
     #[test]
@@ -120160,6 +120190,127 @@
         assert_eq!(copied.state.worksheets[0].name, "CopiedOnly");
 
         fs::remove_dir_all(&base_dir).expect("cleanup SaveCopyAs fixture");
+    }
+
+    #[test]
+    fn saved_true_does_not_clear_serialization_dirty() {
+        let mut runtime = ExcelRuntime::new();
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock")
+            .as_nanos();
+        let base_dir = std::env::temp_dir().join(format!("ootd-saved-serialization-{unique}"));
+        fs::create_dir_all(&base_dir).expect("create Saved serialization fixture dir");
+        let source_path = base_dir.join("source.xlsx");
+        fs::write(&source_path, synthetic_workbook_bytes()).expect("write source workbook");
+
+        let workbooks = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "Workbooks", &[])
+                .expect("Workbooks"),
+        );
+        let workbook = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    workbooks,
+                    "Open",
+                    &[OmValue::Text(source_path.to_string_lossy().into_owned())],
+                )
+                .expect("Workbooks.Open"),
+        );
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let first_cell = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1".to_string())])
+                .expect("Range(A1)"),
+        );
+
+        runtime
+            .dispatch_set(
+                first_cell,
+                "Value2",
+                OmValue::Text("serialized after Saved=true".to_string()),
+                &[],
+            )
+            .expect("set A1 before Workbook.Saved");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(workbook, "Saved", &[])
+                .expect("Workbook.Saved after cell edit")
+        ));
+
+        runtime
+            .dispatch_set(workbook, "Saved", OmValue::Bool(true), &[])
+            .expect("Workbook.Saved = true");
+        assert!(expect_bool(
+            runtime
+                .dispatch_get(workbook, "Saved", &[])
+                .expect("Workbook.Saved after true")
+        ));
+
+        runtime
+            .dispatch_invoke(workbook, "Save", &[])
+            .expect("Workbook.Save after Saved=true");
+        let reopened = ExcelRuntime::new()
+            .codec
+            .load(
+                &fs::read(&source_path).expect("read saved workbook"),
+                LoadOptions::default(),
+            )
+            .expect("reopen workbook saved after Saved=true");
+        let sheet_id = reopened.state.worksheets[0].id;
+        assert_eq!(
+            reopened.state.cell(sheet_id, 1, 1).map(|cell| &cell.value),
+            Some(&CellValue::Text(
+                "serialized after Saved=true".to_string()
+            ))
+        );
+
+        let missing_cell = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("Z99".to_string())])
+                .expect("Range(Z99)"),
+        );
+        runtime
+            .dispatch_set(missing_cell, "Value2", OmValue::Empty, &[])
+            .expect("set missing cell to Empty");
+        assert!(expect_bool(
+            runtime
+                .dispatch_get(workbook, "Saved", &[])
+                .expect("Workbook.Saved after no-op missing-cell assignment")
+        ));
+        runtime
+            .dispatch_set(
+                first_cell,
+                "Value2",
+                OmValue::Text("serialized after Saved=true".to_string()),
+                &[],
+            )
+            .expect("set A1 to its saved value");
+        assert!(expect_bool(
+            runtime
+                .dispatch_get(workbook, "Saved", &[])
+                .expect("Workbook.Saved after no-op same-value assignment")
+        ));
+        runtime
+            .dispatch_set(
+                first_cell,
+                "Value2",
+                OmValue::Text("new prompt-dirty value".to_string()),
+                &[],
+            )
+            .expect("set A1 to a new value");
+        assert!(!expect_bool(
+            runtime
+                .dispatch_get(workbook, "Saved", &[])
+                .expect("Workbook.Saved after a new cell edit")
+        ));
+
+        fs::remove_dir_all(&base_dir).expect("cleanup Saved serialization fixture");
     }
 
     #[test]
@@ -122470,7 +122621,7 @@
         (
             runtime_workbook.loaded.state.clone(),
             runtime_workbook.loaded.package.clone(),
-            runtime_workbook.dirty,
+            runtime_workbook.prompt_dirty,
         )
     }
 

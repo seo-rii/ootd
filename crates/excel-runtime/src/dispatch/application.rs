@@ -534,7 +534,7 @@ impl ExcelRuntime {
                     .collect::<Vec<_>>();
                 for workbook in workbooks {
                     if self.invalidate_workbook_calc_chain(workbook)? {
-                        self.runtime_workbook_mut(workbook)?.dirty = true;
+                        self.runtime_workbook_mut(workbook)?.prompt_dirty = true;
                     }
                     self.calculate_workbook_formulas(workbook)?;
                 }

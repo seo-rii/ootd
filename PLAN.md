@@ -58,8 +58,12 @@ calculation, chart/pivot preservation, Windows Excel Oracle, CI와 문서 구조
 1. `OOTD-001` — 완료 (2026-07-27): Save/SaveAs의 durable output을 codec으로 다시
    검증·적재한 뒤 runtime baseline으로 commit한다. cell, defined name, chart, drawing의
    두 번 연속 저장과 기존 object handle 보존 회귀를 고정했다.
-2. `OOTD-002` + `OOTD-046`: `Saved`/prompt 상태와 semantic, serialization, formula-cache,
-   package-graph dirty domain을 분리한다.
+2. `OOTD-002` — 완료 (2026-07-27): `Workbook.Saved`를 사용자 저장 경고용
+   `prompt_dirty`로 분리해 `Saved = true`가 worksheet/name/chart/drawing serialization
+   delta를 지우지 않게 했다. 값·수식·clear/replace/sort/insert/delete/copy/cut/paste/fill
+   mutation은 실제 변경일 때만 prompt 상태를 올리고, no-op assignment는 clean 상태를
+   유지한다. `OOTD-046`의 formula-cache/package-graph 등 나머지 dirty-domain 분해는
+   후속 work unit으로 남는다.
 3. `OOTD-003`: source path가 없는 `Workbook.Save`를 stable error로 거부한다.
 4. `OOTD-004`: read-only source overwrite를 거부하고 SaveAs/SaveCopyAs 정책을 고정한다.
 5. `OOTD-005`: dirty/source/SaveChanges/Filename/DisplayAlerts close state table을 구현한다.

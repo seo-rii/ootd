@@ -7,7 +7,6 @@ use super::super::{
     validate_optional_integer_arg, validate_optional_text_arg, validate_print_out_args,
     validate_print_preview_args,
 };
-use excel_model::DrawingObjectModel;
 use office_common::{
     ExcelProfile, FileFormat, ObjectHandle, OmError, OmErrorCode, OmResult, OmValue,
     OpenWorkbookSpec, SaveWorkbookSpec, WorkbookHandle,
@@ -65,30 +64,9 @@ impl ExcelRuntime {
                     .contains("xl/vbaProject.bin"),
             )),
             "ReadOnly" => Ok(OmValue::Bool(self.runtime_workbook(workbook)?.read_only)),
-            "Saved" => Ok(OmValue::Bool({
-                let runtime = self.runtime_workbook(workbook)?;
-                !runtime.dirty
-                    && !runtime.loaded.state.defined_names.is_dirty()
-                    && runtime
-                        .loaded
-                        .state
-                        .charts
-                        .values()
-                        .all(|chart| !chart.dirty)
-                    && runtime.loaded.state.drawings.values().all(|drawing| {
-                        !drawing.dirty
-                            && drawing.objects.iter().all(|object| match object {
-                                DrawingObjectModel::ChartFrame(chart_object) => !chart_object.dirty,
-                                DrawingObjectModel::UnsupportedRaw { .. } => true,
-                            })
-                    })
-                    && runtime
-                        .loaded
-                        .state
-                        .worksheet_data
-                        .values()
-                        .all(|worksheet| !worksheet.dirty)
-            })),
+            "Saved" => Ok(OmValue::Bool(
+                self.runtime_workbook(workbook)?.saved_for_prompt(),
+            )),
             "Worksheets" | "Sheets" | "Charts" => {
                 let handle = self.register_object(RuntimeObjectKind::WorksheetsCollection {
                     workbook,

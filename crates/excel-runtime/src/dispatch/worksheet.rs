@@ -698,7 +698,7 @@ impl ExcelRuntime {
                                     &runtime.loaded.state.worksheets,
                                 )?,
                             )?;
-                            runtime.dirty = true;
+                            runtime.prompt_dirty = true;
                         }
                         self.find_state = None;
                         self.cut_copy_mode = None;

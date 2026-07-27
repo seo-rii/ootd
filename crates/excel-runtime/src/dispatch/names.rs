@@ -393,7 +393,7 @@ impl ExcelRuntime {
                             refresh_chart_source(&mut series.bubble_size, chart_current_sheet);
                         }
                     }
-                    runtime.dirty = true;
+                    runtime.prompt_dirty = true;
                     self.find_state = None;
                     self.cut_copy_mode = None;
                     self.clipboard = None;
@@ -550,7 +550,7 @@ impl ExcelRuntime {
                         refresh_chart_source(&mut series.bubble_size, chart_current_sheet);
                     }
                 }
-                runtime.dirty = true;
+                runtime.prompt_dirty = true;
                 self.find_state = None;
                 self.cut_copy_mode = None;
                 self.clipboard = None;

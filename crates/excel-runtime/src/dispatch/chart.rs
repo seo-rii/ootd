@@ -791,7 +791,7 @@ impl ExcelRuntime {
                             dirty: true,
                         }));
                     drawing.dirty = true;
-                    runtime.dirty = true;
+                    runtime.prompt_dirty = true;
                     self.find_state = None;
                     self.cut_copy_mode = None;
                     self.clipboard = None;
@@ -1055,7 +1055,7 @@ impl ExcelRuntime {
                     }
                 }
                 if workbook_dirty {
-                    runtime.dirty = true;
+                    runtime.prompt_dirty = true;
                     self.find_state = None;
                     self.cut_copy_mode = None;
                     self.clipboard = None;
@@ -1252,7 +1252,7 @@ impl ExcelRuntime {
                     }
                 }
                 if workbook_dirty {
-                    runtime.dirty = true;
+                    runtime.prompt_dirty = true;
                     self.find_state = None;
                     self.cut_copy_mode = None;
                     self.clipboard = None;
@@ -4202,7 +4202,7 @@ impl ExcelRuntime {
                     }
                     chart.content_dirty = true;
                     chart.dirty = true;
-                    runtime.dirty = true;
+                    runtime.prompt_dirty = true;
                 }
                 self.stale_chart_group_line_handles_for_group(
                     workbook,
@@ -4260,7 +4260,7 @@ impl ExcelRuntime {
                 }
                 chart.content_dirty = true;
                 chart.dirty = true;
-                runtime.dirty = true;
+                runtime.prompt_dirty = true;
                 self.find_state = None;
                 self.cut_copy_mode = None;
                 self.clipboard = None;
@@ -5522,7 +5522,7 @@ impl ExcelRuntime {
                     normalize_volume_stock_chart(chart);
                     chart.content_dirty = true;
                     chart.dirty = true;
-                    runtime.dirty = true;
+                    runtime.prompt_dirty = true;
                     series_index
                 };
                 self.find_state = None;
@@ -5676,7 +5676,7 @@ impl ExcelRuntime {
                     normalize_volume_stock_chart(chart);
                     chart.content_dirty = true;
                     chart.dirty = true;
-                    runtime.dirty = true;
+                    runtime.prompt_dirty = true;
                     first_new_series_index
                 };
                 self.find_state = None;
