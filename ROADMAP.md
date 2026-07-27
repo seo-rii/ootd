@@ -37,12 +37,13 @@ Active order:
    partial, and uncomputed caches; calculation-input digests prevent reuse after later edits,
    manual/automatic mode is synchronized, and every rewritten calculation state removes stale
    calc-chain artifacts.
-10. **Active:** `OOTD-046` now exposes typed prompt, semantic, serialization, formula-cache,
-   package-graph, and external-refresh domains. Semantic mutations and calculation writeback use
-   separate markers, and only a successful baseline commit clears them. The remaining slice maps
-   every mutation/refresh command and save failure point to an explicit domain transition.
-11. Continue with fail-closed public/security contracts, QName/reference/parser invariants, then
-   cell/formula fidelity.
+10. `OOTD-046` complete (2026-07-27): typed prompt, semantic, serialization, formula-cache,
+   package-graph, and external-refresh domains have a documented transition table. Semantic
+   mutations and calculation writeback use separate markers, all save failure points preserve the
+   complete snapshot, `SaveCopyAs` leaves it unchanged, and only a successful baseline commit
+   clears it. External refresh remains inactive until OOTD-065 provides a supported backend.
+11. **Active:** continue with fail-closed public/security contracts, starting at `OOTD-010`, then
+   QName/reference/parser invariants and cell/formula fidelity.
 12. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
    claiming practical chart/pivot/style parity.
 

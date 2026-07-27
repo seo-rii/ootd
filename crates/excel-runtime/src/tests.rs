@@ -6180,6 +6180,42 @@
                 .expect("committed dirty domains"),
             WorkbookDirtyDomains::default()
         );
+        let application = runtime.root_application();
+        runtime
+            .dispatch_set(
+                application,
+                "Calculation",
+                OmValue::Number(f64::from(XL_CALCULATION_MANUAL)),
+                &[],
+            )
+            .expect("set manual calculation mode");
+        assert_eq!(
+            runtime
+                .workbook_dirty_domains(workbook)
+                .expect("calculation-property dirty domains"),
+            WorkbookDirtyDomains {
+                serialization_dirty: true,
+                ..WorkbookDirtyDomains::default()
+            }
+        );
+        let mut calculation_mode_output = Vec::new();
+        runtime
+            .save_workbook_to_writer(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+                &mut calculation_mode_output,
+            )
+            .expect("commit calculation-property baseline");
+        assert_eq!(
+            runtime
+                .workbook_dirty_domains(workbook)
+                .expect("committed calculation-property domains"),
+            WorkbookDirtyDomains::default()
+        );
 
         let mut stale_cache_package =
             OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("stale cache package");
@@ -43753,6 +43789,9 @@
                     &[],
                 )
                 .expect("dirty atomic failure source");
+            let expected_dirty_domains = runtime
+                .workbook_dirty_domains(WorkbookHandle(workbook))
+                .expect("dirty domains before atomic failure");
             runtime.persistence_failure_point = Some(failure_point);
 
             let error = runtime
@@ -43782,6 +43821,13 @@
                     .dispatch_get(workbook, "Saved", &[])
                     .expect("dirty state after atomic failure")
             ));
+            assert_eq!(
+                runtime
+                    .workbook_dirty_domains(WorkbookHandle(workbook))
+                    .expect("dirty domains after atomic failure"),
+                expected_dirty_domains,
+                "{failure_point:?}"
+            );
             assert_eq!(
                 fs::read_dir(&base_dir)
                     .expect("read atomic failure fixture dir")
@@ -43858,6 +43904,9 @@
                     &[],
                 )
                 .expect("dirty atomic API workbook");
+            let expected_dirty_domains = runtime
+                .workbook_dirty_domains(WorkbookHandle(workbook))
+                .expect("dirty domains before atomic API failure");
             runtime.persistence_failure_point = Some(PersistenceFailurePoint::ReplaceTarget);
 
             let result = match save_api {
@@ -43914,6 +43963,13 @@
                     .dispatch_get(workbook, "Saved", &[])
                     .expect("dirty state after atomic API failure")
             ));
+            assert_eq!(
+                runtime
+                    .workbook_dirty_domains(WorkbookHandle(workbook))
+                    .expect("dirty domains after atomic API failure"),
+                expected_dirty_domains,
+                "{save_api:?}"
+            );
 
             fs::remove_dir_all(base_dir).expect("cleanup atomic API fixture");
         }
@@ -43961,6 +44017,9 @@
                 &[],
             )
             .expect("dirty post-replace sync source");
+        let expected_dirty_domains = runtime
+            .workbook_dirty_domains(WorkbookHandle(workbook))
+            .expect("dirty domains before parent-directory sync failure");
         runtime.persistence_failure_point =
             Some(PersistenceFailurePoint::SyncParentDirectory);
 
@@ -43989,6 +44048,12 @@
                 .dispatch_get(workbook, "Saved", &[])
                 .expect("dirty state after parent-directory sync failure")
         ));
+        assert_eq!(
+            runtime
+                .workbook_dirty_domains(WorkbookHandle(workbook))
+                .expect("dirty domains after parent-directory sync failure"),
+            expected_dirty_domains
+        );
 
         runtime
             .dispatch_invoke(workbook, "Save", &[])
@@ -43998,6 +44063,12 @@
                 .dispatch_get(workbook, "Saved", &[])
                 .expect("Saved after retry")
         ));
+        assert_eq!(
+            runtime
+                .workbook_dirty_domains(WorkbookHandle(workbook))
+                .expect("dirty domains after successful retry"),
+            WorkbookDirtyDomains::default()
+        );
 
         fs::remove_dir_all(base_dir).expect("cleanup post-replace sync fixture");
     }
@@ -44069,6 +44140,9 @@
                 &[],
             )
             .expect("set A1 before host stream failure");
+        let expected_dirty_domains = runtime
+            .workbook_dirty_domains(workbook)
+            .expect("dirty domains before host stream failure");
         let save_spec = SaveWorkbookSpec {
             format: FileFormat::Xlsx,
             profile: ExcelProfile::Excel365,
@@ -44093,6 +44167,12 @@
             ),
             "first stream save"
         );
+        assert_eq!(
+            runtime
+                .workbook_dirty_domains(workbook)
+                .expect("dirty domains after host write failure"),
+            expected_dirty_domains
+        );
 
         let mut rejecting_flush_writer = RejectingFlushWriter { bytes: Vec::new() };
         let flush_error = runtime
@@ -44114,6 +44194,12 @@
                 .dispatch_get(workbook.0, "Saved", &[])
                 .expect("dirty state after host stream flush failure")
         ));
+        assert_eq!(
+            runtime
+                .workbook_dirty_domains(workbook)
+                .expect("dirty domains after host flush failure"),
+            expected_dirty_domains
+        );
 
         let mut first_output = Vec::new();
         runtime
@@ -44124,6 +44210,12 @@
                 .dispatch_get(workbook.0, "Saved", &[])
                 .expect("Saved after successful host stream save")
         ));
+        assert_eq!(
+            runtime
+                .workbook_dirty_domains(workbook)
+                .expect("dirty domains after successful host stream save"),
+            WorkbookDirtyDomains::default()
+        );
 
         runtime
             .dispatch_set(
@@ -121707,6 +121799,9 @@
                 .dispatch_get(workbook, "Saved", &[])
                 .expect("Workbook.Saved before SaveCopyAs")
         ));
+        let expected_dirty_domains = runtime
+            .workbook_dirty_domains(WorkbookHandle(workbook))
+            .expect("dirty domains before SaveCopyAs");
 
         runtime
             .dispatch_invoke(
@@ -121740,6 +121835,12 @@
                 .dispatch_get(workbook, "Saved", &[])
                 .expect("Workbook.Saved after SaveCopyAs")
         ));
+        assert_eq!(
+            runtime
+                .workbook_dirty_domains(WorkbookHandle(workbook))
+                .expect("dirty domains after SaveCopyAs"),
+            expected_dirty_domains
+        );
 
         let copied = ExcelRuntime::new()
             .codec

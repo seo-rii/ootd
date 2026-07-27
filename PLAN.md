@@ -93,14 +93,16 @@ calculation, chart/pivot preservation, Windows Excel Oracle, CI와 문서 구조
    cache 완료 flag를 기록하며, calculation-input digest가 이후 mutation으로 달라지면
    완료 snapshot을 재사용하지 않는다. 모든 재작성 경로는 stale calc chain을 제거하고
    원본 manual/autoNoTable mode와 알 수 없는 `calcPr` attribute를 보존한다.
-10. **진행 중 — `OOTD-046`**: public `WorkbookDirtyDomains` snapshot으로
+10. `OOTD-046` — 완료 (2026-07-27): public `WorkbookDirtyDomains` snapshot으로
     prompt/semantic/serialization/formula-cache/package-graph/external-refresh 상태를
     독립적으로 관찰할 수 있게 했다. 기존 workbook mutation 지점은 공통 semantic marker를
     사용하며, 계산 cache writeback은 prompt/semantic 상태를 올리지 않고 formula-cache와
     serialization만 올린다. calc-chain 제거가 필요한 worksheet/name/calculation 변경은
     package-graph domain에 드러나고, 성공한 save baseline commit만 모든 domain과 계산
-    snapshot을 정리한다. 남은 작업은 external-refresh 상태를 실제 refresh policy에 연결하고
-    mutation command별 domain 전이 표와 save fault matrix를 완성하는 것이다.
+    snapshot을 정리한다. command별 전이표를 `docs/interfaces/workbook_dirty_domains.md`에
+    고정하고, 모든 filesystem failure point, host write/flush failure, `SaveCopyAs`, 성공
+    commit에서 전체 snapshot 보존/정리를 회귀로 검증한다. 아직 지원하지 않는 external
+    refresh의 domain은 `false`로 고정하며 실제 활성화는 `OOTD-065`가 소유한다.
 
 Wave 1 exit gate:
 

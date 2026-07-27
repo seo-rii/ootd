@@ -16,6 +16,7 @@ Some detailed implementation notes currently remain in Korean because they were 
 ## Current Runtime Surfaces
 
 - [Excel runtime calculation surface](interfaces/excel_runtime_calculation.md): current formula evaluator scope, supported functions, and known gaps.
+- [Workbook dirty domains](interfaces/workbook_dirty_domains.md): prompt, semantic, serialization, calculation-cache, and package-graph state transitions.
 - [Behavioral Excel Oracle protocol](test-protocols/behavioral_excel_oracle.md): typed cases, run manifests, desktop Excel execution, and differential gates.
 
 ## Spec Intake And Contracts
