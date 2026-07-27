@@ -22,7 +22,7 @@ contract-based until Milestone M1 pins the first behavioral Excel corpus.
 |---|---|---|---|
 | Office OM source intake | Partial | Schema, template, capture planning, Windows launcher, receipt, and normalization paths exist; the real TypeLib/PIA bundle is not pinned | Real Windows capture bundle with build, channel, architecture, and locale |
 | Behavioral Excel oracle | Partial | Typed cases, exact-byte run manifests, comparison/gate bridge, `ExcelRuntime` adapter, .NET contract tests, and an isolated COM runner/watchdog exist; no real Excel observation is pinned | Execute twice on the pinned Windows/Excel profile and commit the first required corpus |
-| OPC package loading | Partial | ZIP parts and opaque bytes are retained; default loading enforces finite archive/entry/name/decompression/ratio budgets with pre-central-directory entry-count checks; canonical case-insensitive part identities and content-type overrides reject ambiguous duplicates and invalid URI spellings | M3 relationship validation and shared XML budgets |
+| OPC package loading | Partial | ZIP parts and opaque bytes are retained; default loading enforces finite archive/entry/name/decompression/ratio budgets with pre-central-directory entry-count checks; canonical part identities and strict relationship parsing reject ambiguous duplicates, root escapes, invalid modes, and malformed URI spellings | M3 shared XML budgets and CI portability gates |
 | Workbook and worksheet model | Partial | Workbook, sheet, cell, name, chart, drawing, and basic dynamic-array state are modeled | Oracle-backed mutation and save/reopen cases |
 | XLSX load/save | Partial | No-op and targeted dirty-save preservation have broad synthetic regression coverage | Tracked real-world corpus, bounded parsing, and Excel reopen without repair |
 | Runtime object model | Partial | Application, workbook, worksheet, range, names, selection, clipboard, and chart-related dispatch are available | Generated member coverage and behavioral Oracle cases |
@@ -44,9 +44,9 @@ contract-based until Milestone M1 pins the first behavioral Excel corpus.
   Workbook/Workbooks, WorksheetFunction, and Worksheet/sheet-collection dispatch are grouped by
   object surface; Names/Name, Range/Areas, and the chart-family helper surface are also isolated;
   inline public-router arms remain as the final M2 dispatch debt.
-- M3 input safety: default OPC ZIP loading is resource-bounded and canonical part identities are
-  enforced across load/mutation/save; relationship validation and shared XML budgets remain in
-  progress.
+- M3 input safety: default OPC ZIP loading is resource-bounded; canonical part identities are
+  enforced across load/mutation/save; relationship attributes, IDs, target modes, and internal
+  targets fail closed. Shared XML budgets remain in progress.
 - Formatting, strict Clippy, MSRV, and Windows jobs: scheduled for M3.
 - Behavioral Oracle foundation: Rust and .NET contracts, runtime adapter, differential gate bridge,
   COM runner, and watchdog are implemented and synthetic/fake-backed tests pass.

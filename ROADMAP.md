@@ -108,9 +108,11 @@ Completed slices:
 - Added canonical, ASCII-case-insensitive OPC part identities across load, lookup, mutation,
   content-type override resolution, and serialization; ambiguous case/percent-encoding duplicates
   and non-canonical URI spellings are rejected before package state is exposed.
+- Made relationship parsing fail closed for missing required attributes, duplicate IDs, unknown
+  target modes, malformed percent encodings, and internal targets that escape the package root or
+  cannot identify a canonical part.
 
 - Enforce formatting, strict Clippy, MSRV, Linux stable, and Windows portability jobs.
-- Add strict relationship target/identity validation and duplicate relationship-ID rejection.
 - Apply shared XML depth, event, text, attribute, and collection budgets.
 - Add dependency/license policy, property tests, scheduled fuzzing, and benchmark trends.
 

@@ -11242,30 +11242,53 @@
     }
 
     #[test]
-    fn parse_relationship_entries_skips_entries_without_required_attrs_or_valid_targets() {
-        let relationships = super::parse_relationship_entries(
+    fn parse_relationship_entries_rejects_missing_required_attributes() {
+        for relationship in [
+            r#"<Relationship Id="rId1" Target="worksheets/missing-type.xml"/>"#,
+            r#"<Relationship Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/missing-id.xml"/>"#,
+            r#"<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"/>"#,
+        ] {
+            let rels_xml = format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  {relationship}
+</Relationships>"#,
+            );
+            let error = super::parse_relationship_entries(rels_xml.as_bytes(), &["xl"])
+                .expect_err("missing relationship attribute must fail");
+
+            assert_eq!(error.code, OmErrorCode::Parse);
+        }
+    }
+
+    #[test]
+    fn parse_relationship_entries_rejects_duplicate_ids() {
+        let error = super::parse_relationship_entries(
             br#"<?xml version="1.0" encoding="UTF-8"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
-  <Relationship Id="rId2" Target="worksheets/missing-type.xml"/>
-  <Relationship Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/missing-id.xml"/>
-  <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="../../.."/>
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
 </Relationships>"#,
             &["xl"],
         )
-        .expect("relationships");
+        .expect_err("duplicate relationship Id must fail");
 
-        assert_eq!(
-            relationships,
-            vec![super::RelationshipEntry {
-                id: "rId1".to_string(),
-                relationship_type:
-                    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"
-                        .to_string(),
-                target: "xl/worksheets/sheet1.xml".to_string(),
-                target_mode: None,
-            }]
-        );
+        assert_eq!(error.code, OmErrorCode::Parse);
+    }
+
+    #[test]
+    fn parse_relationship_entries_rejects_unknown_target_mode() {
+        let error = super::parse_relationship_entries_with_options(
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://example.com" TargetMode="Remote"/>
+</Relationships>"#,
+            &["xl"],
+            true,
+        )
+        .expect_err("unknown relationship TargetMode must fail");
+
+        assert_eq!(error.code, OmErrorCode::Parse);
     }
 
     #[test]
@@ -12531,11 +12554,36 @@
     }
 
     #[test]
-    fn normalize_relationship_target_collapses_parent_segments_to_remaining_path() {
+    fn normalize_relationship_target_rejects_package_root_escape() {
         assert_eq!(
             super::normalize_relationship_target("../../comments1.xml", &["xl"]),
-            Some("comments1.xml".to_string())
+            None
         );
+    }
+
+    #[test]
+    fn parse_relationship_entries_rejects_invalid_internal_targets() {
+        for target in [
+            "../../comments1.xml",
+            "%2e%2e/%2E%2E/comments1.xml",
+            "worksheets\\sheet1.xml",
+            "worksheets/%2Fsheet1.xml",
+            "worksheets/%GG.xml",
+            "worksheets/sheet1.xml#fragment",
+            "worksheets/sheet1.xml?query",
+            "https://example.com/internal.xml",
+        ] {
+            let rels_xml = format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="{target}"/>
+</Relationships>"#,
+            );
+            let error = super::parse_relationship_entries(rels_xml.as_bytes(), &["xl"])
+                .expect_err("invalid internal relationship target must fail");
+
+            assert_eq!(error.code, OmErrorCode::Parse);
+        }
     }
 
     #[test]
@@ -51980,13 +52028,13 @@
         let error = codec
             .save(&loaded, office_common::SaveOptions::default())
             .expect_err("save should fail when hyperlink relationship TargetMode drifts");
-        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert_eq!(error.code, OmErrorCode::Parse);
         assert!(
             error
                 .message
-                .contains("explicit worksheet relationship id rId1")
+                .contains("invalid internal relationship target")
         );
-        assert!(error.message.contains("TargetMode"));
+        assert!(error.message.contains("https://example.com"));
     }
 
     #[test]

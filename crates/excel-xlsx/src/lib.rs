@@ -3045,7 +3045,7 @@ fn parse_worksheet_relationships_part_summary(
      -> OmResult<_> {
         let mut attr_map = BTreeMap::new();
         let mut target = None::<String>;
-        let mut external = false;
+        let mut target_mode = None::<String>;
         for attr in element.attributes() {
             let attr = attr.map_err(xml_error)?;
             let key = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
@@ -3055,17 +3055,31 @@ fn parse_worksheet_relationships_part_summary(
                 .into_owned();
             if attr.key.as_ref() == b"Target" {
                 target = Some(value.clone());
-            } else if attr.key.as_ref() == b"TargetMode" && value.eq_ignore_ascii_case("External") {
-                external = true;
+            } else if attr.key.as_ref() == b"TargetMode" {
+                target_mode = Some(value.clone());
             }
             attr_map.insert(key, value);
         }
-        if !external
-            && let Some(target) = target
-            && let Some(normalized_target) =
-                normalize_relationship_target(target.as_str(), base_segments)
-        {
-            attr_map.insert("Target".to_string(), normalized_target);
+        if let Some(target) = target {
+            let external = match target_mode.as_deref() {
+                None => false,
+                Some(mode) if mode.eq_ignore_ascii_case("Internal") => false,
+                Some(mode) if mode.eq_ignore_ascii_case("External") => true,
+                Some(mode) => {
+                    return Err(OmError::parse(format!(
+                        "unsupported relationship TargetMode {mode:?}"
+                    )));
+                }
+            };
+            if !external {
+                let normalized_target = normalize_relationship_target(&target, base_segments)
+                    .ok_or_else(|| {
+                        OmError::parse(format!(
+                            "invalid internal relationship target {target:?}"
+                        ))
+                    })?;
+                attr_map.insert("Target".to_string(), normalized_target);
+            }
         }
         Ok(attr_map)
     };
@@ -25766,7 +25780,8 @@ fn should_strip_calc_chain_relationship(
     element: &BytesStart<'_>,
     decoder: quick_xml::encoding::Decoder,
 ) -> OmResult<bool> {
-    let mut target = None;
+    let mut raw_target = None;
+    let mut target_mode = None;
     let mut rel_type = None;
     for attr in element.attributes() {
         let attr = attr.map_err(xml_error)?;
@@ -25775,11 +25790,36 @@ fn should_strip_calc_chain_relationship(
             .map_err(xml_error)?
             .into_owned();
         match attr.key.as_ref() {
-            b"Target" => target = normalize_relationship_target(&value, &["xl"]),
+            b"Target" => raw_target = Some(value),
+            b"TargetMode" => target_mode = Some(value),
             b"Type" => rel_type = Some(value),
             _ => {}
         }
     }
+
+    let external = match target_mode.as_deref() {
+        None => false,
+        Some(mode) if mode.eq_ignore_ascii_case("Internal") => false,
+        Some(mode) if mode.eq_ignore_ascii_case("External") => true,
+        Some(mode) => {
+            return Err(OmError::parse(format!(
+                "unsupported relationship TargetMode {mode:?}"
+            )));
+        }
+    };
+    let target = if external {
+        None
+    } else {
+        raw_target
+            .map(|target| {
+                normalize_relationship_target(&target, &["xl"]).ok_or_else(|| {
+                    OmError::parse(format!(
+                        "invalid internal relationship target {target:?}"
+                    ))
+                })
+            })
+            .transpose()?
+    };
 
     Ok(
         matches!(rel_type.as_deref(), Some(CALC_CHAIN_RELATIONSHIP_TYPE))
