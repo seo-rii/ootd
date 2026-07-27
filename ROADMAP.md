@@ -176,13 +176,28 @@ Exit criteria for every supported function:
 
 ### M5 — Pivot Preserve-Only
 
-Status: pending M3 package safety and M4 calculation foundation.
+Status: in progress on explicit package inventory and preservation gates; real Excel reopen evidence
+remains an external M1 dependency.
 
-- Inventory pivot table definitions, cache definitions and records, slicers, timelines,
-  relationships, and content types.
-- Preserve the graph across no-op save and unrelated cell edits.
+Completed slices:
+
+- Inventoried pivot table definitions, cache definitions and records, slicers and slicer caches,
+  timelines and timeline caches by content type and relationship type.
+- Followed each known seed's internal outgoing relationship closure as `OpaqueRelated`, retained
+  external targets, and recorded workbook/worksheet incoming edges so shared-cache ownership is
+  visible without traversing unrelated owner graphs.
+- Snapshotted part bytes, current content type overrides, compression, owner `.rels` bytes, and
+  normalized relationship identity; save validates the inventory before mutation and again before
+  serialization.
+- Proved synthetic clean save and unrelated cell edits retain the inventory, while changed parts,
+  changed outgoing relationships, and dangling internal targets fail explicitly.
+
+Next slices:
+
 - Define safe sheet rename/copy/move/delete and shared-cache ownership behavior.
 - Reject unsupported destructive mutations before changing model or package state.
+- Replace duplicate raw cache-record snapshots with a bounded digest or shared backing after the
+  preservation contract is stable.
 
 Exit criteria:
 

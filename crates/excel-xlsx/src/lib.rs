@@ -30,6 +30,7 @@ use quick_xml::{NsReader, Reader, Writer};
 
 mod chart_encoder;
 mod chart_graph;
+mod pivot;
 mod relationships;
 mod shared_strings;
 mod worksheet;
@@ -53,6 +54,11 @@ use worksheet::{
 
 pub use chart_encoder::encode_chart_model_xml;
 pub use chart_graph::materialize_state_only_chart_graphs;
+pub use pivot::{
+    PivotPackageInventory, PivotPackagePartKind, PivotPackageRelationship, PreservedPivotPart,
+};
+
+use pivot::{collect_pivot_package_inventory, ensure_pivot_package_inventory_preserved};
 
 const CALC_CHAIN_PART_NAME: &str = "xl/calcChain.xml";
 const CALC_CHAIN_RELATIONSHIP_TYPE: &str =
@@ -145,6 +151,7 @@ pub struct XlsxCodec;
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct WorkbookSupportParts {
+    pub pivot_inventory: PivotPackageInventory,
     pub content_types_source_bytes: Option<Vec<u8>>,
     pub content_types_summary: Option<ContentTypesPartSummary>,
     pub package_relationships_part_source_bytes: Option<Vec<u8>>,
@@ -1371,6 +1378,10 @@ impl XlsxCodec {
 
     pub fn save(&self, workbook: &LoadedXlsxWorkbook, _options: SaveOptions) -> OmResult<Vec<u8>> {
         ensure_support_parts_present(&workbook.package, &workbook.support_parts)?;
+        ensure_pivot_package_inventory_preserved(
+            &workbook.package,
+            &workbook.support_parts.pivot_inventory,
+        )?;
         ensure_workbook_style_ids_are_valid(&workbook.state, &workbook.support_parts)?;
         let mut materialized_workbook = if chart_graph::has_state_only_chart_graphs(workbook) {
             let mut materialized = workbook.clone();
@@ -2700,6 +2711,10 @@ impl XlsxCodec {
 
         ensure_support_parts_present_for_save(&package, &workbook.support_parts)?;
         ensure_worksheet_support_parts_present(&package, &workbook.worksheet_support_parts)?;
+        ensure_pivot_package_inventory_preserved(
+            &package,
+            &workbook.support_parts.pivot_inventory,
+        )?;
 
         package.to_bytes()
     }
@@ -3719,6 +3734,7 @@ fn collect_workbook_support_parts(
         });
 
     let support_parts = WorkbookSupportParts {
+        pivot_inventory: collect_pivot_package_inventory(package)?,
         content_types_source_bytes,
         content_types_summary,
         package_relationships_part_source_bytes,

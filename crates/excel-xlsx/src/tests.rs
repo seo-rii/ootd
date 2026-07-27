@@ -10,7 +10,8 @@
         DrawingAnchorSummary, DrawingCellMarkerSummary, DrawingOpaqueRelationshipSummary,
         DrawingPointSummary, DrawingSizeSummary, DxfSummary, FileFormat, FillSummary, FontSummary,
         HYPERLINK_RELATIONSHIP_TYPE, OpcPackage, STYLES_RELATIONSHIP_TYPE, THEME_RELATIONSHIP_TYPE,
-        VML_DRAWING_RELATIONSHIP_TYPE, WORKBOOK_RELS_PART_NAME, WorksheetCommentSummary,
+        PivotPackagePartKind, VML_DRAWING_RELATIONSHIP_TYPE, WORKBOOK_RELS_PART_NAME,
+        WorksheetCommentSummary,
         WorksheetData, WorksheetHyperlinkBinding, WorksheetHyperlinkSummary,
         WorksheetRelationshipBinding, WorksheetSupportParts, XlsxCodec, chart_object_anchor_xml,
         collect_support_part_dimension_coords, compute_dimension_ref,
@@ -13993,6 +13994,233 @@
         assert!(saved_content_types.contains(r#"<ext preserve="1"/>"#));
         assert!(saved_content_types.contains(r#"data-default="keep""#));
         assert!(saved_content_types.contains(r#"data-style="keep""#));
+    }
+
+    #[test]
+    fn load_inventories_pivot_package_graph() {
+        let codec = XlsxCodec;
+        let input = workbook_with_pivot_package_graph_bytes();
+        let original_package = OpcPackage::from_bytes(input.as_slice()).expect("pivot package");
+
+        let loaded = codec
+            .load(input.as_slice(), CommonLoadOptions::default())
+            .expect("load pivot workbook");
+        let inventory = &loaded.support_parts.pivot_inventory;
+
+        assert_eq!(inventory.parts.len(), 8);
+        for (part_uri, kind) in [
+            (
+                "xl/pivotTables/pivotTable1.xml",
+                PivotPackagePartKind::PivotTableDefinition,
+            ),
+            (
+                "xl/pivotCache/pivotCacheDefinition1.xml",
+                PivotPackagePartKind::PivotCacheDefinition,
+            ),
+            (
+                "xl/pivotCache/pivotCacheRecords1.xml",
+                PivotPackagePartKind::PivotCacheRecords,
+            ),
+            ("xl/slicers/slicer1.xml", PivotPackagePartKind::Slicer),
+            (
+                "xl/slicerCaches/slicerCache1.xml",
+                PivotPackagePartKind::SlicerCache,
+            ),
+            ("xl/timelines/timeline1.xml", PivotPackagePartKind::Timeline),
+            (
+                "xl/timelineCaches/timelineCache1.xml",
+                PivotPackagePartKind::TimelineCache,
+            ),
+            ("xl/connections.xml", PivotPackagePartKind::OpaqueRelated),
+        ] {
+            let part = inventory.parts.get(part_uri).expect(part_uri);
+            assert_eq!(part.kind, kind, "{part_uri}");
+            assert_eq!(
+                part.source_bytes,
+                original_package.part(part_uri).expect(part_uri).bytes,
+                "{part_uri}",
+            );
+        }
+        let cache_definition = inventory
+            .parts
+            .get("xl/pivotCache/pivotCacheDefinition1.xml")
+            .expect("cache definition");
+        assert_eq!(
+            cache_definition.relationships_part_uri.as_deref(),
+            Some("xl/pivotCache/_rels/pivotCacheDefinition1.xml.rels"),
+        );
+        assert!(cache_definition.relationships_part_source_bytes.is_some());
+        assert!(inventory.relationships.iter().any(|relationship| {
+            relationship.source_part_uri.as_deref() == Some("xl/worksheets/sheet1.xml")
+                && relationship.target == "xl/pivotTables/pivotTable1.xml"
+        }));
+        assert!(inventory.relationships.iter().any(|relationship| {
+            relationship.source_part_uri.as_deref()
+                == Some("xl/pivotCache/pivotCacheDefinition1.xml")
+                && relationship.target == "xl/pivotCache/pivotCacheRecords1.xml"
+        }));
+        assert_eq!(
+            inventory
+                .relationships
+                .iter()
+                .filter(|relationship| {
+                    relationship.target == "xl/pivotCache/pivotCacheDefinition1.xml"
+                })
+                .count(),
+            2,
+            "workbook and pivot table should retain shared-cache ownership edges",
+        );
+        assert!(inventory.relationships.iter().any(|relationship| {
+            relationship.source_part_uri.as_deref()
+                == Some("xl/pivotCache/pivotCacheDefinition1.xml")
+                && relationship.target == "https://example.com/external-cache"
+                && relationship.target_mode.as_deref() == Some("External")
+        }));
+    }
+
+    #[test]
+    fn pivot_package_graph_survives_clean_and_unrelated_dirty_save() {
+        let codec = XlsxCodec;
+        let input = workbook_with_pivot_package_graph_bytes();
+        let mut loaded = codec
+            .load(input.as_slice(), CommonLoadOptions::default())
+            .expect("load pivot workbook");
+        let expected_inventory = loaded.support_parts.pivot_inventory.clone();
+
+        let clean_saved = codec
+            .save(&loaded, office_common::SaveOptions::default())
+            .expect("clean save pivot workbook");
+        let clean_reopened = codec
+            .load(clean_saved.as_slice(), CommonLoadOptions::default())
+            .expect("reopen clean pivot workbook");
+        assert_eq!(
+            clean_reopened.support_parts.pivot_inventory,
+            expected_inventory,
+        );
+
+        let sheet_id = loaded.state.worksheets[0].id;
+        loaded
+            .state
+            .set_range_values(
+                &office_common::RangeRef::single_cell(WorkbookId(0), sheet_id, 100, 26),
+                &office_common::OmArray::scalar(OmValue::Text("unrelated".to_string())),
+            )
+            .expect("set unrelated cell");
+        let dirty_saved = codec
+            .save(&loaded, office_common::SaveOptions::default())
+            .expect("dirty save pivot workbook");
+        let dirty_reopened = codec
+            .load(dirty_saved.as_slice(), CommonLoadOptions::default())
+            .expect("reopen dirty pivot workbook");
+        assert_eq!(
+            dirty_reopened.support_parts.pivot_inventory,
+            expected_inventory,
+        );
+    }
+
+    #[test]
+    fn save_rejects_preserved_pivot_part_drift() {
+        let codec = XlsxCodec;
+        let mut loaded = codec
+            .load(
+                workbook_with_pivot_package_graph_bytes().as_slice(),
+                CommonLoadOptions::default(),
+            )
+            .expect("load pivot workbook");
+        loaded
+            .package
+            .replace_part_bytes(
+                "xl/pivotCache/pivotCacheRecords1.xml",
+                br#"<pivotCacheRecords changed="true"/>"#.to_vec(),
+            )
+            .expect("replace pivot cache records");
+
+        let error = codec
+            .save(&loaded, office_common::SaveOptions::default())
+            .expect_err("changed preserved pivot part should fail");
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("pivotCacheRecords1.xml"));
+    }
+
+    #[test]
+    fn pivot_inventory_reads_current_content_type_overrides() {
+        let mut package =
+            OpcPackage::from_bytes(&workbook_with_pivot_package_graph_bytes()).expect("package");
+        let content_types = std::str::from_utf8(
+            package
+                .part("[Content_Types].xml")
+                .expect("content types")
+                .bytes
+                .as_slice(),
+        )
+        .expect("content types utf8")
+        .replace(
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.pivotCacheRecords+xml",
+            "application/xml",
+        );
+        package
+            .replace_part_bytes("[Content_Types].xml", content_types.into_bytes())
+            .expect("replace content types");
+
+        let inventory = super::collect_pivot_package_inventory(&package)
+            .expect("collect changed pivot inventory");
+        assert_eq!(
+            inventory
+                .parts
+                .get("xl/pivotCache/pivotCacheRecords1.xml")
+                .expect("cache records")
+                .content_type
+                .as_deref(),
+            Some("application/xml"),
+        );
+    }
+
+    #[test]
+    fn save_rejects_preserved_pivot_relationship_drift() {
+        let codec = XlsxCodec;
+        let mut loaded = codec
+            .load(
+                workbook_with_pivot_package_graph_bytes().as_slice(),
+                CommonLoadOptions::default(),
+            )
+            .expect("load pivot workbook");
+        let relationship_part_uri =
+            "xl/pivotCache/_rels/pivotCacheDefinition1.xml.rels";
+        let relationship_xml = std::str::from_utf8(
+            loaded
+                .package
+                .part(relationship_part_uri)
+                .expect("cache relationships")
+                .bytes
+                .as_slice(),
+        )
+        .expect("cache relationships utf8")
+        .replace("</Relationships>", "  </Relationships>");
+        loaded
+            .package
+            .replace_part_bytes(relationship_part_uri, relationship_xml.into_bytes())
+            .expect("replace cache relationships");
+
+        let error = codec
+            .save(&loaded, office_common::SaveOptions::default())
+            .expect_err("changed pivot relationships should fail");
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("pivotCacheDefinition1.xml"));
+    }
+
+    #[test]
+    fn load_rejects_missing_internal_pivot_relationship_target() {
+        let codec = XlsxCodec;
+        let mut package =
+            OpcPackage::from_bytes(&workbook_with_pivot_package_graph_bytes()).expect("package");
+        assert!(package.remove_part("xl/pivotCache/pivotCacheRecords1.xml"));
+        let bytes = package.to_bytes().expect("package without cache records");
+
+        let error = codec
+            .load(bytes.as_slice(), CommonLoadOptions::default())
+            .expect_err("missing pivot relationship target should fail");
+        assert!(matches!(error.code, OmErrorCode::Parse | OmErrorCode::InvalidState));
+        assert!(error.message.contains("pivotCacheRecords1.xml"));
     }
 
     #[test]
@@ -115386,6 +115614,158 @@
             )
             .expect("replace comments part");
         package.to_bytes().expect("package bytes")
+    }
+
+    fn workbook_with_pivot_package_graph_bytes() -> Vec<u8> {
+        let mut package = OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("package");
+        let content_types = std::str::from_utf8(
+            package
+                .part("[Content_Types].xml")
+                .expect("content types")
+                .bytes
+                .as_slice(),
+        )
+        .expect("content types utf8")
+        .replace(
+            "</Types>",
+            r#"  <Override PartName="/xl/pivotTables/pivotTable1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.pivotTable+xml"/>
+  <Override PartName="/xl/pivotCache/pivotCacheDefinition1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.pivotCacheDefinition+xml"/>
+  <Override PartName="/xl/pivotCache/pivotCacheRecords1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.pivotCacheRecords+xml"/>
+  <Override PartName="/xl/slicers/slicer1.xml" ContentType="application/vnd.ms-excel.slicer+xml"/>
+  <Override PartName="/xl/slicerCaches/slicerCache1.xml" ContentType="application/vnd.ms-excel.slicerCache+xml"/>
+  <Override PartName="/xl/timelines/timeline1.xml" ContentType="application/vnd.ms-excel.timeline+xml"/>
+  <Override PartName="/xl/timelineCaches/timelineCache1.xml" ContentType="application/vnd.ms-excel.timelineCache+xml"/>
+  <Override PartName="/xl/connections.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.connections+xml"/>
+</Types>"#,
+        );
+        package
+            .replace_part_bytes("[Content_Types].xml", content_types.into_bytes())
+            .expect("replace content types");
+
+        let workbook_relationships = std::str::from_utf8(
+            package
+                .part(WORKBOOK_RELS_PART_NAME)
+                .expect("workbook relationships")
+                .bytes
+                .as_slice(),
+        )
+        .expect("workbook relationships utf8")
+        .replace(
+            "</Relationships>",
+            r#"  <Relationship Id="rIdPivotCache" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotCacheDefinition" Target="pivotCache/pivotCacheDefinition1.xml"/>
+  <Relationship Id="rIdSlicerCache" Type="http://schemas.microsoft.com/office/2007/relationships/slicerCache" Target="slicerCaches/slicerCache1.xml"/>
+  <Relationship Id="rIdTimelineCache" Type="http://schemas.microsoft.com/office/2011/relationships/timelineCache" Target="timelineCaches/timelineCache1.xml"/>
+</Relationships>"#,
+        );
+        package
+            .replace_part_bytes(
+                WORKBOOK_RELS_PART_NAME,
+                workbook_relationships.into_bytes(),
+            )
+            .expect("replace workbook relationships");
+
+        for part in [
+            OpcPart {
+                name: "xl/worksheets/_rels/sheet1.xml.rels".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rIdPivotTable" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotTable" Target="../pivotTables/pivotTable1.xml"/>
+  <Relationship Id="rIdSlicer" Type="http://schemas.microsoft.com/office/2007/relationships/slicer" Target="../slicers/slicer1.xml"/>
+  <Relationship Id="rIdTimeline" Type="http://schemas.microsoft.com/office/2011/relationships/timeline" Target="../timelines/timeline1.xml"/>
+</Relationships>"#
+                    .to_vec(),
+            },
+            OpcPart {
+                name: "xl/pivotTables/pivotTable1.xml".to_string(),
+                content_type: Some(
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.pivotTable+xml"
+                        .to_string(),
+                ),
+                compression: CompressionMethod::Deflated,
+                bytes: br#"<pivotTableDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" name="Pivot1"/>"#.to_vec(),
+            },
+            OpcPart {
+                name: "xl/pivotTables/_rels/pivotTable1.xml.rels".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdCache" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotCacheDefinition" Target="../pivotCache/pivotCacheDefinition1.xml"/></Relationships>"#.to_vec(),
+            },
+            OpcPart {
+                name: "xl/pivotCache/pivotCacheDefinition1.xml".to_string(),
+                content_type: Some(
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.pivotCacheDefinition+xml"
+                        .to_string(),
+                ),
+                compression: CompressionMethod::Stored,
+                bytes: br#"<pivotCacheDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"/>"#.to_vec(),
+            },
+            OpcPart {
+                name: "xl/pivotCache/_rels/pivotCacheDefinition1.xml.rels".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Deflated,
+                bytes: br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdRecords" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotCacheRecords" Target="pivotCacheRecords1.xml"/><Relationship Id="rIdConnection" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/connections" Target="../connections.xml"/><Relationship Id="rIdExternal" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/externalLinkPath" Target="https://example.com/external-cache" TargetMode="External"/></Relationships>"#.to_vec(),
+            },
+            OpcPart {
+                name: "xl/pivotCache/pivotCacheRecords1.xml".to_string(),
+                content_type: Some(
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.pivotCacheRecords+xml"
+                        .to_string(),
+                ),
+                compression: CompressionMethod::Deflated,
+                bytes: br#"<pivotCacheRecords xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="0"/>"#.to_vec(),
+            },
+            OpcPart {
+                name: "xl/connections.xml".to_string(),
+                content_type: Some(
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.connections+xml"
+                        .to_string(),
+                ),
+                compression: CompressionMethod::Stored,
+                bytes: br#"<connections xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"/>"#.to_vec(),
+            },
+            OpcPart {
+                name: "xl/slicers/slicer1.xml".to_string(),
+                content_type: Some("application/vnd.ms-excel.slicer+xml".to_string()),
+                compression: CompressionMethod::Deflated,
+                bytes: br#"<slicers xmlns="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"/>"#.to_vec(),
+            },
+            OpcPart {
+                name: "xl/slicers/_rels/slicer1.xml.rels".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdSlicerCache" Type="http://schemas.microsoft.com/office/2007/relationships/slicerCache" Target="../slicerCaches/slicerCache1.xml"/></Relationships>"#.to_vec(),
+            },
+            OpcPart {
+                name: "xl/slicerCaches/slicerCache1.xml".to_string(),
+                content_type: Some("application/vnd.ms-excel.slicerCache+xml".to_string()),
+                compression: CompressionMethod::Stored,
+                bytes: br#"<slicerCaches xmlns="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"/>"#.to_vec(),
+            },
+            OpcPart {
+                name: "xl/timelines/timeline1.xml".to_string(),
+                content_type: Some("application/vnd.ms-excel.timeline+xml".to_string()),
+                compression: CompressionMethod::Deflated,
+                bytes: br#"<timelines xmlns="http://schemas.microsoft.com/office/spreadsheetml/2010/11/main"/>"#.to_vec(),
+            },
+            OpcPart {
+                name: "xl/timelines/_rels/timeline1.xml.rels".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdTimelineCache" Type="http://schemas.microsoft.com/office/2011/relationships/timelineCache" Target="../timelineCaches/timelineCache1.xml"/></Relationships>"#.to_vec(),
+            },
+            OpcPart {
+                name: "xl/timelineCaches/timelineCache1.xml".to_string(),
+                content_type: Some("application/vnd.ms-excel.timelineCache+xml".to_string()),
+                compression: CompressionMethod::Stored,
+                bytes: br#"<timelineCacheDefinition xmlns="http://schemas.microsoft.com/office/spreadsheetml/2010/11/main"/>"#.to_vec(),
+            },
+        ] {
+            package.add_part(part).expect("add pivot graph part");
+        }
+
+        package.to_bytes().expect("pivot workbook bytes")
     }
 
     fn synthetic_workbook_bytes() -> Vec<u8> {
