@@ -360,6 +360,7 @@ impl ExcelRuntime {
         };
 
         let mut report = CalculationReport::default();
+        let mut formula_cache_changed = false;
         let mut dynamic_updates = Vec::<((u32, u32), FormulaArrayResult)>::new();
         let mut scalar_formula_cells = Vec::new();
         for (row, col, formula, is_dynamic) in formula_cells {
@@ -433,6 +434,9 @@ impl ExcelRuntime {
                 .worksheet_data_for_sheet_mut(sheet_id)?;
             for (anchor @ (row, col), result) in dynamic_updates {
                 worksheet.clear_owned_spill(anchor);
+                worksheet.dirty = true;
+                worksheet.dirty_cells.insert(anchor);
+                formula_cache_changed = true;
                 let Some(row_last) = row
                     .checked_add(u32::try_from(result.rows).unwrap_or(u32::MAX))
                     .and_then(|value| value.checked_sub(1))
@@ -565,8 +569,12 @@ impl ExcelRuntime {
                     cell.value = value;
                     worksheet.dirty_cells.insert(coordinates);
                     worksheet.dirty = true;
+                    formula_cache_changed = true;
                 }
             }
+        }
+        if formula_cache_changed {
+            self.runtime_workbook_mut(workbook)?.formula_cache_dirty = true;
         }
         report.evaluated.sort_unstable();
         report.unsupported.sort_unstable();

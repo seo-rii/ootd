@@ -6,7 +6,7 @@
         XL_CURRENCY_DIGITS, XL_DATE_SEPARATOR, XL_DECIMAL_SEPARATOR, XL_LIST_SEPARATOR, XL_R1C1,
         XL_ROW_SEPARATOR, XL_THOUSANDS_SEPARATOR, XL_TIME_SEPARATOR, XL_UPPER_CASE_COLUMN_LETTER,
         XL_UPPER_CASE_ROW_LETTER, WorkbookCalculationMode, WorkbookCalculationState,
-        blank_workbook_bytes, formula_complex_from_text, supports_format,
+        WorkbookDirtyDomains, blank_workbook_bytes, formula_complex_from_text, supports_format,
         worksheet_relationships_part_uri_for,
     };
     use excel_model::{ChartDataLabelPosition, ChartSheetBinding, ChartType, DrawingObjectModel};
@@ -6052,6 +6052,179 @@
         assert!(saved_workbook_xml.contains(r#"forceFullCalc="1""#));
         assert!(saved_workbook_xml.contains(r#"uri="urn:ootd:preserve""#));
         assert!(!saved_package.contains("xl/calcChain.xml"));
+    }
+
+    #[test]
+    fn dirty_domains_separate_prompt_semantic_formula_cache_and_package_graph_state() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_calc_chain_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open dirty-domain workbook");
+        assert_eq!(
+            runtime
+                .workbook_dirty_domains(workbook)
+                .expect("initial dirty domains"),
+            WorkbookDirtyDomains::default()
+        );
+        runtime
+            .dispatch_set(workbook.0, "Saved", OmValue::Bool(false), &[])
+            .expect("Workbook.Saved = false");
+        assert_eq!(
+            runtime
+                .workbook_dirty_domains(workbook)
+                .expect("prompt-only dirty domains"),
+            WorkbookDirtyDomains {
+                prompt_dirty: true,
+                ..WorkbookDirtyDomains::default()
+            }
+        );
+        runtime
+            .dispatch_set(workbook.0, "Saved", OmValue::Bool(true), &[])
+            .expect("restore Workbook.Saved");
+        assert_eq!(
+            runtime
+                .workbook_dirty_domains(workbook)
+                .expect("restored initial dirty domains"),
+            WorkbookDirtyDomains::default()
+        );
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let formulas = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("A1:B1".to_string())],
+                )
+                .expect("Range(A1:B1)"),
+        );
+        runtime
+            .dispatch_set(
+                formulas,
+                "Formula",
+                OmValue::Array(
+                    OmArray::new(
+                        1,
+                        2,
+                        vec![
+                            OmValue::Number(2.0),
+                            OmValue::Text("=A1+1".to_string()),
+                        ],
+                    )
+                    .expect("dirty-domain formulas"),
+                ),
+                &[],
+            )
+            .expect("set dirty-domain formulas");
+        assert_eq!(
+            runtime
+                .workbook_dirty_domains(workbook)
+                .expect("edited dirty domains"),
+            WorkbookDirtyDomains {
+                prompt_dirty: true,
+                semantic_dirty: true,
+                serialization_dirty: true,
+                formula_cache_dirty: false,
+                package_graph_dirty: true,
+                external_refresh_dirty: false,
+            }
+        );
+        runtime
+            .dispatch_set(workbook.0, "Saved", OmValue::Bool(true), &[])
+            .expect("Workbook.Saved = true");
+        assert_eq!(
+            runtime
+                .workbook_dirty_domains(workbook)
+                .expect("prompt-cleared dirty domains"),
+            WorkbookDirtyDomains {
+                prompt_dirty: false,
+                semantic_dirty: true,
+                serialization_dirty: true,
+                formula_cache_dirty: false,
+                package_graph_dirty: true,
+                external_refresh_dirty: false,
+            }
+        );
+        runtime
+            .calculate_workbook_with_report(workbook)
+            .expect("calculate dirty-domain workbook");
+        assert!(
+            runtime
+                .workbook_dirty_domains(workbook)
+                .expect("calculated dirty domains")
+                .formula_cache_dirty
+        );
+        let mut saved = Vec::new();
+        runtime
+            .save_workbook_to_writer(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+                &mut saved,
+            )
+            .expect("commit dirty-domain baseline");
+        assert_eq!(
+            runtime
+                .workbook_dirty_domains(workbook)
+                .expect("committed dirty domains"),
+            WorkbookDirtyDomains::default()
+        );
+
+        let mut stale_cache_package =
+            OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("stale cache package");
+        let stale_worksheet_xml = String::from_utf8(
+            stale_cache_package
+                .part("xl/worksheets/sheet1.xml")
+                .expect("stale cache worksheet")
+                .bytes
+                .clone(),
+        )
+        .expect("stale cache worksheet utf8")
+        .replace("<v>SHARED</v>", "<v>STALE</v>");
+        stale_cache_package
+            .replace_part_bytes(
+                "xl/worksheets/sheet1.xml",
+                stale_worksheet_xml.into_bytes(),
+            )
+            .expect("replace stale formula cache");
+        let mut cache_runtime = ExcelRuntime::new();
+        let cache_workbook = cache_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: stale_cache_package
+                    .to_bytes()
+                    .expect("stale cache workbook bytes"),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open stale cache workbook");
+        cache_runtime
+            .calculate_workbook_with_report(cache_workbook)
+            .expect("calculate stale cache workbook");
+        assert_eq!(
+            cache_runtime
+                .workbook_dirty_domains(cache_workbook)
+                .expect("cache-only dirty domains"),
+            WorkbookDirtyDomains {
+                prompt_dirty: false,
+                semantic_dirty: false,
+                serialization_dirty: true,
+                formula_cache_dirty: true,
+                package_graph_dirty: false,
+                external_refresh_dirty: false,
+            }
+        );
     }
 
     #[test]

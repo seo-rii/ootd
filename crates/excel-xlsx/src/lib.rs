@@ -172,6 +172,11 @@ impl WorkbookCalculationProperties {
         self.source_calc_id
     }
 
+    /// Returns whether calculation properties must be rewritten on the next save.
+    pub fn is_dirty(&self) -> bool {
+        self.mode_dirty || self.requested_state.is_some()
+    }
+
     /// Requests a calculation mode update on the next save.
     pub fn set_mode(&mut self, mode: WorkbookCalculationMode) {
         if self.mode != mode {

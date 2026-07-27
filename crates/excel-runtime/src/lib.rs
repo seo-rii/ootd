@@ -643,6 +643,20 @@ const PINNED_OM_TEMPLATE_JSON: &str = include_str!(concat!(
 #[cfg(test)]
 const FORMULA_IMPLEMENTATION_SOURCE: &str = include_str!("calc/mod.rs");
 
+/// Purpose-specific dirty state for one open workbook.
+///
+/// Prompt state is intentionally independent from the state that must be serialized. In
+/// particular, assigning `Workbook.Saved = true` clears only `prompt_dirty`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct WorkbookDirtyDomains {
+    pub prompt_dirty: bool,
+    pub semantic_dirty: bool,
+    pub serialization_dirty: bool,
+    pub formula_cache_dirty: bool,
+    pub package_graph_dirty: bool,
+    pub external_refresh_dirty: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct RuntimeCalculationSnapshot {
     input_digest: [u8; 32],
@@ -656,6 +670,10 @@ struct RuntimeWorkbook {
     read_only: bool,
     source_path: Option<PathBuf>,
     prompt_dirty: bool,
+    semantic_dirty: bool,
+    formula_cache_dirty: bool,
+    package_graph_dirty: bool,
+    external_refresh_dirty: bool,
     calculation_snapshot: Option<RuntimeCalculationSnapshot>,
 }
 
@@ -666,6 +684,11 @@ impl RuntimeWorkbook {
 
     fn set_saved_for_prompt(&mut self, saved: bool) {
         self.prompt_dirty = !saved;
+    }
+
+    fn mark_semantic_dirty(&mut self) {
+        self.prompt_dirty = true;
+        self.semantic_dirty = true;
     }
 }
 
@@ -1557,6 +1580,10 @@ impl ExcelRuntime {
                 read_only: spec.read_only,
                 source_path,
                 prompt_dirty: false,
+                semantic_dirty: false,
+                formula_cache_dirty: false,
+                package_graph_dirty: false,
+                external_refresh_dirty: false,
                 calculation_snapshot: None,
             },
         );
@@ -2114,6 +2141,75 @@ impl ExcelRuntime {
         Ok(&self.runtime_workbook(workbook)?.loaded.state)
     }
 
+    /// Returns independently observable dirty domains for an open workbook.
+    pub fn workbook_dirty_domains(
+        &self,
+        workbook: WorkbookHandle,
+    ) -> OmResult<WorkbookDirtyDomains> {
+        let runtime = self.runtime_workbook(workbook)?;
+        let has_dirty_worksheets = runtime
+            .loaded
+            .state
+            .worksheet_data
+            .values()
+            .any(|worksheet| worksheet.dirty);
+        let has_dirty_charts = runtime.loaded.state.charts.values().any(|chart| {
+            chart.dirty
+                || chart.content_dirty
+                || chart.series_topology_dirty
+                || chart.series.iter().any(|series| series.filter_dirty)
+                || chart.groups.iter().any(|group| group.dirty)
+        });
+        let has_dirty_drawings = runtime.loaded.state.drawings.values().any(|drawing| {
+            drawing.dirty
+                || drawing.objects.iter().any(|object| {
+                    matches!(
+                        object,
+                        DrawingObjectModel::ChartFrame(chart_object) if chart_object.dirty
+                    )
+                })
+        });
+        let has_pending_package_graph = !runtime
+            .loaded
+            .pending_drawing_relationship_graphs
+            .is_empty()
+            || !runtime
+                .loaded
+                .pending_chart_relationship_graphs
+                .is_empty()
+            || !runtime.chart_support_part_sources.is_empty();
+        let source_has_calc_chain = runtime
+            .loaded
+            .support_parts
+            .calc_chain_relationship
+            .is_some()
+            || runtime.loaded.support_parts.calc_chain_part_uri.is_some();
+        let package_graph_dirty = runtime.package_graph_dirty
+            || has_pending_package_graph
+            || (source_has_calc_chain
+                && (has_dirty_worksheets
+                    || runtime.loaded.state.defined_names.is_dirty()
+                    || runtime.calculation_snapshot.is_some()));
+        let serialization_dirty = runtime.semantic_dirty
+            || runtime.formula_cache_dirty
+            || package_graph_dirty
+            || runtime.calculation_snapshot.is_some()
+            || runtime.loaded.calculation_properties.is_dirty()
+            || has_dirty_worksheets
+            || runtime.loaded.state.defined_names.is_dirty()
+            || has_dirty_charts
+            || has_dirty_drawings;
+
+        Ok(WorkbookDirtyDomains {
+            prompt_dirty: runtime.prompt_dirty,
+            semantic_dirty: runtime.semantic_dirty,
+            serialization_dirty,
+            formula_cache_dirty: runtime.formula_cache_dirty,
+            package_graph_dirty,
+            external_refresh_dirty: runtime.external_refresh_dirty,
+        })
+    }
+
     pub fn worksheets(&self, workbook: WorkbookHandle) -> OmResult<&[WorksheetModel]> {
         Ok(&self.runtime_workbook(workbook)?.loaded.state.worksheets)
     }
@@ -2154,7 +2250,7 @@ impl ExcelRuntime {
             .state
             .set_range_values_with_change(&spec.range, &spec.values)?;
         if changed {
-            runtime.prompt_dirty = true;
+            runtime.mark_semantic_dirty();
         }
         Ok(())
     }
@@ -2173,7 +2269,7 @@ impl ExcelRuntime {
             .state
             .set_range_formulas_with_change(&spec.range, &spec.values)?;
         if changed {
-            runtime.prompt_dirty = true;
+            runtime.mark_semantic_dirty();
         }
         Ok(())
     }
@@ -2195,7 +2291,7 @@ impl ExcelRuntime {
             .state
             .set_range_dynamic_array_formulas_with_change(&spec.range, &spec.values)?;
         if changed {
-            runtime.prompt_dirty = true;
+            runtime.mark_semantic_dirty();
         }
         Ok(())
     }
@@ -2214,7 +2310,7 @@ impl ExcelRuntime {
             .state
             .set_range_r1c1_formulas_with_change(&spec.range, &spec.values)?;
         if changed {
-            runtime.prompt_dirty = true;
+            runtime.mark_semantic_dirty();
         }
         Ok(())
     }
@@ -2236,7 +2332,7 @@ impl ExcelRuntime {
             .state
             .set_range_dynamic_array_r1c1_formulas_with_change(&spec.range, &spec.values)?;
         if changed {
-            runtime.prompt_dirty = true;
+            runtime.mark_semantic_dirty();
         }
         Ok(())
     }
@@ -3175,7 +3271,7 @@ impl ExcelRuntime {
                             }
                             if runtime.loaded.state.model.date1904 != date1904 {
                                 runtime.loaded.state.model.date1904 = date1904;
-                                runtime.prompt_dirty = true;
+                                runtime.mark_semantic_dirty();
                                 changed = true;
                             }
                         }
@@ -3203,7 +3299,7 @@ impl ExcelRuntime {
                             }
                             if runtime.loaded.state.model.is_addin != is_addin {
                                 runtime.loaded.state.model.is_addin = is_addin;
-                                runtime.prompt_dirty = true;
+                                runtime.mark_semantic_dirty();
                                 changed = true;
                             }
                         }
@@ -3716,7 +3812,7 @@ impl ExcelRuntime {
                                     chart.dirty = true;
                                 }
                             }
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             changed = true;
                         }
                         if changed {
@@ -3792,7 +3888,7 @@ impl ExcelRuntime {
                                 })?;
                             if worksheet.visibility != new_visibility {
                                 worksheet.visibility = new_visibility;
-                                runtime.prompt_dirty = true;
+                                runtime.mark_semantic_dirty();
                                 changed = true;
                             }
                         }
@@ -4198,7 +4294,7 @@ impl ExcelRuntime {
                                     chart.dirty = true;
                                 }
                             }
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -4224,7 +4320,7 @@ impl ExcelRuntime {
                             .defined_names
                             .set_hidden_by_id(name_id, !visible)?
                         {
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -4299,7 +4395,7 @@ impl ExcelRuntime {
                                     );
                                 }
                             }
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -4380,7 +4476,7 @@ impl ExcelRuntime {
                             }
                         }
                         if workbook_dirty {
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                         }
                         if workbook_dirty {
                             self.find_state = None;
@@ -4573,7 +4669,7 @@ impl ExcelRuntime {
                             }
                         }
                         if workbook_dirty {
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                         }
                         if workbook_dirty {
                             self.find_state = None;
@@ -4639,7 +4735,7 @@ impl ExcelRuntime {
                             }
                         }
                         if workbook_dirty {
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                         }
                         if workbook_dirty {
                             self.find_state = None;
@@ -4695,7 +4791,7 @@ impl ExcelRuntime {
                             }
                         }
                         if workbook_dirty {
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                         }
                         if workbook_dirty {
                             self.find_state = None;
@@ -4739,7 +4835,7 @@ impl ExcelRuntime {
                             chart.rounded_corners = Some(rounded_corners);
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                         }
                         if changed {
                             self.find_state = None;
@@ -4797,7 +4893,7 @@ impl ExcelRuntime {
                             }
                         }
                         if workbook_dirty {
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                         }
                         if workbook_dirty {
                             self.find_state = None;
@@ -4899,7 +4995,7 @@ impl ExcelRuntime {
                         }
                     }
                     if workbook_dirty {
-                        runtime.prompt_dirty = true;
+                        runtime.mark_semantic_dirty();
                     }
                     if workbook_dirty {
                         self.find_state = None;
@@ -4977,7 +5073,7 @@ impl ExcelRuntime {
                         }
                     }
                     if workbook_dirty {
-                        runtime.prompt_dirty = true;
+                        runtime.mark_semantic_dirty();
                         self.find_state = None;
                         self.cut_copy_mode = None;
                         self.clipboard = None;
@@ -5040,7 +5136,7 @@ impl ExcelRuntime {
                         }
                     }
                     if workbook_dirty {
-                        runtime.prompt_dirty = true;
+                        runtime.mark_semantic_dirty();
                     }
                     if workbook_dirty {
                         self.find_state = None;
@@ -5139,7 +5235,7 @@ impl ExcelRuntime {
                             series.is_filtered = is_filtered;
                             series.filter_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -5239,7 +5335,7 @@ impl ExcelRuntime {
                                         OmError::new(OmErrorCode::NotFound, "chart not found")
                                     })?;
                                 *chart = candidate;
-                                runtime.prompt_dirty = true;
+                                runtime.mark_semantic_dirty();
                             }
                             if axis_topology_changed {
                                 self.stale_axis_handles_for_chart(workbook, chart_id);
@@ -5284,7 +5380,7 @@ impl ExcelRuntime {
                             series.axis_group = axis_group;
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -5333,7 +5429,7 @@ impl ExcelRuntime {
                         if changed {
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -5379,7 +5475,7 @@ impl ExcelRuntime {
                             data_labels.dirty = true;
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -5415,7 +5511,7 @@ impl ExcelRuntime {
                             series.bar_shape = Some(bar_shape);
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -5456,7 +5552,7 @@ impl ExcelRuntime {
                             series.smooth = Some(smooth);
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -5496,7 +5592,7 @@ impl ExcelRuntime {
                             series.marker_style = Some(marker_style);
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -5546,7 +5642,7 @@ impl ExcelRuntime {
                             series.marker_size = Some(marker_size);
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -5582,7 +5678,7 @@ impl ExcelRuntime {
                             series.invert_if_negative = Some(invert_if_negative);
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -5761,7 +5857,7 @@ impl ExcelRuntime {
                         }
                         chart.content_dirty = true;
                         chart.dirty = true;
-                        runtime.prompt_dirty = true;
+                        runtime.mark_semantic_dirty();
                         self.find_state = None;
                         self.cut_copy_mode = None;
                         self.clipboard = None;
@@ -5956,7 +6052,7 @@ impl ExcelRuntime {
                         normalize_volume_stock_chart(chart);
                         chart.content_dirty = true;
                         chart.dirty = true;
-                        runtime.prompt_dirty = true;
+                        runtime.mark_semantic_dirty();
                         self.find_state = None;
                         self.cut_copy_mode = None;
                         self.clipboard = None;
@@ -6018,7 +6114,7 @@ impl ExcelRuntime {
                             normalize_volume_stock_chart(chart);
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -6104,7 +6200,7 @@ impl ExcelRuntime {
                             }
                         }
                         if workbook_dirty {
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -6351,7 +6447,7 @@ impl ExcelRuntime {
                             }
                         }
                         if workbook_dirty {
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -6396,7 +6492,7 @@ impl ExcelRuntime {
                             }
                         }
                         if workbook_dirty {
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -6443,7 +6539,7 @@ impl ExcelRuntime {
                             chart.rounded_corners = Some(rounded_corners);
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -6553,7 +6649,7 @@ impl ExcelRuntime {
                             chart.plot_area_layout_dirty = true;
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -6635,7 +6731,7 @@ impl ExcelRuntime {
                             point.dirty = true;
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -6680,7 +6776,7 @@ impl ExcelRuntime {
                             series.point_data_labels.insert(point_index, replacement);
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -6742,7 +6838,7 @@ impl ExcelRuntime {
                             data_labels.dirty = true;
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -6802,7 +6898,7 @@ impl ExcelRuntime {
                             data_labels.dirty = true;
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -6858,7 +6954,7 @@ impl ExcelRuntime {
                             data_labels.dirty = true;
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -6919,7 +7015,7 @@ impl ExcelRuntime {
                             data_labels.dirty = true;
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -6977,7 +7073,7 @@ impl ExcelRuntime {
                             data_labels.dirty = true;
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -7025,7 +7121,7 @@ impl ExcelRuntime {
                             data_labels.dirty = true;
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -7242,7 +7338,7 @@ impl ExcelRuntime {
                                         OmError::new(OmErrorCode::NotFound, "chart not found")
                                     })?;
                                 *chart = candidate;
-                                runtime.prompt_dirty = true;
+                                runtime.mark_semantic_dirty();
                             }
                             if axis_topology_changed {
                                 self.stale_axis_handles_for_chart(workbook, chart_id);
@@ -7299,7 +7395,7 @@ impl ExcelRuntime {
                         if changed {
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -7352,7 +7448,7 @@ impl ExcelRuntime {
                             axis.tick_label_position = Some(tick_label_position);
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -7397,7 +7493,7 @@ impl ExcelRuntime {
                         if changed {
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -7465,7 +7561,7 @@ impl ExcelRuntime {
                             if changed {
                                 chart.content_dirty = true;
                                 chart.dirty = true;
-                                runtime.prompt_dirty = true;
+                                runtime.mark_semantic_dirty();
                                 removed_lines = !enabled;
                             }
                         }
@@ -7534,7 +7630,7 @@ impl ExcelRuntime {
                         if changed {
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -7726,7 +7822,7 @@ impl ExcelRuntime {
                         if changed {
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -7776,7 +7872,7 @@ impl ExcelRuntime {
                         if changed {
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -7828,7 +7924,7 @@ impl ExcelRuntime {
                         if changed {
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -7879,7 +7975,7 @@ impl ExcelRuntime {
                         if changed {
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -8006,7 +8102,7 @@ impl ExcelRuntime {
                                 }
                             }
                             if workbook_dirty {
-                                runtime.prompt_dirty = true;
+                                runtime.mark_semantic_dirty();
                             }
                             if found && workbook_dirty {
                                 self.find_state = None;
@@ -8177,7 +8273,7 @@ impl ExcelRuntime {
                                 }
                                 chart.content_dirty = true;
                                 chart.dirty = true;
-                                runtime.prompt_dirty = true;
+                                runtime.mark_semantic_dirty();
                                 self.find_state = None;
                                 self.cut_copy_mode = None;
                                 self.clipboard = None;
@@ -8224,7 +8320,7 @@ impl ExcelRuntime {
                                 chart.style = Some(chart_style);
                                 chart.content_dirty = true;
                                 chart.dirty = true;
-                                runtime.prompt_dirty = true;
+                                runtime.mark_semantic_dirty();
                                 self.find_state = None;
                                 self.cut_copy_mode = None;
                                 self.clipboard = None;
@@ -8352,7 +8448,7 @@ impl ExcelRuntime {
                             chart.view_3d_dirty = true;
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -8388,7 +8484,7 @@ impl ExcelRuntime {
                             chart.gap_depth = Some(value);
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -8424,7 +8520,7 @@ impl ExcelRuntime {
                             chart.groups.clear();
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -8460,7 +8556,7 @@ impl ExcelRuntime {
                             chart.view_3d_dirty = true;
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -8499,7 +8595,7 @@ impl ExcelRuntime {
                                 chart.display_blanks_as = Some(display_blanks_as);
                                 chart.content_dirty = true;
                                 chart.dirty = true;
-                                runtime.prompt_dirty = true;
+                                runtime.mark_semantic_dirty();
                                 self.find_state = None;
                                 self.cut_copy_mode = None;
                                 self.clipboard = None;
@@ -8528,7 +8624,7 @@ impl ExcelRuntime {
                                 chart.plot_visible_only = Some(plot_visible_only);
                                 chart.content_dirty = true;
                                 chart.dirty = true;
-                                runtime.prompt_dirty = true;
+                                runtime.mark_semantic_dirty();
                                 self.find_state = None;
                                 self.cut_copy_mode = None;
                                 self.clipboard = None;
@@ -8557,7 +8653,7 @@ impl ExcelRuntime {
                                 chart.show_data_labels_over_maximum = Some(show_data_labels);
                                 chart.content_dirty = true;
                                 chart.dirty = true;
-                                runtime.prompt_dirty = true;
+                                runtime.mark_semantic_dirty();
                                 self.find_state = None;
                                 self.cut_copy_mode = None;
                                 self.clipboard = None;
@@ -8602,7 +8698,7 @@ impl ExcelRuntime {
                             if changed {
                                 chart.content_dirty = true;
                                 chart.dirty = true;
-                                runtime.prompt_dirty = true;
+                                runtime.mark_semantic_dirty();
                                 self.find_state = None;
                                 self.cut_copy_mode = None;
                                 self.clipboard = None;
@@ -8649,7 +8745,7 @@ impl ExcelRuntime {
                                 chart.data_table_dirty = true;
                                 chart.content_dirty = true;
                                 chart.dirty = true;
-                                runtime.prompt_dirty = true;
+                                runtime.mark_semantic_dirty();
                                 self.find_state = None;
                                 self.cut_copy_mode = None;
                                 self.clipboard = None;
@@ -8708,7 +8804,7 @@ impl ExcelRuntime {
                             if changed {
                                 chart.content_dirty = true;
                                 chart.dirty = true;
-                                runtime.prompt_dirty = true;
+                                runtime.mark_semantic_dirty();
                                 self.find_state = None;
                                 self.cut_copy_mode = None;
                                 self.clipboard = None;
@@ -8763,7 +8859,7 @@ impl ExcelRuntime {
                             title.text = text;
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -8839,7 +8935,7 @@ impl ExcelRuntime {
                             legend.position = Some(position);
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -8879,7 +8975,7 @@ impl ExcelRuntime {
                             legend.include_in_layout = Some(include_in_layout);
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -8953,7 +9049,7 @@ impl ExcelRuntime {
                     chart.data_table_dirty = true;
                     chart.content_dirty = true;
                     chart.dirty = true;
-                    runtime.prompt_dirty = true;
+                    runtime.mark_semantic_dirty();
                     self.find_state = None;
                     self.cut_copy_mode = None;
                     self.clipboard = None;
@@ -9003,7 +9099,7 @@ impl ExcelRuntime {
                             data_labels.dirty = true;
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -9057,7 +9153,7 @@ impl ExcelRuntime {
                             data_labels.dirty = true;
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -9107,7 +9203,7 @@ impl ExcelRuntime {
                             data_labels.dirty = true;
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -9162,7 +9258,7 @@ impl ExcelRuntime {
                             data_labels.dirty = true;
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -9214,7 +9310,7 @@ impl ExcelRuntime {
                             data_labels.dirty = true;
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -9256,7 +9352,7 @@ impl ExcelRuntime {
                             data_labels.dirty = true;
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -9320,7 +9416,7 @@ impl ExcelRuntime {
                             if changed {
                                 chart.content_dirty = true;
                                 chart.dirty = true;
-                                runtime.prompt_dirty = true;
+                                runtime.mark_semantic_dirty();
                                 self.find_state = None;
                                 self.cut_copy_mode = None;
                                 self.clipboard = None;
@@ -9363,7 +9459,7 @@ impl ExcelRuntime {
                                 *target = Some(has_gridlines);
                                 chart.content_dirty = true;
                                 chart.dirty = true;
-                                runtime.prompt_dirty = true;
+                                runtime.mark_semantic_dirty();
                                 self.find_state = None;
                                 self.cut_copy_mode = None;
                                 self.clipboard = None;
@@ -9426,7 +9522,7 @@ impl ExcelRuntime {
                             value_axis.axis_between_categories = Some(axis_between_categories);
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -9506,7 +9602,7 @@ impl ExcelRuntime {
                         if changed {
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -9580,7 +9676,7 @@ impl ExcelRuntime {
                                 axis.display_unit_label = next_display_unit_label;
                                 chart.content_dirty = true;
                                 chart.dirty = true;
-                                runtime.prompt_dirty = true;
+                                runtime.mark_semantic_dirty();
                                 self.find_state = None;
                                 self.cut_copy_mode = None;
                                 self.clipboard = None;
@@ -9639,7 +9735,7 @@ impl ExcelRuntime {
                             axis.has_display_unit_label = next_label;
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -9691,7 +9787,7 @@ impl ExcelRuntime {
                                 axis.display_unit_label = next_display_unit_label;
                                 chart.content_dirty = true;
                                 chart.dirty = true;
-                                runtime.prompt_dirty = true;
+                                runtime.mark_semantic_dirty();
                                 self.find_state = None;
                                 self.cut_copy_mode = None;
                                 self.clipboard = None;
@@ -9753,7 +9849,7 @@ impl ExcelRuntime {
                             *target = Some(time_unit);
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -9801,7 +9897,7 @@ impl ExcelRuntime {
                             axis.base_unit = next;
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -9839,7 +9935,7 @@ impl ExcelRuntime {
                             axis.reverse_plot_order = Some(reverse_plot_order);
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -9889,7 +9985,7 @@ impl ExcelRuntime {
                             axis.log_base = next_log_base;
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -9939,7 +10035,7 @@ impl ExcelRuntime {
                             axis.log_base = Some(number);
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -9995,7 +10091,7 @@ impl ExcelRuntime {
                             axis.crosses_at = next_crosses_at;
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -10040,7 +10136,7 @@ impl ExcelRuntime {
                             axis.crosses_at = Some(number);
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -10101,7 +10197,7 @@ impl ExcelRuntime {
                         if changed {
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -10173,7 +10269,7 @@ impl ExcelRuntime {
                         if changed {
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -10222,7 +10318,7 @@ impl ExcelRuntime {
                             *target = Some(spacing);
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -10270,7 +10366,7 @@ impl ExcelRuntime {
                             axis.tick_label_spacing = next;
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -10330,7 +10426,7 @@ impl ExcelRuntime {
                         if changed {
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -10393,7 +10489,7 @@ impl ExcelRuntime {
                             axis.tick_label_number_format_linked = Some(false);
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -10442,7 +10538,7 @@ impl ExcelRuntime {
                             axis.tick_label_number_format = next_format;
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -10499,7 +10595,7 @@ impl ExcelRuntime {
                             title.text = text;
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -10563,7 +10659,7 @@ impl ExcelRuntime {
                             axis.display_unit_label = next_label;
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -11193,7 +11289,7 @@ impl ExcelRuntime {
                                 .state
                                 .clear_range_contents_with_change(&range_ref)?
                             {
-                                runtime.prompt_dirty = true;
+                                runtime.mark_semantic_dirty();
                             }
                             self.find_state = None;
                             self.cut_copy_mode = None;
@@ -11231,7 +11327,7 @@ impl ExcelRuntime {
                                 }
                             }
                             if changed {
-                                runtime.prompt_dirty = true;
+                                runtime.mark_semantic_dirty();
                             }
                             self.find_state = None;
                             self.cut_copy_mode = None;
@@ -11280,7 +11376,7 @@ impl ExcelRuntime {
                                 }
                             }
                             if changed {
-                                runtime.prompt_dirty = true;
+                                runtime.mark_semantic_dirty();
                             }
                             self.find_state = None;
                             self.cut_copy_mode = None;
@@ -11846,7 +11942,7 @@ impl ExcelRuntime {
                             }
                         }
                         if replaced_any {
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -12359,7 +12455,7 @@ impl ExcelRuntime {
                             }
                         }
                         if changed {
-                            self.runtime_workbook_mut(workbook)?.prompt_dirty = true;
+                            self.runtime_workbook_mut(workbook)?.mark_semantic_dirty();
                             self.find_state = None;
                         }
                         Ok(OmValue::Empty)
@@ -12527,7 +12623,7 @@ impl ExcelRuntime {
                             }
                         };
                         if changed {
-                            self.runtime_workbook_mut(workbook)?.prompt_dirty = true;
+                            self.runtime_workbook_mut(workbook)?.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -12689,7 +12785,7 @@ impl ExcelRuntime {
                             }
                         };
                         if changed {
-                            self.runtime_workbook_mut(workbook)?.prompt_dirty = true;
+                            self.runtime_workbook_mut(workbook)?.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -12871,7 +12967,7 @@ impl ExcelRuntime {
                             }
                         }
                         if changed {
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                         }
                         self.cut_copy_mode = None;
                         self.clipboard = None;
@@ -13170,7 +13266,7 @@ impl ExcelRuntime {
                                 }
                             }
                             if changed {
-                                runtime.prompt_dirty = true;
+                                runtime.mark_semantic_dirty();
                             }
                         } else {
                             if self.runtime_workbook(workbook)?.read_only
@@ -13243,7 +13339,7 @@ impl ExcelRuntime {
                                     }
                                 }
                                 if changed {
-                                    destination_runtime.prompt_dirty = true;
+                                    destination_runtime.mark_semantic_dirty();
                                 }
                             }
 
@@ -13281,7 +13377,7 @@ impl ExcelRuntime {
                                     }
                                 }
                                 if changed {
-                                    source_runtime.prompt_dirty = true;
+                                    source_runtime.mark_semantic_dirty();
                                 }
                             }
                         }
@@ -13824,7 +13920,7 @@ impl ExcelRuntime {
                                     clear_source(source_worksheet, sheet_id == clipboard_sheet_id);
                             }
                             if changed {
-                                runtime.prompt_dirty = true;
+                                runtime.mark_semantic_dirty();
                             }
                         } else {
                             if self.runtime_workbook(workbook)?.read_only
@@ -13843,7 +13939,7 @@ impl ExcelRuntime {
                                     .state
                                     .worksheet_data_for_sheet_mut(sheet_id)?;
                                 if apply_paste(destination_worksheet)? {
-                                    destination_runtime.prompt_dirty = true;
+                                    destination_runtime.mark_semantic_dirty();
                                 }
                             }
                             if clipboard.mode == XL_CUT {
@@ -13854,7 +13950,7 @@ impl ExcelRuntime {
                                     .state
                                     .worksheet_data_for_sheet_mut(clipboard_sheet_id)?;
                                 if clear_source(source_worksheet, false) {
-                                    source_runtime.prompt_dirty = true;
+                                    source_runtime.mark_semantic_dirty();
                                 }
                             }
                         }
@@ -13940,7 +14036,7 @@ impl ExcelRuntime {
                             }
                         }
                         if changed {
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                         }
                         self.find_state = None;
                         self.cut_copy_mode = None;
@@ -14016,7 +14112,7 @@ impl ExcelRuntime {
                             }
                         }
                         if changed {
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                         }
                         self.find_state = None;
                         self.cut_copy_mode = None;
@@ -14092,7 +14188,7 @@ impl ExcelRuntime {
                             }
                         }
                         if changed {
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                         }
                         self.find_state = None;
                         self.cut_copy_mode = None;
@@ -14168,7 +14264,7 @@ impl ExcelRuntime {
                             }
                         }
                         if changed {
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                         }
                         self.find_state = None;
                         self.cut_copy_mode = None;
@@ -14216,7 +14312,7 @@ impl ExcelRuntime {
                             .state
                             .clear_range_contents_with_change(&range)?
                         {
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                         }
                         self.find_state = None;
                         self.cut_copy_mode = None;
@@ -14251,7 +14347,7 @@ impl ExcelRuntime {
                             }
                         }
                         if changed {
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                         }
                         self.find_state = None;
                         self.cut_copy_mode = None;
@@ -14296,7 +14392,7 @@ impl ExcelRuntime {
                             }
                         }
                         if changed {
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                         }
                         self.find_state = None;
                         self.cut_copy_mode = None;
@@ -14728,7 +14824,7 @@ impl ExcelRuntime {
                                 .pending_chart_relationship_graphs
                                 .insert(target_chart_id, graph);
                         }
-                        runtime.prompt_dirty = true;
+                        runtime.mark_semantic_dirty();
                         self.find_state = None;
                         self.cut_copy_mode = None;
                         self.clipboard = None;
@@ -14852,7 +14948,7 @@ impl ExcelRuntime {
                         chart.protection_dirty = true;
                         chart.content_dirty = true;
                         chart.dirty = true;
-                        runtime.prompt_dirty = true;
+                        runtime.mark_semantic_dirty();
                         self.find_state = None;
                         self.cut_copy_mode = None;
                         self.clipboard = None;
@@ -14884,7 +14980,7 @@ impl ExcelRuntime {
                         chart.protection_dirty = true;
                         chart.content_dirty = true;
                         chart.dirty = true;
-                        runtime.prompt_dirty = true;
+                        runtime.mark_semantic_dirty();
                         self.find_state = None;
                         self.cut_copy_mode = None;
                         self.clipboard = None;
@@ -14943,7 +15039,7 @@ impl ExcelRuntime {
                         .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart not found"))?;
                     chart.content_dirty = true;
                     chart.dirty = true;
-                    runtime.prompt_dirty = true;
+                    runtime.mark_semantic_dirty();
                     self.find_state = None;
                     self.cut_copy_mode = None;
                     self.clipboard = None;
@@ -15043,7 +15139,7 @@ impl ExcelRuntime {
                     if changed {
                         chart.content_dirty = true;
                         chart.dirty = true;
-                        runtime.prompt_dirty = true;
+                        runtime.mark_semantic_dirty();
                         self.find_state = None;
                         self.cut_copy_mode = None;
                         self.clipboard = None;
@@ -15082,7 +15178,7 @@ impl ExcelRuntime {
                                 })?;
                         chart.content_dirty = true;
                         chart.dirty = true;
-                        runtime.prompt_dirty = true;
+                        runtime.mark_semantic_dirty();
                         self.find_state = None;
                         self.cut_copy_mode = None;
                         self.clipboard = None;
@@ -15225,7 +15321,7 @@ impl ExcelRuntime {
                                     chart_model.series = new_series;
                                     chart_model.content_dirty = true;
                                     chart_model.dirty = true;
-                                    runtime.prompt_dirty = true;
+                                    runtime.mark_semantic_dirty();
                                 }
                                 self.stale_series_handles_for_chart(workbook, chart_id);
                                 self.find_state = None;
@@ -15382,7 +15478,7 @@ impl ExcelRuntime {
                         .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart not found"))?;
                     chart.content_dirty = true;
                     chart.dirty = true;
-                    runtime.prompt_dirty = true;
+                    runtime.mark_semantic_dirty();
                     self.find_state = None;
                     self.cut_copy_mode = None;
                     self.clipboard = None;
@@ -15483,7 +15579,7 @@ impl ExcelRuntime {
                         .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart not found"))?;
                     chart.content_dirty = true;
                     chart.dirty = true;
-                    runtime.prompt_dirty = true;
+                    runtime.mark_semantic_dirty();
                     self.find_state = None;
                     self.cut_copy_mode = None;
                     self.clipboard = None;
@@ -15639,7 +15735,7 @@ impl ExcelRuntime {
                             normalize_volume_stock_chart(chart);
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                         }
                         self.cut_copy_mode = None;
                         self.clipboard = None;
@@ -15794,7 +15890,7 @@ impl ExcelRuntime {
                         chart.data_labels = Some(data_labels);
                         chart.content_dirty = true;
                         chart.dirty = true;
-                        runtime.prompt_dirty = true;
+                        runtime.mark_semantic_dirty();
                         self.find_state = None;
                         self.cut_copy_mode = None;
                         self.clipboard = None;
@@ -16339,7 +16435,7 @@ impl ExcelRuntime {
                                     stale_titles = true;
                                     chart.content_dirty = true;
                                     chart.dirty = true;
-                                    runtime.prompt_dirty = true;
+                                    runtime.mark_semantic_dirty();
                                     changed = true;
                                 }
                             }
@@ -16351,7 +16447,7 @@ impl ExcelRuntime {
                                     });
                                     chart.content_dirty = true;
                                     chart.dirty = true;
-                                    runtime.prompt_dirty = true;
+                                    runtime.mark_semantic_dirty();
                                     changed = true;
                                 }
                             }
@@ -16360,7 +16456,7 @@ impl ExcelRuntime {
                                     stale_legends = true;
                                     chart.content_dirty = true;
                                     chart.dirty = true;
-                                    runtime.prompt_dirty = true;
+                                    runtime.mark_semantic_dirty();
                                     changed = true;
                                 }
                             }
@@ -16377,7 +16473,7 @@ impl ExcelRuntime {
                                             legend.include_in_layout = Some(include_in_layout);
                                             chart.content_dirty = true;
                                             chart.dirty = true;
-                                            runtime.prompt_dirty = true;
+                                            runtime.mark_semantic_dirty();
                                             changed = true;
                                         }
                                     }
@@ -16389,7 +16485,7 @@ impl ExcelRuntime {
                                         });
                                         chart.content_dirty = true;
                                         chart.dirty = true;
-                                        runtime.prompt_dirty = true;
+                                        runtime.mark_semantic_dirty();
                                         changed = true;
                                     }
                                 }
@@ -16405,7 +16501,7 @@ impl ExcelRuntime {
                                         legend.include_in_layout = Some(true);
                                         chart.content_dirty = true;
                                         chart.dirty = true;
-                                        runtime.prompt_dirty = true;
+                                        runtime.mark_semantic_dirty();
                                         changed = true;
                                     }
                                 }
@@ -16417,7 +16513,7 @@ impl ExcelRuntime {
                                     });
                                     chart.content_dirty = true;
                                     chart.dirty = true;
-                                    runtime.prompt_dirty = true;
+                                    runtime.mark_semantic_dirty();
                                     changed = true;
                                 }
                             },
@@ -16434,7 +16530,7 @@ impl ExcelRuntime {
                                             legend.include_in_layout = Some(include_in_layout);
                                             chart.content_dirty = true;
                                             chart.dirty = true;
-                                            runtime.prompt_dirty = true;
+                                            runtime.mark_semantic_dirty();
                                             changed = true;
                                         }
                                     }
@@ -16446,7 +16542,7 @@ impl ExcelRuntime {
                                         });
                                         chart.content_dirty = true;
                                         chart.dirty = true;
-                                        runtime.prompt_dirty = true;
+                                        runtime.mark_semantic_dirty();
                                         changed = true;
                                     }
                                 }
@@ -16462,7 +16558,7 @@ impl ExcelRuntime {
                                         legend.include_in_layout = Some(true);
                                         chart.content_dirty = true;
                                         chart.dirty = true;
-                                        runtime.prompt_dirty = true;
+                                        runtime.mark_semantic_dirty();
                                         changed = true;
                                     }
                                 }
@@ -16474,7 +16570,7 @@ impl ExcelRuntime {
                                     });
                                     chart.content_dirty = true;
                                     chart.dirty = true;
-                                    runtime.prompt_dirty = true;
+                                    runtime.mark_semantic_dirty();
                                     changed = true;
                                 }
                             },
@@ -16683,7 +16779,7 @@ impl ExcelRuntime {
                         }
                         chart.content_dirty = true;
                         chart.dirty = true;
-                        runtime.prompt_dirty = true;
+                        runtime.mark_semantic_dirty();
                     }
                     self.stale_series_handles_for_chart(workbook, chart_id);
                     self.find_state = None;
@@ -16964,7 +17060,7 @@ impl ExcelRuntime {
                                         .pending_chart_relationship_graphs
                                         .insert(temporary_chart_id, graph);
                                 }
-                                runtime.prompt_dirty = true;
+                                runtime.mark_semantic_dirty();
                                 self.find_state = None;
                                 self.cut_copy_mode = None;
                                 self.clipboard = None;
@@ -17163,7 +17259,7 @@ impl ExcelRuntime {
                     if changed {
                         chart.content_dirty = true;
                         chart.dirty = true;
-                        runtime.prompt_dirty = true;
+                        runtime.mark_semantic_dirty();
                         self.find_state = None;
                         self.cut_copy_mode = None;
                         self.clipboard = None;
@@ -17224,7 +17320,7 @@ impl ExcelRuntime {
                     if changed {
                         chart.content_dirty = true;
                         chart.dirty = true;
-                        runtime.prompt_dirty = true;
+                        runtime.mark_semantic_dirty();
                         self.find_state = None;
                         self.cut_copy_mode = None;
                         self.clipboard = None;
@@ -17273,7 +17369,7 @@ impl ExcelRuntime {
                         series.marker_style = Some(ChartMarkerStyle::Picture);
                         chart.content_dirty = true;
                         chart.dirty = true;
-                        runtime.prompt_dirty = true;
+                        runtime.mark_semantic_dirty();
                         self.find_state = None;
                         self.cut_copy_mode = None;
                         self.clipboard = None;
@@ -17352,7 +17448,7 @@ impl ExcelRuntime {
                         normalize_volume_stock_chart(chart);
                         chart.content_dirty = true;
                         chart.dirty = true;
-                        runtime.prompt_dirty = true;
+                        runtime.mark_semantic_dirty();
                         (group_topology_changed, axis_topology_changed)
                     };
                     if group_topology_changed {
@@ -17418,7 +17514,7 @@ impl ExcelRuntime {
                         series.point_data_labels.insert(point_index, data_labels);
                         chart.content_dirty = true;
                         chart.dirty = true;
-                        runtime.prompt_dirty = true;
+                        runtime.mark_semantic_dirty();
                         self.find_state = None;
                         self.cut_copy_mode = None;
                         self.clipboard = None;
@@ -17484,7 +17580,7 @@ impl ExcelRuntime {
                         point.dirty = true;
                         chart.content_dirty = true;
                         chart.dirty = true;
-                        runtime.prompt_dirty = true;
+                        runtime.mark_semantic_dirty();
                         self.find_state = None;
                         self.cut_copy_mode = None;
                         self.clipboard = None;
@@ -17537,7 +17633,7 @@ impl ExcelRuntime {
                             chart.rounded_corners = None;
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -17569,7 +17665,7 @@ impl ExcelRuntime {
                             normalize_volume_stock_chart(chart);
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                         }
                         self.stale_series_handles_for_chart(workbook, chart_id);
                         self.find_state = None;
@@ -17637,7 +17733,7 @@ impl ExcelRuntime {
                             normalize_volume_stock_chart(chart);
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                         }
                         self.stale_series_handles_for_chart(workbook, chart_id);
                         self.find_state = None;
@@ -17744,7 +17840,7 @@ impl ExcelRuntime {
                                 || OmError::new(OmErrorCode::NotFound, "chart not found"),
                             )?;
                             *chart = candidate;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                         }
                         self.stale_axis_handles_for_chart(workbook, chart_id);
                         self.find_state = None;
@@ -17807,7 +17903,7 @@ impl ExcelRuntime {
                             }
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                         }
                         self.stale_chart_title_handles_for_chart(workbook, chart_id);
                         self.find_state = None;
@@ -17889,7 +17985,7 @@ impl ExcelRuntime {
                             chart.legend = None;
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                         }
                         self.stale_legend_handles_for_chart(workbook, chart_id);
                         self.find_state = None;
@@ -17996,7 +18092,7 @@ impl ExcelRuntime {
                             chart.data_table_dirty = true;
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                         }
                         self.stale_data_table_handles_for_chart(workbook, chart_id);
                         self.find_state = None;
@@ -18103,7 +18199,7 @@ impl ExcelRuntime {
                     if changed {
                         chart.content_dirty = true;
                         chart.dirty = true;
-                        runtime.prompt_dirty = true;
+                        runtime.mark_semantic_dirty();
                         self.find_state = None;
                         self.cut_copy_mode = None;
                         self.clipboard = None;
@@ -18198,7 +18294,7 @@ impl ExcelRuntime {
                     if changed {
                         chart.content_dirty = true;
                         chart.dirty = true;
-                        runtime.prompt_dirty = true;
+                        runtime.mark_semantic_dirty();
                         self.find_state = None;
                         self.cut_copy_mode = None;
                         self.clipboard = None;
@@ -18255,7 +18351,7 @@ impl ExcelRuntime {
                             series.point_data_labels.clear();
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -18286,7 +18382,7 @@ impl ExcelRuntime {
                         if changed {
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                             self.find_state = None;
                             self.cut_copy_mode = None;
                             self.clipboard = None;
@@ -18372,7 +18468,7 @@ impl ExcelRuntime {
                             }
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                         }
                         self.stale_leader_lines_handles_for_series(
                             workbook,
@@ -18428,7 +18524,7 @@ impl ExcelRuntime {
                         series.point_data_labels.insert(point_index, replacement);
                         chart.content_dirty = true;
                         chart.dirty = true;
-                        runtime.prompt_dirty = true;
+                        runtime.mark_semantic_dirty();
                         self.find_state = None;
                         self.cut_copy_mode = None;
                         self.clipboard = None;
@@ -18519,7 +18615,7 @@ impl ExcelRuntime {
                     if changed {
                         chart.content_dirty = true;
                         chart.dirty = true;
-                        runtime.prompt_dirty = true;
+                        runtime.mark_semantic_dirty();
                         self.find_state = None;
                         self.cut_copy_mode = None;
                         self.clipboard = None;
@@ -18594,7 +18690,7 @@ impl ExcelRuntime {
                             *target = Some(false);
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                         }
                         self.stale_gridline_handles_for_axis(workbook, chart_id, axis_index, major);
                         self.find_state = None;
@@ -18665,7 +18761,7 @@ impl ExcelRuntime {
                             }
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                         }
                         self.stale_axis_title_handles_for_axis(workbook, chart_id, axis_index);
                         self.find_state = None;
@@ -18741,7 +18837,7 @@ impl ExcelRuntime {
                             axis.display_unit_label = None;
                             chart.content_dirty = true;
                             chart.dirty = true;
-                            runtime.prompt_dirty = true;
+                            runtime.mark_semantic_dirty();
                         }
                         self.stale_display_unit_label_handles_for_axis(
                             workbook, chart_id, axis_index,
@@ -18803,7 +18899,7 @@ impl ExcelRuntime {
                         axis.tick_label_position = Some(ChartTickLabelPosition::None);
                         chart.content_dirty = true;
                         chart.dirty = true;
-                        runtime.prompt_dirty = true;
+                        runtime.mark_semantic_dirty();
                         self.find_state = None;
                         self.cut_copy_mode = None;
                         self.clipboard = None;
@@ -20878,7 +20974,7 @@ impl ExcelRuntime {
                         },
                     );
                 }
-                runtime.prompt_dirty = true;
+                runtime.mark_semantic_dirty();
 
                 sheet_id
             };
@@ -20942,7 +21038,8 @@ impl ExcelRuntime {
         {
             self.delete_worksheet(copied_workbook, other_sheet_id, false)?;
         }
-        self.runtime_workbook_mut(copied_workbook)?.prompt_dirty = true;
+        self.runtime_workbook_mut(copied_workbook)?
+            .mark_semantic_dirty();
         self.set_selection(copied_workbook, sheet_id, selection_rect);
         Ok(copied_workbook)
     }
@@ -21325,7 +21422,7 @@ impl ExcelRuntime {
                     runtime
                         .chart_support_part_sources
                         .extend(copied_chart_support_part_sources);
-                    runtime.prompt_dirty = true;
+                    runtime.mark_semantic_dirty();
                 }
                 self.find_state = None;
                 self.cut_copy_mode = None;
@@ -21600,7 +21697,7 @@ impl ExcelRuntime {
                     {
                         worksheet.visibility = source_visibility;
                     }
-                    runtime.prompt_dirty = true;
+                    runtime.mark_semantic_dirty();
                 }
                 self.find_state = None;
                 self.cut_copy_mode = None;
@@ -21744,7 +21841,7 @@ impl ExcelRuntime {
                 {
                     worksheet.visibility = source_visibility;
                 }
-                runtime.prompt_dirty = true;
+                runtime.mark_semantic_dirty();
             }
             self.find_state = None;
             self.cut_copy_mode = None;
@@ -22742,7 +22839,7 @@ impl ExcelRuntime {
                 &runtime.loaded.state.worksheets,
             )?,
         )?;
-        runtime.prompt_dirty = true;
+        runtime.mark_semantic_dirty();
         self.find_state = None;
         self.cut_copy_mode = None;
         self.clipboard = None;
@@ -23109,7 +23206,7 @@ impl ExcelRuntime {
                 )?;
             }
 
-            runtime.prompt_dirty = true;
+            runtime.mark_semantic_dirty();
             (
                 removed_chart_object_ids.into_iter().collect::<Vec<_>>(),
                 removed_chart_ids_for_handles,
@@ -24944,7 +25041,7 @@ impl ExcelRuntime {
                 )?;
             }
 
-            runtime.prompt_dirty = true;
+            runtime.mark_semantic_dirty();
             chart_was_removed
         };
 
@@ -25155,7 +25252,7 @@ impl ExcelRuntime {
             .objects
             .push(DrawingObjectModel::ChartFrame(duplicated_chart_object));
         drawing.dirty = true;
-        runtime.prompt_dirty = true;
+        runtime.mark_semantic_dirty();
 
         self.find_state = None;
         self.cut_copy_mode = None;
@@ -25304,7 +25401,7 @@ impl ExcelRuntime {
             }
         }
         if workbook_dirty {
-            runtime.prompt_dirty = true;
+            runtime.mark_semantic_dirty();
             self.find_state = None;
             self.cut_copy_mode = None;
             self.clipboard = None;
@@ -25553,7 +25650,7 @@ impl ExcelRuntime {
         if changed {
             chart.content_dirty = true;
             chart.dirty = true;
-            runtime.prompt_dirty = true;
+            runtime.mark_semantic_dirty();
             self.find_state = None;
             self.cut_copy_mode = None;
             self.clipboard = None;
@@ -25696,7 +25793,7 @@ impl ExcelRuntime {
                 .get_mut(&chart_id)
                 .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart not found"))?;
             *chart = candidate;
-            runtime.prompt_dirty = true;
+            runtime.mark_semantic_dirty();
             self.stale_axis_handles_for_chart(workbook, chart_id);
             self.find_state = None;
             self.cut_copy_mode = None;
@@ -28166,6 +28263,11 @@ impl ExcelRuntime {
     fn clear_workbook_dirty_state(&mut self, workbook: WorkbookHandle) -> OmResult<()> {
         let runtime = self.runtime_workbook_mut(workbook)?;
         runtime.prompt_dirty = false;
+        runtime.semantic_dirty = false;
+        runtime.formula_cache_dirty = false;
+        runtime.package_graph_dirty = false;
+        runtime.external_refresh_dirty = false;
+        runtime.calculation_snapshot = None;
         for worksheet in runtime.loaded.state.worksheet_data.values_mut() {
             worksheet.dirty = false;
             worksheet.dirty_cells.clear();
@@ -28229,6 +28331,7 @@ impl ExcelRuntime {
             .map(|relationship| relationship.id);
         let calc_chain_part_uri = runtime.loaded.support_parts.calc_chain_part_uri.take();
         let changed = calc_chain_relationship_id.is_some() || calc_chain_part_uri.is_some();
+        runtime.package_graph_dirty |= changed;
 
         if let Some(calc_chain_relationship_id) = calc_chain_relationship_id
             && let Some(workbook_rels_xml) = runtime

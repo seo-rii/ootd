@@ -25,7 +25,7 @@ contract-based until Milestone M1 pins the first behavioral Excel corpus.
 | OPC package loading | Partial | ZIP parts and opaque bytes are retained; default loading enforces finite ZIP and XML depth/event/text/attribute budgets; canonical part identities and strict relationship parsing reject ambiguous duplicates, root escapes, invalid modes, malformed URIs, and malformed XML | M3 CI portability gates, property/fuzz coverage, and dependency policy |
 | Workbook and worksheet model | Partial | Workbook, sheet, cell, name, chart, drawing, and basic dynamic-array state are modeled | Oracle-backed mutation and save/reopen cases |
 | XLSX load/save | Partial | No-op and targeted dirty-save preservation have broad synthetic regression coverage; filesystem saves use verified preparation, same-directory durable temporary files, atomic replace/create-new, and post-write baseline commit; calculation-state rewrites update `calcPr` and remove stale calc chains; read-only Save cannot overwrite its source | Tracked real-world corpus and Excel reopen without repair |
-| Runtime object model | Partial | Application, workbook, worksheet, range, names, selection, clipboard, and chart-related dispatch are available; `Workbook.Saved` uses prompt-only state, pathless `Workbook.Save` fails closed, `Workbook.Close` has a deterministic headless state table, and workbook calculation mode is synchronized with `Application.Calculation` | Complete dirty-domain taxonomy, generated member coverage, and behavioral Oracle cases |
+| Runtime object model | Partial | Application, workbook, worksheet, range, names, selection, clipboard, and chart-related dispatch are available; `Workbook.Saved` uses prompt-only state, typed workbook dirty domains separate semantic/cache/package state, pathless `Workbook.Save` fails closed, `Workbook.Close` has a deterministic headless state table, and workbook calculation mode is synchronized with `Application.Calculation` | Complete command-to-dirty-domain mapping, generated member coverage, and behavioral Oracle cases |
 | Scalar formula calculation | Partial | Broad deterministic function coverage exists behind an internal `calc` module; changed results are serialized as cached values, a public report classifies address-level outcomes without overwriting unresolved caches, and complete/partial/uncomputed states drive coherent `calcPr` metadata | Shared coercion/reference model and Excel differential corpus |
 | Formula2 and dynamic arrays | Partial | Seventeen array functions produce two-dimensional spill results; model value, A1/R1C1 formula families, and `ClearContents` commands reject spill-child batches atomically; worksheet array formula metadata restores and writes spill state across synthetic save/reopen; A1 `anchor#` resolves a materialized extent, and scalar dependents recalculate after dynamic materialization | Remaining runtime mutation paths, `@`, dynamic-to-dynamic dependency order/cycles, Excel-specific dynamic-array extension metadata, and Oracle agreement |
 | Charts and drawings | Partial | Typed chart mutation and lossless-first relationship graph lifecycle cover a broad surface | Remain feature-frozen until PivotChart work; fix preservation regressions only |
@@ -37,7 +37,7 @@ contract-based until Milestone M1 pins the first behavioral Excel corpus.
 
 - Rust MSRV: 1.88; development toolchain: 1.94.0.
 - Linux workspace tests: enabled in CI.
-- Current root test inventory: 708 `excel-runtime` tests and 2,838 `excel-xlsx` tests.
+- Current root test inventory: 709 `excel-runtime` tests and 2,838 `excel-xlsx` tests.
 - M2 boundary progress: the `excel-xlsx` and `excel-runtime` unit tests now live outside their
   library roots with test identities unchanged; calculation and recalculation/writeback are
   isolated; shared strings, relationships, and worksheet cell codec logic are isolated; Application,
@@ -58,9 +58,11 @@ contract-based until Milestone M1 pins the first behavioral Excel corpus.
   newly calculated Formula2 extents, and is removed when an anchor becomes an ordinary formula;
   real Excel dynamic-array extension metadata remains Oracle-gated.
 - Persistence dirty-state boundary: `Workbook.Saved` now changes only the prompt-facing dirty
-  state. Serialization flags remain intact until a successful save commits its verified baseline,
-  and runtime range mutations propagate prompt state only when model/package content actually
-  changes.
+  state. Public `WorkbookDirtyDomains` independently reports prompt, semantic, serialization,
+  formula-cache, package-graph, and external-refresh state. Runtime mutations use a shared
+  semantic marker, calculation writeback raises formula-cache/serialization state without
+  changing prompt state, and calc-chain invalidation is visible as package-graph state. Only a
+  successful verified baseline commit clears these domains and the consumed calculation snapshot.
 - Save target boundary: `Workbook.Save` requires an existing source path and returns a stable
   `InvalidState` error before serialization when none exists, leaving both clean and dirty
   workbooks open and unchanged so callers must choose `SaveAs`.
