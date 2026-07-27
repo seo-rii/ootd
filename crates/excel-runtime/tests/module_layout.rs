@@ -115,3 +115,22 @@ fn worksheet_dispatch_is_grouped_by_object_surface() {
     }
     assert!(!worksheet.contains("use super::super::*;"));
 }
+
+#[test]
+fn names_dispatch_is_grouped_by_object_surface() {
+    let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let library = fs::read_to_string(crate_root.join("src/lib.rs")).expect("read library root");
+    let names = fs::read_to_string(crate_root.join("src/dispatch/names.rs"))
+        .expect("read Names dispatch module");
+
+    for method in [
+        "dispatch_get_names",
+        "dispatch_invoke_names",
+        "dispatch_get_name",
+        "dispatch_invoke_name",
+    ] {
+        assert!(names.contains(&format!("fn {method}(")));
+        assert!(!library.contains(&format!("fn {method}(")));
+    }
+    assert!(!names.contains("use super::super::*;"));
+}
