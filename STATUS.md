@@ -40,8 +40,9 @@ contract-based until Milestone M1 pins the first behavioral Excel corpus.
 - Current root test inventory: 677 `excel-runtime` tests and 2,826 `excel-xlsx` tests.
 - M2 boundary progress: the `excel-xlsx` and `excel-runtime` unit tests now live outside their
   library roots with test identities unchanged; calculation and recalculation/writeback are
-  isolated; shared strings, relationships, and worksheet cell codec logic are isolated; Application
-  dispatch is grouped by object surface, with the remaining runtime surfaces still to be split.
+  isolated; shared strings, relationships, and worksheet cell codec logic are isolated; Application,
+  Workbook, and Workbooks dispatch are grouped by object surface, with the remaining runtime
+  surfaces still to be split.
 - Formatting, strict Clippy, MSRV, and Windows jobs: scheduled for M3.
 - Behavioral Oracle foundation: Rust and .NET contracts, runtime adapter, differential gate bridge,
   COM runner, and watchdog are implemented and synthetic/fake-backed tests pass.

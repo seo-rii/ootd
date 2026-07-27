@@ -56,3 +56,22 @@ fn application_dispatch_is_grouped_by_object_surface() {
     assert!(!library.contains("fn dispatch_get_application("));
     assert!(!library.contains("fn dispatch_invoke_application("));
 }
+
+#[test]
+fn workbook_dispatch_is_grouped_by_object_surface() {
+    let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let library = fs::read_to_string(crate_root.join("src/lib.rs")).expect("read library root");
+    let workbook = fs::read_to_string(crate_root.join("src/dispatch/workbook.rs"))
+        .expect("read Workbook dispatch module");
+
+    for method in [
+        "dispatch_get_workbook",
+        "dispatch_get_workbooks",
+        "dispatch_invoke_workbook",
+        "dispatch_invoke_workbooks",
+    ] {
+        assert!(workbook.contains(&format!("fn {method}(")));
+        assert!(!library.contains(&format!("fn {method}(")));
+    }
+    assert!(!workbook.contains("use super::super::*;"));
+}

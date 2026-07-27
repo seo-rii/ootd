@@ -73,8 +73,10 @@ Completed slices:
   behind `excel-xlsx::worksheet` with the full test-name inventory unchanged.
 - Grouped Application property and method dispatch in an explicit-dependency object-surface module,
   establishing the extraction pattern for the remaining runtime objects.
+- Grouped Workbook and Workbooks collection get/invoke dispatch in the same object-surface pattern,
+  leaving shared formula evaluation and operation routers in their current ownership.
 
-- Apply the object-surface dispatch pattern to workbook, worksheet, range, names, and chart objects.
+- Apply the object-surface dispatch pattern to worksheet, range, names, and chart objects.
 
 Exit criteria:
 
