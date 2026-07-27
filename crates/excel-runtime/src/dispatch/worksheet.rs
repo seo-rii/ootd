@@ -5,7 +5,7 @@ use super::super::{
     XL_SHEET_TYPE_EXCEL4_MACRO_SHEET, XL_SHEET_TYPE_WORKSHEET, coerce_evaluate_expression_arg,
     coerce_optional_bool_arg, coerce_positive_index, coerce_u32_arg, om_value_is_omitted,
     parse_cells_args, parse_rect_a1, reorder_workbook_sheet_entries,
-    sheet_visibility_to_excel_value, validate_check_spelling_args,
+    sheet_visibility_to_excel_value, unsupported_execution_backend, validate_check_spelling_args,
     validate_export_as_fixed_format_args, validate_optional_integer_arg,
     validate_optional_text_arg, validate_print_out_args, validate_print_preview_args,
 };
@@ -794,7 +794,11 @@ impl ExcelRuntime {
                 } else {
                     self.runtime_workbook(workbook)?;
                 }
-                Ok(OmValue::Empty)
+                Err(unsupported_execution_backend(
+                    collection_name,
+                    member,
+                    "print",
+                ))
             }
             "Select" => {
                 if args.len() > 1 {
@@ -1019,22 +1023,38 @@ impl ExcelRuntime {
             "PrintPreview" => {
                 validate_print_preview_args(args, "Worksheet")?;
                 self.worksheet_model(workbook, sheet_id)?;
-                Ok(OmValue::Empty)
+                Err(unsupported_execution_backend(
+                    "Worksheet",
+                    "PrintPreview",
+                    "print",
+                ))
             }
             "PrintOut" => {
                 validate_print_out_args(args, "Worksheet")?;
                 self.worksheet_model(workbook, sheet_id)?;
-                Ok(OmValue::Empty)
+                Err(unsupported_execution_backend(
+                    "Worksheet",
+                    "PrintOut",
+                    "print",
+                ))
             }
             "CheckSpelling" => {
                 validate_check_spelling_args(args, "Worksheet")?;
                 self.worksheet_model(workbook, sheet_id)?;
-                Ok(OmValue::Empty)
+                Err(unsupported_execution_backend(
+                    "Worksheet",
+                    "CheckSpelling",
+                    "spelling",
+                ))
             }
             "ExportAsFixedFormat" => {
                 validate_export_as_fixed_format_args(args, "Worksheet")?;
                 self.worksheet_model(workbook, sheet_id)?;
-                Ok(OmValue::Empty)
+                Err(unsupported_execution_backend(
+                    "Worksheet",
+                    "ExportAsFixedFormat",
+                    "fixed-format export",
+                ))
             }
             "Paste" => {
                 self.ensure_grid_worksheet(workbook, sheet_id, "Worksheet.Paste")?;

@@ -130,7 +130,12 @@ Wave 1 exit gate:
    허용한다. Excel2016/2021 profile, unknown-part drop, calc-chain skip, lossy save는
    package parse/serialization 전에 stable `Unsupported`로 거부한다. 각 field/profile의
    관찰 가능한 결과와 capability 표는 `docs/interfaces/xlsx_codec_options.md`에 있다.
-4. `OOTD-013`: observable effect가 없는 workbook/worksheet method를 `Unsupported`로 바꾼다.
+4. `OOTD-013` — 완료 (2026-07-27): refresh, spelling, fixed-format export, print backend가
+   없는 Workbook/Worksheet/Chart/시트 컬렉션 method는 public argument와 object validity를
+   먼저 검증한 뒤 stable `Unsupported`를 반환한다. 정상 형태의 호출이 `Empty` 성공을
+   위장하지 않고, export/print artifact와 workbook state를 만들거나 바꾸지 않음을
+   20-surface matrix로 고정했다. capability 표는
+   `docs/interfaces/unsupported_execution_methods.md`에 있다.
 5. `OOTD-062`: CFB/encrypted OOXML 탐지와 Password fail-closed 1단계를 구현한다.
 6. `OOTD-063`: signed package mutation의 refuse 또는 explicit strip+audit 정책을 구현한다.
 7. `OOTD-022` + `OOTD-064`: VBA, XLM, ActiveX, OLE, custom UI 전체 relationship closure에

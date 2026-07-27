@@ -51,9 +51,13 @@ Active order:
 13. `OOTD-012` complete (2026-07-27): codec load/save options now accept only the implemented
    Excel365 lossless-preservation policy; other profiles, unknown-part dropping, calc-chain
    skipping, and lossy save fail before parse/serialization.
-14. **Active:** continue fail-closed contracts at `OOTD-013`, then QName/reference/parser
-   invariants and cell/formula fidelity.
-15. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
+14. `OOTD-013` complete (2026-07-27): Workbook, Worksheet, Chart, and sheet-collection refresh,
+   spelling, fixed-format export, and print methods now retain argument/object validation but
+   return stable `Unsupported` when no execution backend is configured; valid calls no longer
+   return false `Empty` success or create output artifacts.
+15. **Active:** continue Wave 2 security fail-closed work at encrypted OOXML detection
+   (`OOTD-062`), then signature/active-content/external-link policy.
+16. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
    claiming practical chart/pivot/style parity.
 
 Every numbered work unit starts with a failing regression and lands as its own reviewable commit.

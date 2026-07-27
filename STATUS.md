@@ -25,7 +25,7 @@ contract-based until Milestone M1 pins the first behavioral Excel corpus.
 | OPC package loading | Partial | ZIP parts and opaque bytes are retained; default loading enforces finite ZIP and XML depth/event/text/attribute budgets; canonical part identities and strict relationship parsing reject ambiguous duplicates, root escapes, invalid modes, malformed URIs, and malformed XML | M3 CI portability gates, property/fuzz coverage, and dependency policy |
 | Workbook and worksheet model | Partial | Workbook, sheet, cell, name, chart, drawing, and basic dynamic-array state are modeled | Oracle-backed mutation and save/reopen cases |
 | XLSX load/save | Partial | No-op and targeted dirty-save preservation have broad synthetic regression coverage; filesystem saves use verified preparation, same-directory durable temporary files, atomic replace/create-new, and post-write baseline commit; calculation-state rewrites update `calcPr` and remove stale calc chains; read-only Save cannot overwrite its source; codec options fail closed outside the implemented Excel365 lossless-preservation policy | Tracked real-world corpus and Excel reopen without repair |
-| Runtime object model | Partial | Application, workbook, worksheet, range, names, selection, clipboard, and chart-related dispatch are available; `Workbook.Saved` uses prompt-only state, typed workbook dirty domains have a command/save-failure transition contract, pathless `Workbook.Save` fails closed, `SaveAs` rejects unsupported options before write, `Workbooks.Open` implements read-only and rejects unsupported options before read, `Workbook.Close` has a deterministic headless state table, and workbook calculation mode is synchronized with `Application.Calculation` | Remaining fail-closed codec/member contracts, generated member coverage, and behavioral Oracle cases |
+| Runtime object model | Partial | Application, workbook, worksheet, range, names, selection, clipboard, and chart-related dispatch are available; `Workbook.Saved` uses prompt-only state, typed workbook dirty domains have a command/save-failure transition contract, pathless `Workbook.Save` fails closed, `SaveAs` rejects unsupported options before write, `Workbooks.Open` implements read-only and rejects unsupported options before read, backend-free refresh/spelling/fixed-format export/print methods return `Unsupported`, `Workbook.Close` has a deterministic headless state table, and workbook calculation mode is synchronized with `Application.Calculation` | Remaining security-policy contracts, generated member coverage, and behavioral Oracle cases |
 | Scalar formula calculation | Partial | Broad deterministic function coverage exists behind an internal `calc` module; changed results are serialized as cached values, a public report classifies address-level outcomes without overwriting unresolved caches, and complete/partial/uncomputed states drive coherent `calcPr` metadata | Shared coercion/reference model and Excel differential corpus |
 | Formula2 and dynamic arrays | Partial | Seventeen array functions produce two-dimensional spill results; model value, A1/R1C1 formula families, and `ClearContents` commands reject spill-child batches atomically; worksheet array formula metadata restores and writes spill state across synthetic save/reopen; A1 `anchor#` resolves a materialized extent, and scalar dependents recalculate after dynamic materialization | Remaining runtime mutation paths, `@`, dynamic-to-dynamic dependency order/cycles, Excel-specific dynamic-array extension metadata, and Oracle agreement |
 | Charts and drawings | Partial | Typed chart mutation and lossless-first relationship graph lifecycle cover a broad surface | Remain feature-frozen until PivotChart work; fix preservation regressions only |
@@ -37,7 +37,7 @@ contract-based until Milestone M1 pins the first behavioral Excel corpus.
 
 - Rust MSRV: 1.88; development toolchain: 1.94.0.
 - Linux workspace tests: enabled in CI.
-- Current root test inventory: 711 `excel-runtime` tests and 2,839 `excel-xlsx` tests.
+- Current root test inventory: 712 `excel-runtime` tests and 2,839 `excel-xlsx` tests.
 - M2 boundary progress: the `excel-xlsx` and `excel-runtime` unit tests now live outside their
   library roots with test identities unchanged; calculation and recalculation/writeback are
   isolated; shared strings, relationships, and worksheet cell codec logic are isolated; Application,
@@ -80,6 +80,10 @@ contract-based until Milestone M1 pins the first behavioral Excel corpus.
 - Codec option boundary: `LoadOptions` and `SaveOptions` accept only `Excel365`,
   unknown-part preservation, calc-chain inventory, and lossless save. Other profiles and
   destructive/skip/lossy modes return stable `Unsupported` before OPC parsing or serialization.
+- Execution backend boundary: correctly shaped refresh, spelling, fixed-format export, and print
+  calls on Workbook, Worksheet, Chart, and sheet collections return stable `Unsupported` after
+  object validation when no backend is configured. Malformed arguments retain their existing
+  validation errors, and rejected calls create no output artifact or workbook state change.
 - Read-only save boundary: `Workbook.Save` never overwrites a read-only source. `SaveAs` and
   `SaveCopyAs` use create-new targets for read-only workbooks; copy preserves the original
   read-only identity, while SaveAs detaches the open workbook to the new writable source.

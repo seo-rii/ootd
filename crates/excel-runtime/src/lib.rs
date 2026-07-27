@@ -14994,12 +14994,16 @@ impl ExcelRuntime {
                         ));
                     }
                     self.chart_model(workbook, chart_id)?;
-                    Ok(OmValue::Empty)
+                    Err(unsupported_execution_backend("Chart", "Refresh", "refresh"))
                 }
                 "CheckSpelling" => {
                     validate_check_spelling_args(args, "Chart")?;
                     self.chart_model(workbook, chart_id)?;
-                    Ok(OmValue::Empty)
+                    Err(unsupported_execution_backend(
+                        "Chart",
+                        "CheckSpelling",
+                        "spelling",
+                    ))
                 }
                 "Deselect" => {
                     if !args.is_empty() {
@@ -16623,17 +16627,29 @@ impl ExcelRuntime {
                 "ExportAsFixedFormat" => {
                     validate_export_as_fixed_format_args(args, "Chart")?;
                     self.chart_model(workbook, chart_id)?;
-                    Ok(OmValue::Empty)
+                    Err(unsupported_execution_backend(
+                        "Chart",
+                        "ExportAsFixedFormat",
+                        "fixed-format export",
+                    ))
                 }
                 "PrintPreview" => {
                     validate_print_preview_args(args, "Chart")?;
                     self.chart_model(workbook, chart_id)?;
-                    Ok(OmValue::Empty)
+                    Err(unsupported_execution_backend(
+                        "Chart",
+                        "PrintPreview",
+                        "print",
+                    ))
                 }
                 "PrintOut" => {
                     validate_print_out_args(args, "Chart")?;
                     self.chart_model(workbook, chart_id)?;
-                    Ok(OmValue::Empty)
+                    Err(unsupported_execution_backend(
+                        "Chart",
+                        "PrintOut",
+                        "print",
+                    ))
                 }
                 "Delete" => {
                     if !args.is_empty() {
@@ -29020,6 +29036,16 @@ fn validate_optional_text_arg(args: &[OmValue], index: usize, label: &str) -> Om
             "{label} expects a string value when provided"
         ))),
     }
+}
+
+fn unsupported_execution_backend(
+    object_name: &str,
+    member: &str,
+    backend_name: &str,
+) -> OmError {
+    OmError::unsupported(format!(
+        "{object_name}.{member} is unsupported because no {backend_name} backend is configured"
+    ))
 }
 
 fn validate_check_spelling_args(args: &[OmValue], object_name: &str) -> OmResult<()> {

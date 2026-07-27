@@ -43664,7 +43664,7 @@
     }
 
     #[test]
-    fn workbook_refresh_all_is_noop_and_preserves_selection_and_saved_state() {
+    fn workbook_refresh_all_fails_closed_and_preserves_selection_and_saved_state() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
             .open_workbook(OpenWorkbookSpec {
@@ -43689,12 +43689,13 @@
             .dispatch_invoke(selected_range, "Select", &[])
             .expect("Range.Select");
 
-        assert!(matches!(
+        assert_eq!(
             runtime
                 .dispatch_invoke(workbook.0, "RefreshAll", &[])
-                .expect("Workbook.RefreshAll"),
-            OmValue::Empty
-        ));
+                .expect_err("Workbook.RefreshAll requires a refresh backend")
+                .code,
+            OmErrorCode::Unsupported
+        );
         let selection = expect_object_handle(
             runtime
                 .dispatch_get(application, "Selection", &[])
@@ -43719,6 +43720,254 @@
                 .expect_err("Workbook.RefreshAll args should be rejected")
                 .code,
             OmErrorCode::InvalidArgument
+        );
+    }
+
+    #[test]
+    fn unimplemented_execution_methods_fail_closed_without_observable_output() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with embedded chart");
+        let worksheet = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+                .expect("Workbook.Worksheets(1)"),
+        );
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let sheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Sheets", &[])
+                .expect("Workbook.Sheets"),
+        );
+        let charts = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Charts", &[])
+                .expect("Workbook.Charts"),
+        );
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(worksheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(chart_objects, "Item", &[OmValue::Number(1.0)])
+                .expect("ChartObjects.Item(1)"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let output_stem = std::env::temp_dir().join(format!(
+            "ootd-runtime-unsupported-output-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("time")
+                .as_nanos()
+        ));
+        let workbook_pdf = output_stem.with_extension("workbook.pdf");
+        let worksheet_xps = output_stem.with_extension("worksheet.xps");
+        let chart_pdf = output_stem.with_extension("chart.pdf");
+        let print_file = output_stem.with_extension("prn");
+
+        let cases = [
+            (
+                "Workbook.RefreshAll",
+                workbook.0,
+                "RefreshAll",
+                Vec::new(),
+                "Workbook.RefreshAll is unsupported because no refresh backend is configured",
+            ),
+            (
+                "Workbook.CheckSpelling",
+                workbook.0,
+                "CheckSpelling",
+                Vec::new(),
+                "Workbook.CheckSpelling is unsupported because no spelling backend is configured",
+            ),
+            (
+                "Workbook.ExportAsFixedFormat",
+                workbook.0,
+                "ExportAsFixedFormat",
+                vec![
+                    OmValue::Number(f64::from(super::XL_TYPE_PDF)),
+                    OmValue::Text(workbook_pdf.to_string_lossy().into_owned()),
+                ],
+                "Workbook.ExportAsFixedFormat is unsupported because no fixed-format export backend is configured",
+            ),
+            (
+                "Workbook.PrintPreview",
+                workbook.0,
+                "PrintPreview",
+                Vec::new(),
+                "Workbook.PrintPreview is unsupported because no print backend is configured",
+            ),
+            (
+                "Workbook.PrintOut",
+                workbook.0,
+                "PrintOut",
+                vec![
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Missing,
+                    OmValue::Bool(true),
+                    OmValue::Missing,
+                    OmValue::Text(print_file.to_string_lossy().into_owned()),
+                ],
+                "Workbook.PrintOut is unsupported because no print backend is configured",
+            ),
+            (
+                "Worksheet.CheckSpelling",
+                worksheet,
+                "CheckSpelling",
+                Vec::new(),
+                "Worksheet.CheckSpelling is unsupported because no spelling backend is configured",
+            ),
+            (
+                "Worksheet.ExportAsFixedFormat",
+                worksheet,
+                "ExportAsFixedFormat",
+                vec![
+                    OmValue::Number(f64::from(super::XL_TYPE_XPS)),
+                    OmValue::Text(worksheet_xps.to_string_lossy().into_owned()),
+                ],
+                "Worksheet.ExportAsFixedFormat is unsupported because no fixed-format export backend is configured",
+            ),
+            (
+                "Worksheet.PrintPreview",
+                worksheet,
+                "PrintPreview",
+                Vec::new(),
+                "Worksheet.PrintPreview is unsupported because no print backend is configured",
+            ),
+            (
+                "Worksheet.PrintOut",
+                worksheet,
+                "PrintOut",
+                Vec::new(),
+                "Worksheet.PrintOut is unsupported because no print backend is configured",
+            ),
+            (
+                "Worksheets.PrintPreview",
+                worksheets,
+                "PrintPreview",
+                Vec::new(),
+                "Worksheets.PrintPreview is unsupported because no print backend is configured",
+            ),
+            (
+                "Worksheets.PrintOut",
+                worksheets,
+                "PrintOut",
+                Vec::new(),
+                "Worksheets.PrintOut is unsupported because no print backend is configured",
+            ),
+            (
+                "Sheets.PrintPreview",
+                sheets,
+                "PrintPreview",
+                Vec::new(),
+                "Sheets.PrintPreview is unsupported because no print backend is configured",
+            ),
+            (
+                "Sheets.PrintOut",
+                sheets,
+                "PrintOut",
+                Vec::new(),
+                "Sheets.PrintOut is unsupported because no print backend is configured",
+            ),
+            (
+                "Charts.PrintPreview",
+                charts,
+                "PrintPreview",
+                Vec::new(),
+                "Charts.PrintPreview is unsupported because no print backend is configured",
+            ),
+            (
+                "Charts.PrintOut",
+                charts,
+                "PrintOut",
+                Vec::new(),
+                "Charts.PrintOut is unsupported because no print backend is configured",
+            ),
+            (
+                "Chart.Refresh",
+                chart,
+                "Refresh",
+                Vec::new(),
+                "Chart.Refresh is unsupported because no refresh backend is configured",
+            ),
+            (
+                "Chart.CheckSpelling",
+                chart,
+                "CheckSpelling",
+                Vec::new(),
+                "Chart.CheckSpelling is unsupported because no spelling backend is configured",
+            ),
+            (
+                "Chart.ExportAsFixedFormat",
+                chart,
+                "ExportAsFixedFormat",
+                vec![
+                    OmValue::Number(f64::from(super::XL_TYPE_PDF)),
+                    OmValue::Text(chart_pdf.to_string_lossy().into_owned()),
+                ],
+                "Chart.ExportAsFixedFormat is unsupported because no fixed-format export backend is configured",
+            ),
+            (
+                "Chart.PrintPreview",
+                chart,
+                "PrintPreview",
+                Vec::new(),
+                "Chart.PrintPreview is unsupported because no print backend is configured",
+            ),
+            (
+                "Chart.PrintOut",
+                chart,
+                "PrintOut",
+                Vec::new(),
+                "Chart.PrintOut is unsupported because no print backend is configured",
+            ),
+        ];
+
+        for (label, handle, member, args, expected_message) in cases {
+            let error = runtime
+                .dispatch_invoke(handle, member, &args)
+                .expect_err(&format!("{label} must fail closed"));
+            assert_eq!(error.code, OmErrorCode::Unsupported, "{label}: {error:?}");
+            assert_eq!(error.message, expected_message, "{label}");
+        }
+
+        for path in [workbook_pdf, worksheet_xps, chart_pdf, print_file] {
+            assert!(
+                !path.exists(),
+                "unsupported execution method must not create {}",
+                path.display()
+            );
+        }
+        assert!(expect_bool(
+            runtime
+                .dispatch_get(workbook.0, "Saved", &[])
+                .expect("Workbook.Saved after unsupported execution methods")
+        ));
+        assert_eq!(
+            runtime
+                .workbook_dirty_domains(workbook)
+                .expect("dirty domains after unsupported execution methods"),
+            WorkbookDirtyDomains::default()
         );
     }
 
@@ -46387,7 +46636,7 @@
     }
 
     #[test]
-    fn charts_print_methods_are_headless_noops_and_validate_arguments() {
+    fn charts_print_methods_fail_closed_and_validate_arguments() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
             .open_workbook(OpenWorkbookSpec {
@@ -46406,8 +46655,9 @@
         assert_eq!(
             runtime
                 .dispatch_invoke(charts, "PrintPreview", &[])
-                .expect("empty Charts.PrintPreview"),
-            OmValue::Empty
+                .expect_err("empty Charts.PrintPreview requires a print backend")
+                .code,
+            OmErrorCode::Unsupported
         );
         runtime
             .dispatch_invoke(charts, "Add", &[])
@@ -46418,8 +46668,9 @@
         assert_eq!(
             runtime
                 .dispatch_invoke(charts, "PrintPreview", &[OmValue::Bool(false)])
-                .expect("Charts.PrintPreview"),
-            OmValue::Empty
+                .expect_err("Charts.PrintPreview requires a print backend")
+                .code,
+            OmErrorCode::Unsupported
         );
         assert_eq!(
             runtime
@@ -46438,8 +46689,9 @@
                         OmValue::Bool(true),
                     ],
                 )
-                .expect("Charts.PrintOut"),
-            OmValue::Empty
+                .expect_err("Charts.PrintOut requires a print backend")
+                .code,
+            OmErrorCode::Unsupported
         );
         assert_eq!(
             runtime
@@ -46497,7 +46749,7 @@
     }
 
     #[test]
-    fn workbook_print_methods_are_headless_noops_and_validate_arguments() {
+    fn workbook_print_methods_fail_closed_and_validate_arguments() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
             .open_workbook(OpenWorkbookSpec {
@@ -46516,8 +46768,9 @@
         assert_eq!(
             runtime
                 .dispatch_invoke(workbook.0, "PrintPreview", &[OmValue::Bool(false)])
-                .expect("Workbook.PrintPreview"),
-            OmValue::Empty
+                .expect_err("Workbook.PrintPreview requires a print backend")
+                .code,
+            OmErrorCode::Unsupported
         );
         assert_eq!(
             runtime
@@ -46536,8 +46789,9 @@
                         OmValue::Bool(true),
                     ],
                 )
-                .expect("Workbook.PrintOut"),
-            OmValue::Empty
+                .expect_err("Workbook.PrintOut requires a print backend")
+                .code,
+            OmErrorCode::Unsupported
         );
         assert!(expect_bool(
             runtime
@@ -46604,7 +46858,7 @@
     }
 
     #[test]
-    fn worksheet_and_sheet_collection_print_methods_are_headless_noops_and_validate_arguments() {
+    fn worksheet_and_sheet_collection_print_methods_fail_closed_and_validate_arguments() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
             .open_workbook(OpenWorkbookSpec {
@@ -46650,8 +46904,9 @@
         assert_eq!(
             runtime
                 .dispatch_invoke(worksheet, "PrintPreview", &[OmValue::Bool(false)])
-                .expect("Worksheet.PrintPreview"),
-            OmValue::Empty
+                .expect_err("Worksheet.PrintPreview requires a print backend")
+                .code,
+            OmErrorCode::Unsupported
         );
         assert_eq!(
             runtime
@@ -46665,20 +46920,23 @@
                         OmValue::Bool(false),
                     ],
                 )
-                .expect("Worksheet.PrintOut"),
-            OmValue::Empty
+                .expect_err("Worksheet.PrintOut requires a print backend")
+                .code,
+            OmErrorCode::Unsupported
         );
         assert_eq!(
             runtime
                 .dispatch_invoke(chart_sheet, "PrintPreview", &[])
-                .expect("chart sheet PrintPreview"),
-            OmValue::Empty
+                .expect_err("chart sheet PrintPreview requires a print backend")
+                .code,
+            OmErrorCode::Unsupported
         );
         assert_eq!(
             runtime
                 .dispatch_invoke(worksheets, "PrintPreview", &[])
-                .expect("Worksheets.PrintPreview"),
-            OmValue::Empty
+                .expect_err("Worksheets.PrintPreview requires a print backend")
+                .code,
+            OmErrorCode::Unsupported
         );
         assert_eq!(
             runtime
@@ -46692,14 +46950,16 @@
                         OmValue::Bool(true),
                     ],
                 )
-                .expect("Worksheets.PrintOut"),
-            OmValue::Empty
+                .expect_err("Worksheets.PrintOut requires a print backend")
+                .code,
+            OmErrorCode::Unsupported
         );
         assert_eq!(
             runtime
                 .dispatch_invoke(sheets, "PrintPreview", &[OmValue::Empty])
-                .expect("Sheets.PrintPreview"),
-            OmValue::Empty
+                .expect_err("Sheets.PrintPreview requires a print backend")
+                .code,
+            OmErrorCode::Unsupported
         );
         assert_eq!(
             runtime
@@ -46708,8 +46968,9 @@
                     "PrintOut",
                     &[OmValue::Number(1.0), OmValue::Missing, OmValue::Number(1.0),],
                 )
-                .expect("Sheets.PrintOut"),
-            OmValue::Empty
+                .expect_err("Sheets.PrintOut requires a print backend")
+                .code,
+            OmErrorCode::Unsupported
         );
         assert!(expect_bool(
             runtime
@@ -46787,7 +47048,7 @@
     }
 
     #[test]
-    fn workbook_and_worksheet_check_spelling_are_headless_noops_and_validate_arguments() {
+    fn workbook_and_worksheet_check_spelling_fail_closed_and_validate_arguments() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
             .open_workbook(OpenWorkbookSpec {
@@ -46842,8 +47103,9 @@
                         OmValue::Number(1033.0),
                     ],
                 )
-                .expect("Workbook.CheckSpelling"),
-            OmValue::Empty
+                .expect_err("Workbook.CheckSpelling requires a spelling backend")
+                .code,
+            OmErrorCode::Unsupported
         );
         assert_eq!(
             runtime
@@ -46857,14 +47119,16 @@
                         OmValue::Number(1042.0),
                     ],
                 )
-                .expect("Worksheet.CheckSpelling"),
-            OmValue::Empty
+                .expect_err("Worksheet.CheckSpelling requires a spelling backend")
+                .code,
+            OmErrorCode::Unsupported
         );
         assert_eq!(
             runtime
                 .dispatch_invoke(chart_sheet, "CheckSpelling", &[])
-                .expect("chart sheet CheckSpelling"),
-            OmValue::Empty
+                .expect_err("chart sheet CheckSpelling requires a spelling backend")
+                .code,
+            OmErrorCode::Unsupported
         );
         assert!(expect_bool(
             runtime
@@ -46925,7 +47189,7 @@
     }
 
     #[test]
-    fn workbook_and_worksheet_export_fixed_format_are_headless_noops_and_validate_arguments() {
+    fn workbook_and_worksheet_export_fixed_format_fail_closed_and_validate_arguments() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
             .open_workbook(OpenWorkbookSpec {
@@ -46984,8 +47248,9 @@
                         OmValue::Bool(false),
                     ],
                 )
-                .expect("Workbook.ExportAsFixedFormat"),
-            OmValue::Empty
+                .expect_err("Workbook.ExportAsFixedFormat requires an export backend")
+                .code,
+            OmErrorCode::Unsupported
         );
         assert_eq!(
             runtime
@@ -46998,8 +47263,9 @@
                         OmValue::Number(f64::from(super::XL_QUALITY_MINIMUM)),
                     ],
                 )
-                .expect("Worksheet.ExportAsFixedFormat"),
-            OmValue::Empty
+                .expect_err("Worksheet.ExportAsFixedFormat requires an export backend")
+                .code,
+            OmErrorCode::Unsupported
         );
         assert_eq!(
             runtime
@@ -47008,8 +47274,9 @@
                     "ExportAsFixedFormat",
                     &[OmValue::Number(f64::from(super::XL_TYPE_PDF))],
                 )
-                .expect("chart sheet ExportAsFixedFormat"),
-            OmValue::Empty
+                .expect_err("chart sheet ExportAsFixedFormat requires an export backend")
+                .code,
+            OmErrorCode::Unsupported
         );
         assert!(expect_bool(
             runtime
@@ -78008,7 +78275,7 @@
     }
 
     #[test]
-    fn chart_refresh_is_noop_and_validates_arguments() {
+    fn chart_refresh_fails_closed_and_validates_arguments() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
             .open_workbook(OpenWorkbookSpec {
@@ -78048,8 +78315,9 @@
         assert_eq!(
             runtime
                 .dispatch_invoke(chart, "Refresh", &[])
-                .expect("Chart.Refresh"),
-            OmValue::Empty
+                .expect_err("Chart.Refresh requires a refresh backend")
+                .code,
+            OmErrorCode::Unsupported
         );
         assert_eq!(
             runtime
@@ -78617,7 +78885,7 @@
     }
 
     #[test]
-    fn chart_headless_noops_allow_read_only_workbooks() {
+    fn chart_read_only_execution_contracts_are_explicit() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
             .open_workbook(OpenWorkbookSpec {
@@ -78719,9 +78987,10 @@
             assert_eq!(
                 runtime
                     .dispatch_invoke(chart, member, &args)
-                    .unwrap_or_else(|error| panic!("Chart.{member}: {error:?}")),
-                OmValue::Empty,
-                "Chart.{member} should be allowed for read-only workbooks"
+                    .expect_err(&format!("Chart.{member} requires an execution backend"))
+                    .code,
+                OmErrorCode::Unsupported,
+                "Chart.{member} should fail closed for read-only workbooks"
             );
             assert_eq!(
                 runtime
@@ -78761,7 +79030,7 @@
     }
 
     #[test]
-    fn chart_print_methods_are_noops_and_validate_arguments() {
+    fn chart_print_methods_fail_closed_and_validate_arguments() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
             .open_workbook(OpenWorkbookSpec {
@@ -78801,8 +79070,9 @@
         assert_eq!(
             runtime
                 .dispatch_invoke(chart, "PrintPreview", &[OmValue::Bool(false)])
-                .expect("Chart.PrintPreview"),
-            OmValue::Empty
+                .expect_err("Chart.PrintPreview requires a print backend")
+                .code,
+            OmErrorCode::Unsupported
         );
         assert_eq!(
             runtime
@@ -78821,8 +79091,9 @@
                         OmValue::Bool(true),
                     ],
                 )
-                .expect("Chart.PrintOut"),
-            OmValue::Empty
+                .expect_err("Chart.PrintOut requires a print backend")
+                .code,
+            OmErrorCode::Unsupported
         );
         assert_eq!(
             runtime
@@ -87548,7 +87819,7 @@
     }
 
     #[test]
-    fn chart_export_methods_are_headless_noops_and_validate_arguments() {
+    fn chart_export_contracts_fail_closed_and_validate_arguments() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
             .open_workbook(OpenWorkbookSpec {
@@ -87615,8 +87886,9 @@
                         OmValue::Bool(false),
                     ],
                 )
-                .expect("Chart.ExportAsFixedFormat"),
-            OmValue::Empty
+                .expect_err("Chart.ExportAsFixedFormat requires an export backend")
+                .code,
+            OmErrorCode::Unsupported
         );
         assert_eq!(
             runtime
@@ -87727,7 +87999,7 @@
     }
 
     #[test]
-    fn chart_export_methods_allow_read_only_workbooks() {
+    fn chart_export_contracts_are_explicit_for_read_only_workbooks() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
             .open_workbook(OpenWorkbookSpec {
@@ -87788,8 +88060,9 @@
                         OmValue::Text("readonly-chart.pdf".to_string()),
                     ],
                 )
-                .expect("read-only Chart.ExportAsFixedFormat"),
-            OmValue::Empty
+                .expect_err("read-only Chart.ExportAsFixedFormat requires an export backend")
+                .code,
+            OmErrorCode::Unsupported
         );
         assert!(
             runtime
@@ -88953,8 +89226,9 @@
                         OmValue::Number(1033.0),
                     ],
                 )
-                .expect("Chart.CheckSpelling"),
-            OmValue::Empty
+                .expect_err("Chart.CheckSpelling requires a spelling backend")
+                .code,
+            OmErrorCode::Unsupported
         );
         runtime
             .dispatch_invoke(search_range, "Find", &[OmValue::Text("1".to_string())])

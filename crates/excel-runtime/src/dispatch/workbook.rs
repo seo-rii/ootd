@@ -3,7 +3,8 @@ use super::super::{
     RuntimeSheetTemplate, XL_OPEN_XML_STRICT_WORKBOOK, XL_OPEN_XML_TEMPLATE,
     XL_OPEN_XML_TEMPLATE_MACRO_ENABLED, XL_OPEN_XML_WORKBOOK, XL_OPEN_XML_WORKBOOK_MACRO_ENABLED,
     file_format_from_path, file_format_to_excel_value, om_value_is_omitted,
-    validate_check_spelling_args, validate_export_as_fixed_format_args, validate_optional_bool_arg,
+    unsupported_execution_backend, validate_check_spelling_args,
+    validate_export_as_fixed_format_args, validate_optional_bool_arg,
     validate_optional_integer_arg, validate_optional_text_arg, validate_print_out_args,
     validate_print_preview_args,
 };
@@ -444,27 +445,46 @@ impl ExcelRuntime {
                         "Workbook.RefreshAll does not accept arguments",
                     ));
                 }
-                Ok(OmValue::Empty)
+                self.runtime_workbook(workbook)?;
+                Err(unsupported_execution_backend(
+                    "Workbook",
+                    "RefreshAll",
+                    "refresh",
+                ))
             }
             "CheckSpelling" => {
                 validate_check_spelling_args(args, "Workbook")?;
                 self.runtime_workbook(workbook)?;
-                Ok(OmValue::Empty)
+                Err(unsupported_execution_backend(
+                    "Workbook",
+                    "CheckSpelling",
+                    "spelling",
+                ))
             }
             "ExportAsFixedFormat" => {
                 validate_export_as_fixed_format_args(args, "Workbook")?;
                 self.runtime_workbook(workbook)?;
-                Ok(OmValue::Empty)
+                Err(unsupported_execution_backend(
+                    "Workbook",
+                    "ExportAsFixedFormat",
+                    "fixed-format export",
+                ))
             }
             "PrintPreview" => {
                 validate_print_preview_args(args, "Workbook")?;
                 self.runtime_workbook(workbook)?;
-                Ok(OmValue::Empty)
+                Err(unsupported_execution_backend(
+                    "Workbook",
+                    "PrintPreview",
+                    "print",
+                ))
             }
             "PrintOut" => {
                 validate_print_out_args(args, "Workbook")?;
                 self.runtime_workbook(workbook)?;
-                Ok(OmValue::Empty)
+                Err(unsupported_execution_backend(
+                    "Workbook", "PrintOut", "print",
+                ))
             }
             "Close" => {
                 if args.len() > 3 {
