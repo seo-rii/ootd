@@ -79,10 +79,19 @@ pub(super) fn normalize_relationship_target(value: &str, base_segments: &[&str])
     (!segments.is_empty()).then(|| segments.join("/"))
 }
 
+#[cfg(test)]
 pub(super) fn parse_workbook_relationship_entries(
     rels_xml: &[u8],
 ) -> OmResult<Vec<RelationshipEntry>> {
-    parse_relationship_entries(rels_xml, &["xl"])
+    parse_relationship_entries_for_part(rels_xml, "xl/workbook.xml")
+}
+
+pub(super) fn parse_relationship_entries_for_part(
+    rels_xml: &[u8],
+    owner_part_uri: &str,
+) -> OmResult<Vec<RelationshipEntry>> {
+    let base_segments = relationship_base_segments_for_part(owner_part_uri);
+    parse_relationship_entries(rels_xml, &base_segments)
 }
 
 pub(super) fn parse_relationship_entries(
@@ -183,6 +192,25 @@ pub(super) fn worksheet_relationships_part_uri(worksheet_part_uri: &str) -> Opti
 }
 
 pub(super) fn relationships_part_uri_for_part(part_uri: &str) -> Option<String> {
-    let (parent, file_name) = part_uri.rsplit_once('/')?;
-    Some(format!("{parent}/_rels/{file_name}.rels"))
+    let part_uri = part_uri.strip_prefix('/').unwrap_or(part_uri);
+    if part_uri.is_empty() || part_uri.ends_with('/') {
+        return None;
+    }
+    Some(match part_uri.rsplit_once('/') {
+        Some((parent, file_name)) => format!("{parent}/_rels/{file_name}.rels"),
+        None => format!("_rels/{part_uri}.rels"),
+    })
+}
+
+pub(super) fn relationship_base_segments_for_part(part_uri: &str) -> Vec<&str> {
+    let part_uri = part_uri.strip_prefix('/').unwrap_or(part_uri);
+    part_uri
+        .rsplit_once('/')
+        .map(|(parent, _)| {
+            parent
+                .split('/')
+                .filter(|segment| !segment.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
 }

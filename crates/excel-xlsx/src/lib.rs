@@ -53,9 +53,12 @@ pub use digital_signature::DigitalSignatureInventory;
 use digital_signature::collect_digital_signature_inventory;
 use relationships::{
     RelationshipEntry, normalize_relationship_target, parse_relationship_entries,
-    parse_relationship_entries_with_options, parse_workbook_relationship_entries,
-    relationships_part_uri_for_part, worksheet_relationships_part_uri,
+    parse_relationship_entries_for_part, parse_relationship_entries_with_options,
+    relationship_base_segments_for_part, relationships_part_uri_for_part,
+    worksheet_relationships_part_uri,
 };
+#[cfg(test)]
+use relationships::parse_workbook_relationship_entries;
 use shared_strings::parse_shared_strings;
 use worksheet::{
     cell_reference, collect_support_part_dimension_coords, format_cell_error,
@@ -77,6 +80,9 @@ pub use pivot::{
 use pivot::{collect_pivot_package_inventory, ensure_pivot_package_inventory_preserved};
 
 const CALC_CHAIN_PART_NAME: &str = "xl/calcChain.xml";
+const PACKAGE_RELATIONSHIPS_PART_NAME: &str = "_rels/.rels";
+const OFFICE_DOCUMENT_RELATIONSHIP_TYPE: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument";
 const CALC_CHAIN_RELATIONSHIP_TYPE: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/calcChain";
 const WORKSHEET_RELATIONSHIP_TYPE: &str =
@@ -319,6 +325,7 @@ pub struct WorkbookSupportParts {
     pub content_types_summary: Option<ContentTypesPartSummary>,
     pub package_relationships_part_source_bytes: Option<Vec<u8>>,
     pub package_relationships_summary: Option<WorksheetRelationshipsPartSummary>,
+    pub workbook_part_uri: Option<String>,
     pub workbook_relationships_part_uri: Option<String>,
     pub workbook_relationships_part_source_bytes: Option<Vec<u8>>,
     pub workbook_relationships_summary: Option<WorksheetRelationshipsPartSummary>,
@@ -1400,6 +1407,61 @@ pub struct ChartOpaqueRelationshipSummary {
     pub target_mode: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WorkbookMainDocument {
+    part_uri: String,
+    relationships_part_uri: String,
+}
+
+fn discover_workbook_main_document(package: &OpcPackage) -> OmResult<WorkbookMainDocument> {
+    let package_relationships = package
+        .part(PACKAGE_RELATIONSHIPS_PART_NAME)
+        .ok_or_else(|| {
+            OmError::parse(format!(
+                "workbook package is missing {PACKAGE_RELATIONSHIPS_PART_NAME}"
+            ))
+        })?;
+    let relationships = parse_relationship_entries_with_options(
+        package_relationships.bytes.as_slice(),
+        &[],
+        true,
+    )?;
+    let mut office_documents = relationships
+        .into_iter()
+        .filter(|relationship| {
+            relationship.relationship_type == OFFICE_DOCUMENT_RELATIONSHIP_TYPE
+        });
+    let office_document = office_documents.next().ok_or_else(|| {
+        OmError::parse("package root relationships are missing an officeDocument relationship")
+    })?;
+    if office_documents.next().is_some() {
+        return Err(OmError::parse(
+            "package root relationships contain multiple officeDocument relationships",
+        ));
+    }
+    if office_document
+        .target_mode
+        .as_deref()
+        .is_some_and(|target_mode| target_mode.eq_ignore_ascii_case("External"))
+    {
+        return Err(OmError::parse(
+            "package officeDocument relationship must target an internal part",
+        ));
+    }
+    if !package.contains(&office_document.target) {
+        return Err(OmError::parse(format!(
+            "package officeDocument relationship target is missing: {}",
+            office_document.target
+        )));
+    }
+    let relationships_part_uri = relationships_part_uri_for_part(&office_document.target)
+        .ok_or_else(|| OmError::parse("package officeDocument target is not a valid part URI"))?;
+    Ok(WorkbookMainDocument {
+        part_uri: office_document.target,
+        relationships_part_uri,
+    })
+}
+
 impl XlsxCodec {
     pub fn sniff(&self, input: &[u8]) -> bool {
         if is_encrypted_ooxml_compound_file(input) {
@@ -1429,26 +1491,35 @@ impl XlsxCodec {
             ));
         }
         let package = OpcPackage::from_bytes(input)?;
-        if !self.is_workbook_package(&package) {
+        if !package.contains("[Content_Types].xml") {
             return Err(OmError::new(
                 OmErrorCode::Unsupported,
                 "input is not an OOXML workbook package",
             ));
         }
+        let main_document = discover_workbook_main_document(&package)?;
         let active_content_inventory = collect_active_content_inventory(&package)?;
         let digital_signature_inventory = collect_digital_signature_inventory(&package)?;
         let external_data_inventory = collect_external_data_inventory(&package)?;
 
-        let workbook_part = package.part("xl/workbook.xml").ok_or_else(|| {
+        let workbook_part = package.part(&main_document.part_uri).ok_or_else(|| {
             OmError::new(
                 OmErrorCode::Parse,
-                "workbook package is missing xl/workbook.xml",
+                format!(
+                    "workbook package is missing discovered main part {}",
+                    main_document.part_uri
+                ),
             )
         })?;
-        let detected_format = detect_format(&package);
+        let detected_format = detect_format(&package, &main_document.part_uri);
         let relationship_entries = package
-            .part(WORKBOOK_RELS_PART_NAME)
-            .map(|part| parse_workbook_relationship_entries(part.bytes.as_slice()))
+            .part(&main_document.relationships_part_uri)
+            .map(|part| {
+                parse_relationship_entries_for_part(
+                    part.bytes.as_slice(),
+                    &main_document.part_uri,
+                )
+            })
             .transpose()?
             .unwrap_or_default();
         let relationships = relationship_entries
@@ -1523,7 +1594,11 @@ impl XlsxCodec {
                 bytes: part.bytes.clone(),
             })
             .collect();
-        let support_parts = collect_workbook_support_parts(&relationship_entries, &package)?;
+        let support_parts = collect_workbook_support_parts(
+            &relationship_entries,
+            &package,
+            &main_document.part_uri,
+        )?;
         let workbook_display_name = "Workbook";
         let (charts, drawings, chart_sheets) = build_chart_model_overlay(
             WorkbookId(0),
@@ -1660,12 +1735,30 @@ impl XlsxCodec {
             }
             None => (workbook, workbook.package.clone()),
         };
+        let main_document = discover_workbook_main_document(&package)?;
+        if workbook
+            .support_parts
+            .workbook_part_uri
+            .as_deref()
+            .is_some_and(|expected_part_uri| expected_part_uri != main_document.part_uri.as_str())
+        {
+            return Err(OmError::new(
+                OmErrorCode::InvalidState,
+                format!(
+                    "discovered workbook main part {} does not match the loaded snapshot",
+                    main_document.part_uri
+                ),
+            ));
+        }
         let workbook_xml = package
-            .part("xl/workbook.xml")
+            .part(&main_document.part_uri)
             .ok_or_else(|| {
                 OmError::new(
                     OmErrorCode::Parse,
-                    "workbook package is missing xl/workbook.xml",
+                    format!(
+                        "workbook package is missing discovered main part {}",
+                        main_document.part_uri
+                    ),
                 )
             })?
             .bytes
@@ -2027,7 +2120,10 @@ impl XlsxCodec {
                 buffer.clear();
             }
 
-            package.replace_part_bytes("xl/workbook.xml", writer.into_inner().into_inner())?;
+            package.replace_part_bytes(
+                &main_document.part_uri,
+                writer.into_inner().into_inner(),
+            )?;
         }
         let mut dirty_worksheet_ids = BTreeSet::new();
         let mut worksheet_xml_rewrite_recovery_ids = BTreeSet::new();
@@ -2511,7 +2607,12 @@ impl XlsxCodec {
         }
 
         if has_dirty_worksheets || effective_calculation_state.is_some() {
-            invalidate_calc_chain_artifacts(&mut package)?;
+            invalidate_calc_chain_artifacts(
+                &mut package,
+                &main_document.part_uri,
+                &main_document.relationships_part_uri,
+                workbook.support_parts.calc_chain_part_uri.as_deref(),
+            )?;
         }
 
         for drawing in workbook.state.drawings.values() {
@@ -3208,13 +3309,14 @@ impl XlsxCodec {
     }
 
     fn is_workbook_package(&self, package: &OpcPackage) -> bool {
-        package.contains("[Content_Types].xml") && package.contains("xl/workbook.xml")
+        package.contains("[Content_Types].xml")
+            && discover_workbook_main_document(package).is_ok()
     }
 }
 
-fn detect_format(package: &OpcPackage) -> FileFormat {
+fn detect_format(package: &OpcPackage, workbook_part_uri: &str) -> FileFormat {
     match package
-        .part("xl/workbook.xml")
+        .part(workbook_part_uri)
         .and_then(|part| part.content_type.as_deref())
     {
         Some("application/vnd.ms-excel.sheet.macroEnabled.main+xml") => FileFormat::Xlsm,
@@ -4179,6 +4281,7 @@ fn parse_content_types_part_summary(content_types_xml: &[u8]) -> OmResult<Conten
 fn collect_workbook_support_parts(
     relationships: &[RelationshipEntry],
     package: &OpcPackage,
+    workbook_part_uri: &str,
 ) -> OmResult<WorkbookSupportParts> {
     let content_types_source_bytes = package
         .part("[Content_Types].xml")
@@ -4188,21 +4291,25 @@ fn collect_workbook_support_parts(
         .map(parse_content_types_part_summary)
         .transpose()?;
     let package_relationships_part_source_bytes =
-        package.part("_rels/.rels").map(|part| part.bytes.clone());
+        package
+            .part(PACKAGE_RELATIONSHIPS_PART_NAME)
+            .map(|part| part.bytes.clone());
     let package_relationships_summary = package_relationships_part_source_bytes
         .as_deref()
         .map(|source_bytes| parse_worksheet_relationships_part_summary(source_bytes, &[]))
         .transpose()?;
-    let workbook_relationships_part_uri = package
-        .contains(WORKBOOK_RELS_PART_NAME)
-        .then(|| WORKBOOK_RELS_PART_NAME.to_string());
+    let workbook_relationships_part_uri = relationships_part_uri_for_part(workbook_part_uri)
+        .filter(|part_uri| package.contains(part_uri));
     let workbook_relationships_part_source_bytes = workbook_relationships_part_uri
         .as_deref()
         .and_then(|workbook_rels| package.part(workbook_rels))
         .map(|part| part.bytes.clone());
     let workbook_relationships_summary = workbook_relationships_part_source_bytes
         .as_deref()
-        .map(|source_bytes| parse_worksheet_relationships_part_summary(source_bytes, &["xl"]))
+        .map(|source_bytes| {
+            let base_segments = relationship_base_segments_for_part(workbook_part_uri);
+            parse_worksheet_relationships_part_summary(source_bytes, &base_segments)
+        })
         .transpose()?;
     let styles_relationship = relationships
         .iter()
@@ -4287,6 +4394,7 @@ fn collect_workbook_support_parts(
         content_types_summary,
         package_relationships_part_source_bytes,
         package_relationships_summary,
+        workbook_part_uri: Some(workbook_part_uri.to_string()),
         workbook_relationships_part_uri,
         workbook_relationships_part_source_bytes,
         workbook_relationships_summary,
@@ -5888,12 +5996,16 @@ fn ensure_support_parts_present_with_options(
         support_parts.package_relationships_summary.as_ref(),
     ) && validate_package_source_bytes
     {
-        let actual_part = package.part("_rels/.rels").ok_or_else(|| {
-            OmError::new(
-                OmErrorCode::InvalidState,
-                "explicit package relationships part is missing: _rels/.rels",
-            )
-        })?;
+        let actual_part = package
+            .part(PACKAGE_RELATIONSHIPS_PART_NAME)
+            .ok_or_else(|| {
+                OmError::new(
+                    OmErrorCode::InvalidState,
+                    format!(
+                        "explicit package relationships part is missing: {PACKAGE_RELATIONSHIPS_PART_NAME}"
+                    ),
+                )
+            })?;
         let actual_summary =
             parse_worksheet_relationships_part_summary(actual_part.bytes.as_slice(), &[]).map_err(
                 |error| OmError::new(error.code, format!("_rels/.rels: {}", error.message)),
@@ -5914,10 +6026,14 @@ fn ensure_support_parts_present_with_options(
             ));
         }
     }
+    let workbook_part_uri = support_parts
+        .workbook_part_uri
+        .as_deref()
+        .unwrap_or("xl/workbook.xml");
     let workbook_relationships = if let Some(workbook_rels) =
         &support_parts.workbook_relationships_part_uri
     {
-        Some(parse_workbook_relationship_entries(
+        Some(parse_relationship_entries_for_part(
             package
                 .part(workbook_rels)
                 .ok_or_else(|| {
@@ -5928,6 +6044,7 @@ fn ensure_support_parts_present_with_options(
                 })?
                 .bytes
                 .as_slice(),
+            workbook_part_uri,
         )?)
     } else {
         None
@@ -6080,7 +6197,7 @@ fn ensure_support_parts_present_with_options(
                 })?
                 .bytes
                 .as_slice(),
-            &["xl"],
+            &relationship_base_segments_for_part(workbook_part_uri),
         )
         .map_err(|error| OmError::new(error.code, format!("{workbook_rels}: {}", error.message)))?;
         if &actual_summary != expected_summary {
@@ -26016,16 +26133,26 @@ fn parse_vml_drawing_part_summary(vml_xml: &[u8]) -> OmResult<VmlDrawingPartSumm
     })
 }
 
-fn invalidate_calc_chain_artifacts(package: &mut OpcPackage) -> OmResult<()> {
-    package.remove_part(CALC_CHAIN_PART_NAME);
+fn invalidate_calc_chain_artifacts(
+    package: &mut OpcPackage,
+    workbook_part_uri: &str,
+    workbook_relationships_part_uri: &str,
+    calc_chain_part_uri: Option<&str>,
+) -> OmResult<()> {
+    let calc_chain_part_uri = calc_chain_part_uri.unwrap_or(CALC_CHAIN_PART_NAME);
+    package.remove_part(calc_chain_part_uri);
 
     if let Some(rels_xml) = package
-        .part("xl/_rels/workbook.xml.rels")
+        .part(workbook_relationships_part_uri)
         .map(|part| part.bytes.clone())
     {
         package.replace_part_bytes(
-            "xl/_rels/workbook.xml.rels",
-            strip_calc_chain_relationships(&rels_xml)?,
+            workbook_relationships_part_uri,
+            strip_calc_chain_relationships_for_part(
+                &rels_xml,
+                workbook_part_uri,
+                calc_chain_part_uri,
+            )?,
         )?;
     }
     if let Some(content_types_xml) = package
@@ -26034,14 +26161,30 @@ fn invalidate_calc_chain_artifacts(package: &mut OpcPackage) -> OmResult<()> {
     {
         package.replace_part_bytes(
             "[Content_Types].xml",
-            strip_calc_chain_content_type_override(&content_types_xml)?,
+            strip_calc_chain_content_type_override_for_part(
+                &content_types_xml,
+                calc_chain_part_uri,
+            )?,
         )?;
     }
 
     Ok(())
 }
 
+#[cfg(test)]
 fn strip_calc_chain_relationships(rels_xml: &[u8]) -> OmResult<Vec<u8>> {
+    strip_calc_chain_relationships_for_part(
+        rels_xml,
+        "xl/workbook.xml",
+        CALC_CHAIN_PART_NAME,
+    )
+}
+
+fn strip_calc_chain_relationships_for_part(
+    rels_xml: &[u8],
+    workbook_part_uri: &str,
+    calc_chain_part_uri: &str,
+) -> OmResult<Vec<u8>> {
     let mut reader = Reader::from_reader(Cursor::new(rels_xml));
     reader.config_mut().trim_text(false);
     let mut writer = Writer::new(Cursor::new(Vec::new()));
@@ -26058,10 +26201,20 @@ fn strip_calc_chain_relationships(rels_xml: &[u8]) -> OmResult<Vec<u8>> {
             }
             Ok(Event::Empty(element))
                 if element.name().as_ref() == b"Relationship"
-                    && should_strip_calc_chain_relationship(&element, reader.decoder())? => {}
+                    && should_strip_calc_chain_relationship_for_part(
+                        &element,
+                        reader.decoder(),
+                        workbook_part_uri,
+                        calc_chain_part_uri,
+                    )? => {}
             Ok(Event::Start(element))
                 if element.name().as_ref() == b"Relationship"
-                    && should_strip_calc_chain_relationship(&element, reader.decoder())? =>
+                    && should_strip_calc_chain_relationship_for_part(
+                        &element,
+                        reader.decoder(),
+                        workbook_part_uri,
+                        calc_chain_part_uri,
+                    )? =>
             {
                 skip_depth = 1;
             }
@@ -26341,9 +26494,24 @@ fn rewrite_tracked_worksheet_relationship(
     Ok(rewritten)
 }
 
+#[cfg(test)]
 fn should_strip_calc_chain_relationship(
     element: &BytesStart<'_>,
     decoder: quick_xml::encoding::Decoder,
+) -> OmResult<bool> {
+    should_strip_calc_chain_relationship_for_part(
+        element,
+        decoder,
+        "xl/workbook.xml",
+        CALC_CHAIN_PART_NAME,
+    )
+}
+
+fn should_strip_calc_chain_relationship_for_part(
+    element: &BytesStart<'_>,
+    decoder: quick_xml::encoding::Decoder,
+    workbook_part_uri: &str,
+    calc_chain_part_uri: &str,
 ) -> OmResult<bool> {
     let mut raw_target = None;
     let mut target_mode = None;
@@ -26377,7 +26545,11 @@ fn should_strip_calc_chain_relationship(
     } else {
         raw_target
             .map(|target| {
-                normalize_relationship_target(&target, &["xl"]).ok_or_else(|| {
+                normalize_relationship_target(
+                    &target,
+                    &relationship_base_segments_for_part(workbook_part_uri),
+                )
+                .ok_or_else(|| {
                     OmError::parse(format!(
                         "invalid internal relationship target {target:?}"
                     ))
@@ -26388,7 +26560,7 @@ fn should_strip_calc_chain_relationship(
 
     Ok(
         matches!(rel_type.as_deref(), Some(CALC_CHAIN_RELATIONSHIP_TYPE))
-            || matches!(target.as_deref(), Some(CALC_CHAIN_PART_NAME)),
+            || target.as_deref() == Some(calc_chain_part_uri),
     )
 }
 
@@ -26470,7 +26642,15 @@ fn write_defined_names<W: Write>(
     Ok(())
 }
 
+#[cfg(test)]
 fn strip_calc_chain_content_type_override(content_types_xml: &[u8]) -> OmResult<Vec<u8>> {
+    strip_calc_chain_content_type_override_for_part(content_types_xml, CALC_CHAIN_PART_NAME)
+}
+
+fn strip_calc_chain_content_type_override_for_part(
+    content_types_xml: &[u8],
+    calc_chain_part_uri: &str,
+) -> OmResult<Vec<u8>> {
     let mut reader = Reader::from_reader(Cursor::new(content_types_xml));
     reader.config_mut().trim_text(false);
     let mut writer = Writer::new(Cursor::new(Vec::new()));
@@ -26487,10 +26667,18 @@ fn strip_calc_chain_content_type_override(content_types_xml: &[u8]) -> OmResult<
             }
             Ok(Event::Empty(element))
                 if element.name().as_ref() == b"Override"
-                    && should_strip_calc_chain_override(&element, reader.decoder())? => {}
+                    && should_strip_calc_chain_override_for_part(
+                        &element,
+                        reader.decoder(),
+                        calc_chain_part_uri,
+                    )? => {}
             Ok(Event::Start(element))
                 if element.name().as_ref() == b"Override"
-                    && should_strip_calc_chain_override(&element, reader.decoder())? =>
+                    && should_strip_calc_chain_override_for_part(
+                        &element,
+                        reader.decoder(),
+                        calc_chain_part_uri,
+                    )? =>
             {
                 skip_depth = 1;
             }
@@ -26510,9 +26698,18 @@ fn strip_calc_chain_content_type_override(content_types_xml: &[u8]) -> OmResult<
     Ok(writer.into_inner().into_inner())
 }
 
+#[cfg(test)]
 fn should_strip_calc_chain_override(
     element: &BytesStart<'_>,
     decoder: quick_xml::encoding::Decoder,
+) -> OmResult<bool> {
+    should_strip_calc_chain_override_for_part(element, decoder, CALC_CHAIN_PART_NAME)
+}
+
+fn should_strip_calc_chain_override_for_part(
+    element: &BytesStart<'_>,
+    decoder: quick_xml::encoding::Decoder,
+    calc_chain_part_uri: &str,
 ) -> OmResult<bool> {
     for attr in element.attributes() {
         let attr = attr.map_err(xml_error)?;
@@ -26523,7 +26720,7 @@ fn should_strip_calc_chain_override(
             .decode_and_unescape_value(decoder)
             .map_err(xml_error)?
             .into_owned();
-        if value.trim_start_matches('/') == CALC_CHAIN_PART_NAME {
+        if value.trim_start_matches('/') == calc_chain_part_uri.trim_start_matches('/') {
             return Ok(true);
         }
     }

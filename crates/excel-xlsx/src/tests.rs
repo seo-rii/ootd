@@ -158,6 +158,169 @@
     }
 
     #[test]
+    fn root_relationship_discovers_nonstandard_workbook_part() {
+        let codec = XlsxCodec;
+        let source_bytes = workbook_with_nonstandard_main_part_bytes();
+        let source_package = OpcPackage::from_bytes(&source_bytes).expect("source package");
+        let source_root_relationships = source_package
+            .part("_rels/.rels")
+            .expect("source root relationships")
+            .bytes
+            .clone();
+        let source_workbook_relationships = source_package
+            .part("documents/book/_rels/main.xml.rels")
+            .expect("source workbook relationships")
+            .bytes
+            .clone();
+
+        assert!(codec.sniff(&source_bytes));
+        let loaded = codec
+            .load(&source_bytes, CommonLoadOptions::default())
+            .expect("load nonstandard workbook main part");
+        assert_eq!(
+            loaded.support_parts.workbook_part_uri.as_deref(),
+            Some("documents/book/main.xml")
+        );
+        assert_eq!(
+            loaded
+                .support_parts
+                .workbook_relationships_part_uri
+                .as_deref(),
+            Some("documents/book/_rels/main.xml.rels")
+        );
+
+        let clean_saved = codec
+            .save(&loaded, CommonSaveOptions::default())
+            .expect("no-op save nonstandard workbook");
+        let clean_package = OpcPackage::from_bytes(&clean_saved).expect("clean saved package");
+        assert!(!clean_package.contains("xl/workbook.xml"));
+        assert_eq!(
+            clean_package
+                .part("documents/book/main.xml")
+                .expect("clean saved workbook part")
+                .bytes,
+            source_package
+                .part("documents/book/main.xml")
+                .expect("source workbook part")
+                .bytes
+        );
+        assert_eq!(
+            clean_package
+                .part("documents/book/_rels/main.xml.rels")
+                .expect("clean saved workbook relationships")
+                .bytes,
+            source_workbook_relationships
+        );
+        assert!(clean_package.contains("documents/book/calc/calcChain.xml"));
+
+        let mut edited = codec
+            .load(&clean_saved, CommonLoadOptions::default())
+            .expect("reload clean nonstandard workbook");
+        edited.state.insert_cell(
+            SheetId(1),
+            2,
+            2,
+            CellData {
+                value: CellValue::Number(99.0),
+                formula: None,
+                style_id: None,
+            },
+        );
+        let edited_saved = codec
+            .save(&edited, CommonSaveOptions::default())
+            .expect("targeted save nonstandard workbook");
+        let edited_package = OpcPackage::from_bytes(&edited_saved).expect("edited saved package");
+        assert!(!edited_package.contains("xl/workbook.xml"));
+        assert_eq!(
+            edited_package
+                .part("_rels/.rels")
+                .expect("edited root relationships")
+                .bytes,
+            source_root_relationships
+        );
+        assert!(!edited_package.contains("documents/book/calc/calcChain.xml"));
+        let edited_workbook_relationships = std::str::from_utf8(
+            &edited_package
+                .part("documents/book/_rels/main.xml.rels")
+                .expect("edited workbook relationships")
+                .bytes,
+        )
+        .expect("edited workbook relationships utf8");
+        assert!(edited_workbook_relationships.contains("../../xl/worksheets/sheet1.xml"));
+        assert!(!edited_workbook_relationships.contains("calcChain"));
+        let edited_content_types = std::str::from_utf8(
+            &edited_package
+                .part("[Content_Types].xml")
+                .expect("edited content types")
+                .bytes,
+        )
+        .expect("edited content types utf8");
+        assert!(!edited_content_types.contains("documents/book/calc/calcChain.xml"));
+        let edited_workbook_xml = std::str::from_utf8(
+            &edited_package
+                .part("documents/book/main.xml")
+                .expect("edited workbook part")
+                .bytes,
+        )
+        .expect("edited workbook utf8");
+        assert!(edited_workbook_xml.contains("<calcPr"));
+
+        let reopened = codec
+            .load(&edited_saved, CommonLoadOptions::default())
+            .expect("reopen edited nonstandard workbook");
+        assert_eq!(
+            reopened
+                .state
+                .worksheet_data_for_sheet(SheetId(1))
+                .expect("reopened worksheet")
+                .cells
+                .get(&(2, 2))
+                .expect("B2")
+                .value,
+            CellValue::Number(99.0)
+        );
+    }
+
+    #[test]
+    fn root_relationship_main_document_discovery_fails_closed() {
+        let codec = XlsxCodec;
+        let cases = [
+            (
+                "missing target",
+                br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="missing/book.xml"/></Relationships>"#.as_slice(),
+                "package officeDocument relationship target is missing: missing/book.xml",
+            ),
+            (
+                "external target",
+                br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="https://example.com/book.xlsx" TargetMode="External"/></Relationships>"#.as_slice(),
+                "package officeDocument relationship must target an internal part",
+            ),
+            (
+                "duplicate office document",
+                br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="documents/book/main.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="documents/book/main.xml"/></Relationships>"#.as_slice(),
+                "package root relationships contain multiple officeDocument relationships",
+            ),
+        ];
+
+        for (label, root_relationships, expected_message) in cases {
+            let mut package = OpcPackage::from_bytes(
+                &workbook_with_nonstandard_main_part_bytes(),
+            )
+            .expect("nonstandard package");
+            package
+                .replace_part_bytes("_rels/.rels", root_relationships.to_vec())
+                .expect("replace root relationships");
+            let bytes = package.to_bytes().expect("malformed discovery fixture");
+            assert!(!codec.sniff(&bytes), "{label}");
+            let error = codec
+                .load(&bytes, CommonLoadOptions::default())
+                .expect_err("invalid main document discovery must fail");
+            assert_eq!(error.code, OmErrorCode::Parse, "{label}");
+            assert_eq!(error.message, expected_message, "{label}");
+        }
+    }
+
+    #[test]
     fn encrypted_ooxml_compound_container_is_classified_before_zip_parsing() {
         let codec = XlsxCodec;
         for (label, encrypted) in [
@@ -12147,8 +12310,13 @@
             OpcPackage::from_bytes(&workbook_with_hyperlink_comment_and_calc_chain_bytes())
                 .expect("base workbook package");
 
-        super::invalidate_calc_chain_artifacts(&mut package)
-            .expect("invalidate calc chain artifacts");
+        super::invalidate_calc_chain_artifacts(
+            &mut package,
+            "xl/workbook.xml",
+            "xl/_rels/workbook.xml.rels",
+            Some("xl/calcChain.xml"),
+        )
+        .expect("invalidate calc chain artifacts");
 
         assert!(!package.contains("xl/calcChain.xml"));
         assert!(package.contains("xl/comments1.xml"));
@@ -14183,6 +14351,7 @@
                 target_mode: None,
             }],
             &package,
+            "xl/workbook.xml",
         )
         .expect_err("collect should fail when explicit styles part is missing");
 
@@ -14205,6 +14374,7 @@
                 target_mode: None,
             }],
             &package,
+            "xl/workbook.xml",
         )
         .expect_err("collect should fail when explicit theme part is missing");
 
@@ -52081,6 +52251,7 @@
 </Types>"#
                     .to_vec(),
             },
+            standard_package_root_relationship_part(),
             OpcPart {
                 name: "xl/workbook.xml".to_string(),
                 content_type: None,
@@ -116522,6 +116693,88 @@
         package.to_bytes().expect("pivot workbook bytes")
     }
 
+    fn standard_package_root_relationship_part() -> OpcPart {
+        OpcPart {
+            name: "_rels/.rels".to_string(),
+            content_type: None,
+            compression: CompressionMethod::Stored,
+            bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>"#
+                .to_vec(),
+        }
+    }
+
+    fn workbook_with_nonstandard_main_part_bytes() -> Vec<u8> {
+        let mut package =
+            OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("synthetic package");
+        let mut workbook_part = package
+            .part("xl/workbook.xml")
+            .expect("source workbook part")
+            .clone();
+        let mut workbook_relationships_part = package
+            .part("xl/_rels/workbook.xml.rels")
+            .expect("source workbook relationships")
+            .clone();
+        package.remove_part("xl/workbook.xml");
+        package.remove_part("xl/_rels/workbook.xml.rels");
+
+        workbook_part.name = "documents/book/main.xml".to_string();
+        workbook_relationships_part.name = "documents/book/_rels/main.xml.rels".to_string();
+        workbook_relationships_part.bytes = br#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="../../xl/worksheets/sheet1.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/calcChain" Target="calc/calcChain.xml"/>
+</Relationships>"#
+            .to_vec();
+        package.add_part(workbook_part).expect("move workbook part");
+        package
+            .add_part(workbook_relationships_part)
+            .expect("move workbook relationships part");
+        package
+            .add_part(OpcPart {
+                name: "documents/book/calc/calcChain.xml".to_string(),
+                content_type: Some(
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.calcChain+xml"
+                        .to_string(),
+                ),
+                compression: CompressionMethod::Stored,
+                bytes: br#"<calcChain xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><c r="B1" i="1"/></calcChain>"#.to_vec(),
+            })
+            .expect("add relocated calculation chain");
+
+        let content_types = std::str::from_utf8(
+            &package
+                .part("[Content_Types].xml")
+                .expect("content types")
+                .bytes,
+        )
+        .expect("content types utf8")
+        .replace(
+            "PartName=\"/xl/workbook.xml\"",
+            "PartName=\"/documents/book/main.xml\"",
+        )
+        .replace(
+            "</Types>",
+            "  <Override PartName=\"/documents/book/calc/calcChain.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.calcChain+xml\"/>\n</Types>",
+        );
+        package
+            .replace_part_bytes("[Content_Types].xml", content_types.into_bytes())
+            .expect("retarget workbook content type");
+        package
+            .replace_part_bytes(
+                "_rels/.rels",
+                br#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="documents/book/main.xml"/>
+</Relationships>"#
+                    .to_vec(),
+            )
+            .expect("retarget package office document relationship");
+        package.to_bytes().expect("nonstandard workbook bytes")
+    }
+
     fn synthetic_workbook_bytes() -> Vec<u8> {
         let package = OpcPackage::new(vec![
             OpcPart {
@@ -116647,6 +116900,7 @@
 </Types>"#
                     .to_vec(),
             },
+            standard_package_root_relationship_part(),
             OpcPart {
                 name: "xl/workbook.xml".to_string(),
                 content_type: None,
@@ -116702,6 +116956,7 @@
 </Types>"#
                     .to_vec(),
             },
+            standard_package_root_relationship_part(),
             OpcPart {
                 name: "xl/workbook.xml".to_string(),
                 content_type: None,
