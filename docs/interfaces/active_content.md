@@ -91,7 +91,8 @@ character bound. This intentionally favors false-positive refusal over activatin
 control, embedding, or callback inside the Oracle host.
 
 External connections, query tables, linked-workbook refresh, data-model providers, and network
-isolation belong to the separate OOTD-065 offline policy and are not claimed by this inventory.
+isolation belong to the separate OOTD-065 policy documented in
+`docs/interfaces/external_data.md`; they are not classified as active content by this inventory.
 
 ## Remaining Scope
 

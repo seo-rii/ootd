@@ -18,7 +18,8 @@ use excel_model::CellData;
 pub use office_common::{
     ActiveContentAuditManifest, ActiveContentContentTypeEntryKind, ActiveContentKind,
     ActiveContentPolicy, ActiveContentRemovedContentTypeEntry, ActiveContentRemovedPart,
-    ActiveContentRemovedRelationship,
+    ActiveContentRemovedRelationship, ExternalDataAccessReport, ExternalDataInventory,
+    ExternalDataKind, ExternalDataPolicy, ExternalDataRelationship,
 };
 use office_common::{
     AbsoluteAnchor, CellError, CellMarker, CellValue, ChartId, ChartObjectId, DefinedName,
@@ -38,12 +39,14 @@ mod chart_encoder;
 mod chart_graph;
 mod digital_signature;
 mod encryption;
+mod external_data;
 mod pivot;
 mod relationships;
 mod shared_strings;
 mod worksheet;
 
 use encryption::is_encrypted_ooxml_compound_file;
+use external_data::collect_external_data_inventory;
 pub use active_content::ActiveContentInventory;
 use active_content::{collect_active_content_inventory, strip_active_content_from_package};
 pub use digital_signature::DigitalSignatureInventory;
@@ -217,6 +220,7 @@ pub struct LoadedXlsxWorkbook {
     pub pending_chart_relationship_graphs: BTreeMap<ChartId, PendingChartRelationshipGraph>,
     active_content_inventory: ActiveContentInventory,
     digital_signature_inventory: DigitalSignatureInventory,
+    external_data_inventory: ExternalDataInventory,
 }
 
 impl LoadedXlsxWorkbook {
@@ -231,6 +235,16 @@ impl LoadedXlsxWorkbook {
 
     pub fn digital_signature_inventory(&self) -> &DigitalSignatureInventory {
         &self.digital_signature_inventory
+    }
+
+    pub fn external_data_inventory(&self) -> &ExternalDataInventory {
+        &self.external_data_inventory
+    }
+
+    pub fn source_or_current_external_data_inventory(&self) -> OmResult<ExternalDataInventory> {
+        Ok(self
+            .external_data_inventory
+            .merged_with(&collect_external_data_inventory(&self.package)?))
     }
 }
 
@@ -1423,6 +1437,7 @@ impl XlsxCodec {
         }
         let active_content_inventory = collect_active_content_inventory(&package)?;
         let digital_signature_inventory = collect_digital_signature_inventory(&package)?;
+        let external_data_inventory = collect_external_data_inventory(&package)?;
 
         let workbook_part = package.part("xl/workbook.xml").ok_or_else(|| {
             OmError::new(
@@ -1547,6 +1562,7 @@ impl XlsxCodec {
             pending_chart_relationship_graphs: BTreeMap::new(),
             active_content_inventory,
             digital_signature_inventory,
+            external_data_inventory,
         })
     }
 

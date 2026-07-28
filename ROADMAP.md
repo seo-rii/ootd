@@ -72,7 +72,10 @@ Active order:
    policies remove exclusive relationship closure, incoming XML anchors, active/orphan manifest
    entries, and macro/dialog sheets; retain shared descendants; and return a deterministic audit.
    Complex ActiveX/VML/OLE/custom UI real-Excel evidence remains required before Oracle-verified.
-19. **Active:** implement `OOTD-065` external-link/connection/query offline policy.
+19. `OOTD-065` stage 1 complete (2026-07-28, synthetic): deterministic external-data inventory,
+   typed offline-preserve/refuse open policy, access-attempt report, and unrelated-edit cache
+   preservation are implemented. **Active:** add Windows Oracle preflight/isolation audit and
+   define the disabled host refresh/provider callback boundary.
 20. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
    claiming practical chart/pivot/style parity.
 

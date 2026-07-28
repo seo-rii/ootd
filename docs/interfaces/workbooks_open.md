@@ -29,10 +29,11 @@ contract. Normal load value `xlNormalLoad = 0` follows
 `Missing`, `Empty`, and `Null` are treated as omitted optional values. Explicit default-equivalent
 arguments are accepted without claiming the associated feature is implemented.
 
-Excel normally prompts for link-update policy when `UpdateLinks` is omitted. OOTD is currently a
-headless, offline runtime, so omission deterministically means no external access. OOTD-065 owns
-the future host callback and link-update policy; until then any request to update links is
-`Unsupported`.
+Excel normally prompts for link-update policy when `UpdateLinks` is omitted. OOTD is a headless,
+offline runtime, so omission deterministically selects `ExternalDataPolicy::OfflinePreserve` and
+means no external access. The caller can inspect the package-only inventory and attempt flags or
+use the typed host API's `Refuse` policy; see `docs/interfaces/external_data.md`. Until an audited
+host callback exists, any request to update links is `Unsupported`.
 
 The rejection matrix uses a nonexistent source path to prove all unsupported options fail before
 filesystem read. It also locks the exact error code/message and verifies that no workbook enters

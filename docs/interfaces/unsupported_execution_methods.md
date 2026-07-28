@@ -30,6 +30,8 @@ stable `Unsupported` boundary. Object and collection ownership are also resolved
 Rejected calls do not create export/print artifacts, mutate selection, or change workbook dirty
 domains. `Chart.Export` is a separate Boolean-returning contract: the current headless path returns
 `false`, which explicitly reports that no image was exported rather than reporting success.
+For workbooks with linked data, a rejected `RefreshAll` also leaves the typed external-data access
+report's refresh and external-access attempt flags `false`; see `docs/interfaces/external_data.md`.
 
 Support can be enabled only after a backend produces a testable file, state, or event result and
 has both synthetic behavior tests and the applicable desktop Excel Oracle evidence.

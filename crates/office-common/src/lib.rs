@@ -28,6 +28,7 @@ pub enum OmErrorCode {
     SignedPackageMutationUnsupported,
     ActiveContentConversionUnsupported,
     ActiveContentPolicyRefused,
+    ExternalDataPolicyRefused,
     Calculation,
     External,
 }
@@ -80,6 +81,10 @@ impl OmError {
 
     pub fn active_content_policy_refused(message: impl Into<String>) -> Self {
         Self::new(OmErrorCode::ActiveContentPolicyRefused, message)
+    }
+
+    pub fn external_data_policy_refused(message: impl Into<String>) -> Self {
+        Self::new(OmErrorCode::ExternalDataPolicyRefused, message)
     }
 
     pub fn unsupported(message: impl Into<String>) -> Self {
@@ -586,6 +591,146 @@ impl ActiveContentAuditManifest {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ExternalDataPolicy {
+    #[default]
+    OfflinePreserve,
+    Refuse,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ExternalDataKind {
+    ExternalLink,
+    ExternalWorkbook,
+    DdeLink,
+    OleLink,
+    Connection,
+    QueryTable,
+    DataModel,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalDataRelationship {
+    pub relationship_part_uri: String,
+    pub id: String,
+    pub relationship_type: String,
+    pub target: String,
+    pub target_mode: Option<String>,
+    pub kinds: Vec<ExternalDataKind>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalDataInventory {
+    kinds: Vec<ExternalDataKind>,
+    part_uris: Vec<String>,
+    relationship_part_uris: Vec<String>,
+    relationships: Vec<ExternalDataRelationship>,
+    has_content_type_markers: bool,
+}
+
+impl ExternalDataInventory {
+    pub fn new(
+        mut kinds: Vec<ExternalDataKind>,
+        mut part_uris: Vec<String>,
+        mut relationships: Vec<ExternalDataRelationship>,
+        has_content_type_markers: bool,
+    ) -> Self {
+        kinds.sort();
+        kinds.dedup();
+        part_uris.sort_by_key(|part_uri| part_uri.to_ascii_lowercase());
+        part_uris.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
+        for relationship in &mut relationships {
+            relationship.kinds.sort();
+            relationship.kinds.dedup();
+        }
+        relationships.sort();
+        relationships.dedup();
+        let mut relationship_part_uris = relationships
+            .iter()
+            .map(|relationship| relationship.relationship_part_uri.clone())
+            .collect::<Vec<_>>();
+        relationship_part_uris.sort_by_key(|part_uri| part_uri.to_ascii_lowercase());
+        relationship_part_uris.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
+        Self {
+            kinds,
+            part_uris,
+            relationship_part_uris,
+            relationships,
+            has_content_type_markers,
+        }
+    }
+
+    pub fn has_artifacts(&self) -> bool {
+        !self.kinds.is_empty()
+            || !self.part_uris.is_empty()
+            || !self.relationships.is_empty()
+            || self.has_content_type_markers
+    }
+
+    pub fn kinds(&self) -> &[ExternalDataKind] {
+        &self.kinds
+    }
+
+    pub fn part_uris(&self) -> &[String] {
+        &self.part_uris
+    }
+
+    pub fn relationship_part_uris(&self) -> &[String] {
+        &self.relationship_part_uris
+    }
+
+    pub fn relationships(&self) -> &[ExternalDataRelationship] {
+        &self.relationships
+    }
+
+    pub fn has_content_type_markers(&self) -> bool {
+        self.has_content_type_markers
+    }
+
+    pub fn merged_with(&self, other: &Self) -> Self {
+        Self::new(
+            self.kinds.iter().chain(&other.kinds).copied().collect(),
+            self.part_uris
+                .iter()
+                .chain(&other.part_uris)
+                .cloned()
+                .collect(),
+            self.relationships
+                .iter()
+                .chain(&other.relationships)
+                .cloned()
+                .collect(),
+            self.has_content_type_markers || other.has_content_type_markers,
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalDataAccessReport {
+    pub policy: ExternalDataPolicy,
+    pub inventory: ExternalDataInventory,
+    pub link_update_attempted: bool,
+    pub refresh_attempted: bool,
+    pub external_access_attempted: bool,
+}
+
+impl ExternalDataAccessReport {
+    pub fn offline(policy: ExternalDataPolicy, inventory: ExternalDataInventory) -> Self {
+        Self {
+            policy,
+            inventory,
+            link_update_attempted: false,
+            refresh_attempted: false,
+            external_access_attempted: false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SaveOptions {
     pub profile: ExcelProfile,
@@ -613,8 +758,9 @@ impl OmError {
 #[cfg(test)]
 mod tests {
     use super::{
-        ActiveContentPolicy, CellValue, Emu, ExcelProfile, LoadOptions, ObjectHandle, OmArray,
-        OmErrorCode, OmValue, Points, RangeRef, Rect, SaveOptions, SheetId, SheetScope, WorkbookId,
+        ActiveContentPolicy, CellValue, Emu, ExcelProfile, ExternalDataAccessReport,
+        ExternalDataInventory, ExternalDataPolicy, LoadOptions, ObjectHandle, OmArray, OmErrorCode,
+        OmValue, Points, RangeRef, Rect, SaveOptions, SheetId, SheetScope, WorkbookId,
     };
 
     #[test]
@@ -709,6 +855,16 @@ mod tests {
         assert_eq!(save.profile, ExcelProfile::Excel365);
         assert!(save.lossless);
         assert_eq!(save.active_content_policy, ActiveContentPolicy::Preserve);
+        let external_data_report = ExternalDataAccessReport::offline(
+            ExternalDataPolicy::default(),
+            ExternalDataInventory::default(),
+        );
+        assert_eq!(
+            external_data_report.policy,
+            ExternalDataPolicy::OfflinePreserve
+        );
+        assert!(!external_data_report.inventory.has_artifacts());
+        assert!(!external_data_report.external_access_attempted);
     }
 
     #[test]

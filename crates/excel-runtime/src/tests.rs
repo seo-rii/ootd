@@ -15,10 +15,11 @@
 
     use super::persistence::PersistenceFailurePoint;
     use office_common::{
-        ActiveContentPolicy, CellError, CellValue, ExcelProfile, FileFormat, GetRangeValuesSpec,
-        LoadOptions, ObjectHandle, OmArray, OmErrorCode, OmValue, OpenWorkbookSpec, RangeArea,
-        RangeRef, RangeSet, Rect, ReferenceTarget, SaveWorkbookSpec, SetRangeValuesSpec, SheetId,
-        SheetScope, StyleId, WorkbookHandle, WorkbookId,
+        ActiveContentPolicy, CellError, CellValue, ExcelProfile, ExternalDataKind,
+        ExternalDataPolicy, FileFormat, GetRangeValuesSpec, LoadOptions, ObjectHandle, OmArray,
+        OmErrorCode, OmValue, OpenWorkbookSpec, RangeArea, RangeRef, RangeSet, Rect,
+        ReferenceTarget, SaveWorkbookSpec, SetRangeValuesSpec, SheetId, SheetScope, StyleId,
+        WorkbookHandle, WorkbookId,
     };
     use office_opc::{CompressionMethod, OpcPackage, OpcPart};
 
@@ -33,6 +34,13 @@
         include!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/support/active_content.rs"
+        ));
+    }
+
+    mod external_data_fixture {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/support/external_data.rs"
         ));
     }
 
@@ -43339,6 +43347,91 @@
         assert_eq!(opened, workbook_item);
 
         fs::remove_file(path).expect("cleanup fixture");
+    }
+
+    #[test]
+    fn external_data_open_policy_is_offline_reportable_and_refuses_before_registration() {
+        let bytes = external_data_fixture::package_with_external_data(
+            &synthetic_workbook_bytes(),
+        );
+        let spec = OpenWorkbookSpec {
+            bytes: bytes.clone(),
+            format_hint: Some(FileFormat::Xlsx),
+            profile: ExcelProfile::Excel365,
+            read_only: false,
+        };
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(spec)
+            .expect("default open preserves cached external data offline");
+        let report = runtime
+            .workbook_external_data_access_report(workbook)
+            .expect("external-data access report");
+
+        assert_eq!(report.policy, ExternalDataPolicy::OfflinePreserve);
+        assert_eq!(
+            report.inventory.kinds(),
+            &[
+                ExternalDataKind::ExternalLink,
+                ExternalDataKind::ExternalWorkbook,
+                ExternalDataKind::DdeLink,
+                ExternalDataKind::OleLink,
+                ExternalDataKind::Connection,
+                ExternalDataKind::QueryTable,
+                ExternalDataKind::DataModel,
+            ]
+        );
+        assert!(!report.link_update_attempted);
+        assert!(!report.refresh_attempted);
+        assert!(!report.external_access_attempted);
+
+        let refresh = runtime
+            .dispatch_invoke(workbook.0, "RefreshAll", &[])
+            .expect_err("offline runtime has no refresh backend");
+        assert_eq!(refresh.code, OmErrorCode::Unsupported);
+        let report_after_refresh = runtime
+            .workbook_external_data_access_report(workbook)
+            .expect("report after refused refresh");
+        assert!(!report_after_refresh.refresh_attempted);
+        assert!(!report_after_refresh.external_access_attempted);
+
+        let mut refusing_runtime = ExcelRuntime::new();
+        let error = refusing_runtime
+            .open_workbook_with_external_data_policy(
+                OpenWorkbookSpec {
+                    bytes,
+                    format_hint: Some(FileFormat::Xlsx),
+                    profile: ExcelProfile::Excel365,
+                    read_only: false,
+                },
+                ExternalDataPolicy::Refuse,
+            )
+            .expect_err("refuse policy blocks external-data packages");
+        assert_eq!(error.code, OmErrorCode::ExternalDataPolicyRefused);
+        assert_eq!(
+            error.message,
+            "external-data policy refused a workbook containing external data sources"
+        );
+        assert!(refusing_runtime.workbooks.is_empty());
+        assert!(refusing_runtime.active_workbook.is_none());
+
+        let clean_workbook = refusing_runtime
+            .open_workbook_with_external_data_policy(
+                OpenWorkbookSpec {
+                    bytes: synthetic_workbook_bytes(),
+                    format_hint: Some(FileFormat::Xlsx),
+                    profile: ExcelProfile::Excel365,
+                    read_only: false,
+                },
+                ExternalDataPolicy::Refuse,
+            )
+            .expect("refuse policy accepts a marker-free workbook");
+        let clean_report = refusing_runtime
+            .workbook_external_data_access_report(clean_workbook)
+            .expect("marker-free refuse report");
+        assert_eq!(clean_report.policy, ExternalDataPolicy::Refuse);
+        assert!(!clean_report.inventory.has_artifacts());
+        assert!(!clean_report.external_access_attempted);
     }
 
     #[test]

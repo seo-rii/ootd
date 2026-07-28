@@ -316,6 +316,7 @@ fn observe_om_error(error: OmError) -> ObservedError {
         OmErrorCode::SignedPackageMutationUnsupported => CanonicalErrorKind::Unsupported,
         OmErrorCode::ActiveContentConversionUnsupported => CanonicalErrorKind::Unsupported,
         OmErrorCode::ActiveContentPolicyRefused => CanonicalErrorKind::Unsupported,
+        OmErrorCode::ExternalDataPolicyRefused => CanonicalErrorKind::Unsupported,
         OmErrorCode::Calculation => CanonicalErrorKind::Calculation,
         OmErrorCode::External => CanonicalErrorKind::External,
     };
@@ -332,6 +333,7 @@ fn observe_om_error(error: OmError) -> ObservedError {
         OmErrorCode::SignedPackageMutationUnsupported => "signedPackageMutationUnsupported",
         OmErrorCode::ActiveContentConversionUnsupported => "activeContentConversionUnsupported",
         OmErrorCode::ActiveContentPolicyRefused => "activeContentPolicyRefused",
+        OmErrorCode::ExternalDataPolicyRefused => "externalDataPolicyRefused",
         OmErrorCode::Calculation => "calculation",
         OmErrorCode::External => "external",
     };

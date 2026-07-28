@@ -26,10 +26,10 @@
     };
     use office_common::{
         ActiveContentPolicy, CellError, CellMarker, CellValue, ChartId, ChartObjectId,
-        DrawingAnchor, Emu, ExcelProfile, FormulaSource, LoadOptions as CommonLoadOptions,
-        NameScope, NameValidationMode, ObjectPlacement, OmErrorCode, OmValue, Rect, ReferenceTarget,
-        SaveOptions as CommonSaveOptions, SheetId, SheetKind, SheetScope, SheetVisibility, StyleId,
-        TwoCellAnchor, WorkbookId, WorksheetModel,
+        DrawingAnchor, Emu, ExcelProfile, ExternalDataKind, FormulaSource,
+        LoadOptions as CommonLoadOptions, NameScope, NameValidationMode, ObjectPlacement,
+        OmErrorCode, OmValue, Rect, ReferenceTarget, SaveOptions as CommonSaveOptions, SheetId,
+        SheetKind, SheetScope, SheetVisibility, StyleId, TwoCellAnchor, WorkbookId, WorksheetModel,
     };
     use office_opc::{CompressionMethod, OpcPart};
 
@@ -44,6 +44,13 @@
         include!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/support/active_content.rs"
+        ));
+    }
+
+    mod external_data_fixture {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/support/external_data.rs"
         ));
     }
 
@@ -352,6 +359,106 @@
         assert_eq!(
             error.code,
             OmErrorCode::SignedPackageMutationUnsupported
+        );
+    }
+
+    #[test]
+    fn external_data_inventory_reports_offline_sources_and_preserves_cached_parts() {
+        let codec = XlsxCodec;
+        let source_bytes = external_data_fixture::package_with_external_data(
+            &synthetic_workbook_bytes(),
+        );
+        let mut loaded = codec
+            .load(&source_bytes, CommonLoadOptions::default())
+            .expect("external-data workbook remains readable offline");
+        let inventory = loaded.external_data_inventory().clone();
+
+        assert!(inventory.has_artifacts());
+        assert_eq!(
+            inventory.kinds(),
+            &[
+                ExternalDataKind::ExternalLink,
+                ExternalDataKind::ExternalWorkbook,
+                ExternalDataKind::DdeLink,
+                ExternalDataKind::OleLink,
+                ExternalDataKind::Connection,
+                ExternalDataKind::QueryTable,
+                ExternalDataKind::DataModel,
+            ]
+        );
+        assert_eq!(
+            inventory.part_uris(),
+            &[
+                "xl/connections.xml".to_string(),
+                "xl/externalLinks/externalLink1.xml".to_string(),
+                "xl/externalLinks/externalLink2.xml".to_string(),
+                "xl/externalLinks/externalLink3.xml".to_string(),
+                "xl/model/item.data".to_string(),
+                "xl/queryTables/queryTable1.xml".to_string(),
+            ]
+        );
+        assert_eq!(
+            inventory.relationship_part_uris(),
+            &[
+                "xl/_rels/workbook.xml.rels".to_string(),
+                "xl/externalLinks/_rels/externalLink1.xml.rels".to_string(),
+                "xl/worksheets/_rels/sheet1.xml.rels".to_string(),
+            ]
+        );
+        assert!(inventory.has_content_type_markers());
+        assert!(inventory.relationships().iter().any(|relationship| {
+            relationship.target == "file:///unreachable/external.xlsx"
+                && relationship.target_mode.as_deref() == Some("External")
+                && relationship
+                    .kinds
+                    .contains(&ExternalDataKind::ExternalWorkbook)
+        }));
+
+        let mut source_guard = loaded.clone();
+        source_guard.package =
+            OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("clean replacement");
+        assert_eq!(
+            source_guard
+                .source_or_current_external_data_inventory()
+                .expect("source inventory survives package replacement")
+                .kinds(),
+            inventory.kinds()
+        );
+
+        let source_package = OpcPackage::from_bytes(&source_bytes).expect("source package");
+        loaded.state.insert_cell(
+            SheetId(1),
+            1,
+            1,
+            CellData {
+                value: CellValue::Number(77.0),
+                formula: None,
+                style_id: None,
+            },
+        );
+        let saved_bytes = codec
+            .save(&loaded, CommonSaveOptions::default())
+            .expect("offline save preserves cached external data");
+        let saved_package = OpcPackage::from_bytes(&saved_bytes).expect("saved package");
+        for part_uri in external_data_fixture::EXTERNAL_DATA_PARTS {
+            assert_eq!(
+                saved_package
+                    .part(part_uri)
+                    .unwrap_or_else(|| panic!("saved package missing {part_uri}"))
+                    .bytes,
+                source_package
+                    .part(part_uri)
+                    .unwrap_or_else(|| panic!("source package missing {part_uri}"))
+                    .bytes,
+                "{part_uri}"
+            );
+        }
+        let reloaded = codec
+            .load(&saved_bytes, CommonLoadOptions::default())
+            .expect("saved external-data workbook reloads offline");
+        assert_eq!(
+            reloaded.external_data_inventory().kinds(),
+            inventory.kinds()
         );
     }
 

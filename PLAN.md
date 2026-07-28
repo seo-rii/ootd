@@ -162,8 +162,12 @@ Wave 1 exit gate:
    anchor 삭제와 deterministic `ActiveContentAuditManifest`를 codec/runtime snapshot API에
    연결했다. signed package는 독립 서명 정책이 먼저 거부한다. 복합 ActiveX/VML/OLE 및
    custom UI 실제 Excel fixture는 OOTD-064의 Oracle evidence 단계로 계속 열어 둔다.
-9. `OOTD-065`: external link/connection/query offline policy와 host callback boundary를
-   정의한다.
+9. `OOTD-065` 1단계 완료 (2026-07-28, synthetic contract): external workbook cache,
+   DDE/OLE link, connection, queryTable, data-model의 path/content-type/relationship inventory와
+   typed `OfflinePreserve`/`Refuse` open policy를 구현했다. 기본 open/save는 외부 접근 없이
+   cache를 보존하고 access report는 update/refresh/access 미시도를 반환한다. Refuse는 handle
+   등록 전에 stable error로 차단한다. 2단계는 Windows Oracle preflight·격리 audit와 host
+   callback/provider boundary다.
 10. `OOTD-044` + `OOTD-059`: machine-readable capability manifest를 source of truth로 두고
    README/STATUS/ROADMAP/archived bundle drift를 CI에서 검출한다.
 

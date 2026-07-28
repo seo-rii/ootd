@@ -13,7 +13,7 @@ contract.
 | `serialization_dirty` | Saving the current runtime would rewrite at least one model, calculation, or package artifact. This is derived from the other runtime and codec states. |
 | `formula_cache_dirty` | Calculation changed a cached formula result or dynamic-array materialization. This does not by itself change `Workbook.Saved`. |
 | `package_graph_dirty` | A relationship, part, content-type binding, or stale calculation-chain artifact must change. |
-| `external_refresh_dirty` | External refresh output is pending serialization. No external refresh command is supported yet, so this remains `false`; OOTD-065 owns activation of this domain. |
+| `external_refresh_dirty` | External refresh output is pending serialization. Offline inventory/reporting does not activate it; without an audited refresh backend this remains `false`. |
 
 ## State Transitions
 
@@ -56,5 +56,6 @@ baseline and dirty domains are cleared.
   from clearing data that still needs to be written.
 - Only successful baseline commit clears all domains and consumes the calculation snapshot.
 
-`RefreshAll` and other external-refresh members remain part of OOTD-013/OOTD-065. Until they have
-an observable backend or host callback, they must not claim an external-refresh state transition.
+`RefreshAll` and other external-refresh members remain fail-closed. OOTD-065's offline access
+report records that a rejected call attempted neither refresh nor external access; only a future
+observable backend or host callback may claim an external-refresh state transition.

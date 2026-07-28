@@ -38,9 +38,10 @@ use excel_xlsx::{
 use office_codegen::{OmFocusSurfaceRegistry, build_focus_surface_registry_from_json};
 use office_common::{
     AbsoluteAnchor, ActiveContentPolicy, CellError, CellValue, ChartId, ChartObjectId,
-    DefinedNameId, DrawingAnchor, DrawingId, DrawingObjectId, ExcelProfile, FileFormat,
-    FormulaSource, GetRangeValuesSpec, LoadOptions, NameScope, NameValidationMode, ObjectHandle,
-    ObjectPlacement, OmArray, OmError, OmErrorCode, OmResult, OmValue, OpaquePart,
+    DefinedNameId, DrawingAnchor, DrawingId, DrawingObjectId, ExcelProfile,
+    ExternalDataAccessReport, ExternalDataPolicy, FileFormat, FormulaSource, GetRangeValuesSpec,
+    LoadOptions, NameScope, NameValidationMode, ObjectHandle, ObjectPlacement, OmArray, OmError,
+    OmErrorCode, OmResult, OmValue, OpaquePart,
     OpenWorkbookSpec, PointEmu, RangeArea, RangeHandle, RangeRef, RangeSet, Rect, ReferenceTarget,
     SaveOptions, SaveWorkbookSpec, SetRangeValuesSpec, SheetId, SheetKind, SheetScope,
     SheetVisibility, SizeEmu, WorkbookHandle, WorkbookId, WorkbookModel, WorksheetHandle,
@@ -664,6 +665,7 @@ struct RuntimeCalculationSnapshot {
 #[derive(Debug)]
 struct RuntimeWorkbook {
     loaded: LoadedXlsxWorkbook,
+    external_data_policy: ExternalDataPolicy,
     chart_support_part_sources: BTreeMap<ChartId, Vec<RuntimeChartSupportPartSource>>,
     read_only: bool,
     source_path: Option<PathBuf>,
@@ -1428,7 +1430,22 @@ impl ExcelRuntime {
     }
 
     pub fn open_workbook(&mut self, spec: OpenWorkbookSpec) -> OmResult<WorkbookHandle> {
-        self.open_workbook_with_display_name(spec, None, None)
+        self.open_workbook_with_external_data_policy(spec, ExternalDataPolicy::OfflinePreserve)
+    }
+
+    /// Opens a workbook under an explicit external-data policy. The default offline policy parses
+    /// and preserves cached package data without contacting any external source.
+    pub fn open_workbook_with_external_data_policy(
+        &mut self,
+        spec: OpenWorkbookSpec,
+        external_data_policy: ExternalDataPolicy,
+    ) -> OmResult<WorkbookHandle> {
+        self.open_workbook_with_display_name_and_external_data_policy(
+            spec,
+            None,
+            None,
+            external_data_policy,
+        )
     }
 
     fn allocate_created_workbook_name(&mut self) -> String {
@@ -1521,6 +1538,21 @@ impl ExcelRuntime {
         display_name: Option<String>,
         source_path: Option<PathBuf>,
     ) -> OmResult<WorkbookHandle> {
+        self.open_workbook_with_display_name_and_external_data_policy(
+            spec,
+            display_name,
+            source_path,
+            ExternalDataPolicy::OfflinePreserve,
+        )
+    }
+
+    fn open_workbook_with_display_name_and_external_data_policy(
+        &mut self,
+        spec: OpenWorkbookSpec,
+        display_name: Option<String>,
+        source_path: Option<PathBuf>,
+        external_data_policy: ExternalDataPolicy,
+    ) -> OmResult<WorkbookHandle> {
         let mut loaded = self.codec.load(
             &spec.bytes,
             LoadOptions {
@@ -1529,6 +1561,16 @@ impl ExcelRuntime {
                 read_calc_chain: true,
             },
         )?;
+
+        if external_data_policy == ExternalDataPolicy::Refuse
+            && loaded
+                .source_or_current_external_data_inventory()?
+                .has_artifacts()
+        {
+            return Err(OmError::external_data_policy_refused(
+                "external-data policy refused a workbook containing external data sources",
+            ));
+        }
 
         if let Some(format_hint) = spec.format_hint
             && format_hint != loaded.detected_format
@@ -1574,6 +1616,7 @@ impl ExcelRuntime {
             handle_value,
             RuntimeWorkbook {
                 loaded,
+                external_data_policy,
                 chart_support_part_sources: BTreeMap::new(),
                 read_only: spec.read_only,
                 source_path,
@@ -2310,6 +2353,19 @@ impl ExcelRuntime {
         self.runtime_workbook(workbook)?
             .loaded
             .has_source_or_current_active_content_artifacts()
+    }
+
+    pub fn workbook_external_data_access_report(
+        &self,
+        workbook: WorkbookHandle,
+    ) -> OmResult<ExternalDataAccessReport> {
+        let runtime = self.runtime_workbook(workbook)?;
+        Ok(ExternalDataAccessReport::offline(
+            runtime.external_data_policy,
+            runtime
+                .loaded
+                .source_or_current_external_data_inventory()?,
+        ))
     }
 
     pub fn is_read_only(&self, workbook: WorkbookHandle) -> OmResult<bool> {
