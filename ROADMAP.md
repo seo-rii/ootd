@@ -74,9 +74,13 @@ Active order:
    Complex ActiveX/VML/OLE/custom UI real-Excel evidence remains required before Oracle-verified.
 19. `OOTD-065` stage 1 complete (2026-07-28, synthetic): deterministic external-data inventory,
    typed offline-preserve/refuse open policy, access-attempt report, and unrelated-edit cache
-   preservation are implemented. **Active:** add Windows Oracle preflight/isolation audit and
-   define the disabled host refresh/provider callback boundary.
-20. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
+   preservation are implemented.
+20. `OOTD-041`/`OOTD-065` Oracle preflight stage complete (2026-07-28,
+   synthetic/fake-backed): source and sandbox packages are audited before COM activation; known
+   external-link, connection, query-table, and Data Model paths, content types, and relationships
+   are refused while ordinary external hyperlinks remain allowed. **Active:** define the disabled
+   host refresh/provider callback boundary and add pinned isolated-Excel evidence.
+21. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
    claiming practical chart/pivot/style parity.
 
 Every numbered work unit starts with a failing regression and lands as its own reviewable commit.

@@ -37,8 +37,12 @@ infrastructure failure, never a semantic pass.
 ## Safety Boundary
 
 - Run only SHA-256-pinned corpus inputs on an offline, disposable Windows profile.
-- Only `.xlsx` and `.xltx` are accepted. VBA projects, macro sheets, and dialog sheets are rejected
-  before Excel activation.
+- Only `.xlsx` and `.xltx` are accepted. Known VBA/XLM, ActiveX, OLE/embedded-package, custom-UI,
+  external-link, connection, query-table, and Data Model markers are rejected before Excel
+  activation. Ordinary external hyperlinks are not classified as external data.
+- The source input and its sandbox copy each receive an atomic preflight decision under
+  `manifest/preflight/`. Rejected inputs retain a machine-readable reason even though no Excel
+  process is started; accepted records include the archive entry and uncompressed-byte counts.
 - Excel is hidden with alerts, events, link updates, and macros disabled. Workbooks open with
   `UpdateLinks=0` and `CorruptLoad=xlNormalLoad`; there is no automatic repair fallback.
 - Each case records every Excel process it activates. All COM objects are released in reverse order after

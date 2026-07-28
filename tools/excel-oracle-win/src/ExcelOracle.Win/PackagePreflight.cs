@@ -1,4 +1,6 @@
 using System.IO.Compression;
+using System.Security.Cryptography;
+using System.Text.Json.Nodes;
 using System.Xml;
 using ExcelOracle.Contracts;
 
@@ -51,8 +53,57 @@ public static class PackagePreflight
         "http://schemas.microsoft.com/office/2007/relationships/ui/extensibility",
         "http://schemas.microsoft.com/office/2006/relationships/ui/userCustomization",
     };
+    private static readonly HashSet<string> ExternalDataContentTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.externalLink+xml",
+        "application/vnd.ms-excel.externalLink",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.connections+xml",
+        "application/vnd.ms-excel.connections",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.queryTable+xml",
+        "application/vnd.ms-excel.queryTable",
+        "application/vnd.ms-excel.model",
+        "application/vnd.ms-excel.dataModel",
+    };
 
-    public static void Validate(string inputPath)
+    public static void Validate(string inputPath) => ValidateCore(inputPath);
+
+    public static void ValidateAndWriteAudit(
+        string inputPath,
+        string auditPath,
+        string inputRole)
+    {
+        try
+        {
+            var metrics = ValidateCore(inputPath);
+            WriteAudit(inputPath, auditPath, inputRole, "accepted", metrics, reason: null);
+        }
+        catch (ContractException error)
+        {
+            WriteAudit(
+                inputPath,
+                auditPath,
+                inputRole,
+                "rejected",
+                metrics: null,
+                reason: error.Message);
+            throw;
+        }
+        catch (InvalidDataException error)
+        {
+            var contractError = new ContractException(
+                $"Excel Oracle input was not a valid ZIP package: {error.Message}");
+            WriteAudit(
+                inputPath,
+                auditPath,
+                inputRole,
+                "rejected",
+                metrics: null,
+                reason: contractError.Message);
+            throw contractError;
+        }
+    }
+
+    private static PackagePreflightMetrics ValidateCore(string inputPath)
     {
         var fullPath = Path.GetFullPath(inputPath);
         var extension = Path.GetExtension(fullPath);
@@ -101,17 +152,32 @@ public static class PackagePreflight
             {
                 throw new ContractException($"Excel Oracle input contained active-content part {name}");
             }
+            if (IsExternalDataPart(name))
+            {
+                throw new ContractException($"Excel Oracle input contained external-data part {name}");
+            }
             if (name.Equals("[Content_Types].xml", StringComparison.OrdinalIgnoreCase)
                 && XmlPartContainsMarker(entry, "ContentType", IsActiveContentType))
             {
                 throw new ContractException("Excel Oracle input declared an active-content content type");
+            }
+            if (name.Equals("[Content_Types].xml", StringComparison.OrdinalIgnoreCase)
+                && XmlPartContainsMarker(entry, "ContentType", IsExternalDataContentType))
+            {
+                throw new ContractException("Excel Oracle input declared an external-data content type");
             }
             if (name.EndsWith(".rels", StringComparison.OrdinalIgnoreCase)
                 && XmlPartContainsMarker(entry, "Type", ActiveContentRelationshipTypes.Contains))
             {
                 throw new ContractException($"Excel Oracle input declared an active-content relationship in {name}");
             }
+            if (name.EndsWith(".rels", StringComparison.OrdinalIgnoreCase)
+                && XmlPartContainsMarker(entry, "Type", IsExternalDataRelationshipType))
+            {
+                throw new ContractException($"Excel Oracle input declared an external-data relationship in {name}");
+            }
         }
+        return new PackagePreflightMetrics(info.Length, archive.Entries.Count, total);
     }
 
     private static bool IsActiveContentPart(string name) =>
@@ -125,12 +191,92 @@ public static class PackagePreflight
         || name.StartsWith("xl/embeddings/", StringComparison.OrdinalIgnoreCase)
         || name.StartsWith("customUI/", StringComparison.OrdinalIgnoreCase);
 
+    private static bool IsExternalDataPart(string name) =>
+        name.StartsWith("xl/externalLinks/", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("xl/connections.xml", StringComparison.OrdinalIgnoreCase)
+        || name.StartsWith("xl/queryTables/", StringComparison.OrdinalIgnoreCase)
+        || name.StartsWith("xl/model/", StringComparison.OrdinalIgnoreCase)
+        || name.StartsWith("xl/customData/", StringComparison.OrdinalIgnoreCase);
+
     private static bool IsActiveContentType(string value)
     {
         var separator = value.IndexOf(';');
         var mediaType = separator >= 0 ? value[..separator] : value;
         return ActiveContentTypes.Contains(mediaType.Trim());
     }
+
+    private static bool IsExternalDataContentType(string value)
+    {
+        var separator = value.IndexOf(';');
+        var mediaType = separator >= 0 ? value[..separator] : value;
+        return ExternalDataContentTypes.Contains(mediaType.Trim());
+    }
+
+    private static bool IsExternalDataRelationshipType(string value)
+    {
+        var relationshipType = value.Trim();
+        return relationshipType.EndsWith("/externalLink", StringComparison.OrdinalIgnoreCase)
+            || relationshipType.EndsWith("/externalLinkPath", StringComparison.OrdinalIgnoreCase)
+            || relationshipType.Contains("/xlExternalLinkPath/", StringComparison.OrdinalIgnoreCase)
+            || relationshipType.EndsWith("/externalLinkLongPath", StringComparison.OrdinalIgnoreCase)
+            || relationshipType.Contains("/xlExternalLinkLongPath/", StringComparison.OrdinalIgnoreCase)
+            || relationshipType.EndsWith("/oleObjectLinkLongPath", StringComparison.OrdinalIgnoreCase)
+            || relationshipType.EndsWith("/connections", StringComparison.OrdinalIgnoreCase)
+            || relationshipType.EndsWith("/queryTable", StringComparison.OrdinalIgnoreCase)
+            || relationshipType.EndsWith("/model", StringComparison.OrdinalIgnoreCase)
+            || relationshipType.EndsWith("/modelConnection", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static void WriteAudit(
+        string inputPath,
+        string auditPath,
+        string inputRole,
+        string decision,
+        PackagePreflightMetrics? metrics,
+        string? reason)
+    {
+        var fullPath = Path.GetFullPath(inputPath);
+        var info = new FileInfo(fullPath);
+        var audit = new JsonObject
+        {
+            ["schemaVersion"] = 1,
+            ["inputRole"] = inputRole,
+            ["inputFileName"] = Path.GetFileName(fullPath),
+            ["decision"] = decision,
+            ["excelActivationEligible"] = decision == "accepted",
+            ["policies"] = new JsonObject
+            {
+                ["activeContent"] = "refuse",
+                ["externalData"] = "refuse",
+                ["network"] = "required-host-isolation",
+            },
+        };
+        if (metrics is not null)
+        {
+            audit["archiveBytes"] = metrics.ArchiveBytes;
+            audit["entryCount"] = metrics.EntryCount;
+            audit["uncompressedBytes"] = metrics.UncompressedBytes;
+        }
+        else if (info.Exists)
+        {
+            audit["archiveBytes"] = info.Length;
+        }
+        if (CanHashInput(info))
+        {
+            using var stream = new FileStream(fullPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+            audit["inputSha256"] = Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
+        }
+        if (reason is not null)
+        {
+            audit["reason"] = reason;
+        }
+        AtomicArtifacts.WriteJson(auditPath, audit);
+    }
+
+    private static bool CanHashInput(FileInfo info) =>
+        info.Exists
+        && info.Length <= MaxArchiveBytes
+        && (info.Attributes & FileAttributes.ReparsePoint) == 0;
 
     private static bool XmlPartContainsMarker(
         ZipArchiveEntry entry,
@@ -171,4 +317,9 @@ public static class PackagePreflight
             throw new ContractException($"Excel Oracle input contained malformed package XML in {entry.FullName}: {error.Message}");
         }
     }
+
+    private sealed record PackagePreflightMetrics(
+        long ArchiveBytes,
+        int EntryCount,
+        long UncompressedBytes);
 }

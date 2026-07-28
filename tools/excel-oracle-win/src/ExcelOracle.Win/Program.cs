@@ -27,11 +27,18 @@ try
         throw new ContractException("observation path must be contained by the output root");
     }
 
-    PackagePreflight.Validate(inputPath);
+    var preflightManifestRoot = Path.Combine(outputRoot, "manifest", "preflight");
+    PackagePreflight.ValidateAndWriteAudit(
+        inputPath,
+        Path.Combine(preflightManifestRoot, "source_input.json"),
+        "source");
     var sandboxInput = Path.Combine(outputRoot, "work", "input" + Path.GetExtension(inputPath));
     Directory.CreateDirectory(Path.GetDirectoryName(sandboxInput)!);
     File.Copy(inputPath, sandboxInput, overwrite: false);
-    PackagePreflight.Validate(sandboxInput);
+    PackagePreflight.ValidateAndWriteAudit(
+        sandboxInput,
+        Path.Combine(preflightManifestRoot, "sandbox_input.json"),
+        "sandbox-copy");
 
     var caseBytes = File.ReadAllBytes(casePath);
     string caseJson;

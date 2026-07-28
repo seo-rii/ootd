@@ -45,6 +45,23 @@ is `Unsupported` before the source file is read. `Workbook.RefreshAll` is likewi
 the rejected call does not mark a refresh or external-access attempt and does not set
 `external_refresh_dirty`.
 
+## Windows Excel Oracle Boundary
+
+The desktop Excel Oracle uses a stricter `Refuse` boundary. Before constructing an Excel COM
+session, it scans both the caller's source package and the copied sandbox input with bounded ZIP
+and XML readers. Known external-link, connection, query-table, and Data Model paths, content types,
+and relationship types are rejected. This includes Transitional and Strict external-link
+relationships plus Excel long-path relationship extensions; an ordinary external hyperlink remains
+allowed by this classification.
+
+Each decision is atomically recorded as `manifest/preflight/source_input.json` or
+`manifest/preflight/sandbox_input.json`. The audit states the active-content and external-data
+policies, whether the package was eligible for Excel activation, size metrics for accepted inputs,
+the input SHA-256 when the bounded regular file can be read, and the stable rejection reason for
+denied inputs. A rejected source therefore leaves evidence without activating Excel. The network
+field records required host isolation rather than claiming that the runner configured it. These
+controls supplement, rather than replace, the required offline and disposable Windows host profile.
+
 ## Save Contract
 
 Serialization never refreshes external data. Default lossless save preserves cached external-data
@@ -56,7 +73,7 @@ strips active content nor bypasses signed-package rewrite refusal.
 
 OOTD-065 remains `Partial`. Before a refresh capability can be enabled, it needs a host callback or
 provider boundary with explicit allowlists, credential isolation, timeouts, cancellation, audit
-events, and deterministic `external_refresh_dirty` transitions. Windows Excel Oracle preflight
-must also reject or isolate external-data fixtures before COM activation, and a pinned corpus must
-cover linked workbooks, DDE/OLE, ODBC/OLE DB/web/text connections, QueryTables, Power Query,
-Data Model, external pivot sources, and locale-specific link paths.
+events, and deterministic `external_refresh_dirty` transitions. A pinned Oracle corpus must still
+cover linked workbooks, DDE/OLE, ODBC/OLE DB/web/text connections, QueryTables, Power Query, Data
+Model, external pivot sources, and locale-specific link paths. Preflight marker coverage must grow
+with that corpus; it is not a claim that desktop Excel is safe outside the isolated host profile.

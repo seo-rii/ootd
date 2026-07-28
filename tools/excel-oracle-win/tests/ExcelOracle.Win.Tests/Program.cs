@@ -175,6 +175,155 @@ Run("rejects active-content content types and relationships before Excel activat
     }
 });
 
+Run("rejects external-data paths before Excel activation", () =>
+{
+    foreach (var externalDataPath in new[]
+    {
+        "xl/externalLinks/externalLink1.xml",
+        "xl/connections.xml",
+        "xl/queryTables/queryTable1.xml",
+        "xl/model/model.bin",
+        "xl/customData/item1.xml",
+    })
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"ootd-oracle-external-path-{Guid.NewGuid():N}.xlsx");
+        try
+        {
+            WriteZipPackage(path, new Dictionary<string, string>
+            {
+                ["[Content_Types].xml"] = "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"/>",
+                ["xl/workbook.xml"] = "<workbook/>",
+                [externalDataPath] = "fixture",
+            });
+            Throws<ContractException>(() => PackagePreflight.Validate(path));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+});
+
+Run("rejects external-data content types and relationships before Excel activation", () =>
+{
+    foreach (var contentType in new[]
+    {
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.externalLink+xml",
+        "application/vnd.ms-excel.externalLink",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.connections+xml",
+        "application/vnd.ms-excel.connections",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.queryTable+xml",
+        "application/vnd.ms-excel.queryTable",
+        "application/vnd.ms-excel.model",
+        "application/vnd.ms-excel.dataModel",
+    })
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"ootd-oracle-external-type-{Guid.NewGuid():N}.xlsx");
+        try
+        {
+            WriteZipPackage(path, new Dictionary<string, string>
+            {
+                ["[Content_Types].xml"] = $"<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Override PartName=\"/custom/payload.bin\" ContentType=\"{contentType}; charset=binary\"/></Types>",
+                ["xl/workbook.xml"] = "<workbook/>",
+            });
+            Throws<ContractException>(() => PackagePreflight.Validate(path));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    foreach (var relationshipType in new[]
+    {
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/externalLink",
+        "http://purl.oclc.org/ooxml/officeDocument/relationships/externalLink",
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/externalLinkPath",
+        "http://schemas.microsoft.com/office/2020/07/relationships/xlExternalLinkPath/remote",
+        "http://schemas.microsoft.com/office/2011/relationships/externalLinkLongPath",
+        "http://schemas.microsoft.com/office/2020/07/relationships/xlExternalLinkLongPath/remote",
+        "http://schemas.microsoft.com/office/2011/relationships/oleObjectLinkLongPath",
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/connections",
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/queryTable",
+        "http://schemas.microsoft.com/office/2007/relationships/model",
+        "http://schemas.microsoft.com/office/2011/relationships/modelConnection",
+    })
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"ootd-oracle-external-rel-{Guid.NewGuid():N}.xlsx");
+        try
+        {
+            WriteZipPackage(path, new Dictionary<string, string>
+            {
+                ["[Content_Types].xml"] = "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"/>",
+                ["xl/workbook.xml"] = "<workbook/>",
+                ["_rels/.rels"] = $"<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rIdExternal\" Type=\"{relationshipType}\" Target=\"https://external.example/data\" TargetMode=\"External\"/></Relationships>",
+            });
+            Throws<ContractException>(() => PackagePreflight.Validate(path));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+});
+
+Run("writes accepted and rejected package-preflight audits before Excel activation", () =>
+{
+    var root = Path.Combine(Path.GetTempPath(), $"ootd-oracle-preflight-audit-{Guid.NewGuid():N}");
+    Directory.CreateDirectory(root);
+    var acceptedPath = Path.Combine(root, "accepted.xlsx");
+    var rejectedPath = Path.Combine(root, "rejected.xlsx");
+    var acceptedAuditPath = Path.Combine(root, "manifest", "accepted.json");
+    var rejectedAuditPath = Path.Combine(root, "manifest", "rejected.json");
+    try
+    {
+        WriteZipPackage(acceptedPath, new Dictionary<string, string>
+        {
+            ["[Content_Types].xml"] = "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"/>",
+            ["xl/workbook.xml"] = "<workbook/>",
+        });
+        WriteZipPackage(rejectedPath, new Dictionary<string, string>
+        {
+            ["[Content_Types].xml"] = "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"/>",
+            ["xl/workbook.xml"] = "<workbook/>",
+            ["xl/connections.xml"] = "<connections/>",
+        });
+
+        PackagePreflight.ValidateAndWriteAudit(
+            acceptedPath,
+            acceptedAuditPath,
+            "source");
+        Throws<ContractException>(() => PackagePreflight.ValidateAndWriteAudit(
+            rejectedPath,
+            rejectedAuditPath,
+            "sandbox-copy"));
+
+        var acceptedAudit = JsonNode.Parse(File.ReadAllBytes(acceptedAuditPath))!;
+        Equal("accepted", acceptedAudit["decision"]?.GetValue<string>());
+        Equal(true, acceptedAudit["excelActivationEligible"]?.GetValue<bool>());
+        Equal("refuse", acceptedAudit["policies"]?["externalData"]?.GetValue<string>());
+        Equal(2, acceptedAudit["entryCount"]?.GetValue<int>());
+        Equal(
+            Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(acceptedPath))).ToLowerInvariant(),
+            acceptedAudit["inputSha256"]?.GetValue<string>());
+
+        var rejectedAudit = JsonNode.Parse(File.ReadAllBytes(rejectedAuditPath))!;
+        Equal("rejected", rejectedAudit["decision"]?.GetValue<string>());
+        Equal(false, rejectedAudit["excelActivationEligible"]?.GetValue<bool>());
+        Equal("sandbox-copy", rejectedAudit["inputRole"]?.GetValue<string>());
+        Equal(
+            Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(rejectedPath))).ToLowerInvariant(),
+            rejectedAudit["inputSha256"]?.GetValue<string>());
+        Equal(
+            "Excel Oracle input contained external-data part xl/connections.xml",
+            rejectedAudit["reason"]?.GetValue<string>());
+    }
+    finally
+    {
+        Directory.Delete(root, recursive: true);
+    }
+});
+
 Run("accepts inert content types and relationships in package preflight", () =>
 {
     var path = Path.Combine(Path.GetTempPath(), $"ootd-oracle-inert-{Guid.NewGuid():N}.xlsx");
@@ -184,7 +333,7 @@ Run("accepts inert content types and relationships in package preflight", () =>
         {
             ["[Content_Types].xml"] = "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Override PartName=\"/xl/workbook.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml\"/></Types>",
             ["xl/workbook.xml"] = "<workbook/>",
-            ["_rels/.rels"] = "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"xl/workbook.xml\"/></Relationships>",
+            ["_rels/.rels"] = "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"xl/workbook.xml\"/><Relationship Id=\"rId2\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink\" Target=\"https://example.com/\" TargetMode=\"External\"/></Relationships>",
         });
         PackagePreflight.Validate(path);
     }

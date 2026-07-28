@@ -166,9 +166,14 @@ Wave 1 exit gate:
    DDE/OLE link, connection, queryTable, data-model의 path/content-type/relationship inventory와
    typed `OfflinePreserve`/`Refuse` open policy를 구현했다. 기본 open/save는 외부 접근 없이
    cache를 보존하고 access report는 update/refresh/access 미시도를 반환한다. Refuse는 handle
-   등록 전에 stable error로 차단한다. 2단계는 Windows Oracle preflight·격리 audit와 host
-   callback/provider boundary다.
-10. `OOTD-044` + `OOTD-059`: machine-readable capability manifest를 source of truth로 두고
+   등록 전에 stable error로 차단한다.
+10. `OOTD-041` + `OOTD-065` Oracle preflight 단계 완료 (2026-07-28, synthetic/fake-backed):
+    Windows runner가 COM session 생성 전에 source와 sandbox copy를 각각 bounded scan하며,
+    external-link/connection/query-table/Data Model의 path/content-type/relationship marker를
+    거부한다. 각 허용/거부 결정은 `manifest/preflight`에 원자적으로 기록되고 ordinary
+    external hyperlink는 외부 데이터로 오인하지 않는다. host refresh/provider callback과
+    실제 Excel corpus는 계속 열려 있다.
+11. `OOTD-044` + `OOTD-059`: machine-readable capability manifest를 source of truth로 두고
    README/STATUS/ROADMAP/archived bundle drift를 CI에서 검출한다.
 
 Wave 2 exit gate:
