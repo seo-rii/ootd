@@ -1,6 +1,6 @@
 use super::super::{
     ExcelRuntime, RuntimeNamesScope, RuntimeObjectKind, RuntimeSheetCollectionKind,
-    RuntimeSheetTemplate, XL_OPEN_XML_STRICT_WORKBOOK, XL_OPEN_XML_TEMPLATE,
+    RuntimeSheetTemplate, VBA_PROJECT_PART_NAME, XL_OPEN_XML_STRICT_WORKBOOK, XL_OPEN_XML_TEMPLATE,
     XL_OPEN_XML_TEMPLATE_MACRO_ENABLED, XL_OPEN_XML_WORKBOOK, XL_OPEN_XML_WORKBOOK_MACRO_ENABLED,
     file_format_from_path, file_format_to_excel_value, om_value_is_omitted,
     unsupported_execution_backend, validate_check_spelling_args,
@@ -68,7 +68,7 @@ impl ExcelRuntime {
                 self.runtime_workbook(workbook)?
                     .loaded
                     .package
-                    .contains("xl/vbaProject.bin"),
+                    .contains(VBA_PROJECT_PART_NAME),
             )),
             "ReadOnly" => Ok(OmValue::Bool(self.runtime_workbook(workbook)?.read_only)),
             "Saved" => Ok(OmValue::Bool(

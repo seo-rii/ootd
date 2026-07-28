@@ -29,6 +29,13 @@
         ));
     }
 
+    mod active_content_fixture {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/support/active_content.rs"
+        ));
+    }
+
     mod signed_ooxml_fixture {
         include!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -122358,176 +122365,184 @@
     }
 
     #[test]
-    fn workbook_save_as_strips_macro_parts_to_non_macro_format() {
-        let mut package =
-            OpcPackage::from_bytes(synthetic_workbook_bytes().as_slice()).expect("package");
-        package
-            .add_part(OpcPart {
-                name: super::VBA_PROJECT_PART_NAME.to_string(),
-                content_type: Some(super::VBA_PROJECT_CONTENT_TYPE.to_string()),
-                compression: CompressionMethod::Stored,
-                bytes: vec![0x56, 0x42, 0x41],
-            })
-            .expect("add vba project part");
-        let content_types_xml = package
-            .part(super::CONTENT_TYPES_PART_NAME)
-            .expect("content types part")
-            .bytes
-            .clone();
-        package
-            .replace_part_bytes(
-                super::CONTENT_TYPES_PART_NAME,
-                super::set_content_type_override(
-                    content_types_xml.as_slice(),
-                    super::WORKBOOK_PART_NAME,
-                    super::WORKBOOK_XLSM_CONTENT_TYPE,
-                )
-                .expect("retag workbook content type"),
-            )
-            .expect("replace content types");
-        let content_types_xml = String::from_utf8(
-            package
-                .part(super::CONTENT_TYPES_PART_NAME)
-                .expect("content types after workbook retag")
-                .bytes
-                .clone(),
-        )
-        .expect("content types utf8")
-        .replace(
-            r#"<Default Extension="xml" ContentType="application/xml"/>"#,
-            format!(
-                r#"<Default Extension="xml" ContentType="application/xml"/>
-  <Default Extension="bin" ContentType="{}"/>"#,
-                super::VBA_PROJECT_CONTENT_TYPE
-            )
-            .as_str(),
+    fn workbook_save_as_refuses_active_content_loss_and_preserves_macro_targets() {
+        let source_bytes = active_content_fixture::macro_enabled_package_with_active_content(
+            &synthetic_workbook_bytes(),
         );
-        package
-            .replace_part_bytes(
-                super::CONTENT_TYPES_PART_NAME,
-                content_types_xml.into_bytes(),
-            )
-            .expect("replace content types with vba default");
-        let content_types_xml = package
-            .part(super::CONTENT_TYPES_PART_NAME)
-            .expect("content types part after retag")
-            .bytes
-            .clone();
-        package
-            .replace_part_bytes(
-                super::CONTENT_TYPES_PART_NAME,
-                super::append_content_type_override_if_missing(
-                    content_types_xml.as_slice(),
-                    super::VBA_PROJECT_PART_NAME,
-                    super::VBA_PROJECT_CONTENT_TYPE,
-                )
-                .expect("add vba content type override"),
-            )
-            .expect("replace content types with vba override");
-        let workbook_rels_xml = String::from_utf8(
-            package
-                .part(super::WORKBOOK_RELS_PART_NAME)
-                .expect("workbook rels")
-                .bytes
-                .clone(),
-        )
-        .expect("workbook rels utf8")
-        .replace(
-            "</Relationships>",
-            format!(
-                r#"  <Relationship Id="rId2" Type="{}" Target="vbaProject.bin"/>
-</Relationships>"#,
-                super::VBA_PROJECT_RELATIONSHIP_TYPE
-            )
-            .as_str(),
-        );
-        package
-            .replace_part_bytes(
-                super::WORKBOOK_RELS_PART_NAME,
-                workbook_rels_xml.into_bytes(),
-            )
-            .expect("replace workbook rels");
-
+        let source_package = OpcPackage::from_bytes(&source_bytes).expect("source package");
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
             .open_workbook(OpenWorkbookSpec {
-                bytes: package.to_bytes().expect("macro workbook bytes"),
+                bytes: source_bytes,
                 format_hint: None,
                 profile: ExcelProfile::Excel365,
                 read_only: false,
             })
             .expect("open macro workbook");
-        let target_path = std::env::temp_dir().join(format!(
-            "ootd-strip-macro-{}.xlsx",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("system clock")
-                .as_nanos()
-        ));
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock")
+            .as_nanos();
+        let base_dir = std::env::temp_dir().join(format!("ootd-active-content-{unique}"));
+        fs::create_dir_all(&base_dir).expect("create active-content fixture directory");
+        let xlsx_target = base_dir.join("lossy.xlsx");
+        let xltx_target = base_dir.join("lossy.xltx");
+        let xltm_target = base_dir.join("preserved.xltm");
 
+        assert!(
+            runtime
+                .workbook_has_active_content_artifacts(workbook)
+                .expect("active-content inventory")
+        );
         assert!(expect_bool(
             runtime
                 .dispatch_get(workbook.0, "HasVBProject", &[])
-                .expect("macro Workbook.HasVBProject before SaveAs")
-        ));
-        runtime
-            .dispatch_invoke(
-                workbook.0,
-                "SaveAs",
-                &[
-                    OmValue::Text(target_path.to_string_lossy().into_owned()),
-                    OmValue::Number(f64::from(super::XL_OPEN_XML_WORKBOOK)),
-                ],
-            )
-            .expect("Workbook.SaveAs should strip macro parts");
-        assert!(target_path.exists());
-        assert!(!expect_bool(
-            runtime
-                .dispatch_get(workbook.0, "HasVBProject", &[])
-                .expect("macro Workbook.HasVBProject after SaveAs")
+                .expect("Workbook.HasVBProject before SaveAs")
         ));
         assert_eq!(
             expect_number(
                 runtime
                     .dispatch_get(workbook.0, "FileFormat", &[])
-                    .expect("Workbook.FileFormat after macro stripping SaveAs")
+                    .expect("Workbook.FileFormat before SaveAs")
             ),
-            f64::from(super::XL_OPEN_XML_WORKBOOK)
+            f64::from(super::XL_OPEN_XML_WORKBOOK_MACRO_ENABLED)
         );
 
-        let saved_bytes = fs::read(&target_path).expect("read stripped macro target");
-        let saved_package =
-            OpcPackage::from_bytes(saved_bytes.as_slice()).expect("stripped macro package");
-        assert!(!saved_package.contains(super::VBA_PROJECT_PART_NAME));
-        let saved_content_types = String::from_utf8(
-            saved_package
-                .part(super::CONTENT_TYPES_PART_NAME)
-                .expect("saved content types")
-                .bytes
-                .clone(),
-        )
-        .expect("saved content types utf8");
-        assert!(!saved_content_types.contains(super::VBA_PROJECT_CONTENT_TYPE));
-        assert!(saved_content_types.contains(super::WORKBOOK_XLSX_CONTENT_TYPE));
-        let saved_workbook_rels = String::from_utf8(
-            saved_package
-                .part(super::WORKBOOK_RELS_PART_NAME)
-                .expect("saved workbook rels")
-                .bytes
-                .clone(),
-        )
-        .expect("saved workbook rels utf8");
-        assert!(!saved_workbook_rels.contains(super::VBA_PROJECT_RELATIONSHIP_TYPE));
-        assert!(!saved_workbook_rels.contains("vbaProject.bin"));
-        let reopened = ExcelRuntime::new()
-            .codec
-            .load(
-                saved_bytes.as_slice(),
-                office_common::LoadOptions::default(),
+        let expected_message = "macro-enabled workbook conversion to a non-macro format requires an explicit active-content policy";
+        let save_spec = SaveWorkbookSpec {
+            format: FileFormat::Xlsx,
+            profile: ExcelProfile::Excel365,
+            lossless: true,
+        };
+        let direct_error = runtime
+            .save_workbook(workbook, save_spec.clone())
+            .expect_err("direct macro-to-xlsx conversion must fail closed");
+        assert_eq!(
+            direct_error.code,
+            OmErrorCode::ActiveContentConversionUnsupported
+        );
+        assert_eq!(direct_error.message, expected_message);
+        let mut writer = Vec::new();
+        let writer_error = runtime
+            .save_workbook_to_writer(workbook, save_spec, &mut writer)
+            .expect_err("host writer macro-to-xlsx conversion must fail closed");
+        assert_eq!(
+            writer_error.code,
+            OmErrorCode::ActiveContentConversionUnsupported
+        );
+        assert_eq!(writer_error.message, expected_message);
+        assert!(writer.is_empty());
+
+        let clean_error = runtime
+            .dispatch_invoke(
+                workbook.0,
+                "SaveAs",
+                &[
+                    OmValue::Text(xlsx_target.to_string_lossy().into_owned()),
+                    OmValue::Number(f64::from(super::XL_OPEN_XML_WORKBOOK)),
+                ],
             )
-            .expect("reload stripped macro target");
-        assert_eq!(reopened.detected_format, FileFormat::Xlsx);
-        fs::remove_file(&target_path).expect("cleanup stripped macro target");
+            .expect_err("clean macro-to-xlsx conversion must fail closed");
+        assert_eq!(
+            clean_error.code,
+            OmErrorCode::ActiveContentConversionUnsupported
+        );
+        assert_eq!(clean_error.message, expected_message);
+        assert!(!xlsx_target.exists());
+
+        let workbook_id = runtime.workbook_model(workbook).expect("workbook model").id;
+        let sheet_id = runtime.worksheets(workbook).expect("worksheets")[0].id;
+        runtime
+            .set_range_values(SetRangeValuesSpec {
+                workbook,
+                range: RangeRef::single_cell(workbook_id, sheet_id, 1, 1),
+                values: OmArray::scalar(OmValue::Number(43.0)),
+            })
+            .expect("edit macro workbook");
+        let expected_dirty_domains = runtime
+            .workbook_dirty_domains(workbook)
+            .expect("dirty domains before rejected SaveAs");
+        let dirty_error = runtime
+            .dispatch_invoke(
+                workbook.0,
+                "SaveAs",
+                &[
+                    OmValue::Text(xltx_target.to_string_lossy().into_owned()),
+                    OmValue::Number(f64::from(super::XL_OPEN_XML_TEMPLATE)),
+                ],
+            )
+            .expect_err("dirty macro-to-xltx conversion must fail closed");
+        assert_eq!(
+            dirty_error.code,
+            OmErrorCode::ActiveContentConversionUnsupported
+        );
+        assert_eq!(dirty_error.message, expected_message);
+        assert!(!xltx_target.exists());
+        assert_eq!(
+            runtime
+                .workbook_dirty_domains(workbook)
+                .expect("dirty domains after rejected SaveAs"),
+            expected_dirty_domains
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(workbook.0, "FileFormat", &[])
+                    .expect("Workbook.FileFormat after rejected SaveAs")
+            ),
+            f64::from(super::XL_OPEN_XML_WORKBOOK_MACRO_ENABLED)
+        );
+
+        runtime
+            .dispatch_invoke(
+                workbook.0,
+                "SaveAs",
+                &[
+                    OmValue::Text(xltm_target.to_string_lossy().into_owned()),
+                    OmValue::Number(f64::from(
+                        super::XL_OPEN_XML_TEMPLATE_MACRO_ENABLED,
+                    )),
+                ],
+            )
+            .expect("macro-to-macro SaveAs preserves active content");
+        assert!(xltm_target.exists());
+        assert!(
+            runtime
+                .workbook_has_active_content_artifacts(workbook)
+                .expect("active-content inventory after macro SaveAs")
+        );
+        assert!(expect_bool(
+            runtime
+                .dispatch_get(workbook.0, "HasVBProject", &[])
+                .expect("Workbook.HasVBProject after macro SaveAs")
+        ));
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(workbook.0, "FileFormat", &[])
+                    .expect("Workbook.FileFormat after macro SaveAs")
+            ),
+            f64::from(super::XL_OPEN_XML_TEMPLATE_MACRO_ENABLED)
+        );
+
+        let saved_package = OpcPackage::from_bytes(
+            &fs::read(&xltm_target).expect("read preserved macro target"),
+        )
+        .expect("preserved macro target package");
+        for (part_name, _) in active_content_fixture::ACTIVE_PARTS {
+            assert_eq!(
+                saved_package
+                    .part(part_name)
+                    .unwrap_or_else(|| panic!("saved package missing {part_name}"))
+                    .bytes,
+                source_package
+                    .part(part_name)
+                    .unwrap_or_else(|| panic!("source package missing {part_name}"))
+                    .bytes,
+                "{part_name}"
+            );
+        }
+        fs::remove_dir_all(&base_dir).expect("cleanup active-content fixture directory");
     }
 
     #[test]

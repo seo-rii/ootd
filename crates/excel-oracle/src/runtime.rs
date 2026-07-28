@@ -314,6 +314,7 @@ fn observe_om_error(error: OmError) -> ObservedError {
         OmErrorCode::ResourceLimit => CanonicalErrorKind::ResourceLimit,
         OmErrorCode::EncryptedWorkbookUnsupported => CanonicalErrorKind::Unsupported,
         OmErrorCode::SignedPackageMutationUnsupported => CanonicalErrorKind::Unsupported,
+        OmErrorCode::ActiveContentConversionUnsupported => CanonicalErrorKind::Unsupported,
         OmErrorCode::Calculation => CanonicalErrorKind::Calculation,
         OmErrorCode::External => CanonicalErrorKind::External,
     };
@@ -328,6 +329,7 @@ fn observe_om_error(error: OmError) -> ObservedError {
         OmErrorCode::ResourceLimit => "resourceLimit",
         OmErrorCode::EncryptedWorkbookUnsupported => "encryptedWorkbookUnsupported",
         OmErrorCode::SignedPackageMutationUnsupported => "signedPackageMutationUnsupported",
+        OmErrorCode::ActiveContentConversionUnsupported => "activeContentConversionUnsupported",
         OmErrorCode::Calculation => "calculation",
         OmErrorCode::External => "external",
     };

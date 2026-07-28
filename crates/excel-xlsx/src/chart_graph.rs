@@ -3251,6 +3251,7 @@ mod tests {
             sheet_drawing_support_parts: BTreeMap::new(),
             pending_drawing_relationship_graphs: BTreeMap::new(),
             pending_chart_relationship_graphs: BTreeMap::new(),
+            active_content_inventory: Default::default(),
             digital_signature_inventory: Default::default(),
         }
     }

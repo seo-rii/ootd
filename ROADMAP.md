@@ -63,9 +63,14 @@ Active order:
    every codec/runtime/filesystem/host-writer rewrite refuses both linked and orphan OPC signature
    artifacts before output. Manual package replacement cannot bypass the source policy; signature
    verification, explicit strip+audit, and re-signing remain unsupported.
-17. **Active:** continue Wave 2 security policy at active-content closure (`OOTD-022` +
-   `OOTD-064`), then external-link policy.
-18. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
+17. `OOTD-022` complete / `OOTD-064` stage 1 complete (2026-07-28): source/current package
+   inventory covers VBA/XLM/dialog sheets, ActiveX/control properties, OLE/embedded packages, and
+   custom UI by path, content type, and relationship. Same-format and macro-capable saves preserve
+   artifacts; macro-enabled to non-macro conversion returns a dedicated fail-closed error before
+   output. The Windows Oracle preflight blocks the same markers before Excel activation.
+18. **Active:** complete `OOTD-064` with an explicit strip option, closure deletion, audit manifest,
+   and real-Excel fixtures, then implement `OOTD-065` external-link policy.
+19. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
    claiming practical chart/pivot/style parity.
 
 Every numbered work unit starts with a failing regression and lands as its own reviewable commit.

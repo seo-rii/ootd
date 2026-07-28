@@ -79,20 +79,114 @@ Run("parses a strict observe command", () =>
     Throws<ContractException>(() => RunnerOptions.Parse(["observe", "--unknown", "value"]));
 });
 
-Run("rejects macro and legacy execution parts before Excel activation", () =>
+Run("rejects active-content paths before Excel activation", () =>
 {
-    var path = Path.Combine(Path.GetTempPath(), $"ootd-oracle-macro-{Guid.NewGuid():N}.xlsx");
+    foreach (var activePath in new[]
+    {
+        "xl/vbaProject.bin",
+        "xl/vbaProjectSignatureAgile.bin",
+        "xl/vbaData.xml",
+        "xl/macrosheets/sheet1.xml",
+        "xl/dialogsheets/sheet1.xml",
+        "xl/activeX/activeX1.xml",
+        "xl/ctrlProps/ctrlProp1.xml",
+        "xl/embeddings/oleObject1.bin",
+        "customUI/customUI.xml",
+    })
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"ootd-oracle-active-path-{Guid.NewGuid():N}.xlsx");
+        try
+        {
+            WriteZipPackage(path, new Dictionary<string, string>
+            {
+                ["[Content_Types].xml"] = "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"/>",
+                ["xl/workbook.xml"] = "<workbook/>",
+                [activePath] = "fixture",
+            });
+            Throws<ContractException>(() => PackagePreflight.Validate(path));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+});
+
+Run("rejects active-content content types and relationships before Excel activation", () =>
+{
+    foreach (var contentType in new[]
+    {
+        "application/vnd.ms-office.vbaProject",
+        "application/vnd.ms-office.vbaProjectSignatureV3",
+        "application/vnd.ms-office.vbaData+xml",
+        "application/vnd.ms-excel.macrosheet+xml",
+        "application/vnd.ms-excel.intlmacrosheet+xml",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.dialogsheet+xml",
+        "application/vnd.ms-office.activeX",
+        "application/vnd.ms-office.activeX+xml",
+        "application/vnd.ms-excel.controlproperties+xml",
+        "application/vnd.openxmlformats-officedocument.oleObject",
+    })
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"ootd-oracle-active-type-{Guid.NewGuid():N}.xlsx");
+        try
+        {
+            WriteZipPackage(path, new Dictionary<string, string>
+            {
+                ["[Content_Types].xml"] = $"<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Override PartName=\"/custom/payload.bin\" ContentType=\"{contentType}; charset=binary\"/></Types>",
+                ["xl/workbook.xml"] = "<workbook/>",
+            });
+            Throws<ContractException>(() => PackagePreflight.Validate(path));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    foreach (var relationshipType in new[]
+    {
+        "http://schemas.microsoft.com/office/2006/relationships/vbaProject",
+        "http://schemas.microsoft.com/office/2006/relationships/vbaProjectSignatureAgile",
+        "http://schemas.microsoft.com/office/2006/relationships/vbaData",
+        "http://schemas.microsoft.com/office/2006/relationships/xlMacrosheet",
+        "http://schemas.microsoft.com/office/2006/relationships/xlIntlMacrosheet",
+        "http://purl.oclc.org/ooxml/officeDocument/relationships/dialogsheet",
+        "http://schemas.microsoft.com/office/2006/relationships/activeXControlBinary",
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/package",
+        "http://schemas.microsoft.com/office/2007/relationships/ui/extensibility",
+    })
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"ootd-oracle-active-rel-{Guid.NewGuid():N}.xlsx");
+        try
+        {
+            WriteZipPackage(path, new Dictionary<string, string>
+            {
+                ["[Content_Types].xml"] = "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"/>",
+                ["xl/workbook.xml"] = "<workbook/>",
+                ["_rels/.rels"] = $"<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rIdActive\" Type=\"{relationshipType}\" Target=\"custom/payload.bin\"/></Relationships>",
+            });
+            Throws<ContractException>(() => PackagePreflight.Validate(path));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+});
+
+Run("accepts inert content types and relationships in package preflight", () =>
+{
+    var path = Path.Combine(Path.GetTempPath(), $"ootd-oracle-inert-{Guid.NewGuid():N}.xlsx");
     try
     {
-        using (var stream = File.Create(path))
-        using (var archive = new ZipArchive(stream, ZipArchiveMode.Create))
+        WriteZipPackage(path, new Dictionary<string, string>
         {
-            archive.CreateEntry("[Content_Types].xml");
-            archive.CreateEntry("xl/workbook.xml");
-            archive.CreateEntry("xl/vbaProject.bin");
-        }
-
-        Throws<ContractException>(() => PackagePreflight.Validate(path));
+            ["[Content_Types].xml"] = "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Override PartName=\"/xl/workbook.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml\"/></Types>",
+            ["xl/workbook.xml"] = "<workbook/>",
+            ["_rels/.rels"] = "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"xl/workbook.xml\"/></Relationships>",
+        });
+        PackagePreflight.Validate(path);
     }
     finally
     {
@@ -153,6 +247,18 @@ Run("records every owned Excel process once for watchdog cleanup", () =>
 });
 
 return;
+
+static void WriteZipPackage(string path, IReadOnlyDictionary<string, string> entries)
+{
+    using var stream = File.Create(path);
+    using var archive = new ZipArchive(stream, ZipArchiveMode.Create);
+    foreach (var (name, contents) in entries)
+    {
+        var entry = archive.CreateEntry(name);
+        using var writer = new StreamWriter(entry.Open());
+        writer.Write(contents);
+    }
+}
 
 static void Run(string name, Action test)
 {

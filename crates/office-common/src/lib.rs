@@ -26,6 +26,7 @@ pub enum OmErrorCode {
     ResourceLimit,
     EncryptedWorkbookUnsupported,
     SignedPackageMutationUnsupported,
+    ActiveContentConversionUnsupported,
     Calculation,
     External,
 }
@@ -70,6 +71,10 @@ impl OmError {
 
     pub fn signed_package_mutation_unsupported(message: impl Into<String>) -> Self {
         Self::new(OmErrorCode::SignedPackageMutationUnsupported, message)
+    }
+
+    pub fn active_content_conversion_unsupported(message: impl Into<String>) -> Self {
+        Self::new(OmErrorCode::ActiveContentConversionUnsupported, message)
     }
 
     pub fn unsupported(message: impl Into<String>) -> Self {

@@ -1,16 +1,16 @@
     use std::collections::{BTreeMap, BTreeSet};
 
     use super::{
-        BorderSummary, COMMENTS_RELATIONSHIP_TYPE, CellData, ChartAxisCrosses, ChartAxisGroup,
-        ChartAxisKind, ChartAxisScaleType, ChartAxisSummary, ChartCacheKindSummary,
+        ActiveContentKind, BorderSummary, COMMENTS_RELATIONSHIP_TYPE, CellData, ChartAxisCrosses,
+        ChartAxisGroup, ChartAxisKind, ChartAxisScaleType, ChartAxisSummary, ChartCacheKindSummary,
         ChartCacheSummary, ChartDataLabelPosition, ChartDataLabelsSummary, ChartLegendPosition,
         ChartOpaqueRelationshipSummary, ChartSeriesSummary, ChartSourceLiteralPointSummary,
         ChartSourceLiteralSummary, ChartSupportRelationshipBinding, ChartTickLabelPosition,
-        ChartTickMark, ChartView3DModel, CommentPartSummary, DrawingAnchorKind,
-        DrawingAnchorSummary, DrawingCellMarkerSummary, DrawingOpaqueRelationshipSummary,
-        DrawingPointSummary, DrawingSizeSummary, DxfSummary, FileFormat, FillSummary, FontSummary,
-        HYPERLINK_RELATIONSHIP_TYPE, OpcPackage, STYLES_RELATIONSHIP_TYPE, THEME_RELATIONSHIP_TYPE,
-        PivotPackagePartKind, VML_DRAWING_RELATIONSHIP_TYPE, WORKBOOK_RELS_PART_NAME,
+        ChartTickMark, ChartView3DModel, CommentPartSummary, DrawingAnchorKind, DrawingAnchorSummary,
+        DrawingCellMarkerSummary, DrawingOpaqueRelationshipSummary, DrawingPointSummary,
+        DrawingSizeSummary, DxfSummary, FileFormat, FillSummary, FontSummary,
+        HYPERLINK_RELATIONSHIP_TYPE, OpcPackage, PivotPackagePartKind, STYLES_RELATIONSHIP_TYPE,
+        THEME_RELATIONSHIP_TYPE, VML_DRAWING_RELATIONSHIP_TYPE, WORKBOOK_RELS_PART_NAME,
         WorksheetCommentSummary,
         WorksheetData, WorksheetHyperlinkBinding, WorksheetHyperlinkSummary,
         WorksheetRelationshipBinding, WorksheetSupportParts, XlsxCodec, chart_object_anchor_xml,
@@ -37,6 +37,13 @@
         include!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../tests/support/encrypted_ooxml.rs"
+        ));
+    }
+
+    mod active_content_fixture {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/support/active_content.rs"
         ));
     }
 
@@ -345,6 +352,149 @@
         assert_eq!(
             error.code,
             OmErrorCode::SignedPackageMutationUnsupported
+        );
+    }
+
+    #[test]
+    fn active_content_inventory_covers_parts_content_types_and_relationships_without_stripping() {
+        let codec = XlsxCodec;
+        let source_bytes = active_content_fixture::package_with_active_content(
+            &synthetic_workbook_bytes(),
+        );
+        let loaded = codec
+            .load(&source_bytes, CommonLoadOptions::default())
+            .expect("active-content workbook remains readable");
+        let inventory = loaded.active_content_inventory();
+
+        assert!(inventory.has_artifacts());
+        assert_eq!(
+            inventory.kinds(),
+            &[
+                ActiveContentKind::VbaProject,
+                ActiveContentKind::VbaProjectSignature,
+                ActiveContentKind::VbaData,
+                ActiveContentKind::XlmMacroSheet,
+                ActiveContentKind::DialogSheet,
+                ActiveContentKind::ActiveXControl,
+                ActiveContentKind::EmbeddedObject,
+                ActiveContentKind::CustomUi,
+            ]
+        );
+        assert_eq!(
+            inventory.part_uris(),
+            &[
+                "customUI/customUI.xml".to_string(),
+                "xl/activeX/activeX1.xml".to_string(),
+                "xl/ctrlProps/ctrlProp1.xml".to_string(),
+                "xl/dialogsheets/sheet1.xml".to_string(),
+                "xl/embeddings/oleObject1.bin".to_string(),
+                "xl/macrosheets/sheet1.xml".to_string(),
+                "xl/vbaData.xml".to_string(),
+                "xl/vbaProject.bin".to_string(),
+                "xl/vbaProjectSignatureAgile.bin".to_string(),
+            ]
+        );
+        assert_eq!(
+            inventory.relationship_part_uris(),
+            &[
+                "_rels/.rels".to_string(),
+                "xl/_rels/workbook.xml.rels".to_string(),
+            ]
+        );
+        assert!(inventory.has_content_type_markers());
+        assert!(
+            loaded
+                .has_source_or_current_active_content_artifacts()
+                .expect("combined inventory")
+        );
+
+        let saved_bytes = codec
+            .save(&loaded, CommonSaveOptions::default())
+            .expect("same-format active-content save preserves artifacts");
+        let source_package = OpcPackage::from_bytes(&source_bytes).expect("source package");
+        let saved_package = OpcPackage::from_bytes(&saved_bytes).expect("saved package");
+        for part_name in inventory
+            .part_uris()
+            .iter()
+            .map(String::as_str)
+            .chain(
+                inventory
+                    .relationship_part_uris()
+                    .iter()
+                    .map(String::as_str),
+            )
+            .chain(["[Content_Types].xml", "xl/workbook.xml"])
+        {
+            assert_eq!(
+                saved_package
+                    .part(part_name)
+                    .unwrap_or_else(|| panic!("saved package missing {part_name}"))
+                    .bytes,
+                source_package
+                    .part(part_name)
+                    .unwrap_or_else(|| panic!("source package missing {part_name}"))
+                    .bytes,
+                "{part_name}"
+            );
+        }
+    }
+
+    #[test]
+    fn orphan_and_late_active_content_markers_cannot_bypass_the_combined_inventory() {
+        let codec = XlsxCodec;
+        let orphan_bytes = active_content_fixture::package_with_orphan_active_content_markers(
+            &synthetic_workbook_bytes(),
+        );
+        let mut loaded = codec
+            .load(&orphan_bytes, CommonLoadOptions::default())
+            .expect("orphan active-content markers remain readable");
+        assert_eq!(
+            loaded.active_content_inventory().kinds(),
+            &[
+                ActiveContentKind::ActiveXControl,
+                ActiveContentKind::EmbeddedObject,
+            ]
+        );
+        assert!(loaded.active_content_inventory().part_uris().is_empty());
+        assert_eq!(
+            loaded
+                .active_content_inventory()
+                .relationship_part_uris(),
+            &["_rels/.rels".to_string()]
+        );
+        assert!(
+            loaded
+                .active_content_inventory()
+                .has_content_type_markers()
+        );
+
+        loaded.package =
+            OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("clean replacement");
+        assert!(
+            loaded
+                .has_source_or_current_active_content_artifacts()
+                .expect("source inventory survives package replacement")
+        );
+
+        let mut clean = codec
+            .load(
+                synthetic_workbook_bytes().as_slice(),
+                CommonLoadOptions::default(),
+            )
+            .expect("clean workbook");
+        clean
+            .package
+            .add_part(OpcPart {
+                name: "xl/activeX/late.bin".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: vec![1, 2, 3],
+            })
+            .expect("add late ActiveX marker");
+        assert!(
+            clean
+                .has_source_or_current_active_content_artifacts()
+                .expect("current package is re-scanned")
         );
     }
 

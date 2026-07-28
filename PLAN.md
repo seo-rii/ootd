@@ -149,11 +149,18 @@ Wave 1 exit gate:
    rewrite를 stable `SignedPackageMutationUnsupported`로 출력 생성 전에 거부하고 source
    bytes, 열린 workbook, dirty domains를 유지한다. 암호학적 검증, explicit strip+audit,
    re-signing은 지원하지 않는다. 세부 계약은 `docs/interfaces/digital_signatures.md`에 있다.
-7. `OOTD-022` + `OOTD-064`: VBA, XLM, ActiveX, OLE, custom UI 전체 relationship closure에
-   preserve/strip/refuse 정책을 적용한다.
-8. `OOTD-065`: external link/connection/query offline policy와 host callback boundary를
+7. `OOTD-022` 완료 + `OOTD-064` 1단계 완료 (2026-07-28): VBA project/data/signature,
+   XLM/dialog sheet, ActiveX/control property, OLE/embedded package, custom UI를 path,
+   content type, relationship marker로 source/current package에서 inventory한다. same-format과
+   macro-capable target은 part graph를 보존하고, active-content가 있는 XLSM/XLTM→XLSX/XLTX는
+   stable `ActiveContentConversionUnsupported`로 target 생성 전에 거부한다. Windows Oracle도
+   같은 marker를 bounded XML preflight에서 Excel 실행 전에 차단한다. 세부 계약은
+   `docs/interfaces/active_content.md`에 있다.
+8. `OOTD-064` 2단계: caller가 명시적으로 선택하는 strip policy, relationship/content-type
+   closure 삭제, deterministic audit manifest와 실제 Excel fixture를 구현한다.
+9. `OOTD-065`: external link/connection/query offline policy와 host callback boundary를
    정의한다.
-9. `OOTD-044` + `OOTD-059`: machine-readable capability manifest를 source of truth로 두고
+10. `OOTD-044` + `OOTD-059`: machine-readable capability manifest를 source of truth로 두고
    README/STATUS/ROADMAP/archived bundle drift를 CI에서 검출한다.
 
 Wave 2 exit gate:

@@ -567,9 +567,6 @@ const CHART_RELATIONSHIP_TYPE: &str =
 const CHART_COLOR_STYLE_RELATIONSHIP_TYPE: &str =
     "http://schemas.microsoft.com/office/2011/relationships/chartColorStyle";
 const VBA_PROJECT_PART_NAME: &str = "xl/vbaProject.bin";
-const VBA_PROJECT_CONTENT_TYPE: &str = "application/vnd.ms-office.vbaProject";
-const VBA_PROJECT_RELATIONSHIP_TYPE: &str =
-    "http://schemas.microsoft.com/office/2006/relationships/vbaProject";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RuntimeSheetTemplate {
@@ -2227,6 +2224,15 @@ impl ExcelRuntime {
             .loaded
             .digital_signature_inventory()
             .has_artifacts())
+    }
+
+    pub fn workbook_has_active_content_artifacts(
+        &self,
+        workbook: WorkbookHandle,
+    ) -> OmResult<bool> {
+        self.runtime_workbook(workbook)?
+            .loaded
+            .has_source_or_current_active_content_artifacts()
     }
 
     pub fn is_read_only(&self, workbook: WorkbookHandle) -> OmResult<bool> {
@@ -29367,10 +29373,20 @@ fn retag_loaded_workbook_format(
     if format == loaded.detected_format && loaded.state.model.format == format {
         return Ok(loaded.clone());
     }
+    let source_is_macro_enabled = format_allows_vba_project(loaded.detected_format)
+        || format_allows_vba_project(loaded.state.model.format);
+    if source_is_macro_enabled
+        && !format_allows_vba_project(format)
+        && loaded.has_source_or_current_active_content_artifacts()?
+    {
+        return Err(OmError::active_content_conversion_unsupported(
+            "macro-enabled workbook conversion to a non-macro format requires an explicit active-content policy",
+        ));
+    }
     let content_type = workbook_main_content_type(format)?;
 
     let mut retagged = loaded.clone();
-    let mut content_types_xml = retagged
+    let content_types_xml = retagged
         .package
         .part(CONTENT_TYPES_PART_NAME)
         .ok_or_else(|| {
@@ -29381,36 +29397,6 @@ fn retag_loaded_workbook_format(
         })?
         .bytes
         .clone();
-    if retagged.package.contains(VBA_PROJECT_PART_NAME) && !format_allows_vba_project(format) {
-        retagged.package.remove_part(VBA_PROJECT_PART_NAME);
-        content_types_xml = strip_content_type_overrides(
-            content_types_xml.as_slice(),
-            &[VBA_PROJECT_PART_NAME.to_string()],
-        )?;
-        content_types_xml = strip_content_type_defaults_by_content_type(
-            content_types_xml.as_slice(),
-            &[VBA_PROJECT_CONTENT_TYPE],
-        )?;
-        let workbook_rels_part_name = retagged
-            .support_parts
-            .workbook_relationships_part_uri
-            .clone()
-            .unwrap_or_else(|| WORKBOOK_RELS_PART_NAME.to_string());
-        if let Some(workbook_rels_xml) = retagged
-            .package
-            .part(workbook_rels_part_name.as_str())
-            .map(|part| part.bytes.clone())
-        {
-            retagged.package.replace_part_bytes(
-                workbook_rels_part_name.as_str(),
-                strip_relationship_entries_by_type_or_target(
-                    workbook_rels_xml.as_slice(),
-                    &[VBA_PROJECT_RELATIONSHIP_TYPE],
-                    &[VBA_PROJECT_PART_NAME, "vbaProject.bin"],
-                )?,
-            )?;
-        }
-    }
     let content_types_xml = set_content_type_override(
         content_types_xml.as_slice(),
         WORKBOOK_PART_NAME,
@@ -30905,76 +30891,6 @@ fn should_strip_content_type_override(
             .map_err(runtime_xml_error)?
             .into_owned();
         if part_names.contains(value.as_str()) {
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
-
-fn strip_content_type_defaults_by_content_type(
-    content_types_xml: &[u8],
-    content_types: &[&str],
-) -> OmResult<Vec<u8>> {
-    let content_types = content_types.iter().copied().collect::<BTreeSet<_>>();
-    let mut reader = Reader::from_reader(Cursor::new(content_types_xml));
-    reader.config_mut().trim_text(false);
-    let mut writer = Writer::new(Cursor::new(Vec::new()));
-    let mut buffer = Vec::new();
-    let mut skip_depth = 0usize;
-
-    loop {
-        match reader.read_event_into(&mut buffer) {
-            Ok(Event::Start(_)) if skip_depth > 0 => {
-                skip_depth += 1;
-            }
-            Ok(Event::End(_)) if skip_depth > 0 => {
-                skip_depth -= 1;
-            }
-            Ok(Event::Empty(element))
-                if xml_local_name(element.name().as_ref()) == b"Default"
-                    && should_strip_content_type_default(
-                        &element,
-                        reader.decoder(),
-                        &content_types,
-                    )? => {}
-            Ok(Event::Start(element))
-                if xml_local_name(element.name().as_ref()) == b"Default"
-                    && should_strip_content_type_default(
-                        &element,
-                        reader.decoder(),
-                        &content_types,
-                    )? =>
-            {
-                skip_depth = 1;
-            }
-            Ok(Event::Eof) => break,
-            Ok(event) if skip_depth == 0 => writer
-                .write_event(event.into_owned())
-                .map_err(runtime_xml_error)?,
-            Ok(_) => {}
-            Err(error) => return Err(runtime_xml_error(error)),
-        }
-        buffer.clear();
-    }
-
-    Ok(writer.into_inner().into_inner())
-}
-
-fn should_strip_content_type_default(
-    element: &BytesStart<'_>,
-    decoder: quick_xml::encoding::Decoder,
-    content_types: &BTreeSet<&str>,
-) -> OmResult<bool> {
-    for attr in element.attributes() {
-        let attr = attr.map_err(runtime_xml_error)?;
-        if attr.key.as_ref() != b"ContentType" {
-            continue;
-        }
-        let value = attr
-            .decode_and_unescape_value(decoder)
-            .map_err(runtime_xml_error)?
-            .into_owned();
-        if content_types.contains(value.as_str()) {
             return Ok(true);
         }
     }

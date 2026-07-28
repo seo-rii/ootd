@@ -28,6 +28,7 @@ use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::name::ResolveResult;
 use quick_xml::{NsReader, Reader, Writer};
 
+mod active_content;
 mod chart_encoder;
 mod chart_graph;
 mod digital_signature;
@@ -38,6 +39,8 @@ mod shared_strings;
 mod worksheet;
 
 use encryption::is_encrypted_ooxml_compound_file;
+pub use active_content::{ActiveContentInventory, ActiveContentKind};
+use active_content::collect_active_content_inventory;
 pub use digital_signature::DigitalSignatureInventory;
 use digital_signature::collect_digital_signature_inventory;
 use relationships::{
@@ -207,10 +210,20 @@ pub struct LoadedXlsxWorkbook {
     pub sheet_drawing_support_parts: BTreeMap<SheetId, SheetDrawingSupportParts>,
     pub pending_drawing_relationship_graphs: BTreeMap<DrawingId, PendingDrawingRelationshipGraph>,
     pub pending_chart_relationship_graphs: BTreeMap<ChartId, PendingChartRelationshipGraph>,
+    active_content_inventory: ActiveContentInventory,
     digital_signature_inventory: DigitalSignatureInventory,
 }
 
 impl LoadedXlsxWorkbook {
+    pub fn active_content_inventory(&self) -> &ActiveContentInventory {
+        &self.active_content_inventory
+    }
+
+    pub fn has_source_or_current_active_content_artifacts(&self) -> OmResult<bool> {
+        Ok(self.active_content_inventory.has_artifacts()
+            || collect_active_content_inventory(&self.package)?.has_artifacts())
+    }
+
     pub fn digital_signature_inventory(&self) -> &DigitalSignatureInventory {
         &self.digital_signature_inventory
     }
@@ -1396,6 +1409,7 @@ impl XlsxCodec {
                 "input is not an OOXML workbook package",
             ));
         }
+        let active_content_inventory = collect_active_content_inventory(&package)?;
         let digital_signature_inventory = collect_digital_signature_inventory(&package)?;
 
         let workbook_part = package.part("xl/workbook.xml").ok_or_else(|| {
@@ -1519,6 +1533,7 @@ impl XlsxCodec {
             sheet_drawing_support_parts,
             pending_drawing_relationship_graphs: BTreeMap::new(),
             pending_chart_relationship_graphs: BTreeMap::new(),
+            active_content_inventory,
             digital_signature_inventory,
         })
     }
