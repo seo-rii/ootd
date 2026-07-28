@@ -36,5 +36,5 @@ absolute part names, nonempty typed declarations, and a nested same-local-name p
 The existing ZIP/XML resource preflight still runs before this parser.
 
 This contract is synthetic, not Oracle-verified. Media-type grammar validation and a separate
-repair mode remain future work; package relationship root/namespace validation is tracked by
-OOTD-030.
+repair mode remain future work. Package relationship root/namespace validation is now covered by
+OOTD-030 and documented in `opc_relationships.md`.

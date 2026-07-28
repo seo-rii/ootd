@@ -99,9 +99,14 @@ Active order:
    root namespace/local name while accepting arbitrary bound prefixes. Only direct typed
    declarations affect resolution; duplicate defaults/overrides, missing required attributes,
    non-absolute or noncanonical override names, and nonempty declarations fail closed. Opaque
-   extension subtrees cannot inject same-local declarations. **Active:** `OOTD-030` QName-strict
-   package relationships, followed by strict/repair structure separation.
-25. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
+   extension subtrees cannot inject same-local declarations.
+25. `OOTD-030` complete (2026-07-28, synthetic): `.rels` parsing now requires the exact package
+   `Relationships` root expanded name and direct namespace-matching `Relationship` children while
+   accepting arbitrary bound prefixes. Wrong/missing namespaces and foreign/nested same-local
+   entries fail closed; required attributes, duplicate IDs, target modes, and normalized internal
+   targets retain their strict contract. **Active:** `OOTD-016`/`OOTD-017` strict parse versus
+   explicit repair separation.
+26. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
    claiming practical chart/pivot/style parity.
 
 Every numbered work unit starts with a failing regression and lands as its own reviewable commit.

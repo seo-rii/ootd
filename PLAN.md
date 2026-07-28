@@ -220,8 +220,12 @@ Wave 2 exit gate:
    case-insensitive extension duplicate, canonical/absolute part-name duplicate와 empty-content
    구조를 fail-closed한다. opaque extension subtree의 same-local poison은 적용하지 않는다.
    세부 계약은 `docs/interfaces/opc_content_types.md`에 있다.
-9. `OOTD-030`: package relationships root/namespace/direct-child 구조와 duplicate 검증을
-   QName-aware하게 fail-closed한다.
+9. `OOTD-030` 완료 (2026-07-28, synthetic): 모든 typed `.rels` parse 경로가 package
+   relationships namespace의 `Relationships` root와 direct `Relationship` expanded name을
+   요구하고 arbitrary bound prefix를 수용한다. wrong/missing root namespace, foreign 또는
+   nested same-local element, root text/CDATA를 fail-closed하며 기존 required unqualified
+   attribute, duplicate ID, target mode와 internal target validation을 유지한다. 세부 계약은
+   `docs/interfaces/opc_relationships.md`에 있다.
 10. `OOTD-031` + `OOTD-032` + `OOTD-033` + `OOTD-054`: mutable public state를 validated
    command/transaction으로 닫고 workbook identity assignment를 fallible/atomic하게 만든다.
 11. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를

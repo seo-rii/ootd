@@ -22,7 +22,7 @@ contract-based until Milestone M1 pins the first behavioral Excel corpus.
 |---|---|---|---|
 | Office OM source intake | Partial | Schema, template, capture planning, Windows launcher, receipt, and normalization paths exist; the real TypeLib/PIA bundle is not pinned | Real Windows capture bundle with build, channel, architecture, and locale |
 | Behavioral Excel oracle | Partial | Typed cases, exact-byte run manifests, comparison/gate bridge, `ExcelRuntime` adapter, .NET contract tests, and an isolated COM runner/watchdog exist; no real Excel observation is pinned | Execute twice on the pinned Windows/Excel profile and commit the first required corpus |
-| OPC package loading | Partial | ZIP parts and opaque bytes are retained; default loading enforces finite ZIP and XML depth/event/text/attribute budgets; canonical part identities reject ambiguous duplicates and malformed URIs; `[Content_Types].xml` requires the exact package root expanded name, resolves prefixed direct declarations, rejects missing required attributes and case/canonical duplicates, and prevents opaque nested same-local nodes from changing typed resolution; relationship parsing rejects duplicate IDs, root escapes, invalid modes, and malformed XML | QName-strict relationship root/direct-child validation, M3 property/fuzz coverage, and dependency policy |
+| OPC package loading | Partial | ZIP parts and opaque bytes are retained; default loading enforces finite ZIP and XML depth/event/text/attribute budgets; canonical part identities reject ambiguous duplicates and malformed URIs; `[Content_Types].xml` requires the exact package root expanded name, resolves prefixed direct declarations, rejects missing required attributes and case/canonical duplicates, and prevents opaque nested same-local nodes from changing typed resolution; `.rels` parsing likewise requires the exact package root namespace and direct typed children, rejects foreign/nested same-local edges, duplicate IDs, root escapes, invalid modes, and malformed XML, and accepts arbitrary bound prefixes | Strict-versus-repair parser separation, M3 property/fuzz coverage, and dependency policy |
 | Workbook and worksheet model | Partial | Workbook, sheet, cell, name, chart, drawing, and basic dynamic-array state are modeled | Oracle-backed mutation and save/reopen cases |
 | XLSX load/save | Partial | No-op and targeted dirty-save preservation have broad synthetic regression coverage; package-root `officeDocument` discovery supports nonstandard workbook/owner-relationships URIs for exact Transitional and Strict dialects; Strict main namespaces, core relationship types, both accepted main content types, relocated shared strings/calc chain, same-dialect cell edits, and runtime SaveAs are covered, while mixed/unknown dialect signals fail closed; workbook core, shared-string, and worksheet-cell parsing matches namespace URI plus local name, accepts arbitrary valid SpreadsheetML/relationship prefixes, preserves foreign same-local nodes, and inherits source prefixes for generated typed nodes; filesystem saves use verified preparation, same-directory durable temporary files, atomic replace/create-new, and post-write baseline commit; calculation-state rewrites update `calcPr` and remove stale calc chains; read-only Save cannot overwrite its source; codec options fail closed outside the implemented Excel365 lossless-preservation policy; encrypted OOXML CFB containers are detected before ZIP parsing; signed packages are readable but every rewrite is rejected before output; active-content paths, content types, and relationships are inventoried; typed preserve/refuse/strip snapshot policies include ownership-aware closure cleanup and deterministic audit output; external workbook/DDE/OLE/connection/query/data-model markers have a deterministic package inventory and cached parts survive unrelated edits; the Windows Oracle refuses known external-data markers and records source/copy preflight audits before COM activation | Remaining QName parser families, root/parent structure and package-metadata namespace validation, Markup Compatibility, Strict chart/drawing/structural mutation and cross-dialect conversion, tracked real-world corpus, Agile Encryption support, signed-package validation/strip policy, complex active-content Excel reopen evidence, external-data refresh/provider boundary, and repair-free Oracle output |
 | Runtime object model | Partial | Application, workbook, worksheet, range, names, selection, clipboard, and chart-related dispatch are available; `Workbook.Saved` uses prompt-only state, typed workbook dirty domains have a command/save-failure transition contract, pathless `Workbook.Save` fails closed, `SaveAs` rejects unsupported options before write, `Workbooks.Open` implements read-only and rejects unsupported options before read, signed-package Save/SaveAs/SaveCopyAs/Close(save) paths fail before output, active-content macro-to-non-macro conversion fails before output by default, and an explicit snapshot API returns stripped bytes plus audit without mutating the open baseline; external data defaults to offline preserve, exposes a no-attempt report, and supports typed refuse-before-registration; backend-free refresh/spelling/fixed-format export/print methods return `Unsupported`; `Workbook.Close` has a deterministic headless state table; workbook calculation mode is synchronized with `Application.Calculation` | Remaining host callback/provider and Oracle isolation policies, generated member coverage, and behavioral Oracle cases |
@@ -37,7 +37,7 @@ contract-based until Milestone M1 pins the first behavioral Excel corpus.
 
 - Rust MSRV: 1.88; development toolchain: 1.94.0.
 - Linux workspace tests: enabled in CI.
-- Current root test inventory: 719 `excel-runtime` tests and 2,859 `excel-xlsx` tests.
+- Current root test inventory: 719 `excel-runtime` tests and 2,862 `excel-xlsx` tests.
 - M2 boundary progress: the `excel-xlsx` and `excel-runtime` unit tests now live outside their
   library roots with test identities unchanged; calculation and recalculation/writeback are
   isolated; shared strings, relationships, and worksheet cell codec logic are isolated; Application,
@@ -54,6 +54,12 @@ contract-based until Milestone M1 pins the first behavioral Excel corpus.
   and empty typed content are enforced; unknown attributes/subtrees stay opaque and nested
   same-local poison declarations are ignored. The synthetic contract is documented in
   `docs/interfaces/opc_content_types.md`.
+- OPC relationships boundary: parsed `.rels` parts must have the package relationships
+  `Relationships` expanded root name and direct namespace-matching `Relationship` children;
+  arbitrary bound prefixes are accepted. Wrong/missing root namespaces, foreign or nested
+  same-local entries, and root text/CDATA fail closed. Required unqualified attributes, duplicate
+  IDs across filtered external entries, target modes, and normalized internal targets retain their
+  strict contract. Details are in `docs/interfaces/opc_relationships.md`.
 - CI portability: Ubuntu Rust 1.94, Ubuntu MSRV Rust 1.88, and Windows Rust 1.94 run as independent
   test lanes. A bounded rustfmt gate covers 52 tracked files with four guarded monolith exceptions;
   strict Clippy is enforced for the six foundational/model crates, while runtime/XLSX warnings
@@ -98,8 +104,8 @@ contract-based until Milestone M1 pins the first behavioral Excel corpus.
   matched by the loaded dialect namespace URI plus local name. Arbitrary valid element prefixes,
   relationship-ID prefixes, and worksheet namespace redeclarations are accepted; generated dirty
   nodes inherit the nearest typed owner prefix while foreign same-local nodes and no-op source parts
-  remain preserved. Broader parser migration, root/parent structure, package metadata, Markup
-  Compatibility, and real Excel evidence remain open. The current slice is documented in
+  remain preserved. Broader parser migration, root/parent structure, Markup Compatibility, and
+  real Excel evidence remain open. The current slice is documented in
   `docs/interfaces/spreadsheetml_qnames.md`.
 - Execution backend boundary: correctly shaped refresh, spelling, fixed-format export, and print
   calls on Workbook, Worksheet, Chart, and sheet collections return stable `Unsupported` after

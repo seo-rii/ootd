@@ -51,5 +51,5 @@ No desktop Excel observation is pinned yet. This boundary remains synthetic and 
 OOTD-015/OOTD-049 remain open for parser families outside this slice, stricter parent/root
 structure validation, unknown-prefix and duplicate-expanded-attribute diagnostics, and a shared
 owner-aware raw-fragment splice abstraction. OOTD-029 now provides QName-strict
-`[Content_Types].xml` parsing; OOTD-030 still owns package relationship root/namespace parsing.
+`[Content_Types].xml` parsing and OOTD-030 provides QName-strict package relationship parsing.
 OOTD-061 owns Markup Compatibility, `AlternateContent`, and `extLst` preservation semantics.

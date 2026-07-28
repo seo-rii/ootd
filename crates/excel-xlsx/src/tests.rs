@@ -12630,6 +12630,81 @@
     }
 
     #[test]
+    fn parse_relationship_entries_qname_accepts_bound_package_prefixes() {
+        let relationships = super::parse_relationship_entries(
+            br#"<pkg:Relationships xmlns:pkg="http://schemas.openxmlformats.org/package/2006/relationships">
+  <pkg:Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+</pkg:Relationships>"#,
+            &["xl"],
+        )
+        .expect("prefixed package relationships");
+
+        assert_eq!(
+            relationships,
+            vec![super::RelationshipEntry {
+                id: "rId1".to_string(),
+                relationship_type:
+                    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"
+                        .to_string(),
+                target: "xl/worksheets/sheet1.xml".to_string(),
+                target_mode: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn parse_relationship_entries_qname_rejects_wrong_root_or_namespace() {
+        let cases: [(&str, &[u8]); 3] = [
+            (
+                "missing namespace",
+                br#"<Relationships><Relationship Id="rId1" Type="urn:type" Target="item.xml"/></Relationships>"#,
+            ),
+            (
+                "wrong namespace",
+                br#"<Relationships xmlns="urn:ootd:wrong"><Relationship Id="rId1" Type="urn:type" Target="item.xml"/></Relationships>"#,
+            ),
+            (
+                "wrong root",
+                br#"<Package xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="urn:type" Target="item.xml"/></Package>"#,
+            ),
+        ];
+
+        for (name, relationships_xml) in cases {
+            let error = super::parse_relationship_entries(relationships_xml, &["xl"])
+                .expect_err("invalid package relationships root should fail closed");
+            assert_eq!(error.code, OmErrorCode::Parse, "case: {name}");
+            assert!(
+                error.message.contains("relationships root"),
+                "case: {name}; error: {error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_relationship_entries_qname_rejects_wrong_namespace_and_nested_same_local_nodes() {
+        let cases: [(&str, &[u8]); 2] = [
+            (
+                "foreign direct child",
+                br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships" xmlns:fake="urn:ootd:foreign"><fake:Relationship Id="rId1" Type="urn:type" Target="item.xml"/></Relationships>"#,
+            ),
+            (
+                "nested package child",
+                br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><extension><Relationship Id="rId1" Type="urn:type" Target="item.xml"/></extension></Relationships>"#,
+            ),
+        ];
+
+        for (name, relationships_xml) in cases {
+            let error = super::parse_relationship_entries(relationships_xml, &["xl"])
+                .expect_err("ambiguous Relationship placement should fail closed");
+            assert_eq!(error.code, OmErrorCode::Parse, "case: {name}");
+            assert!(
+                error.message.contains("Relationship element"),
+                "case: {name}; error: {error:?}"
+            );
+        }
+    }
+
+    #[test]
     fn parse_relationship_entries_rejects_missing_required_attributes() {
         for relationship in [
             r#"<Relationship Id="rId1" Target="worksheets/missing-type.xml"/>"#,

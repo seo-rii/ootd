@@ -1,6 +1,9 @@
-use super::{xml_error, xml_local_name};
+use super::{
+    xml::{resolved_element_is, unqualified_attribute_is},
+    xml_error,
+};
 use office_common::{OmError, OmResult};
-use quick_xml::Reader;
+use quick_xml::NsReader;
 use quick_xml::events::Event;
 use std::collections::BTreeSet;
 use std::io::Cursor;
@@ -106,78 +109,159 @@ pub(super) fn parse_relationship_entries_with_options(
     base_segments: &[&str],
     include_external: bool,
 ) -> OmResult<Vec<RelationshipEntry>> {
-    let mut reader = Reader::from_reader(Cursor::new(rels_xml));
+    const PACKAGE_RELATIONSHIPS_NAMESPACE: &[u8] =
+        b"http://schemas.openxmlformats.org/package/2006/relationships";
+
+    let mut reader = NsReader::from_reader(Cursor::new(rels_xml));
     reader.config_mut().trim_text(true);
     let mut buffer = Vec::new();
     let mut relationships = Vec::new();
     let mut relationship_ids = BTreeSet::new();
+    let mut root_seen = false;
+    let mut depth = 0_usize;
 
     loop {
-        match reader.read_event_into(&mut buffer) {
-            Ok(Event::Start(element)) | Ok(Event::Empty(element))
-                if xml_local_name(element.name().as_ref()) == b"Relationship" =>
-            {
-                let mut id = None;
-                let mut relationship_type = None;
-                let mut target = None;
-                let mut external = false;
-                let mut target_mode = None;
-                for attr in element.attributes() {
-                    let attr = attr.map_err(xml_error)?;
-                    let value = attr
-                        .decode_and_unescape_value(reader.decoder())
-                        .map_err(xml_error)?
-                        .into_owned();
-                    match attr.key.as_ref() {
-                        b"Id" => id = Some(value),
-                        b"Type" => relationship_type = Some(value),
-                        b"TargetMode" if value.eq_ignore_ascii_case("External") => {
-                            target_mode = Some(value);
-                            external = true;
+        match reader.read_resolved_event_into(&mut buffer) {
+            Ok((namespace, event @ (Event::Start(_) | Event::Empty(_)))) => {
+                let (element, remains_open) = match event {
+                    Event::Start(element) => (element, true),
+                    Event::Empty(element) => (element, false),
+                    _ => unreachable!("matched package relationship element event"),
+                };
+                let local_name = element.local_name();
+                let is_package_relationships_root = resolved_element_is(
+                    &namespace,
+                    local_name,
+                    PACKAGE_RELATIONSHIPS_NAMESPACE,
+                    b"Relationships",
+                );
+                let is_package_relationship = resolved_element_is(
+                    &namespace,
+                    local_name,
+                    PACKAGE_RELATIONSHIPS_NAMESPACE,
+                    b"Relationship",
+                );
+
+                if depth == 0 {
+                    if root_seen {
+                        return Err(OmError::parse(
+                            "invalid package relationships root: document has more than one root",
+                        ));
+                    }
+                    if !is_package_relationships_root {
+                        return Err(OmError::parse(
+                            "invalid package relationships root: expected Relationships in the package relationships namespace",
+                        ));
+                    }
+                    root_seen = true;
+                } else if local_name.as_ref() == b"Relationship" {
+                    if depth != 1 || !is_package_relationship {
+                        return Err(OmError::parse(
+                            "package Relationship element must be a direct child in the package relationships namespace",
+                        ));
+                    }
+
+                    let mut id = None;
+                    let mut relationship_type = None;
+                    let mut target = None;
+                    let mut external = false;
+                    let mut target_mode = None;
+                    for attr in element.attributes() {
+                        let attr = attr.map_err(xml_error)?;
+                        let value = attr
+                            .decode_and_unescape_value(reader.decoder())
+                            .map_err(xml_error)?
+                            .into_owned();
+                        if unqualified_attribute_is(reader.resolver(), attr.key, b"Id") {
+                            id = Some(value);
+                        } else if unqualified_attribute_is(reader.resolver(), attr.key, b"Type") {
+                            relationship_type = Some(value);
+                        } else if unqualified_attribute_is(
+                            reader.resolver(),
+                            attr.key,
+                            b"TargetMode",
+                        ) {
+                            if value.eq_ignore_ascii_case("External") {
+                                target_mode = Some(value);
+                                external = true;
+                            } else if value.eq_ignore_ascii_case("Internal") {
+                                target_mode = Some(value);
+                            } else {
+                                return Err(OmError::parse(format!(
+                                    "unsupported relationship TargetMode {value:?}"
+                                )));
+                            }
+                        } else if unqualified_attribute_is(reader.resolver(), attr.key, b"Target") {
+                            target = Some(value);
                         }
-                        b"TargetMode" if value.eq_ignore_ascii_case("Internal") => {
-                            target_mode = Some(value);
-                        }
-                        b"TargetMode" => {
-                            return Err(OmError::parse(format!(
-                                "unsupported relationship TargetMode {value:?}"
-                            )));
-                        }
-                        b"Target" => target = Some(value),
-                        _ => {}
+                    }
+
+                    let id = id
+                        .filter(|value| !value.is_empty())
+                        .ok_or_else(|| OmError::parse("relationship is missing a non-empty Id"))?;
+                    let relationship_type = relationship_type
+                        .filter(|value| !value.is_empty())
+                        .ok_or_else(|| {
+                            OmError::parse("relationship is missing a non-empty Type")
+                        })?;
+                    let target = target.filter(|value| !value.is_empty()).ok_or_else(|| {
+                        OmError::parse("relationship is missing a non-empty Target")
+                    })?;
+                    if !relationship_ids.insert(id.clone()) {
+                        return Err(OmError::parse(format!("duplicate relationship Id {id:?}")));
+                    }
+                    let target = if external {
+                        target
+                    } else {
+                        normalize_relationship_target(&target, base_segments).ok_or_else(|| {
+                            OmError::parse(format!(
+                                "invalid internal relationship target {target:?}"
+                            ))
+                        })?
+                    };
+                    if !external || include_external {
+                        relationships.push(RelationshipEntry {
+                            id,
+                            relationship_type,
+                            target,
+                            target_mode,
+                        });
                     }
                 }
-                let id = id
-                    .filter(|value| !value.is_empty())
-                    .ok_or_else(|| OmError::parse("relationship is missing a non-empty Id"))?;
-                let relationship_type = relationship_type
-                    .filter(|value| !value.is_empty())
-                    .ok_or_else(|| OmError::parse("relationship is missing a non-empty Type"))?;
-                let target = target
-                    .filter(|value| !value.is_empty())
-                    .ok_or_else(|| OmError::parse("relationship is missing a non-empty Target"))?;
-                if !relationship_ids.insert(id.clone()) {
-                    return Err(OmError::parse(format!("duplicate relationship Id {id:?}")));
+
+                if remains_open {
+                    depth += 1;
                 }
-                let target = if external {
-                    target
-                } else {
-                    normalize_relationship_target(&target, base_segments).ok_or_else(|| {
-                        OmError::parse(format!("invalid internal relationship target {target:?}"))
-                    })?
-                };
-                if external && !include_external {
-                    buffer.clear();
-                    continue;
-                }
-                relationships.push(RelationshipEntry {
-                    id,
-                    relationship_type,
-                    target,
-                    target_mode,
-                });
             }
-            Ok(Event::Eof) => break,
+            Ok((_, Event::End(_))) => {
+                if depth == 0 {
+                    return Err(OmError::parse(
+                        "invalid package relationships structure: unmatched closing element",
+                    ));
+                }
+                depth -= 1;
+            }
+            Ok((_, Event::Text(text))) => {
+                let text = text.xml_content().map_err(xml_error)?;
+                if depth <= 1 && !text.trim().is_empty() {
+                    return Err(OmError::parse(
+                        "invalid text in package relationships root structure",
+                    ));
+                }
+            }
+            Ok((_, Event::CData(_))) if depth <= 1 => {
+                return Err(OmError::parse(
+                    "invalid CDATA in package relationships root structure",
+                ));
+            }
+            Ok((_, Event::Eof)) => {
+                if !root_seen {
+                    return Err(OmError::parse(
+                        "invalid package relationships root: Relationships element is missing",
+                    ));
+                }
+                break;
+            }
             Ok(_) => {}
             Err(error) => return Err(xml_error(error)),
         }
