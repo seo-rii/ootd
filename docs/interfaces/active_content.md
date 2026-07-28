@@ -56,6 +56,33 @@ late insertion of public package parts cannot bypass the conversion boundary.
 Macro-enabled sources with no active-content marker can still be retagged. OOTD does not infer that
 a macro-capable file necessarily contains executable content.
 
+Hosts that intentionally want a sanitized snapshot use
+`ExcelRuntime::save_workbook_with_active_content_policy` (or the codec-level
+`XlsxCodec::save_with_active_content_audit`) with one of three typed policies:
+
+- `Preserve` is the default. It preserves artifacts for compatible targets and retains the
+  fail-closed macro-to-non-macro conversion boundary above.
+- `Refuse` rejects any source/current active-content marker with stable
+  `ActiveContentPolicyRefused`, even when the target could preserve it.
+- `Strip` serializes the current semantic edits, removes the active package graph, and then retags
+  a requested non-macro target. The runtime method returns bytes without committing them as the
+  open workbook baseline, matching the existing snapshot-only `save_workbook` contract.
+
+`Strip` discovers internal descendants through every canonical relationship part. Active roots and
+exclusive descendants are removed with their relationship parts. A descendant with an incoming
+owner outside the removal set is retained, while every incoming edge to a removed root is deleted.
+For retained XML owners, elements whose relationship-namespace `id` points at a deleted edge are
+removed; this covers workbook macro/dialog sheet entries and worksheet control/OLE anchors in the
+synthetic contract corpus. Active and removed-part overrides, active defaults, and orphan active
+content-type/relationship declarations are removed as part of the same transformation. The
+resulting bytes are reloaded before they are returned from the prepared-save path.
+
+Every successful policy call returns a deterministic `ActiveContentAuditManifest`. It records the
+sorted detected categories, removed part URI/content type/byte length, removed relationship owner,
+ID/type/target/mode, removed Default/Override entries, rewritten XML owners, and shared descendants
+that were intentionally retained. Repeating a strip against the same snapshot produces identical
+bytes and an equal manifest in the synthetic regression corpus.
+
 ## Excel Oracle Boundary
 
 The Windows Excel Oracle rejects all inventoried path, content-type, and relationship markers
@@ -68,7 +95,15 @@ isolation belong to the separate OOTD-065 offline policy and are not claimed by 
 
 ## Remaining Scope
 
-OOTD-022 is closed by selecting the safe `refuse` behavior instead of the former partial VBA-only
-strip. OOTD-064 remains open for an explicit typed `strip` option, relationship/content-type closure
-deletion, a deterministic audit manifest, policy-specific fixtures, and isolated real-Excel
-evidence. No automatic strip capability is currently exposed.
+OOTD-022 is closed by selecting the safe default refusal instead of the former partial VBA-only
+strip. OOTD-064 now has typed preserve/refuse/strip behavior, ownership-aware package closure
+deletion, deterministic audit output, orphan-marker cases, shared-descendant cases, arbitrary
+relationship-prefix owner cleanup, and macro/dialog-sheet removal in synthetic fixtures.
+
+OOTD-064 remains `Partial` until a pinned desktop Excel corpus proves that complex real-world
+ActiveX/VML drawing anchors, form controls, OLE previews, custom UI callback graphs, and mixed
+macro/dialog sheet metadata open/save/reopen without a repair dialog. Signed packages continue to
+hit the independent signature-mutation refusal before active-content stripping; signature removal
+or re-signing requires the explicit OOTD-063 follow-up policy. The Excel Object Model `SaveAs`
+surface does not invent a non-Excel optional argument: hosts must select destructive stripping
+through the typed runtime/codec API.

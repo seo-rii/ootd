@@ -68,9 +68,12 @@ Active order:
    custom UI by path, content type, and relationship. Same-format and macro-capable saves preserve
    artifacts; macro-enabled to non-macro conversion returns a dedicated fail-closed error before
    output. The Windows Oracle preflight blocks the same markers before Excel activation.
-18. **Active:** complete `OOTD-064` with an explicit strip option, closure deletion, audit manifest,
-   and real-Excel fixtures, then implement `OOTD-065` external-link policy.
-19. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
+18. `OOTD-064` stage 2 complete (2026-07-28, synthetic): typed preserve/refuse/strip snapshot
+   policies remove exclusive relationship closure, incoming XML anchors, active/orphan manifest
+   entries, and macro/dialog sheets; retain shared descendants; and return a deterministic audit.
+   Complex ActiveX/VML/OLE/custom UI real-Excel evidence remains required before Oracle-verified.
+19. **Active:** implement `OOTD-065` external-link/connection/query offline policy.
+20. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
    claiming practical chart/pivot/style parity.
 
 Every numbered work unit starts with a failing regression and lands as its own reviewable commit.

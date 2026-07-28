@@ -119,8 +119,121 @@ pub fn package_with_active_content(workbook_bytes: &[u8]) -> Vec<u8> {
 }
 
 #[allow(dead_code)]
-pub fn macro_enabled_package_with_active_content(workbook_bytes: &[u8]) -> Vec<u8> {
+pub fn package_with_active_content_closure(workbook_bytes: &[u8]) -> Vec<u8> {
     let active_content = package_with_active_content(workbook_bytes);
+    let mut package =
+        office_opc::OpcPackage::from_bytes(&active_content).expect("parse active-content fixture");
+
+    let content_types = std::str::from_utf8(
+        &package
+            .part("[Content_Types].xml")
+            .expect("content types")
+            .bytes,
+    )
+    .expect("content types utf8")
+    .replace(
+        "</Types>",
+        r#"<Default Extension="bin" ContentType="application/octet-stream"/></Types>"#,
+    );
+    package
+        .replace_part_bytes("[Content_Types].xml", content_types.into_bytes())
+        .expect("replace content types");
+
+    let workbook_xml =
+        std::str::from_utf8(&package.part("xl/workbook.xml").expect("workbook").bytes)
+            .expect("workbook utf8")
+            .replace(
+                "  </sheets>",
+                r#"    <sheet name="Macro1" sheetId="2" r:id="rIdMacroSheet"/>
+    <sheet name="Dialog1" sheetId="3" r:id="rIdDialogSheet"/>
+  </sheets>"#,
+            );
+    package
+        .replace_part_bytes("xl/workbook.xml", workbook_xml.into_bytes())
+        .expect("replace workbook sheets");
+
+    let worksheet_xml = std::str::from_utf8(
+        &package
+            .part("xl/worksheets/sheet1.xml")
+            .expect("worksheet")
+            .bytes,
+    )
+    .expect("worksheet utf8")
+    .replace(
+        "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">",
+        "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:linked=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">",
+    )
+    .replace(
+        "</worksheet>",
+        r#"  <controls><control linked:id="rIdControl"/></controls>
+  <oleObjects><oleObject linked:id="rIdOle"/></oleObjects>
+</worksheet>"#,
+    );
+    package
+        .replace_part_bytes("xl/worksheets/sheet1.xml", worksheet_xml.into_bytes())
+        .expect("replace worksheet");
+
+    package
+        .add_part(office_opc::OpcPart {
+            name: "xl/worksheets/_rels/sheet1.xml.rels".to_string(),
+            content_type: Some(
+                "application/vnd.openxmlformats-package.relationships+xml".to_string(),
+            ),
+            compression: office_opc::CompressionMethod::Stored,
+            bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rIdControl" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/control" Target="../activeX/activeX1.xml"/>
+  <Relationship Id="rIdOle" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/oleObject" Target="../embeddings/oleObject1.bin"/>
+  <Relationship Id="rIdShared" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/shared.bin"/>
+</Relationships>"#
+                .to_vec(),
+        })
+        .expect("add worksheet relationships");
+    package
+        .add_part(office_opc::OpcPart {
+            name: "xl/activeX/_rels/activeX1.xml.rels".to_string(),
+            content_type: Some(
+                "application/vnd.openxmlformats-package.relationships+xml".to_string(),
+            ),
+            compression: office_opc::CompressionMethod::Stored,
+            bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rIdExclusive" Type="http://example.com/relationships/payload" Target="/custom/active-exclusive.bin"/>
+  <Relationship Id="rIdShared" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/shared.bin"/>
+</Relationships>"#
+                .to_vec(),
+        })
+        .expect("add ActiveX relationships");
+    for (part_name, contents) in [
+        ("custom/active-exclusive.bin", b"exclusive".as_slice()),
+        ("xl/media/shared.bin", b"shared".as_slice()),
+    ] {
+        package
+            .add_part(office_opc::OpcPart {
+                name: part_name.to_string(),
+                content_type: Some("application/octet-stream".to_string()),
+                compression: office_opc::CompressionMethod::Stored,
+                bytes: contents.to_vec(),
+            })
+            .expect("add active-content closure fixture part");
+    }
+
+    package
+        .to_bytes()
+        .expect("serialize active-content closure fixture")
+}
+
+#[allow(dead_code)]
+pub fn macro_enabled_package_with_active_content(workbook_bytes: &[u8]) -> Vec<u8> {
+    retag_macro_enabled(package_with_active_content(workbook_bytes))
+}
+
+#[allow(dead_code)]
+pub fn macro_enabled_package_with_active_content_closure(workbook_bytes: &[u8]) -> Vec<u8> {
+    retag_macro_enabled(package_with_active_content_closure(workbook_bytes))
+}
+
+fn retag_macro_enabled(active_content: Vec<u8>) -> Vec<u8> {
     let mut package =
         office_opc::OpcPackage::from_bytes(&active_content).expect("parse active-content fixture");
     let content_types = std::str::from_utf8(

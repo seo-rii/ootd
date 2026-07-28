@@ -25,9 +25,9 @@
         resolve_chart_source_reference,
     };
     use office_common::{
-        CellError, CellMarker, CellValue, ChartId, ChartObjectId, DrawingAnchor, Emu, ExcelProfile,
-        FormulaSource, LoadOptions as CommonLoadOptions, NameScope, NameValidationMode,
-        ObjectPlacement, OmErrorCode, OmValue, Rect, ReferenceTarget,
+        ActiveContentPolicy, CellError, CellMarker, CellValue, ChartId, ChartObjectId,
+        DrawingAnchor, Emu, ExcelProfile, FormulaSource, LoadOptions as CommonLoadOptions,
+        NameScope, NameValidationMode, ObjectPlacement, OmErrorCode, OmValue, Rect, ReferenceTarget,
         SaveOptions as CommonSaveOptions, SheetId, SheetKind, SheetScope, SheetVisibility, StyleId,
         TwoCellAnchor, WorkbookId, WorksheetModel,
     };
@@ -495,6 +495,174 @@
             clean
                 .has_source_or_current_active_content_artifacts()
                 .expect("current package is re-scanned")
+        );
+    }
+
+    #[test]
+    fn explicit_active_content_policies_preserve_refuse_or_strip_with_deterministic_audit() {
+        let codec = XlsxCodec;
+        let source_bytes = active_content_fixture::package_with_active_content_closure(
+            &synthetic_workbook_bytes(),
+        );
+        let loaded = codec
+            .load(&source_bytes, CommonLoadOptions::default())
+            .expect("active-content closure workbook");
+
+        let preserved = codec
+            .save_with_active_content_audit(&loaded, CommonSaveOptions::default())
+            .expect("default policy preserves active content");
+        assert_eq!(preserved.audit.policy, ActiveContentPolicy::Preserve);
+        assert!(preserved.audit.removed_parts.is_empty());
+        assert!(
+            codec
+                .load(&preserved.bytes, CommonLoadOptions::default())
+                .expect("reload preserved active content")
+                .active_content_inventory()
+                .has_artifacts()
+        );
+
+        let refused = codec
+            .save_with_active_content_audit(
+                &loaded,
+                CommonSaveOptions {
+                    active_content_policy: ActiveContentPolicy::Refuse,
+                    ..CommonSaveOptions::default()
+                },
+            )
+            .expect_err("refuse policy rejects any active-content rewrite");
+        assert_eq!(refused.code, OmErrorCode::ActiveContentPolicyRefused);
+        assert_eq!(
+            refused.message,
+            "active-content policy refused a workbook containing active-content artifacts"
+        );
+
+        let strip_options = CommonSaveOptions {
+            active_content_policy: ActiveContentPolicy::Strip,
+            ..CommonSaveOptions::default()
+        };
+        let stripped = codec
+            .save_with_active_content_audit(&loaded, strip_options.clone())
+            .expect("strip active-content closure");
+        let repeated = codec
+            .save_with_active_content_audit(&loaded, strip_options)
+            .expect("repeat deterministic strip");
+        assert_eq!(stripped.audit, repeated.audit);
+        assert_eq!(stripped.bytes, repeated.bytes);
+        assert_eq!(stripped.audit.policy, ActiveContentPolicy::Strip);
+        assert_eq!(
+            stripped.audit.detected_kinds,
+            loaded.active_content_inventory().kinds()
+        );
+        assert_eq!(
+            stripped.audit.retained_shared_part_uris,
+            &["xl/media/shared.bin".to_string()]
+        );
+        assert!(
+            stripped
+                .audit
+                .rewritten_owner_part_uris
+                .contains(&"xl/worksheets/sheet1.xml".to_string())
+        );
+        assert!(
+            stripped
+                .audit
+                .rewritten_owner_part_uris
+                .contains(&"xl/workbook.xml".to_string())
+        );
+
+        let stripped_package = OpcPackage::from_bytes(&stripped.bytes).expect("stripped package");
+        for (active_part_uri, _) in active_content_fixture::ACTIVE_PARTS {
+            assert!(!stripped_package.contains(active_part_uri), "{active_part_uri}");
+        }
+        assert!(!stripped_package.contains("custom/active-exclusive.bin"));
+        assert!(!stripped_package.contains("xl/activeX/_rels/activeX1.xml.rels"));
+        assert!(stripped_package.contains("xl/media/shared.bin"));
+        let workbook_xml = std::str::from_utf8(
+            &stripped_package
+                .part("xl/workbook.xml")
+                .expect("stripped workbook")
+                .bytes,
+        )
+        .expect("workbook utf8");
+        assert!(!workbook_xml.contains("rIdMacroSheet"));
+        assert!(!workbook_xml.contains("rIdDialogSheet"));
+        let worksheet_xml = std::str::from_utf8(
+            &stripped_package
+                .part("xl/worksheets/sheet1.xml")
+                .expect("stripped worksheet")
+                .bytes,
+        )
+        .expect("worksheet utf8");
+        assert!(!worksheet_xml.contains("rIdControl"));
+        assert!(!worksheet_xml.contains("rIdOle"));
+        assert!(!worksheet_xml.contains("<controls"));
+        assert!(!worksheet_xml.contains("<oleObjects"));
+        let worksheet_relationships = std::str::from_utf8(
+            &stripped_package
+                .part("xl/worksheets/_rels/sheet1.xml.rels")
+                .expect("stripped worksheet relationships")
+                .bytes,
+        )
+        .expect("worksheet relationships utf8");
+        assert!(!worksheet_relationships.contains("rIdControl"));
+        assert!(!worksheet_relationships.contains("rIdOle"));
+        assert!(worksheet_relationships.contains("rIdShared"));
+
+        let reloaded = codec
+            .load(&stripped.bytes, CommonLoadOptions::default())
+            .expect("stripped package reloads");
+        assert!(!reloaded.active_content_inventory().has_artifacts());
+        assert_eq!(reloaded.state.worksheets.len(), 1);
+        assert_eq!(reloaded.state.worksheets[0].name, "Sheet1");
+
+        let prepared = codec
+            .prepare_save(
+                &loaded,
+                CommonSaveOptions {
+                    active_content_policy: ActiveContentPolicy::Strip,
+                    ..CommonSaveOptions::default()
+                },
+            )
+            .expect("prepare stripped baseline and audit");
+        assert_eq!(prepared.bytes, stripped.bytes);
+        assert_eq!(prepared.active_content_audit, stripped.audit);
+        assert!(
+            !prepared
+                .next_loaded
+                .active_content_inventory()
+                .has_artifacts()
+        );
+        assert_eq!(prepared.next_loaded.state.worksheets.len(), 1);
+    }
+
+    #[test]
+    fn strip_policy_removes_orphan_active_markers_without_inventing_parts() {
+        let codec = XlsxCodec;
+        let source_bytes = active_content_fixture::package_with_orphan_active_content_markers(
+            &synthetic_workbook_bytes(),
+        );
+        let loaded = codec
+            .load(&source_bytes, CommonLoadOptions::default())
+            .expect("orphan marker workbook");
+        let stripped = codec
+            .save_with_active_content_audit(
+                &loaded,
+                CommonSaveOptions {
+                    active_content_policy: ActiveContentPolicy::Strip,
+                    ..CommonSaveOptions::default()
+                },
+            )
+            .expect("strip orphan markers");
+
+        assert!(stripped.audit.removed_parts.is_empty());
+        assert_eq!(stripped.audit.removed_relationships.len(), 1);
+        assert_eq!(stripped.audit.removed_content_type_entries.len(), 1);
+        assert!(
+            !codec
+                .load(&stripped.bytes, CommonLoadOptions::default())
+                .expect("reload orphan-free workbook")
+                .active_content_inventory()
+                .has_artifacts()
         );
     }
 

@@ -15,10 +15,10 @@
 
     use super::persistence::PersistenceFailurePoint;
     use office_common::{
-        CellError, CellValue, ExcelProfile, FileFormat, GetRangeValuesSpec, LoadOptions,
-        ObjectHandle, OmArray, OmErrorCode, OmValue, OpenWorkbookSpec, RangeArea, RangeRef,
-        RangeSet, Rect, ReferenceTarget, SaveWorkbookSpec, SetRangeValuesSpec, SheetId, SheetScope,
-        StyleId, WorkbookHandle, WorkbookId,
+        ActiveContentPolicy, CellError, CellValue, ExcelProfile, FileFormat, GetRangeValuesSpec,
+        LoadOptions, ObjectHandle, OmArray, OmErrorCode, OmValue, OpenWorkbookSpec, RangeArea,
+        RangeRef, RangeSet, Rect, ReferenceTarget, SaveWorkbookSpec, SetRangeValuesSpec, SheetId,
+        SheetScope, StyleId, WorkbookHandle, WorkbookId,
     };
     use office_opc::{CompressionMethod, OpcPackage, OpcPart};
 
@@ -122543,6 +122543,117 @@
             );
         }
         fs::remove_dir_all(&base_dir).expect("cleanup active-content fixture directory");
+    }
+
+    #[test]
+    fn explicit_runtime_strip_exports_non_macro_bytes_and_audit_without_mutating_baseline() {
+        let source_bytes =
+            active_content_fixture::macro_enabled_package_with_active_content_closure(
+                &synthetic_workbook_bytes(),
+            );
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: source_bytes,
+                format_hint: None,
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open macro workbook with active-content closure");
+        let workbook_id = runtime.workbook_model(workbook).expect("workbook model").id;
+        let sheet_id = runtime.worksheets(workbook).expect("worksheets")[0].id;
+        runtime
+            .set_range_values(SetRangeValuesSpec {
+                workbook,
+                range: RangeRef::single_cell(workbook_id, sheet_id, 1, 1),
+                values: OmArray::scalar(OmValue::Number(77.0)),
+            })
+            .expect("edit workbook before strip export");
+        let expected_dirty_domains = runtime
+            .workbook_dirty_domains(workbook)
+            .expect("dirty domains before strip export");
+
+        let refuse_error = runtime
+            .save_workbook_with_active_content_policy(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsm,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+                ActiveContentPolicy::Refuse,
+            )
+            .expect_err("explicit refuse policy rejects active content");
+        assert_eq!(
+            refuse_error.code,
+            OmErrorCode::ActiveContentPolicyRefused
+        );
+
+        let strip_spec = SaveWorkbookSpec {
+            format: FileFormat::Xlsx,
+            profile: ExcelProfile::Excel365,
+            lossless: true,
+        };
+        let stripped = runtime
+            .save_workbook_with_active_content_policy(
+                workbook,
+                strip_spec.clone(),
+                ActiveContentPolicy::Strip,
+            )
+            .expect("strip active content before non-macro retag");
+        let repeated = runtime
+            .save_workbook_with_active_content_policy(
+                workbook,
+                strip_spec,
+                ActiveContentPolicy::Strip,
+            )
+            .expect("repeat deterministic strip export");
+        assert_eq!(stripped.audit, repeated.audit);
+        assert_eq!(stripped.bytes, repeated.bytes);
+        assert_eq!(stripped.audit.policy, ActiveContentPolicy::Strip);
+        assert!(
+            stripped
+                .audit
+                .removed_parts
+                .iter()
+                .any(|part| part.part_uri == "custom/active-exclusive.bin")
+        );
+        assert_eq!(
+            stripped.audit.retained_shared_part_uris,
+            &["xl/media/shared.bin".to_string()]
+        );
+
+        let reloaded = runtime
+            .codec
+            .load(&stripped.bytes, LoadOptions::default())
+            .expect("reload stripped xlsx export");
+        assert_eq!(reloaded.detected_format, FileFormat::Xlsx);
+        assert!(!reloaded.active_content_inventory().has_artifacts());
+        assert_eq!(
+            reloaded
+                .state
+                .worksheet_data
+                .get(&sheet_id)
+                .and_then(|worksheet| worksheet.cells.get(&(1, 1)))
+                .map(|cell| &cell.value),
+            Some(&CellValue::Number(77.0))
+        );
+
+        assert!(
+            runtime
+                .workbook_has_active_content_artifacts(workbook)
+                .expect("source baseline retains active content")
+        );
+        assert_eq!(
+            runtime.workbook_model(workbook).expect("source model").format,
+            FileFormat::Xlsm
+        );
+        assert_eq!(
+            runtime
+                .workbook_dirty_domains(workbook)
+                .expect("strip export does not commit baseline"),
+            expected_dirty_domains
+        );
     }
 
     #[test]

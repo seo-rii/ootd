@@ -15,6 +15,11 @@ use excel_model::{
 };
 #[cfg(test)]
 use excel_model::CellData;
+pub use office_common::{
+    ActiveContentAuditManifest, ActiveContentContentTypeEntryKind, ActiveContentKind,
+    ActiveContentPolicy, ActiveContentRemovedContentTypeEntry, ActiveContentRemovedPart,
+    ActiveContentRemovedRelationship,
+};
 use office_common::{
     AbsoluteAnchor, CellError, CellMarker, CellValue, ChartId, ChartObjectId, DefinedName,
     DefinedNameId, DrawingAnchor, DrawingId, DrawingObjectId, Emu, ExcelProfile, FileFormat,
@@ -39,8 +44,8 @@ mod shared_strings;
 mod worksheet;
 
 use encryption::is_encrypted_ooxml_compound_file;
-pub use active_content::{ActiveContentInventory, ActiveContentKind};
-use active_content::collect_active_content_inventory;
+pub use active_content::ActiveContentInventory;
+use active_content::{collect_active_content_inventory, strip_active_content_from_package};
 pub use digital_signature::DigitalSignatureInventory;
 use digital_signature::collect_digital_signature_inventory;
 use relationships::{
@@ -233,6 +238,13 @@ impl LoadedXlsxWorkbook {
 pub struct PreparedXlsxSave {
     pub bytes: Vec<u8>,
     pub next_loaded: LoadedXlsxWorkbook,
+    pub active_content_audit: ActiveContentAuditManifest,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActiveContentSaveOutput {
+    pub bytes: Vec<u8>,
+    pub audit: ActiveContentAuditManifest,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1539,6 +1551,64 @@ impl XlsxCodec {
     }
 
     pub fn save(&self, workbook: &LoadedXlsxWorkbook, options: SaveOptions) -> OmResult<Vec<u8>> {
+        Ok(self
+            .save_with_active_content_audit(workbook, options)?
+            .bytes)
+    }
+
+    pub fn save_with_active_content_audit(
+        &self,
+        workbook: &LoadedXlsxWorkbook,
+        options: SaveOptions,
+    ) -> OmResult<ActiveContentSaveOutput> {
+        let current_inventory = collect_active_content_inventory(&workbook.package)?;
+        let detected_kinds = workbook
+            .active_content_inventory
+            .kinds()
+            .iter()
+            .chain(current_inventory.kinds())
+            .copied()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        match options.active_content_policy {
+            ActiveContentPolicy::Preserve => Ok(ActiveContentSaveOutput {
+                bytes: self.save_preserving_active_content(workbook, options)?,
+                audit: ActiveContentAuditManifest::observed(
+                    ActiveContentPolicy::Preserve,
+                    detected_kinds,
+                ),
+            }),
+            ActiveContentPolicy::Refuse if !detected_kinds.is_empty() => {
+                Err(OmError::active_content_policy_refused(
+                    "active-content policy refused a workbook containing active-content artifacts",
+                ))
+            }
+            ActiveContentPolicy::Refuse => Ok(ActiveContentSaveOutput {
+                bytes: self.save_preserving_active_content(workbook, options)?,
+                audit: ActiveContentAuditManifest::observed(
+                    ActiveContentPolicy::Refuse,
+                    detected_kinds,
+                ),
+            }),
+            ActiveContentPolicy::Strip => {
+                let preserved_bytes = self.save_preserving_active_content(workbook, options)?;
+                let package = OpcPackage::from_bytes(&preserved_bytes)?;
+                let (package, mut audit) = strip_active_content_from_package(package)?;
+                audit.detected_kinds = detected_kinds;
+                Ok(ActiveContentSaveOutput {
+                    bytes: package.to_bytes()?,
+                    audit,
+                })
+            }
+        }
+    }
+
+    fn save_preserving_active_content(
+        &self,
+        workbook: &LoadedXlsxWorkbook,
+        options: SaveOptions,
+    ) -> OmResult<Vec<u8>> {
         ensure_supported_codec_profile(options.profile, "XlsxCodec::save")?;
         if !options.lossless {
             return Err(OmError::unsupported(
@@ -3068,7 +3138,11 @@ impl XlsxCodec {
     ) -> OmResult<PreparedXlsxSave> {
         let materialized = materialize_state_only_chart_graphs(workbook.clone())?;
         let profile = options.profile;
-        let bytes = self.save(&materialized, options)?;
+        let active_content_policy = options.active_content_policy;
+        let ActiveContentSaveOutput {
+            bytes,
+            audit: active_content_audit,
+        } = self.save_with_active_content_audit(&materialized, options)?;
         let mut next_loaded = self.load(
             &bytes,
             LoadOptions {
@@ -3077,29 +3151,44 @@ impl XlsxCodec {
                 read_calc_chain: true,
             },
         )?;
-        let mut next_state = materialized.state;
-        for (sheet_id, worksheet_data) in &mut next_state.worksheet_data {
-            let saved_worksheet_data = next_loaded
+        if active_content_policy == ActiveContentPolicy::Strip {
+            next_loaded
                 .state
-                .worksheet_data
-                .get(sheet_id)
-                .ok_or_else(|| {
-                    OmError::new(
-                        OmErrorCode::InvalidState,
-                        format!(
-                            "saved workbook is missing worksheet data for sheet {}",
-                            sheet_id.0
-                        ),
-                    )
-                })?;
-            worksheet_data
-                .source_xml
-                .clone_from(&saved_worksheet_data.source_xml);
+                .assign_workbook_id(materialized.state.model.id);
+            next_loaded
+                .state
+                .model
+                .display_name
+                .clone_from(&materialized.state.model.display_name);
+        } else {
+            let mut next_state = materialized.state;
+            for (sheet_id, worksheet_data) in &mut next_state.worksheet_data {
+                let saved_worksheet_data = next_loaded
+                    .state
+                    .worksheet_data
+                    .get(sheet_id)
+                    .ok_or_else(|| {
+                        OmError::new(
+                            OmErrorCode::InvalidState,
+                            format!(
+                                "saved workbook is missing worksheet data for sheet {}",
+                                sheet_id.0
+                            ),
+                        )
+                    })?;
+                worksheet_data
+                    .source_xml
+                    .clone_from(&saved_worksheet_data.source_xml);
+            }
+            next_state.opaque_parts = std::mem::take(&mut next_loaded.state.opaque_parts);
+            next_loaded.state = next_state;
         }
-        next_state.opaque_parts = std::mem::take(&mut next_loaded.state.opaque_parts);
-        next_loaded.state = next_state;
 
-        Ok(PreparedXlsxSave { bytes, next_loaded })
+        Ok(PreparedXlsxSave {
+            bytes,
+            next_loaded,
+            active_content_audit,
+        })
     }
 
     fn is_workbook_package(&self, package: &OpcPackage) -> bool {

@@ -27,6 +27,7 @@ pub enum OmErrorCode {
     EncryptedWorkbookUnsupported,
     SignedPackageMutationUnsupported,
     ActiveContentConversionUnsupported,
+    ActiveContentPolicyRefused,
     Calculation,
     External,
 }
@@ -75,6 +76,10 @@ impl OmError {
 
     pub fn active_content_conversion_unsupported(message: impl Into<String>) -> Self {
         Self::new(OmErrorCode::ActiveContentConversionUnsupported, message)
+    }
+
+    pub fn active_content_policy_refused(message: impl Into<String>) -> Self {
+        Self::new(OmErrorCode::ActiveContentPolicyRefused, message)
     }
 
     pub fn unsupported(message: impl Into<String>) -> Self {
@@ -494,10 +499,99 @@ impl Default for LoadOptions {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ActiveContentPolicy {
+    #[default]
+    Preserve,
+    Refuse,
+    Strip,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ActiveContentKind {
+    VbaProject,
+    VbaProjectSignature,
+    VbaData,
+    XlmMacroSheet,
+    DialogSheet,
+    ActiveXControl,
+    EmbeddedObject,
+    CustomUi,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ActiveContentContentTypeEntryKind {
+    Default,
+    Override,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActiveContentRemovedPart {
+    pub part_uri: String,
+    pub content_type: Option<String>,
+    pub byte_len: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActiveContentRemovedRelationship {
+    pub relationship_part_uri: String,
+    pub owner_part_uri: Option<String>,
+    pub id: String,
+    pub relationship_type: String,
+    pub target: String,
+    pub target_mode: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActiveContentRemovedContentTypeEntry {
+    pub entry_kind: ActiveContentContentTypeEntryKind,
+    pub selector: String,
+    pub content_type: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActiveContentAuditManifest {
+    pub policy: ActiveContentPolicy,
+    pub detected_kinds: Vec<ActiveContentKind>,
+    pub removed_parts: Vec<ActiveContentRemovedPart>,
+    pub removed_relationships: Vec<ActiveContentRemovedRelationship>,
+    pub removed_content_type_entries: Vec<ActiveContentRemovedContentTypeEntry>,
+    pub rewritten_owner_part_uris: Vec<String>,
+    pub retained_shared_part_uris: Vec<String>,
+}
+
+impl ActiveContentAuditManifest {
+    pub fn observed(
+        policy: ActiveContentPolicy,
+        mut detected_kinds: Vec<ActiveContentKind>,
+    ) -> Self {
+        detected_kinds.sort();
+        detected_kinds.dedup();
+        Self {
+            policy,
+            detected_kinds,
+            removed_parts: Vec::new(),
+            removed_relationships: Vec::new(),
+            removed_content_type_entries: Vec::new(),
+            rewritten_owner_part_uris: Vec::new(),
+            retained_shared_part_uris: Vec::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SaveOptions {
     pub profile: ExcelProfile,
     pub lossless: bool,
+    #[serde(default)]
+    pub active_content_policy: ActiveContentPolicy,
 }
 
 impl Default for SaveOptions {
@@ -505,6 +599,7 @@ impl Default for SaveOptions {
         Self {
             profile: ExcelProfile::default(),
             lossless: true,
+            active_content_policy: ActiveContentPolicy::default(),
         }
     }
 }
@@ -518,8 +613,8 @@ impl OmError {
 #[cfg(test)]
 mod tests {
     use super::{
-        CellValue, Emu, ExcelProfile, LoadOptions, ObjectHandle, OmArray, OmErrorCode, OmValue,
-        Points, RangeRef, Rect, SaveOptions, SheetId, SheetScope, WorkbookId,
+        ActiveContentPolicy, CellValue, Emu, ExcelProfile, LoadOptions, ObjectHandle, OmArray,
+        OmErrorCode, OmValue, Points, RangeRef, Rect, SaveOptions, SheetId, SheetScope, WorkbookId,
     };
 
     #[test]
@@ -613,6 +708,7 @@ mod tests {
         assert!(load.read_calc_chain);
         assert_eq!(save.profile, ExcelProfile::Excel365);
         assert!(save.lossless);
+        assert_eq!(save.active_content_policy, ActiveContentPolicy::Preserve);
     }
 
     #[test]

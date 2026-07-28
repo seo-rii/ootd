@@ -156,8 +156,12 @@ Wave 1 exit gate:
    stable `ActiveContentConversionUnsupported`로 target 생성 전에 거부한다. Windows Oracle도
    같은 marker를 bounded XML preflight에서 Excel 실행 전에 차단한다. 세부 계약은
    `docs/interfaces/active_content.md`에 있다.
-8. `OOTD-064` 2단계: caller가 명시적으로 선택하는 strip policy, relationship/content-type
-   closure 삭제, deterministic audit manifest와 실제 Excel fixture를 구현한다.
+8. `OOTD-064` 2단계 완료 (2026-07-28, synthetic contract): typed
+   `Preserve`/`Refuse`/`Strip` 정책, exclusive relationship closure 및 incoming anchor 제거,
+   shared descendant 보존, active/orphan content-type·relationship 정리, macro/dialog sheet
+   anchor 삭제와 deterministic `ActiveContentAuditManifest`를 codec/runtime snapshot API에
+   연결했다. signed package는 독립 서명 정책이 먼저 거부한다. 복합 ActiveX/VML/OLE 및
+   custom UI 실제 Excel fixture는 OOTD-064의 Oracle evidence 단계로 계속 열어 둔다.
 9. `OOTD-065`: external link/connection/query offline policy와 host callback boundary를
    정의한다.
 10. `OOTD-044` + `OOTD-059`: machine-readable capability manifest를 source of truth로 두고

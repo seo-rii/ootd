@@ -28,7 +28,8 @@ use excel_model::{
     resolve_chart_source_reference_with_names,
 };
 use excel_xlsx::{
-    ChartSupportRelationshipBinding, LoadedXlsxWorkbook, PendingChartRelationshipGraph,
+    ActiveContentSaveOutput, ChartSupportRelationshipBinding, LoadedXlsxWorkbook,
+    PendingChartRelationshipGraph,
     PendingDrawingRelationshipGraph, PendingPackagePart, PendingPackageRelationship,
     PreparedXlsxSave, SheetDrawingSupportParts, WorksheetSupportParts, XlsxCodec,
     WorkbookCalculationMode, WorkbookCalculationState, encode_chart_model_xml,
@@ -36,8 +37,8 @@ use excel_xlsx::{
 };
 use office_codegen::{OmFocusSurfaceRegistry, build_focus_surface_registry_from_json};
 use office_common::{
-    AbsoluteAnchor, CellError, CellValue, ChartId, ChartObjectId, DefinedNameId, DrawingAnchor,
-    DrawingId, DrawingObjectId, ExcelProfile, FileFormat,
+    AbsoluteAnchor, ActiveContentPolicy, CellError, CellValue, ChartId, ChartObjectId,
+    DefinedNameId, DrawingAnchor, DrawingId, DrawingObjectId, ExcelProfile, FileFormat,
     FormulaSource, GetRangeValuesSpec, LoadOptions, NameScope, NameValidationMode, ObjectHandle,
     ObjectPlacement, OmArray, OmError, OmErrorCode, OmResult, OmValue, OpaquePart,
     OpenWorkbookSpec, PointEmu, RangeArea, RangeHandle, RangeRef, RangeSet, Rect, ReferenceTarget,
@@ -1603,12 +1604,87 @@ impl ExcelRuntime {
         workbook: WorkbookHandle,
         spec: SaveWorkbookSpec,
     ) -> OmResult<Vec<u8>> {
+        Ok(self
+            .save_workbook_with_active_content_policy(
+                workbook,
+                spec,
+                ActiveContentPolicy::Preserve,
+            )?
+            .bytes)
+    }
+
+    /// Serializes a workbook snapshot under an explicit active-content policy without changing
+    /// the runtime save baseline. `Strip` returns a deterministic removal audit with the bytes.
+    pub fn save_workbook_with_active_content_policy(
+        &self,
+        workbook: WorkbookHandle,
+        spec: SaveWorkbookSpec,
+        active_content_policy: ActiveContentPolicy,
+    ) -> OmResult<ActiveContentSaveOutput> {
+        if active_content_policy == ActiveContentPolicy::Refuse
+            && self.workbook_has_active_content_artifacts(workbook)?
+        {
+            return Err(OmError::active_content_policy_refused(
+                "active-content policy refused a workbook containing active-content artifacts",
+            ));
+        }
+
+        if active_content_policy == ActiveContentPolicy::Strip {
+            let source_format = self.runtime_workbook(workbook)?.loaded.detected_format;
+            if source_format != spec.format && !format_allows_vba_project(spec.format) {
+                let source_spec = SaveWorkbookSpec {
+                    format: source_format,
+                    profile: spec.profile,
+                    lossless: spec.lossless,
+                };
+                let source_loaded = self.materialized_workbook_for_save(workbook, &source_spec)?;
+                let stripped = self.codec.save_with_active_content_audit(
+                    &source_loaded,
+                    SaveOptions {
+                        profile: spec.profile,
+                        lossless: spec.lossless,
+                        active_content_policy,
+                    },
+                )?;
+                let mut stripped_loaded = self.codec.load(
+                    &stripped.bytes,
+                    LoadOptions {
+                        profile: spec.profile,
+                        preserve_unknown_parts: true,
+                        read_calc_chain: true,
+                    },
+                )?;
+                stripped_loaded
+                    .state
+                    .assign_workbook_id(source_loaded.state.model.id);
+                stripped_loaded
+                    .state
+                    .model
+                    .display_name
+                    .clone_from(&source_loaded.state.model.display_name);
+                let retagged = retag_loaded_workbook_format(&stripped_loaded, spec.format)?;
+                let bytes = self.codec.save(
+                    &retagged,
+                    SaveOptions {
+                        profile: spec.profile,
+                        lossless: spec.lossless,
+                        active_content_policy: ActiveContentPolicy::Preserve,
+                    },
+                )?;
+                return Ok(ActiveContentSaveOutput {
+                    bytes,
+                    audit: stripped.audit,
+                });
+            }
+        }
+
         let loaded = self.materialized_workbook_for_save(workbook, &spec)?;
-        self.codec.save(
+        self.codec.save_with_active_content_audit(
             &loaded,
             SaveOptions {
                 profile: spec.profile,
                 lossless: spec.lossless,
+                active_content_policy,
             },
         )
     }
@@ -1648,6 +1724,7 @@ impl ExcelRuntime {
             SaveOptions {
                 profile: spec.profile,
                 lossless: spec.lossless,
+                active_content_policy: ActiveContentPolicy::Preserve,
             },
         )
     }
@@ -29407,6 +29484,8 @@ fn retag_loaded_workbook_format(
         .replace_part_bytes(CONTENT_TYPES_PART_NAME, content_types_xml)?;
     retagged.package =
         retag_package_part_content_type(retagged.package, WORKBOOK_PART_NAME, content_type);
+    retagged.support_parts.content_types_source_bytes = None;
+    retagged.support_parts.content_types_summary = None;
     retagged.detected_format = format;
     retagged.state.model.format = format;
     Ok(retagged)
