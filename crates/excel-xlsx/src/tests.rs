@@ -614,6 +614,155 @@
     }
 
     #[test]
+    fn prefixed_spreadsheetml_round_trips_targeted_cell_edit() {
+        let codec = XlsxCodec;
+        let source_bytes = prefixed_spreadsheetml_workbook_bytes();
+        let source_package = OpcPackage::from_bytes(&source_bytes).expect("prefixed source package");
+        let mut loaded = codec
+            .load(&source_bytes, CommonLoadOptions::default())
+            .expect("load prefixed SpreadsheetML workbook");
+
+        assert_eq!(loaded.state.worksheets.len(), 1);
+        assert_eq!(loaded.state.worksheets[0].name, "Prefixed");
+        let source_sheet = loaded
+            .state
+            .worksheet_data_for_sheet(SheetId(1))
+            .expect("prefixed worksheet data");
+        assert_eq!(
+            source_sheet.cells.get(&(1, 1)).expect("A1").value,
+            CellValue::Text("prefixed shared".to_string())
+        );
+        assert_eq!(
+            source_sheet.cells.get(&(1, 2)).expect("B1").value,
+            CellValue::Text("prefixed inline".to_string())
+        );
+
+        let clean_saved = codec
+            .save(&loaded, CommonSaveOptions::default())
+            .expect("clean-save prefixed workbook");
+        let clean_package = OpcPackage::from_bytes(&clean_saved).expect("clean prefixed package");
+        for part_uri in [
+            "xl/workbook.xml",
+            "xl/sharedStrings.xml",
+            "xl/worksheets/sheet1.xml",
+        ] {
+            assert_eq!(
+                clean_package.part(part_uri).expect("clean part").bytes,
+                source_package.part(part_uri).expect("source part").bytes,
+                "clean save changed {part_uri}"
+            );
+        }
+
+        loaded.state.insert_cell(
+            SheetId(1),
+            1,
+            1,
+            CellData {
+                value: CellValue::Number(5.0),
+                formula: None,
+                style_id: None,
+            },
+        );
+        loaded.state.insert_cell(
+            SheetId(1),
+            2,
+            2,
+            CellData {
+                value: CellValue::Text("new prefixed inline".to_string()),
+                formula: None,
+                style_id: None,
+            },
+        );
+        loaded.state.insert_cell(
+            SheetId(1),
+            2,
+            3,
+            CellData {
+                value: CellValue::Number(5.0),
+                formula: Some(FormulaSource {
+                    text: "SUM(2,3)".to_string(),
+                    is_r1c1: false,
+                }),
+                style_id: None,
+            },
+        );
+        let edited_saved = codec
+            .save(&loaded, CommonSaveOptions::default())
+            .expect("targeted-save prefixed workbook");
+        let edited_package = OpcPackage::from_bytes(&edited_saved).expect("edited package");
+        let workbook_xml = std::str::from_utf8(
+            &edited_package
+                .part("xl/workbook.xml")
+                .expect("edited workbook")
+                .bytes,
+        )
+        .expect("edited workbook utf8");
+        let worksheet_xml = std::str::from_utf8(
+            &edited_package
+                .part("xl/worksheets/sheet1.xml")
+                .expect("edited worksheet")
+                .bytes,
+        )
+        .expect("edited worksheet utf8");
+        assert!(workbook_xml.contains("<book:calcPr"));
+        assert!(!workbook_xml.contains("<calcPr"));
+        assert!(worksheet_xml.contains("<ws:dimension ref=\"A1:C2\""));
+        assert!(worksheet_xml.contains("<data:sheetData"));
+        assert!(worksheet_xml.contains("<data:c r=\"A1\""));
+        assert!(worksheet_xml.contains(
+            "<foreign:v xmlns:foreign=\"urn:ootd:foreign\">999</foreign:v>"
+        ));
+        assert!(worksheet_xml.contains("<data:v>5</data:v>"));
+        assert!(worksheet_xml.contains("<data:row r=\"2\""));
+        assert!(worksheet_xml.contains("<data:c r=\"B2\" t=\"inlineStr\""));
+        assert!(worksheet_xml.contains(
+            "<data:is><data:t>new prefixed inline</data:t></data:is>"
+        ));
+        assert!(worksheet_xml.contains("<data:c r=\"C2\"><data:f>SUM(2,3)</data:f>"));
+        assert!(worksheet_xml.contains("<data:v>5</data:v>"));
+        assert!(!worksheet_xml.contains("<dimension "));
+        assert!(!worksheet_xml.contains("<sheetData"));
+        assert!(!worksheet_xml.contains("<row "));
+        assert!(!worksheet_xml.contains("<c "));
+        assert!(!worksheet_xml.contains("<v>"));
+
+        let reopened = codec
+            .load(&edited_saved, CommonLoadOptions::default())
+            .expect("reopen edited prefixed workbook");
+        let reopened_sheet = reopened
+            .state
+            .worksheet_data_for_sheet(SheetId(1))
+            .expect("reopened prefixed worksheet");
+        assert_eq!(
+            reopened_sheet.cells.get(&(1, 1)).expect("A1").value,
+            CellValue::Number(5.0)
+        );
+        assert_eq!(
+            reopened_sheet.cells.get(&(1, 2)).expect("B1").value,
+            CellValue::Text("prefixed inline".to_string())
+        );
+        assert_eq!(
+            reopened_sheet.cells.get(&(2, 2)).expect("B2").value,
+            CellValue::Text("new prefixed inline".to_string())
+        );
+        assert_eq!(
+            reopened_sheet.cells.get(&(2, 3)).expect("C2").value,
+            CellValue::Number(5.0)
+        );
+        assert_eq!(
+            reopened_sheet
+                .cells
+                .get(&(2, 3))
+                .expect("C2")
+                .formula
+                .as_ref()
+                .expect("C2 formula")
+                .text,
+            "SUM(2,3)"
+        );
+    }
+
+    #[test]
     fn root_relationship_main_document_discovery_fails_closed() {
         let codec = XlsxCodec;
         let cases = [
@@ -1363,6 +1512,7 @@
 <sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
   <si><t>shared</t></si>
 </sst>"#,
+            "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
         )
         .expect("shared strings");
         let cells = parse_worksheet_cells(
@@ -1379,6 +1529,7 @@
   </sheetData>
 </worksheet>"#,
             &shared_strings,
+            "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
         )
         .expect("worksheet cells")
         .cells;
@@ -1410,6 +1561,7 @@
   <si><r><t>alpha</t></r><r><t><![CDATA[beta]]></t></r></si>
   <si><t xml:space="preserve"> gamma </t></si>
 </sst>"#,
+            "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
         )
         .expect("shared strings");
 
@@ -1453,6 +1605,7 @@
   </sheetData>
 </worksheet>"#,
             &[],
+            "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
         )
         .expect("worksheet cells")
         .cells;
@@ -1480,6 +1633,7 @@
   </sheetData>
 </worksheet>"#,
             &[],
+            "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
         )
         .expect_err("parse should fail when worksheet cell reference is missing");
 
@@ -1503,6 +1657,7 @@
   </sheetData>
 </worksheet>"#,
             &[],
+            "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
         )
         .expect("worksheet cells")
         .cells;
@@ -1532,6 +1687,7 @@
   </sheetData>
 </worksheet>"#,
             &["only".to_string()],
+            "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
         )
         .expect_err("parse should fail when shared string index is out of range");
 
@@ -1555,6 +1711,7 @@
   </sheetData>
 </worksheet>"#,
             &[],
+            "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
         )
         .expect("worksheet cells")
         .cells;
@@ -1585,6 +1742,7 @@
   </sheetData>
 </worksheet>"#,
             &[],
+            "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
         )
         .expect("worksheet cells")
         .cells;
@@ -12691,7 +12849,11 @@
             ..WorksheetData::default()
         };
 
-        let error = rewrite_worksheet_xml(&worksheet, None)
+        let error = rewrite_worksheet_xml(
+            &worksheet,
+            None,
+            "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
+        )
             .expect_err("rewrite should fail when worksheet source xml is missing");
 
         assert_eq!(error.code, OmErrorCode::InvalidState);
@@ -12716,7 +12878,11 @@
             ..WorksheetData::default()
         };
 
-        let error = rewrite_worksheet_xml(&worksheet, None)
+        let error = rewrite_worksheet_xml(
+            &worksheet,
+            None,
+            "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
+        )
             .expect_err("rewrite should fail when start cell reference is missing");
 
         assert_eq!(error.code, OmErrorCode::Parse);
@@ -12745,7 +12911,11 @@
             ..WorksheetData::default()
         };
 
-        let error = rewrite_worksheet_xml(&worksheet, None)
+        let error = rewrite_worksheet_xml(
+            &worksheet,
+            None,
+            "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
+        )
             .expect_err("rewrite should fail when empty cell reference is missing");
 
         assert_eq!(error.code, OmErrorCode::Parse);
@@ -12774,7 +12944,11 @@
             ..WorksheetData::default()
         };
 
-        let error = rewrite_worksheet_xml(&worksheet, None)
+        let error = rewrite_worksheet_xml(
+            &worksheet,
+            None,
+            "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
+        )
             .expect_err("rewrite should fail when template cell reference is invalid");
 
         assert_eq!(error.code, OmErrorCode::Parse);
@@ -51981,8 +52155,12 @@
             comment_relationship_ids: Vec::new(),
         };
 
-        let rewritten =
-            rewrite_worksheet_xml(&worksheet, Some(&support_parts)).expect("rewrite worksheet");
+        let rewritten = rewrite_worksheet_xml(
+            &worksheet,
+            Some(&support_parts),
+            "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
+        )
+        .expect("rewrite worksheet");
         let rewritten_xml = String::from_utf8(rewritten).expect("rewritten xml utf8");
 
         assert!(rewritten_xml.contains(r#"<dimension ref="A1:C3"/>"#));
@@ -52042,8 +52220,12 @@
             comment_relationship_ids: Vec::new(),
         };
 
-        let rewritten =
-            rewrite_worksheet_xml(&worksheet, Some(&support_parts)).expect("rewrite worksheet");
+        let rewritten = rewrite_worksheet_xml(
+            &worksheet,
+            Some(&support_parts),
+            "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
+        )
+        .expect("rewrite worksheet");
         let rewritten_xml = String::from_utf8(rewritten).expect("rewritten xml utf8");
 
         assert!(rewritten_xml.contains(r#"<dimension ref="C3"/>"#));
@@ -52096,8 +52278,12 @@
             comment_relationship_ids: Vec::new(),
         };
 
-        let rewritten =
-            rewrite_worksheet_xml(&worksheet, Some(&support_parts)).expect("rewrite worksheet");
+        let rewritten = rewrite_worksheet_xml(
+            &worksheet,
+            Some(&support_parts),
+            "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
+        )
+        .expect("rewrite worksheet");
         let rewritten_xml = String::from_utf8(rewritten).expect("rewritten xml utf8");
 
         assert!(rewritten_xml.contains(r#"<dimension ref="C3"/>"#));
@@ -52163,8 +52349,12 @@
             comment_relationship_ids: Vec::new(),
         };
 
-        let rewritten =
-            rewrite_worksheet_xml(&worksheet, Some(&support_parts)).expect("rewrite worksheet");
+        let rewritten = rewrite_worksheet_xml(
+            &worksheet,
+            Some(&support_parts),
+            "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
+        )
+        .expect("rewrite worksheet");
         let rewritten_xml = String::from_utf8(rewritten).expect("rewritten xml utf8");
 
         assert!(rewritten_xml.contains(r#"<dimension ref="C3"/>"#));
@@ -52224,8 +52414,12 @@
             comment_relationship_ids: Vec::new(),
         };
 
-        let rewritten =
-            rewrite_worksheet_xml(&worksheet, Some(&support_parts)).expect("rewrite worksheet");
+        let rewritten = rewrite_worksheet_xml(
+            &worksheet,
+            Some(&support_parts),
+            "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
+        )
+        .expect("rewrite worksheet");
         let rewritten_xml = String::from_utf8(rewritten).expect("rewritten xml utf8");
 
         assert!(rewritten_xml.contains(r#"<dimension ref="C3"/>"#));
@@ -52313,8 +52507,12 @@
             comment_relationship_ids: Vec::new(),
         };
 
-        let rewritten =
-            rewrite_worksheet_xml(&worksheet, Some(&support_parts)).expect("rewrite worksheet");
+        let rewritten = rewrite_worksheet_xml(
+            &worksheet,
+            Some(&support_parts),
+            "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
+        )
+        .expect("rewrite worksheet");
         let rewritten_xml = String::from_utf8(rewritten).expect("rewritten xml utf8");
 
         assert!(rewritten_xml.contains(r#"<dimension ref="A1:D1"/>"#));
@@ -117256,6 +117454,51 @@
         ]);
 
         package.to_bytes().expect("Strict workbook bytes")
+    }
+
+    fn prefixed_spreadsheetml_workbook_bytes() -> Vec<u8> {
+        let mut package =
+            OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("synthetic package");
+        package
+            .replace_part_bytes(
+                "xl/workbook.xml",
+                br#"<?xml version="1.0" encoding="UTF-8"?>
+<book:workbook xmlns:book="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+ xmlns:link="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <book:sheets>
+    <book:sheet name="Prefixed" sheetId="1" link:id="rId1"/>
+  </book:sheets>
+</book:workbook>"#
+                    .to_vec(),
+            )
+            .expect("replace prefixed workbook");
+        package
+            .replace_part_bytes(
+                "xl/sharedStrings.xml",
+                br#"<?xml version="1.0" encoding="UTF-8"?>
+<text:sst xmlns:text="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <text:si><foreign:t xmlns:foreign="urn:ootd:foreign">poison</foreign:t><text:t>prefixed shared</text:t></text:si>
+</text:sst>"#
+                    .to_vec(),
+            )
+            .expect("replace prefixed shared strings");
+        package
+            .replace_part_bytes(
+                "xl/worksheets/sheet1.xml",
+                br#"<?xml version="1.0" encoding="UTF-8"?>
+<ws:worksheet xmlns:ws="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <ws:dimension ref="A1:B1"/>
+  <data:sheetData xmlns:data="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+    <data:row r="1">
+      <data:c r="A1" t="s"><foreign:v xmlns:foreign="urn:ootd:foreign">999</foreign:v><data:v>0</data:v></data:c>
+      <data:c r="B1" t="inlineStr"><data:is><foreign:t xmlns:foreign="urn:ootd:foreign">poison</foreign:t><data:t>prefixed inline</data:t></data:is></data:c>
+    </data:row>
+  </data:sheetData>
+</ws:worksheet>"#
+                    .to_vec(),
+            )
+            .expect("replace prefixed worksheet");
+        package.to_bytes().expect("prefixed workbook bytes")
     }
 
     fn synthetic_workbook_bytes() -> Vec<u8> {

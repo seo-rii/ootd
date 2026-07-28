@@ -199,20 +199,26 @@ Wave 2 exit gate:
    고정했다. Strict↔Transitional 변환과 Strict drawing/chart/worksheet-structure mutation은
    `Unsupported`이며 실제 Excel evidence는 아직 없다. 세부 계약은
    `docs/interfaces/ooxml_dialect.md`에 있다.
-3. `OOTD-015` + `OOTD-049` + `OOTD-061`: bounded QName-aware XML layer, prefix preservation,
-   root schema validation, Markup Compatibility/AlternateContent/extLst owner-aware 보존과
-   raw-fragment splice를 도입한다.
-4. `OOTD-016` + `OOTD-017`: workbook/worksheet strict parse와 explicit repair report를
+3. `OOTD-015` + `OOTD-049` 1단계 완료 (2026-07-28, synthetic): workbook core,
+   shared strings, worksheet cell codec가 namespace URI+local name으로 typed node를 판별하고
+   arbitrary SpreadsheetML/relationship prefix와 namespace 재선언을 읽는다. dirty rewrite는
+   기존 owner prefix를 새 `calcPr`, dimension, row, cell, formula/value/inline-string node에
+   상속하며 foreign same-local node와 no-op raw part를 보존한다. 나머지 parser family,
+   root/parent structure, unknown prefix/duplicate expanded attribute 진단과 공통 raw-fragment
+   splice는 계속 열린다. 세부 계약은 `docs/interfaces/spreadsheetml_qnames.md`에 있다.
+4. `OOTD-061`: Markup Compatibility/AlternateContent/extLst owner-aware 보존 정책을
+   QName layer 위에 도입한다.
+5. `OOTD-016` + `OOTD-017`: workbook/worksheet strict parse와 explicit repair report를
    분리한다.
-5. `OOTD-018` + `OOTD-019` + `OOTD-048`: A1/R1C1/range/sheet quoting/grid limits를 checked
+6. `OOTD-018` + `OOTD-019` + `OOTD-048`: A1/R1C1/range/sheet quoting/grid limits를 checked
    reference subsystem으로 통합한다.
-6. `OOTD-021`: bounded Strict preservation과 일반 target-format capability를 분리하고,
+7. `OOTD-021`: bounded Strict preservation과 일반 target-format capability를 분리하고,
    drawing/chart 등 남은 Strict graph와 cross-dialect conversion을 단계적으로 구현한다.
-7. `OOTD-029` + `OOTD-030`: content-types와 relationships root/namespace/duplicate 검증을
+8. `OOTD-029` + `OOTD-030`: content-types와 relationships root/namespace/duplicate 검증을
    fail-closed한다.
-8. `OOTD-031` + `OOTD-032` + `OOTD-033` + `OOTD-054`: mutable public state를 validated
+9. `OOTD-031` + `OOTD-032` + `OOTD-033` + `OOTD-054`: mutable public state를 validated
    command/transaction으로 닫고 workbook identity assignment를 fallible/atomic하게 만든다.
-9. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
+10. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
    structured error에 추가한다.
 
 Wave 3 exit gate:

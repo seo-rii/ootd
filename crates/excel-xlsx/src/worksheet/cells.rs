@@ -1,4 +1,8 @@
-use super::super::{WorksheetSupportParts, io_error, xml_error};
+use super::super::{
+    WorksheetSupportParts, io_error,
+    xml::{expanded_name_is, qualified_name_like, resolved_element_is, unqualified_attribute_is},
+    xml_error,
+};
 
 use excel_model::{CellData, WorksheetData};
 use office_common::{
@@ -6,7 +10,7 @@ use office_common::{
 };
 use quick_xml::escape::partial_escape;
 use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
-use quick_xml::{Reader, Writer};
+use quick_xml::{NsReader, Writer};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Cursor, Write};
 
@@ -118,8 +122,9 @@ pub(crate) fn parse_cell_reference(
 pub(crate) fn parse_worksheet_cells(
     worksheet_xml: &[u8],
     shared_strings: &[String],
+    spreadsheet_namespace: &str,
 ) -> OmResult<ParsedWorksheetCells> {
-    let mut reader = Reader::from_reader(Cursor::new(worksheet_xml));
+    let mut reader = NsReader::from_reader(Cursor::new(worksheet_xml));
     reader.config_mut().trim_text(false);
     let mut buffer = Vec::new();
     let mut cells = BTreeMap::new();
@@ -139,8 +144,15 @@ pub(crate) fn parse_worksheet_cells(
     )> = None;
 
     loop {
-        match reader.read_event_into(&mut buffer) {
-            Ok(Event::Start(element)) if element.name().as_ref() == b"row" => {
+        match reader.read_resolved_event_into(&mut buffer) {
+            Ok((namespace, Event::Start(element)))
+                if resolved_element_is(
+                    &namespace,
+                    element.local_name(),
+                    spreadsheet_namespace.as_bytes(),
+                    b"row",
+                ) =>
+            {
                 let mut row_index = None;
                 for attr in element.attributes() {
                     let attr = attr.map_err(xml_error)?;
@@ -148,14 +160,30 @@ pub(crate) fn parse_worksheet_cells(
                         .decode_and_unescape_value(reader.decoder())
                         .map_err(xml_error)?
                         .into_owned();
-                    if attr.key.as_ref() == b"r" {
+                    if unqualified_attribute_is(reader.resolver(), attr.key, b"r") {
                         row_index = value.parse::<u32>().ok();
                     }
                 }
                 current_row = row_index;
             }
-            Ok(Event::End(element)) if element.name().as_ref() == b"row" => current_row = None,
-            Ok(Event::Start(element)) if element.name().as_ref() == b"c" => {
+            Ok((namespace, Event::End(element)))
+                if resolved_element_is(
+                    &namespace,
+                    element.local_name(),
+                    spreadsheet_namespace.as_bytes(),
+                    b"row",
+                ) =>
+            {
+                current_row = None;
+            }
+            Ok((namespace, Event::Start(element)))
+                if resolved_element_is(
+                    &namespace,
+                    element.local_name(),
+                    spreadsheet_namespace.as_bytes(),
+                    b"c",
+                ) =>
+            {
                 let mut reference = None;
                 let mut cell_type = None;
                 let mut style_id = None;
@@ -165,11 +193,12 @@ pub(crate) fn parse_worksheet_cells(
                         .decode_and_unescape_value(reader.decoder())
                         .map_err(xml_error)?
                         .into_owned();
-                    match attr.key.as_ref() {
-                        b"r" => reference = Some(value),
-                        b"t" => cell_type = Some(value),
-                        b"s" => style_id = value.parse::<u64>().ok().map(StyleId),
-                        _ => {}
+                    if unqualified_attribute_is(reader.resolver(), attr.key, b"r") {
+                        reference = Some(value);
+                    } else if unqualified_attribute_is(reader.resolver(), attr.key, b"t") {
+                        cell_type = Some(value);
+                    } else if unqualified_attribute_is(reader.resolver(), attr.key, b"s") {
+                        style_id = value.parse::<u64>().ok().map(StyleId);
                     }
                 }
                 let reference = reference.ok_or_else(|| {
@@ -190,7 +219,14 @@ pub(crate) fn parse_worksheet_cells(
                     None,
                 ));
             }
-            Ok(Event::Empty(element)) if element.name().as_ref() == b"c" => {
+            Ok((namespace, Event::Empty(element)))
+                if resolved_element_is(
+                    &namespace,
+                    element.local_name(),
+                    spreadsheet_namespace.as_bytes(),
+                    b"c",
+                ) =>
+            {
                 let mut reference = None;
                 let mut style_id = None;
                 for attr in element.attributes() {
@@ -199,10 +235,10 @@ pub(crate) fn parse_worksheet_cells(
                         .decode_and_unescape_value(reader.decoder())
                         .map_err(xml_error)?
                         .into_owned();
-                    match attr.key.as_ref() {
-                        b"r" => reference = Some(value),
-                        b"s" => style_id = value.parse::<u64>().ok().map(StyleId),
-                        _ => {}
+                    if unqualified_attribute_is(reader.resolver(), attr.key, b"r") {
+                        reference = Some(value);
+                    } else if unqualified_attribute_is(reader.resolver(), attr.key, b"s") {
+                        style_id = value.parse::<u64>().ok().map(StyleId);
                     }
                 }
                 let reference = reference.ok_or_else(|| {
@@ -223,7 +259,14 @@ pub(crate) fn parse_worksheet_cells(
                     );
                 }
             }
-            Ok(Event::Start(element)) if element.name().as_ref() == b"f" => {
+            Ok((namespace, Event::Start(element)))
+                if resolved_element_is(
+                    &namespace,
+                    element.local_name(),
+                    spreadsheet_namespace.as_bytes(),
+                    b"f",
+                ) =>
+            {
                 let mut formula_type = None;
                 let mut formula_reference = None;
                 for attr in element.attributes() {
@@ -232,10 +275,10 @@ pub(crate) fn parse_worksheet_cells(
                         .decode_and_unescape_value(reader.decoder())
                         .map_err(xml_error)?
                         .into_owned();
-                    match attr.key.as_ref() {
-                        b"t" => formula_type = Some(value),
-                        b"ref" => formula_reference = Some(value),
-                        _ => {}
+                    if unqualified_attribute_is(reader.resolver(), attr.key, b"t") {
+                        formula_type = Some(value);
+                    } else if unqualified_attribute_is(reader.resolver(), attr.key, b"ref") {
+                        formula_reference = Some(value);
                     }
                 }
                 if formula_type.as_deref() == Some("array") {
@@ -285,20 +328,51 @@ pub(crate) fn parse_worksheet_cells(
                 }
                 current_field = Some("formula");
             }
-            Ok(Event::Start(element)) if element.name().as_ref() == b"v" => {
+            Ok((namespace, Event::Start(element)))
+                if resolved_element_is(
+                    &namespace,
+                    element.local_name(),
+                    spreadsheet_namespace.as_bytes(),
+                    b"v",
+                ) =>
+            {
                 current_field = Some("value");
             }
-            Ok(Event::Start(element)) if element.name().as_ref() == b"t" => {
+            Ok((namespace, Event::Start(element)))
+                if resolved_element_is(
+                    &namespace,
+                    element.local_name(),
+                    spreadsheet_namespace.as_bytes(),
+                    b"t",
+                ) =>
+            {
                 if let Some((_, _, cell_type, _, _, _, _, _)) = &current_cell {
                     if cell_type.as_deref() == Some("inlineStr") {
                         current_field = Some("inline");
                     }
                 }
             }
-            Ok(Event::End(element)) if matches!(element.name().as_ref(), b"f" | b"v" | b"t") => {
+            Ok((namespace, Event::End(element)))
+                if resolved_element_is(
+                    &namespace,
+                    element.local_name(),
+                    spreadsheet_namespace.as_bytes(),
+                    b"f",
+                ) || resolved_element_is(
+                    &namespace,
+                    element.local_name(),
+                    spreadsheet_namespace.as_bytes(),
+                    b"v",
+                ) || resolved_element_is(
+                    &namespace,
+                    element.local_name(),
+                    spreadsheet_namespace.as_bytes(),
+                    b"t",
+                ) =>
+            {
                 current_field = None;
             }
-            Ok(Event::Text(text)) => {
+            Ok((_, Event::Text(text))) => {
                 if let Some(field) = current_field {
                     if let Some(cell) = current_cell.as_mut() {
                         match field {
@@ -310,7 +384,7 @@ pub(crate) fn parse_worksheet_cells(
                     }
                 }
             }
-            Ok(Event::CData(text)) => {
+            Ok((_, Event::CData(text))) => {
                 if let Some(field) = current_field {
                     if let Some(cell) = current_cell.as_mut() {
                         match field {
@@ -322,7 +396,14 @@ pub(crate) fn parse_worksheet_cells(
                     }
                 }
             }
-            Ok(Event::End(element)) if element.name().as_ref() == b"c" => {
+            Ok((namespace, Event::End(element)))
+                if resolved_element_is(
+                    &namespace,
+                    element.local_name(),
+                    spreadsheet_namespace.as_bytes(),
+                    b"c",
+                ) =>
+            {
                 if let Some((row, col, cell_type, style_id, formula, value, inline, spill_range)) =
                     current_cell.take()
                 {
@@ -386,7 +467,7 @@ pub(crate) fn parse_worksheet_cells(
                     }
                 }
             }
-            Ok(Event::Eof) => break,
+            Ok((_, Event::Eof)) => break,
             Ok(_) => {}
             Err(error) => return Err(xml_error(error)),
         }
@@ -427,6 +508,7 @@ pub(crate) struct ParsedWorksheetCells {
 pub(crate) fn rewrite_worksheet_xml(
     worksheet: &WorksheetData,
     support_parts: Option<&WorksheetSupportParts>,
+    spreadsheet_namespace: &str,
 ) -> OmResult<Vec<u8>> {
     if worksheet.source_xml.is_empty() {
         return Err(OmError::new(
@@ -438,12 +520,15 @@ pub(crate) fn rewrite_worksheet_xml(
     let mut row_templates = BTreeMap::<u32, Vec<(String, String)>>::new();
     let mut cell_templates = BTreeMap::<(u32, u32), Vec<(String, String)>>::new();
     let mut formula_templates = BTreeMap::<(u32, u32), Vec<(String, String)>>::new();
+    let mut row_element_names = BTreeMap::<u32, Vec<u8>>::new();
+    let mut cell_element_names = BTreeMap::<(u32, u32), Vec<u8>>::new();
+    let mut worksheet_element_name = None::<Vec<u8>>;
     let mut raw_row_fragments = BTreeMap::<u32, Vec<u8>>::new();
     let mut raw_cell_fragments = BTreeMap::<(u32, u32), Vec<u8>>::new();
     let mut row_content_segments = BTreeMap::<u32, Vec<RowContentSegment>>::new();
     let mut cell_content_segments =
         BTreeMap::<(u32, u32), Vec<(CellContentSegment, Vec<u8>)>>::new();
-    let mut template_reader = Reader::from_reader(Cursor::new(worksheet.source_xml.as_slice()));
+    let mut template_reader = NsReader::from_reader(Cursor::new(worksheet.source_xml.as_slice()));
     template_reader.config_mut().trim_text(false);
     let mut template_buffer = Vec::new();
     let mut current_template_row = None;
@@ -474,234 +559,95 @@ pub(crate) fn rewrite_worksheet_xml(
 
     loop {
         let start = template_reader.buffer_position() as usize;
-        let event = template_reader.read_event_into(&mut template_buffer);
+        let decoder = template_reader.decoder();
+        let event = template_reader
+            .read_resolved_event_into(&mut template_buffer)
+            .map(|(namespace, event)| {
+                let namespace = match namespace {
+                    quick_xml::name::ResolveResult::Bound(namespace) => {
+                        Some(namespace.as_ref().to_vec())
+                    }
+                    quick_xml::name::ResolveResult::Unbound
+                    | quick_xml::name::ResolveResult::Unknown(_) => None,
+                };
+                (namespace, event)
+            });
         let end = template_reader.buffer_position() as usize;
         let raw_event = &worksheet.source_xml[start..end];
 
         match event {
-            Ok(Event::Start(element)) => match element.name().as_ref() {
-                b"row" => {
-                    let attributes = collect_attributes(&element, template_reader.decoder())?;
-                    current_template_row = attributes
-                        .iter()
-                        .find(|(key, _)| key == "r")
-                        .and_then(|(_, value)| value.parse::<u32>().ok());
-                    if let Some(row_index) = current_template_row {
-                        current_raw_row = Some((row_index, raw_event.to_vec()));
-                        current_row_content_cursor = Some((row_index, end));
-                        row_content_segments.entry(row_index).or_default();
-                        row_templates.insert(row_index, attributes);
+            Ok((namespace, Event::Start(element))) => {
+                let local_name = element.local_name();
+                match if expanded_name_is(
+                    namespace.as_deref(),
+                    local_name,
+                    spreadsheet_namespace.as_bytes(),
+                    local_name.as_ref(),
+                ) {
+                    local_name.as_ref()
+                } else {
+                    b""
+                } {
+                    b"worksheet" => {
+                        worksheet_element_name = Some(element.name().as_ref().to_vec());
                     }
-                }
-                b"c" => {
-                    let attributes = collect_attributes(&element, template_reader.decoder())?;
-                    let reference = attributes
-                        .iter()
-                        .find(|(key, _)| key == "r")
-                        .map(|(_, value)| value.clone())
-                        .ok_or_else(|| {
-                            OmError::new(
-                                OmErrorCode::Parse,
-                                "worksheet cell is missing an A1 reference",
-                            )
-                        })?;
-                    let coordinates =
-                        parse_cell_reference(reference.as_str(), current_template_row)?;
-                    current_template_cell = Some(coordinates);
-                    current_raw_cell = Some((coordinates, raw_event.to_vec()));
-                    current_cell_content_cursor = Some((coordinates, end));
-                    cell_content_segments.entry(coordinates).or_default();
-                    if let Some((row_index, cursor)) = current_row_content_cursor {
-                        if current_row_opaque.is_none() && current_row_segment_cell.is_none() {
-                            if cursor < start {
-                                row_content_segments.entry(row_index).or_default().push(
-                                    RowContentSegment::Opaque(
-                                        worksheet.source_xml[cursor..start].to_vec(),
-                                    ),
-                                );
+                    b"row" => {
+                        let attributes = collect_attributes(&element, decoder)?;
+                        current_template_row = attributes
+                            .iter()
+                            .find(|(key, _)| key == "r")
+                            .and_then(|(_, value)| value.parse::<u32>().ok());
+                        if let Some(row_index) = current_template_row {
+                            row_element_names.insert(row_index, element.name().as_ref().to_vec());
+                            current_raw_row = Some((row_index, raw_event.to_vec()));
+                            current_row_content_cursor = Some((row_index, end));
+                            row_content_segments.entry(row_index).or_default();
+                            row_templates.insert(row_index, attributes);
+                        }
+                    }
+                    b"c" => {
+                        let attributes = collect_attributes(&element, decoder)?;
+                        let reference = attributes
+                            .iter()
+                            .find(|(key, _)| key == "r")
+                            .map(|(_, value)| value.clone())
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::Parse,
+                                    "worksheet cell is missing an A1 reference",
+                                )
+                            })?;
+                        let coordinates =
+                            parse_cell_reference(reference.as_str(), current_template_row)?;
+                        current_template_cell = Some(coordinates);
+                        cell_element_names.insert(coordinates, element.name().as_ref().to_vec());
+                        current_raw_cell = Some((coordinates, raw_event.to_vec()));
+                        current_cell_content_cursor = Some((coordinates, end));
+                        cell_content_segments.entry(coordinates).or_default();
+                        if let Some((row_index, cursor)) = current_row_content_cursor {
+                            if current_row_opaque.is_none() && current_row_segment_cell.is_none() {
+                                if cursor < start {
+                                    row_content_segments.entry(row_index).or_default().push(
+                                        RowContentSegment::Opaque(
+                                            worksheet.source_xml[cursor..start].to_vec(),
+                                        ),
+                                    );
+                                }
+                                current_row_segment_cell = Some(coordinates);
                             }
-                            current_row_segment_cell = Some(coordinates);
                         }
-                    }
-                    if let Some((_, raw_row)) = current_raw_row.as_mut() {
-                        raw_row.extend_from_slice(raw_event);
-                    }
-                    cell_templates.insert(coordinates, attributes);
-                }
-                b"f" => {
-                    if let Some(coordinates) = current_template_cell {
-                        formula_templates.insert(
-                            coordinates,
-                            collect_attributes(&element, template_reader.decoder())?,
-                        );
-                        if current_cell_segment.is_none()
-                            && let Some((segment_coordinates, cursor)) = current_cell_content_cursor
-                            && segment_coordinates == coordinates
-                        {
-                            if cursor < start {
-                                cell_content_segments.entry(coordinates).or_default().push((
-                                    CellContentSegment::Opaque,
-                                    worksheet.source_xml[cursor..start].to_vec(),
-                                ));
-                            }
-                            current_cell_segment =
-                                Some((coordinates, CellContentSegment::Formula, start, 1));
-                        } else if let Some((_, _, _, depth)) = current_cell_segment.as_mut() {
-                            *depth += 1;
+                        if let Some((_, raw_row)) = current_raw_row.as_mut() {
+                            raw_row.extend_from_slice(raw_event);
                         }
-                    } else if let Some((row_index, _, depth)) = current_row_opaque.as_mut() {
-                        if Some(*row_index) == current_template_row {
-                            *depth += 1;
-                        }
+                        cell_templates.insert(coordinates, attributes);
                     }
-                    if let Some((_, raw_row)) = current_raw_row.as_mut() {
-                        raw_row.extend_from_slice(raw_event);
-                    }
-                    if let Some((_, raw_cell)) = current_raw_cell.as_mut() {
-                        raw_cell.extend_from_slice(raw_event);
-                    }
-                }
-                b"v" => {
-                    if let Some(coordinates) = current_template_cell {
-                        if current_cell_segment.is_none()
-                            && let Some((segment_coordinates, cursor)) = current_cell_content_cursor
-                            && segment_coordinates == coordinates
-                        {
-                            if cursor < start {
-                                cell_content_segments.entry(coordinates).or_default().push((
-                                    CellContentSegment::Opaque,
-                                    worksheet.source_xml[cursor..start].to_vec(),
-                                ));
-                            }
-                            current_cell_segment =
-                                Some((coordinates, CellContentSegment::Value, start, 1));
-                        } else if let Some((_, _, _, depth)) = current_cell_segment.as_mut() {
-                            *depth += 1;
-                        }
-                    }
-                    if let Some((_, raw_row)) = current_raw_row.as_mut() {
-                        raw_row.extend_from_slice(raw_event);
-                    }
-                    if let Some((_, raw_cell)) = current_raw_cell.as_mut() {
-                        raw_cell.extend_from_slice(raw_event);
-                    }
-                }
-                b"is" => {
-                    if let Some(coordinates) = current_template_cell {
-                        if current_cell_segment.is_none()
-                            && let Some((segment_coordinates, cursor)) = current_cell_content_cursor
-                            && segment_coordinates == coordinates
-                        {
-                            if cursor < start {
-                                cell_content_segments.entry(coordinates).or_default().push((
-                                    CellContentSegment::Opaque,
-                                    worksheet.source_xml[cursor..start].to_vec(),
-                                ));
-                            }
-                            current_cell_segment =
-                                Some((coordinates, CellContentSegment::InlineString, start, 1));
-                        } else if let Some((_, _, _, depth)) = current_cell_segment.as_mut() {
-                            *depth += 1;
-                        }
-                    }
-                    if let Some((_, raw_row)) = current_raw_row.as_mut() {
-                        raw_row.extend_from_slice(raw_event);
-                    }
-                    if let Some((_, raw_cell)) = current_raw_cell.as_mut() {
-                        raw_cell.extend_from_slice(raw_event);
-                    }
-                }
-                _ => {
-                    if let Some((coordinates, _, _, depth)) = current_cell_segment.as_mut() {
-                        if Some(*coordinates) == current_template_cell {
-                            *depth += 1;
-                        }
-                    } else if let Some(coordinates) = current_template_cell {
-                        if let Some((segment_coordinates, cursor)) = current_cell_content_cursor
-                            && segment_coordinates == coordinates
-                        {
-                            current_cell_segment =
-                                Some((coordinates, CellContentSegment::Opaque, cursor, 1));
-                        }
-                    } else if let Some(row_index) = current_template_row {
-                        if let Some((opaque_row_index, _, depth)) = current_row_opaque.as_mut() {
-                            if *opaque_row_index == row_index {
-                                *depth += 1;
-                            }
-                        } else if let Some((cursor_row_index, cursor)) = current_row_content_cursor
-                            && cursor_row_index == row_index
-                        {
-                            current_row_opaque = Some((row_index, cursor, 1));
-                        }
-                    }
-                    if let Some((_, raw_row)) = current_raw_row.as_mut() {
-                        raw_row.extend_from_slice(raw_event);
-                    }
-                    if let Some((_, raw_cell)) = current_raw_cell.as_mut() {
-                        raw_cell.extend_from_slice(raw_event);
-                    }
-                }
-            },
-            Ok(Event::Empty(element)) => match element.name().as_ref() {
-                b"row" => {
-                    let attributes = collect_attributes(&element, template_reader.decoder())?;
-                    if let Some(row_index) = attributes
-                        .iter()
-                        .find(|(key, _)| key == "r")
-                        .and_then(|(_, value)| value.parse::<u32>().ok())
-                    {
-                        raw_row_fragments.insert(row_index, raw_event.to_vec());
-                        row_content_segments.entry(row_index).or_default();
-                        row_templates.insert(row_index, attributes);
-                    }
-                }
-                b"c" => {
-                    let attributes = collect_attributes(&element, template_reader.decoder())?;
-                    let reference = attributes
-                        .iter()
-                        .find(|(key, _)| key == "r")
-                        .map(|(_, value)| value.clone())
-                        .ok_or_else(|| {
-                            OmError::new(
-                                OmErrorCode::Parse,
-                                "worksheet cell is missing an A1 reference",
-                            )
-                        })?;
-                    let coordinates =
-                        parse_cell_reference(reference.as_str(), current_template_row)?;
-                    if let Some((_, raw_row)) = current_raw_row.as_mut() {
-                        raw_row.extend_from_slice(raw_event);
-                    }
-                    if let Some((row_index, cursor)) = current_row_content_cursor
-                        && current_row_opaque.is_none()
-                        && current_row_segment_cell.is_none()
-                    {
-                        if cursor < start {
-                            row_content_segments.entry(row_index).or_default().push(
-                                RowContentSegment::Opaque(
-                                    worksheet.source_xml[cursor..start].to_vec(),
-                                ),
-                            );
-                        }
-                        row_content_segments
-                            .entry(row_index)
-                            .or_default()
-                            .push(RowContentSegment::Cell(coordinates));
-                        current_row_content_cursor = Some((row_index, end));
-                    }
-                    cell_templates.insert(coordinates, attributes);
-                    raw_cell_fragments.insert(coordinates, raw_event.to_vec());
-                    cell_content_segments.entry(coordinates).or_default();
-                    current_template_cell = None;
-                }
-                b"f" => {
-                    if let Some(coordinates) = current_template_cell {
-                        if current_cell_segment.is_none() {
-                            formula_templates.insert(
-                                coordinates,
-                                collect_attributes(&element, template_reader.decoder())?,
-                            );
-                            if let Some((segment_coordinates, cursor)) = current_cell_content_cursor
+                    b"f" => {
+                        if let Some(coordinates) = current_template_cell {
+                            formula_templates
+                                .insert(coordinates, collect_attributes(&element, decoder)?);
+                            if current_cell_segment.is_none()
+                                && let Some((segment_coordinates, cursor)) =
+                                    current_cell_content_cursor
                                 && segment_coordinates == coordinates
                             {
                                 if cursor < start {
@@ -710,185 +656,387 @@ pub(crate) fn rewrite_worksheet_xml(
                                         worksheet.source_xml[cursor..start].to_vec(),
                                     ));
                                 }
-                                cell_content_segments
-                                    .entry(coordinates)
-                                    .or_default()
-                                    .push((CellContentSegment::Formula, raw_event.to_vec()));
-                                current_cell_content_cursor = Some((coordinates, end));
+                                current_cell_segment =
+                                    Some((coordinates, CellContentSegment::Formula, start, 1));
+                            } else if let Some((_, _, _, depth)) = current_cell_segment.as_mut() {
+                                *depth += 1;
+                            }
+                        } else if let Some((row_index, _, depth)) = current_row_opaque.as_mut() {
+                            if Some(*row_index) == current_template_row {
+                                *depth += 1;
                             }
                         }
-                    }
-                    if let Some((_, raw_row)) = current_raw_row.as_mut() {
-                        raw_row.extend_from_slice(raw_event);
-                    }
-                    if let Some((_, raw_cell)) = current_raw_cell.as_mut() {
-                        raw_cell.extend_from_slice(raw_event);
-                    }
-                }
-                b"v" => {
-                    if current_cell_segment.is_none()
-                        && let Some(coordinates) = current_template_cell
-                        && let Some((segment_coordinates, cursor)) = current_cell_content_cursor
-                        && segment_coordinates == coordinates
-                    {
-                        if cursor < start {
-                            cell_content_segments.entry(coordinates).or_default().push((
-                                CellContentSegment::Opaque,
-                                worksheet.source_xml[cursor..start].to_vec(),
-                            ));
+                        if let Some((_, raw_row)) = current_raw_row.as_mut() {
+                            raw_row.extend_from_slice(raw_event);
                         }
-                        cell_content_segments
-                            .entry(coordinates)
-                            .or_default()
-                            .push((CellContentSegment::Value, raw_event.to_vec()));
-                        current_cell_content_cursor = Some((coordinates, end));
-                    }
-                    if let Some((_, raw_row)) = current_raw_row.as_mut() {
-                        raw_row.extend_from_slice(raw_event);
-                    }
-                    if let Some((_, raw_cell)) = current_raw_cell.as_mut() {
-                        raw_cell.extend_from_slice(raw_event);
-                    }
-                }
-                b"is" => {
-                    if current_cell_segment.is_none()
-                        && let Some(coordinates) = current_template_cell
-                        && let Some((segment_coordinates, cursor)) = current_cell_content_cursor
-                        && segment_coordinates == coordinates
-                    {
-                        if cursor < start {
-                            cell_content_segments.entry(coordinates).or_default().push((
-                                CellContentSegment::Opaque,
-                                worksheet.source_xml[cursor..start].to_vec(),
-                            ));
+                        if let Some((_, raw_cell)) = current_raw_cell.as_mut() {
+                            raw_cell.extend_from_slice(raw_event);
                         }
-                        cell_content_segments
-                            .entry(coordinates)
-                            .or_default()
-                            .push((CellContentSegment::InlineString, raw_event.to_vec()));
-                        current_cell_content_cursor = Some((coordinates, end));
                     }
-                    if let Some((_, raw_row)) = current_raw_row.as_mut() {
-                        raw_row.extend_from_slice(raw_event);
+                    b"v" => {
+                        if let Some(coordinates) = current_template_cell {
+                            if current_cell_segment.is_none()
+                                && let Some((segment_coordinates, cursor)) =
+                                    current_cell_content_cursor
+                                && segment_coordinates == coordinates
+                            {
+                                if cursor < start {
+                                    cell_content_segments.entry(coordinates).or_default().push((
+                                        CellContentSegment::Opaque,
+                                        worksheet.source_xml[cursor..start].to_vec(),
+                                    ));
+                                }
+                                current_cell_segment =
+                                    Some((coordinates, CellContentSegment::Value, start, 1));
+                            } else if let Some((_, _, _, depth)) = current_cell_segment.as_mut() {
+                                *depth += 1;
+                            }
+                        }
+                        if let Some((_, raw_row)) = current_raw_row.as_mut() {
+                            raw_row.extend_from_slice(raw_event);
+                        }
+                        if let Some((_, raw_cell)) = current_raw_cell.as_mut() {
+                            raw_cell.extend_from_slice(raw_event);
+                        }
                     }
-                    if let Some((_, raw_cell)) = current_raw_cell.as_mut() {
-                        raw_cell.extend_from_slice(raw_event);
+                    b"is" => {
+                        if let Some(coordinates) = current_template_cell {
+                            if current_cell_segment.is_none()
+                                && let Some((segment_coordinates, cursor)) =
+                                    current_cell_content_cursor
+                                && segment_coordinates == coordinates
+                            {
+                                if cursor < start {
+                                    cell_content_segments.entry(coordinates).or_default().push((
+                                        CellContentSegment::Opaque,
+                                        worksheet.source_xml[cursor..start].to_vec(),
+                                    ));
+                                }
+                                current_cell_segment =
+                                    Some((coordinates, CellContentSegment::InlineString, start, 1));
+                            } else if let Some((_, _, _, depth)) = current_cell_segment.as_mut() {
+                                *depth += 1;
+                            }
+                        }
+                        if let Some((_, raw_row)) = current_raw_row.as_mut() {
+                            raw_row.extend_from_slice(raw_event);
+                        }
+                        if let Some((_, raw_cell)) = current_raw_cell.as_mut() {
+                            raw_cell.extend_from_slice(raw_event);
+                        }
+                    }
+                    _ => {
+                        if let Some((coordinates, _, _, depth)) = current_cell_segment.as_mut() {
+                            if Some(*coordinates) == current_template_cell {
+                                *depth += 1;
+                            }
+                        } else if let Some(coordinates) = current_template_cell {
+                            if let Some((segment_coordinates, cursor)) = current_cell_content_cursor
+                                && segment_coordinates == coordinates
+                            {
+                                current_cell_segment =
+                                    Some((coordinates, CellContentSegment::Opaque, cursor, 1));
+                            }
+                        } else if let Some(row_index) = current_template_row {
+                            if let Some((opaque_row_index, _, depth)) = current_row_opaque.as_mut()
+                            {
+                                if *opaque_row_index == row_index {
+                                    *depth += 1;
+                                }
+                            } else if let Some((cursor_row_index, cursor)) =
+                                current_row_content_cursor
+                                && cursor_row_index == row_index
+                            {
+                                current_row_opaque = Some((row_index, cursor, 1));
+                            }
+                        }
+                        if let Some((_, raw_row)) = current_raw_row.as_mut() {
+                            raw_row.extend_from_slice(raw_event);
+                        }
+                        if let Some((_, raw_cell)) = current_raw_cell.as_mut() {
+                            raw_cell.extend_from_slice(raw_event);
+                        }
                     }
                 }
-                _ => {
-                    if current_cell_segment.is_none()
-                        && let Some((coordinates, cursor)) = current_cell_content_cursor
-                        && Some(coordinates) == current_template_cell
-                    {
-                        cell_content_segments.entry(coordinates).or_default().push((
-                            CellContentSegment::Opaque,
-                            worksheet.source_xml[cursor..end].to_vec(),
-                        ));
-                        current_cell_content_cursor = Some((coordinates, end));
-                    } else if current_template_cell.is_none()
-                        && current_row_opaque.is_none()
-                        && let Some((row_index, cursor)) = current_row_content_cursor
-                        && Some(row_index) == current_template_row
-                    {
-                        row_content_segments.entry(row_index).or_default().push(
-                            RowContentSegment::Opaque(worksheet.source_xml[cursor..end].to_vec()),
-                        );
-                        current_row_content_cursor = Some((row_index, end));
+            }
+            Ok((namespace, Event::Empty(element))) => {
+                let local_name = element.local_name();
+                match if expanded_name_is(
+                    namespace.as_deref(),
+                    local_name,
+                    spreadsheet_namespace.as_bytes(),
+                    local_name.as_ref(),
+                ) {
+                    local_name.as_ref()
+                } else {
+                    b""
+                } {
+                    b"row" => {
+                        let attributes = collect_attributes(&element, decoder)?;
+                        if let Some(row_index) = attributes
+                            .iter()
+                            .find(|(key, _)| key == "r")
+                            .and_then(|(_, value)| value.parse::<u32>().ok())
+                        {
+                            row_element_names.insert(row_index, element.name().as_ref().to_vec());
+                            raw_row_fragments.insert(row_index, raw_event.to_vec());
+                            row_content_segments.entry(row_index).or_default();
+                            row_templates.insert(row_index, attributes);
+                        }
                     }
-                    if let Some((_, raw_row)) = current_raw_row.as_mut() {
-                        raw_row.extend_from_slice(raw_event);
-                    }
-                    if let Some((_, raw_cell)) = current_raw_cell.as_mut() {
-                        raw_cell.extend_from_slice(raw_event);
-                    }
-                }
-            },
-            Ok(Event::End(element)) => match element.name().as_ref() {
-                b"row" => {
-                    if let Some((row_index, cursor)) = current_row_content_cursor
-                        && cursor < start
-                    {
-                        row_content_segments.entry(row_index).or_default().push(
-                            RowContentSegment::Opaque(worksheet.source_xml[cursor..start].to_vec()),
-                        );
-                    }
-                    if let Some((row_index, mut raw_row)) = current_raw_row.take() {
-                        raw_row.extend_from_slice(raw_event);
-                        raw_row_fragments.insert(row_index, raw_row);
-                    }
-                    current_row_content_cursor = None;
-                    current_row_opaque = None;
-                    current_row_segment_cell = None;
-                    current_template_row = None;
-                }
-                b"c" => {
-                    if let Some((coordinates, cursor)) = current_cell_content_cursor
-                        && cursor < start
-                    {
-                        cell_content_segments.entry(coordinates).or_default().push((
-                            CellContentSegment::Opaque,
-                            worksheet.source_xml[cursor..start].to_vec(),
-                        ));
-                    }
-                    if let Some((_, raw_row)) = current_raw_row.as_mut() {
-                        raw_row.extend_from_slice(raw_event);
-                    }
-                    if let Some((coordinates, mut raw_cell)) = current_raw_cell.take() {
-                        raw_cell.extend_from_slice(raw_event);
-                        raw_cell_fragments.insert(coordinates, raw_cell);
-                    }
-                    if let Some(coordinates) = current_row_segment_cell.take()
-                        && let Some((row_index, _)) = current_row_content_cursor
-                    {
-                        row_content_segments
-                            .entry(row_index)
-                            .or_default()
-                            .push(RowContentSegment::Cell(coordinates));
-                        current_row_content_cursor = Some((row_index, end));
-                    }
-                    current_cell_content_cursor = None;
-                    current_cell_segment = None;
-                    current_template_cell = None;
-                }
-                _ => {
-                    if let Some((coordinates, segment_kind, segment_start, depth)) =
-                        current_cell_segment.as_mut()
-                    {
-                        *depth -= 1;
-                        if *depth == 0 {
-                            cell_content_segments
-                                .entry(*coordinates)
+                    b"c" => {
+                        let attributes = collect_attributes(&element, decoder)?;
+                        let reference = attributes
+                            .iter()
+                            .find(|(key, _)| key == "r")
+                            .map(|(_, value)| value.clone())
+                            .ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::Parse,
+                                    "worksheet cell is missing an A1 reference",
+                                )
+                            })?;
+                        let coordinates =
+                            parse_cell_reference(reference.as_str(), current_template_row)?;
+                        cell_element_names.insert(coordinates, element.name().as_ref().to_vec());
+                        if let Some((_, raw_row)) = current_raw_row.as_mut() {
+                            raw_row.extend_from_slice(raw_event);
+                        }
+                        if let Some((row_index, cursor)) = current_row_content_cursor
+                            && current_row_opaque.is_none()
+                            && current_row_segment_cell.is_none()
+                        {
+                            if cursor < start {
+                                row_content_segments.entry(row_index).or_default().push(
+                                    RowContentSegment::Opaque(
+                                        worksheet.source_xml[cursor..start].to_vec(),
+                                    ),
+                                );
+                            }
+                            row_content_segments
+                                .entry(row_index)
                                 .or_default()
-                                .push((
-                                    *segment_kind,
-                                    worksheet.source_xml[*segment_start..end].to_vec(),
-                                ));
-                            current_cell_content_cursor = Some((*coordinates, end));
-                            current_cell_segment = None;
+                                .push(RowContentSegment::Cell(coordinates));
+                            current_row_content_cursor = Some((row_index, end));
                         }
-                    } else if let Some((row_index, opaque_start, depth)) =
-                        current_row_opaque.as_mut()
-                    {
-                        *depth -= 1;
-                        if *depth == 0 {
-                            row_content_segments.entry(*row_index).or_default().push(
+                        cell_templates.insert(coordinates, attributes);
+                        raw_cell_fragments.insert(coordinates, raw_event.to_vec());
+                        cell_content_segments.entry(coordinates).or_default();
+                        current_template_cell = None;
+                    }
+                    b"f" => {
+                        if let Some(coordinates) = current_template_cell {
+                            if current_cell_segment.is_none() {
+                                formula_templates
+                                    .insert(coordinates, collect_attributes(&element, decoder)?);
+                                if let Some((segment_coordinates, cursor)) =
+                                    current_cell_content_cursor
+                                    && segment_coordinates == coordinates
+                                {
+                                    if cursor < start {
+                                        cell_content_segments.entry(coordinates).or_default().push(
+                                            (
+                                                CellContentSegment::Opaque,
+                                                worksheet.source_xml[cursor..start].to_vec(),
+                                            ),
+                                        );
+                                    }
+                                    cell_content_segments
+                                        .entry(coordinates)
+                                        .or_default()
+                                        .push((CellContentSegment::Formula, raw_event.to_vec()));
+                                    current_cell_content_cursor = Some((coordinates, end));
+                                }
+                            }
+                        }
+                        if let Some((_, raw_row)) = current_raw_row.as_mut() {
+                            raw_row.extend_from_slice(raw_event);
+                        }
+                        if let Some((_, raw_cell)) = current_raw_cell.as_mut() {
+                            raw_cell.extend_from_slice(raw_event);
+                        }
+                    }
+                    b"v" => {
+                        if current_cell_segment.is_none()
+                            && let Some(coordinates) = current_template_cell
+                            && let Some((segment_coordinates, cursor)) = current_cell_content_cursor
+                            && segment_coordinates == coordinates
+                        {
+                            if cursor < start {
+                                cell_content_segments.entry(coordinates).or_default().push((
+                                    CellContentSegment::Opaque,
+                                    worksheet.source_xml[cursor..start].to_vec(),
+                                ));
+                            }
+                            cell_content_segments
+                                .entry(coordinates)
+                                .or_default()
+                                .push((CellContentSegment::Value, raw_event.to_vec()));
+                            current_cell_content_cursor = Some((coordinates, end));
+                        }
+                        if let Some((_, raw_row)) = current_raw_row.as_mut() {
+                            raw_row.extend_from_slice(raw_event);
+                        }
+                        if let Some((_, raw_cell)) = current_raw_cell.as_mut() {
+                            raw_cell.extend_from_slice(raw_event);
+                        }
+                    }
+                    b"is" => {
+                        if current_cell_segment.is_none()
+                            && let Some(coordinates) = current_template_cell
+                            && let Some((segment_coordinates, cursor)) = current_cell_content_cursor
+                            && segment_coordinates == coordinates
+                        {
+                            if cursor < start {
+                                cell_content_segments.entry(coordinates).or_default().push((
+                                    CellContentSegment::Opaque,
+                                    worksheet.source_xml[cursor..start].to_vec(),
+                                ));
+                            }
+                            cell_content_segments
+                                .entry(coordinates)
+                                .or_default()
+                                .push((CellContentSegment::InlineString, raw_event.to_vec()));
+                            current_cell_content_cursor = Some((coordinates, end));
+                        }
+                        if let Some((_, raw_row)) = current_raw_row.as_mut() {
+                            raw_row.extend_from_slice(raw_event);
+                        }
+                        if let Some((_, raw_cell)) = current_raw_cell.as_mut() {
+                            raw_cell.extend_from_slice(raw_event);
+                        }
+                    }
+                    _ => {
+                        if current_cell_segment.is_none()
+                            && let Some((coordinates, cursor)) = current_cell_content_cursor
+                            && Some(coordinates) == current_template_cell
+                        {
+                            cell_content_segments.entry(coordinates).or_default().push((
+                                CellContentSegment::Opaque,
+                                worksheet.source_xml[cursor..end].to_vec(),
+                            ));
+                            current_cell_content_cursor = Some((coordinates, end));
+                        } else if current_template_cell.is_none()
+                            && current_row_opaque.is_none()
+                            && let Some((row_index, cursor)) = current_row_content_cursor
+                            && Some(row_index) == current_template_row
+                        {
+                            row_content_segments.entry(row_index).or_default().push(
                                 RowContentSegment::Opaque(
-                                    worksheet.source_xml[*opaque_start..end].to_vec(),
+                                    worksheet.source_xml[cursor..end].to_vec(),
                                 ),
                             );
-                            current_row_content_cursor = Some((*row_index, end));
-                            current_row_opaque = None;
+                            current_row_content_cursor = Some((row_index, end));
+                        }
+                        if let Some((_, raw_row)) = current_raw_row.as_mut() {
+                            raw_row.extend_from_slice(raw_event);
+                        }
+                        if let Some((_, raw_cell)) = current_raw_cell.as_mut() {
+                            raw_cell.extend_from_slice(raw_event);
                         }
                     }
-                    if let Some((_, raw_row)) = current_raw_row.as_mut() {
-                        raw_row.extend_from_slice(raw_event);
+                }
+            }
+            Ok((namespace, Event::End(element))) => {
+                let local_name = element.local_name();
+                match if expanded_name_is(
+                    namespace.as_deref(),
+                    local_name,
+                    spreadsheet_namespace.as_bytes(),
+                    local_name.as_ref(),
+                ) {
+                    local_name.as_ref()
+                } else {
+                    b""
+                } {
+                    b"row" => {
+                        if let Some((row_index, cursor)) = current_row_content_cursor
+                            && cursor < start
+                        {
+                            row_content_segments.entry(row_index).or_default().push(
+                                RowContentSegment::Opaque(
+                                    worksheet.source_xml[cursor..start].to_vec(),
+                                ),
+                            );
+                        }
+                        if let Some((row_index, mut raw_row)) = current_raw_row.take() {
+                            raw_row.extend_from_slice(raw_event);
+                            raw_row_fragments.insert(row_index, raw_row);
+                        }
+                        current_row_content_cursor = None;
+                        current_row_opaque = None;
+                        current_row_segment_cell = None;
+                        current_template_row = None;
                     }
-                    if let Some((_, raw_cell)) = current_raw_cell.as_mut() {
-                        raw_cell.extend_from_slice(raw_event);
+                    b"c" => {
+                        if let Some((coordinates, cursor)) = current_cell_content_cursor
+                            && cursor < start
+                        {
+                            cell_content_segments.entry(coordinates).or_default().push((
+                                CellContentSegment::Opaque,
+                                worksheet.source_xml[cursor..start].to_vec(),
+                            ));
+                        }
+                        if let Some((_, raw_row)) = current_raw_row.as_mut() {
+                            raw_row.extend_from_slice(raw_event);
+                        }
+                        if let Some((coordinates, mut raw_cell)) = current_raw_cell.take() {
+                            raw_cell.extend_from_slice(raw_event);
+                            raw_cell_fragments.insert(coordinates, raw_cell);
+                        }
+                        if let Some(coordinates) = current_row_segment_cell.take()
+                            && let Some((row_index, _)) = current_row_content_cursor
+                        {
+                            row_content_segments
+                                .entry(row_index)
+                                .or_default()
+                                .push(RowContentSegment::Cell(coordinates));
+                            current_row_content_cursor = Some((row_index, end));
+                        }
+                        current_cell_content_cursor = None;
+                        current_cell_segment = None;
+                        current_template_cell = None;
+                    }
+                    _ => {
+                        if let Some((coordinates, segment_kind, segment_start, depth)) =
+                            current_cell_segment.as_mut()
+                        {
+                            *depth -= 1;
+                            if *depth == 0 {
+                                cell_content_segments
+                                    .entry(*coordinates)
+                                    .or_default()
+                                    .push((
+                                        *segment_kind,
+                                        worksheet.source_xml[*segment_start..end].to_vec(),
+                                    ));
+                                current_cell_content_cursor = Some((*coordinates, end));
+                                current_cell_segment = None;
+                            }
+                        } else if let Some((row_index, opaque_start, depth)) =
+                            current_row_opaque.as_mut()
+                        {
+                            *depth -= 1;
+                            if *depth == 0 {
+                                row_content_segments.entry(*row_index).or_default().push(
+                                    RowContentSegment::Opaque(
+                                        worksheet.source_xml[*opaque_start..end].to_vec(),
+                                    ),
+                                );
+                                current_row_content_cursor = Some((*row_index, end));
+                                current_row_opaque = None;
+                            }
+                        }
+                        if let Some((_, raw_row)) = current_raw_row.as_mut() {
+                            raw_row.extend_from_slice(raw_event);
+                        }
+                        if let Some((_, raw_cell)) = current_raw_cell.as_mut() {
+                            raw_cell.extend_from_slice(raw_event);
+                        }
                     }
                 }
-            },
-            Ok(Event::Eof) => break,
+            }
+            Ok((_, Event::Eof)) => break,
             Ok(_) => {
                 if let Some((_, raw_row)) = current_raw_row.as_mut() {
                     raw_row.extend_from_slice(raw_event);
@@ -902,7 +1050,13 @@ pub(crate) fn rewrite_worksheet_xml(
         template_buffer.clear();
     }
 
-    let mut reader = Reader::from_reader(Cursor::new(worksheet.source_xml.as_slice()));
+    let worksheet_element_name = worksheet_element_name.ok_or_else(|| {
+        OmError::new(
+            OmErrorCode::Parse,
+            "worksheet source XML does not contain a SpreadsheetML worksheet root",
+        )
+    })?;
+    let mut reader = NsReader::from_reader(Cursor::new(worksheet.source_xml.as_slice()));
     reader.config_mut().trim_text(false);
     let mut writer = Writer::new(Cursor::new(Vec::new()));
     let mut buffer = Vec::new();
@@ -937,6 +1091,8 @@ pub(crate) fn rewrite_worksheet_xml(
     let mut has_sheet_data = false;
     let mut inserted_dimension = false;
     let mut inserted_sheet_data = false;
+    let worksheet_dimension_name = qualified_name_like(&worksheet_element_name, "dimension");
+    let worksheet_sheet_data_name = qualified_name_like(&worksheet_element_name, "sheetData");
     let mut rows = BTreeMap::<u32, BTreeMap<u32, Option<&CellData>>>::new();
     let dirty_rows = worksheet
         .dirty_cells
@@ -964,10 +1120,12 @@ pub(crate) fn rewrite_worksheet_xml(
 
     let write_placeholder_cell = |writer: &mut Writer<Cursor<Vec<u8>>>,
                                   row_index: u32,
-                                  col_index: u32|
+                                  col_index: u32,
+                                  element_name_reference: &[u8]|
      -> OmResult<()> {
         let reference = cell_reference(row_index, col_index);
-        let mut cell_tag = BytesStart::new("c");
+        let cell_name = qualified_name_like(element_name_reference, "c");
+        let mut cell_tag = BytesStart::new(cell_name.as_str());
         let mut wrote_reference = false;
         if let Some(attributes) = cell_templates.get(&(row_index, col_index)) {
             for (key, value) in attributes {
@@ -1010,7 +1168,7 @@ pub(crate) fn rewrite_worksheet_xml(
             writer.get_mut().write_all(raw_bytes).map_err(io_error)?;
         }
         writer
-            .write_event(Event::End(BytesEnd::new("c")))
+            .write_event(Event::End(BytesEnd::new(cell_name.as_str())))
             .map_err(xml_error)?;
         Ok(())
     };
@@ -1018,9 +1176,15 @@ pub(crate) fn rewrite_worksheet_xml(
     let write_cell = |writer: &mut Writer<Cursor<Vec<u8>>>,
                       row_index: u32,
                       col_index: u32,
-                      cell: &CellData|
+                      cell: &CellData,
+                      element_name_reference: &[u8]|
      -> OmResult<()> {
         let reference = cell_reference(row_index, col_index);
+        let cell_name = qualified_name_like(element_name_reference, "c");
+        let formula_name = qualified_name_like(element_name_reference, "f");
+        let value_name = qualified_name_like(element_name_reference, "v");
+        let inline_string_name = qualified_name_like(element_name_reference, "is");
+        let text_name = qualified_name_like(element_name_reference, "t");
         let style = cell.style_id.map(|style_id| style_id.0.to_string());
         let cell_type = if cell.formula.is_some() {
             match cell.value {
@@ -1037,7 +1201,7 @@ pub(crate) fn rewrite_worksheet_xml(
                 _ => None,
             }
         };
-        let mut cell_tag = BytesStart::new("c");
+        let mut cell_tag = BytesStart::new(cell_name.as_str());
         let mut wrote_reference = false;
         let mut wrote_style = false;
         let mut wrote_type = false;
@@ -1106,7 +1270,7 @@ pub(crate) fn rewrite_worksheet_xml(
         });
         let write_formula_xml =
             |writer: &mut Writer<Cursor<Vec<u8>>>, formula: &FormulaSource| -> OmResult<()> {
-                let mut formula_tag = BytesStart::new("f");
+                let mut formula_tag = BytesStart::new(formula_name.as_str());
                 if let Some(attributes) = formula_templates.get(&coordinates) {
                     for (key, value) in attributes {
                         if is_dynamic_array_formula && matches!(key.as_str(), "t" | "ref" | "si") {
@@ -1134,7 +1298,7 @@ pub(crate) fn rewrite_worksheet_xml(
                     ))))
                     .map_err(xml_error)?;
                 writer
-                    .write_event(Event::End(BytesEnd::new("f")))
+                    .write_event(Event::End(BytesEnd::new(formula_name.as_str())))
                     .map_err(xml_error)?;
                 Ok(())
             };
@@ -1158,7 +1322,7 @@ pub(crate) fn rewrite_worksheet_xml(
                         CellValue::Blank => {}
                         CellValue::Bool(value) => {
                             writer
-                                .write_event(Event::Start(BytesStart::new("v")))
+                                .write_event(Event::Start(BytesStart::new(value_name.as_str())))
                                 .map_err(xml_error)?;
                             writer
                                 .write_event(Event::Text(BytesText::from_escaped(partial_escape(
@@ -1166,14 +1330,14 @@ pub(crate) fn rewrite_worksheet_xml(
                                 ))))
                                 .map_err(xml_error)?;
                             writer
-                                .write_event(Event::End(BytesEnd::new("v")))
+                                .write_event(Event::End(BytesEnd::new(value_name.as_str())))
                                 .map_err(xml_error)?;
                             wrote_value = true;
                         }
                         CellValue::Number(value) => {
                             let value_string = value.to_string();
                             writer
-                                .write_event(Event::Start(BytesStart::new("v")))
+                                .write_event(Event::Start(BytesStart::new(value_name.as_str())))
                                 .map_err(xml_error)?;
                             writer
                                 .write_event(Event::Text(BytesText::from_escaped(partial_escape(
@@ -1181,13 +1345,13 @@ pub(crate) fn rewrite_worksheet_xml(
                                 ))))
                                 .map_err(xml_error)?;
                             writer
-                                .write_event(Event::End(BytesEnd::new("v")))
+                                .write_event(Event::End(BytesEnd::new(value_name.as_str())))
                                 .map_err(xml_error)?;
                             wrote_value = true;
                         }
                         CellValue::Text(value) if cell.formula.is_some() => {
                             writer
-                                .write_event(Event::Start(BytesStart::new("v")))
+                                .write_event(Event::Start(BytesStart::new(value_name.as_str())))
                                 .map_err(xml_error)?;
                             writer
                                 .write_event(Event::Text(BytesText::from_escaped(partial_escape(
@@ -1195,16 +1359,18 @@ pub(crate) fn rewrite_worksheet_xml(
                                 ))))
                                 .map_err(xml_error)?;
                             writer
-                                .write_event(Event::End(BytesEnd::new("v")))
+                                .write_event(Event::End(BytesEnd::new(value_name.as_str())))
                                 .map_err(xml_error)?;
                             wrote_value = true;
                         }
                         CellValue::Text(value) => {
                             writer
-                                .write_event(Event::Start(BytesStart::new("is")))
+                                .write_event(Event::Start(BytesStart::new(
+                                    inline_string_name.as_str(),
+                                )))
                                 .map_err(xml_error)?;
                             writer
-                                .write_event(Event::Start(BytesStart::new("t")))
+                                .write_event(Event::Start(BytesStart::new(text_name.as_str())))
                                 .map_err(xml_error)?;
                             writer
                                 .write_event(Event::Text(BytesText::from_escaped(partial_escape(
@@ -1212,17 +1378,17 @@ pub(crate) fn rewrite_worksheet_xml(
                                 ))))
                                 .map_err(xml_error)?;
                             writer
-                                .write_event(Event::End(BytesEnd::new("t")))
+                                .write_event(Event::End(BytesEnd::new(text_name.as_str())))
                                 .map_err(xml_error)?;
                             writer
-                                .write_event(Event::End(BytesEnd::new("is")))
+                                .write_event(Event::End(BytesEnd::new(inline_string_name.as_str())))
                                 .map_err(xml_error)?;
                             wrote_inline_string = true;
                         }
                         CellValue::Error(error) => {
                             let value = format_cell_error(*error);
                             writer
-                                .write_event(Event::Start(BytesStart::new("v")))
+                                .write_event(Event::Start(BytesStart::new(value_name.as_str())))
                                 .map_err(xml_error)?;
                             writer
                                 .write_event(Event::Text(BytesText::from_escaped(partial_escape(
@@ -1230,7 +1396,7 @@ pub(crate) fn rewrite_worksheet_xml(
                                 ))))
                                 .map_err(xml_error)?;
                             writer
-                                .write_event(Event::End(BytesEnd::new("v")))
+                                .write_event(Event::End(BytesEnd::new(value_name.as_str())))
                                 .map_err(xml_error)?;
                             wrote_value = true;
                         }
@@ -1240,10 +1406,12 @@ pub(crate) fn rewrite_worksheet_xml(
                             && cell.formula.is_none()
                         {
                             writer
-                                .write_event(Event::Start(BytesStart::new("is")))
+                                .write_event(Event::Start(BytesStart::new(
+                                    inline_string_name.as_str(),
+                                )))
                                 .map_err(xml_error)?;
                             writer
-                                .write_event(Event::Start(BytesStart::new("t")))
+                                .write_event(Event::Start(BytesStart::new(text_name.as_str())))
                                 .map_err(xml_error)?;
                             writer
                                 .write_event(Event::Text(BytesText::from_escaped(partial_escape(
@@ -1251,10 +1419,10 @@ pub(crate) fn rewrite_worksheet_xml(
                                 ))))
                                 .map_err(xml_error)?;
                             writer
-                                .write_event(Event::End(BytesEnd::new("t")))
+                                .write_event(Event::End(BytesEnd::new(text_name.as_str())))
                                 .map_err(xml_error)?;
                             writer
-                                .write_event(Event::End(BytesEnd::new("is")))
+                                .write_event(Event::End(BytesEnd::new(inline_string_name.as_str())))
                                 .map_err(xml_error)?;
                             wrote_inline_string = true;
                         }
@@ -1271,7 +1439,7 @@ pub(crate) fn rewrite_worksheet_xml(
                 CellValue::Blank => {}
                 CellValue::Bool(value) => {
                     writer
-                        .write_event(Event::Start(BytesStart::new("v")))
+                        .write_event(Event::Start(BytesStart::new(value_name.as_str())))
                         .map_err(xml_error)?;
                     writer
                         .write_event(Event::Text(BytesText::from_escaped(partial_escape(
@@ -1279,13 +1447,13 @@ pub(crate) fn rewrite_worksheet_xml(
                         ))))
                         .map_err(xml_error)?;
                     writer
-                        .write_event(Event::End(BytesEnd::new("v")))
+                        .write_event(Event::End(BytesEnd::new(value_name.as_str())))
                         .map_err(xml_error)?;
                 }
                 CellValue::Number(value) => {
                     let value_string = value.to_string();
                     writer
-                        .write_event(Event::Start(BytesStart::new("v")))
+                        .write_event(Event::Start(BytesStart::new(value_name.as_str())))
                         .map_err(xml_error)?;
                     writer
                         .write_event(Event::Text(BytesText::from_escaped(partial_escape(
@@ -1293,12 +1461,12 @@ pub(crate) fn rewrite_worksheet_xml(
                         ))))
                         .map_err(xml_error)?;
                     writer
-                        .write_event(Event::End(BytesEnd::new("v")))
+                        .write_event(Event::End(BytesEnd::new(value_name.as_str())))
                         .map_err(xml_error)?;
                 }
                 CellValue::Text(value) if cell.formula.is_some() => {
                     writer
-                        .write_event(Event::Start(BytesStart::new("v")))
+                        .write_event(Event::Start(BytesStart::new(value_name.as_str())))
                         .map_err(xml_error)?;
                     writer
                         .write_event(Event::Text(BytesText::from_escaped(partial_escape(
@@ -1306,15 +1474,15 @@ pub(crate) fn rewrite_worksheet_xml(
                         ))))
                         .map_err(xml_error)?;
                     writer
-                        .write_event(Event::End(BytesEnd::new("v")))
+                        .write_event(Event::End(BytesEnd::new(value_name.as_str())))
                         .map_err(xml_error)?;
                 }
                 CellValue::Text(value) => {
                     writer
-                        .write_event(Event::Start(BytesStart::new("is")))
+                        .write_event(Event::Start(BytesStart::new(inline_string_name.as_str())))
                         .map_err(xml_error)?;
                     writer
-                        .write_event(Event::Start(BytesStart::new("t")))
+                        .write_event(Event::Start(BytesStart::new(text_name.as_str())))
                         .map_err(xml_error)?;
                     writer
                         .write_event(Event::Text(BytesText::from_escaped(partial_escape(
@@ -1322,29 +1490,29 @@ pub(crate) fn rewrite_worksheet_xml(
                         ))))
                         .map_err(xml_error)?;
                     writer
-                        .write_event(Event::End(BytesEnd::new("t")))
+                        .write_event(Event::End(BytesEnd::new(text_name.as_str())))
                         .map_err(xml_error)?;
                     writer
-                        .write_event(Event::End(BytesEnd::new("is")))
+                        .write_event(Event::End(BytesEnd::new(inline_string_name.as_str())))
                         .map_err(xml_error)?;
                 }
                 CellValue::Error(error) => {
                     let value = format_cell_error(*error);
                     writer
-                        .write_event(Event::Start(BytesStart::new("v")))
+                        .write_event(Event::Start(BytesStart::new(value_name.as_str())))
                         .map_err(xml_error)?;
                     writer
                         .write_event(Event::Text(BytesText::from_escaped(partial_escape(value))))
                         .map_err(xml_error)?;
                     writer
-                        .write_event(Event::End(BytesEnd::new("v")))
+                        .write_event(Event::End(BytesEnd::new(value_name.as_str())))
                         .map_err(xml_error)?;
                 }
             }
         }
 
         writer
-            .write_event(Event::End(BytesEnd::new("c")))
+            .write_event(Event::End(BytesEnd::new(cell_name.as_str())))
             .map_err(xml_error)?;
         Ok(())
     };
@@ -1352,6 +1520,8 @@ pub(crate) fn rewrite_worksheet_xml(
     let write_sheet_data = |writer: &mut Writer<Cursor<Vec<u8>>>,
                             element: BytesStart<'static>|
      -> OmResult<()> {
+        let sheet_data_element_name = element.name().as_ref().to_vec();
+        let sheet_data_name = qualified_name_like(&sheet_data_element_name, "sheetData");
         writer
             .write_event(Event::Start(element))
             .map_err(xml_error)?;
@@ -1365,7 +1535,12 @@ pub(crate) fn rewrite_worksheet_xml(
             }
 
             let row_index_string = row_index.to_string();
-            let mut row = BytesStart::new("row");
+            let row_element_name = row_element_names
+                .get(&row_index)
+                .map(Vec::as_slice)
+                .unwrap_or(sheet_data_element_name.as_slice());
+            let row_name = qualified_name_like(row_element_name, "row");
+            let mut row = BytesStart::new(row_name.as_str());
             let mut wrote_row_reference = false;
             if let Some(attributes) = row_templates.get(&row_index) {
                 for (key, value) in attributes {
@@ -1420,26 +1595,31 @@ pub(crate) fn rewrite_worksheet_xml(
                 .collect::<Vec<_>>();
             let mut wrote_pending_cells = std::collections::BTreeSet::new();
             let mut next_pending_cell = 0usize;
-            let mut write_pending_cells =
-                |writer: &mut Writer<Cursor<Vec<u8>>>, before_col: Option<u32>| -> OmResult<()> {
-                    while let Some((col_index, cell)) =
-                        pending_new_cells.get(next_pending_cell).copied()
+            let mut write_pending_cells = |writer: &mut Writer<Cursor<Vec<u8>>>,
+                                           before_col: Option<u32>|
+             -> OmResult<()> {
+                while let Some((col_index, cell)) =
+                    pending_new_cells.get(next_pending_cell).copied()
+                {
+                    if let Some(before_col) = before_col
+                        && col_index >= before_col
                     {
-                        if let Some(before_col) = before_col
-                            && col_index >= before_col
-                        {
-                            break;
-                        }
-                        wrote_pending_cells.insert(col_index);
-                        if let Some(cell) = cell {
-                            write_cell(writer, row_index, col_index, cell)?;
-                        } else {
-                            write_placeholder_cell(writer, row_index, col_index)?;
-                        }
-                        next_pending_cell += 1;
+                        break;
                     }
-                    Ok(())
-                };
+                    wrote_pending_cells.insert(col_index);
+                    let cell_element_name = cell_element_names
+                        .get(&(row_index, col_index))
+                        .map(Vec::as_slice)
+                        .unwrap_or(row_element_name);
+                    if let Some(cell) = cell {
+                        write_cell(writer, row_index, col_index, cell, cell_element_name)?;
+                    } else {
+                        write_placeholder_cell(writer, row_index, col_index, cell_element_name)?;
+                    }
+                    next_pending_cell += 1;
+                }
+                Ok(())
+            };
             let mut saw_original_row_cell = false;
             if let Some(segments) = row_content_segments.get(&row_index) {
                 for (segment_index, segment) in segments.iter().enumerate() {
@@ -1470,12 +1650,25 @@ pub(crate) fn rewrite_worksheet_xml(
                             let Some(cell) = cells_in_row.get(col_index).and_then(|cell| *cell)
                             else {
                                 if anchored_dirty_cells.contains(&key) {
-                                    write_placeholder_cell(writer, row_index, *col_index)?;
+                                    let cell_element_name = cell_element_names
+                                        .get(&key)
+                                        .map(Vec::as_slice)
+                                        .unwrap_or(row_element_name);
+                                    write_placeholder_cell(
+                                        writer,
+                                        row_index,
+                                        *col_index,
+                                        cell_element_name,
+                                    )?;
                                 }
                                 saw_original_row_cell = true;
                                 continue;
                             };
-                            write_cell(writer, row_index, *col_index, cell)?;
+                            let cell_element_name = cell_element_names
+                                .get(&key)
+                                .map(Vec::as_slice)
+                                .unwrap_or(row_element_name);
+                            write_cell(writer, row_index, *col_index, cell, cell_element_name)?;
                             saw_original_row_cell = true;
                         }
                     }
@@ -1497,64 +1690,107 @@ pub(crate) fn rewrite_worksheet_xml(
                 }
                 let Some(cell) = *cell else {
                     if anchored_dirty_cells.contains(&key) {
-                        write_placeholder_cell(writer, row_index, col_index)?;
+                        let cell_element_name = cell_element_names
+                            .get(&key)
+                            .map(Vec::as_slice)
+                            .unwrap_or(row_element_name);
+                        write_placeholder_cell(writer, row_index, col_index, cell_element_name)?;
                     }
                     continue;
                 };
-                write_cell(writer, row_index, col_index, cell)?;
+                let cell_element_name = cell_element_names
+                    .get(&key)
+                    .map(Vec::as_slice)
+                    .unwrap_or(row_element_name);
+                write_cell(writer, row_index, col_index, cell, cell_element_name)?;
             }
 
             writer
-                .write_event(Event::End(BytesEnd::new("row")))
+                .write_event(Event::End(BytesEnd::new(row_name.as_str())))
                 .map_err(xml_error)?;
         }
 
         writer
-            .write_event(Event::End(BytesEnd::new("sheetData")))
+            .write_event(Event::End(BytesEnd::new(sheet_data_name.as_str())))
             .map_err(xml_error)?;
         Ok(())
     };
 
     loop {
-        match reader.read_event_into(&mut buffer) {
-            Ok(Event::Start(element))
+        match reader.read_resolved_event_into(&mut buffer) {
+            Ok((namespace, Event::Start(element)))
                 if skipping_sheet_data > 0
-                    || (skipping_dimension && element.name().as_ref() == b"dimension") =>
+                    || (skipping_dimension
+                        && resolved_element_is(
+                            &namespace,
+                            element.local_name(),
+                            spreadsheet_namespace.as_bytes(),
+                            b"dimension",
+                        )) =>
             {
                 if skipping_sheet_data > 0 {
                     skipping_sheet_data += 1;
                 }
                 depth += 1;
             }
-            Ok(Event::Empty(_)) if skipping_sheet_data > 0 || skipping_dimension => {}
-            Ok(Event::End(element)) if skipping_sheet_data > 0 => {
-                if skipping_sheet_data == 1 && element.name().as_ref() == b"sheetData" {
+            Ok((_, Event::Empty(_))) if skipping_sheet_data > 0 || skipping_dimension => {}
+            Ok((namespace, Event::End(element))) if skipping_sheet_data > 0 => {
+                if skipping_sheet_data == 1
+                    && resolved_element_is(
+                        &namespace,
+                        element.local_name(),
+                        spreadsheet_namespace.as_bytes(),
+                        b"sheetData",
+                    )
+                {
                     skipping_sheet_data = 0;
                 } else {
                     skipping_sheet_data -= 1;
                 }
                 depth -= 1;
             }
-            Ok(Event::End(element))
-                if skipping_dimension && element.name().as_ref() == b"dimension" =>
+            Ok((namespace, Event::End(element)))
+                if skipping_dimension
+                    && resolved_element_is(
+                        &namespace,
+                        element.local_name(),
+                        spreadsheet_namespace.as_bytes(),
+                        b"dimension",
+                    ) =>
             {
                 skipping_dimension = false;
                 depth -= 1;
             }
             Ok(_) if skipping_sheet_data > 0 || skipping_dimension => {}
-            Ok(Event::Empty(element)) if element.name().as_ref() == b"dimension" => {
+            Ok((namespace, Event::Empty(element)))
+                if resolved_element_is(
+                    &namespace,
+                    element.local_name(),
+                    spreadsheet_namespace.as_bytes(),
+                    b"dimension",
+                ) =>
+            {
                 has_dimension = true;
                 inserted_dimension = true;
-                let mut dimension = BytesStart::new("dimension");
+                let dimension_name = qualified_name_like(element.name().as_ref(), "dimension");
+                let mut dimension = BytesStart::new(dimension_name.as_str());
                 dimension.push_attribute(("ref", dimension_ref.as_str()));
                 writer
                     .write_event(Event::Empty(dimension))
                     .map_err(xml_error)?;
             }
-            Ok(Event::Start(element)) if element.name().as_ref() == b"dimension" => {
+            Ok((namespace, Event::Start(element)))
+                if resolved_element_is(
+                    &namespace,
+                    element.local_name(),
+                    spreadsheet_namespace.as_bytes(),
+                    b"dimension",
+                ) =>
+            {
                 has_dimension = true;
                 inserted_dimension = true;
-                let mut dimension = BytesStart::new("dimension");
+                let dimension_name = qualified_name_like(element.name().as_ref(), "dimension");
+                let mut dimension = BytesStart::new(dimension_name.as_str());
                 dimension.push_attribute(("ref", dimension_ref.as_str()));
                 writer
                     .write_event(Event::Empty(dimension))
@@ -1562,21 +1798,43 @@ pub(crate) fn rewrite_worksheet_xml(
                 skipping_dimension = true;
                 depth += 1;
             }
-            Ok(Event::Empty(element)) if element.name().as_ref() == b"sheetData" => {
+            Ok((namespace, Event::Empty(element)))
+                if resolved_element_is(
+                    &namespace,
+                    element.local_name(),
+                    spreadsheet_namespace.as_bytes(),
+                    b"sheetData",
+                ) =>
+            {
                 has_sheet_data = true;
                 inserted_sheet_data = true;
-                write_sheet_data(&mut writer, BytesStart::new("sheetData"))?;
+                write_sheet_data(&mut writer, element.into_owned())?;
             }
-            Ok(Event::Start(element)) if element.name().as_ref() == b"sheetData" => {
+            Ok((namespace, Event::Start(element)))
+                if resolved_element_is(
+                    &namespace,
+                    element.local_name(),
+                    spreadsheet_namespace.as_bytes(),
+                    b"sheetData",
+                ) =>
+            {
                 has_sheet_data = true;
                 inserted_sheet_data = true;
                 write_sheet_data(&mut writer, element.to_owned())?;
                 skipping_sheet_data = 1;
                 depth += 1;
             }
-            Ok(Event::Empty(element)) => {
-                if depth == 1 && !inserted_dimension && element.name().as_ref() != b"dimension" {
-                    let mut dimension = BytesStart::new("dimension");
+            Ok((namespace, Event::Empty(element))) => {
+                let element_namespace_is_spreadsheet = matches!(
+                    namespace,
+                    quick_xml::name::ResolveResult::Bound(namespace)
+                        if namespace.as_ref() == spreadsheet_namespace.as_bytes()
+                );
+                let local_name = element.local_name();
+                let local_name = element_namespace_is_spreadsheet.then_some(local_name.as_ref());
+                if depth == 1 && !inserted_dimension && local_name != Some(b"dimension".as_slice())
+                {
+                    let mut dimension = BytesStart::new(worksheet_dimension_name.as_str());
                     dimension.push_attribute(("ref", dimension_ref.as_str()));
                     writer
                         .write_event(Event::Empty(dimension))
@@ -1585,22 +1843,35 @@ pub(crate) fn rewrite_worksheet_xml(
                 }
                 if depth == 1
                     && !inserted_sheet_data
-                    && element.name().as_ref() != b"sheetData"
+                    && local_name != Some(b"sheetData".as_slice())
                     && !matches!(
-                        element.name().as_ref(),
-                        b"sheetPr" | b"dimension" | b"sheetViews" | b"sheetFormatPr" | b"cols"
+                        local_name,
+                        Some(
+                            b"sheetPr" | b"dimension" | b"sheetViews" | b"sheetFormatPr" | b"cols"
+                        )
                     )
                 {
-                    write_sheet_data(&mut writer, BytesStart::new("sheetData"))?;
+                    write_sheet_data(
+                        &mut writer,
+                        BytesStart::new(worksheet_sheet_data_name.clone()),
+                    )?;
                     inserted_sheet_data = true;
                 }
                 writer
                     .write_event(Event::Empty(element.to_owned()))
                     .map_err(xml_error)?;
             }
-            Ok(Event::Start(element)) => {
-                if depth == 1 && !inserted_dimension && element.name().as_ref() != b"dimension" {
-                    let mut dimension = BytesStart::new("dimension");
+            Ok((namespace, Event::Start(element))) => {
+                let element_namespace_is_spreadsheet = matches!(
+                    namespace,
+                    quick_xml::name::ResolveResult::Bound(namespace)
+                        if namespace.as_ref() == spreadsheet_namespace.as_bytes()
+                );
+                let local_name = element.local_name();
+                let local_name = element_namespace_is_spreadsheet.then_some(local_name.as_ref());
+                if depth == 1 && !inserted_dimension && local_name != Some(b"dimension".as_slice())
+                {
+                    let mut dimension = BytesStart::new(worksheet_dimension_name.as_str());
                     dimension.push_attribute(("ref", dimension_ref.as_str()));
                     writer
                         .write_event(Event::Empty(dimension))
@@ -1609,13 +1880,18 @@ pub(crate) fn rewrite_worksheet_xml(
                 }
                 if depth == 1
                     && !inserted_sheet_data
-                    && element.name().as_ref() != b"sheetData"
+                    && local_name != Some(b"sheetData".as_slice())
                     && !matches!(
-                        element.name().as_ref(),
-                        b"sheetPr" | b"dimension" | b"sheetViews" | b"sheetFormatPr" | b"cols"
+                        local_name,
+                        Some(
+                            b"sheetPr" | b"dimension" | b"sheetViews" | b"sheetFormatPr" | b"cols"
+                        )
                     )
                 {
-                    write_sheet_data(&mut writer, BytesStart::new("sheetData"))?;
+                    write_sheet_data(
+                        &mut writer,
+                        BytesStart::new(worksheet_sheet_data_name.clone()),
+                    )?;
                     inserted_sheet_data = true;
                 }
                 writer
@@ -1623,10 +1899,17 @@ pub(crate) fn rewrite_worksheet_xml(
                     .map_err(xml_error)?;
                 depth += 1;
             }
-            Ok(Event::End(element)) => {
-                if depth == 1 && element.name().as_ref() == b"worksheet" {
+            Ok((namespace, Event::End(element))) => {
+                if depth == 1
+                    && resolved_element_is(
+                        &namespace,
+                        element.local_name(),
+                        spreadsheet_namespace.as_bytes(),
+                        b"worksheet",
+                    )
+                {
                     if !has_dimension && !inserted_dimension {
-                        let mut dimension = BytesStart::new("dimension");
+                        let mut dimension = BytesStart::new(worksheet_dimension_name.as_str());
                         dimension.push_attribute(("ref", dimension_ref.as_str()));
                         writer
                             .write_event(Event::Empty(dimension))
@@ -1634,7 +1917,10 @@ pub(crate) fn rewrite_worksheet_xml(
                         inserted_dimension = true;
                     }
                     if !has_sheet_data && !inserted_sheet_data {
-                        write_sheet_data(&mut writer, BytesStart::new("sheetData"))?;
+                        write_sheet_data(
+                            &mut writer,
+                            BytesStart::new(worksheet_sheet_data_name.clone()),
+                        )?;
                         inserted_sheet_data = true;
                     }
                 }
@@ -1643,12 +1929,12 @@ pub(crate) fn rewrite_worksheet_xml(
                     .map_err(xml_error)?;
                 depth -= 1;
             }
-            Ok(Event::Eof) => {
+            Ok((_, Event::Eof)) => {
                 writer.write_event(Event::Eof).map_err(xml_error)?;
                 break;
             }
             Err(error) => return Err(xml_error(error)),
-            Ok(event) => writer.write_event(event.into_owned()).map_err(xml_error)?,
+            Ok((_, event)) => writer.write_event(event.into_owned()).map_err(xml_error)?,
         }
         buffer.clear();
     }

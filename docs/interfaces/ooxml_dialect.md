@@ -69,5 +69,6 @@ retention, reopen, both accepted Strict main content types, mixed-dialect reject
 root relationships, unknown content type, and runtime SaveAs behavior.
 
 No real desktop Excel observation is pinned yet. This surface remains `Preserve-only`, not
-`Oracle-verified`. Arbitrary prefixes inside workbook/worksheet parsers remain OOTD-015/OOTD-049,
-and broader Strict object graphs and conversion remain OOTD-021.
+`Oracle-verified`. Workbook core, shared-string, and worksheet-cell arbitrary prefixes are covered
+by the bounded OOTD-015/OOTD-049 slice in `spreadsheetml_qnames.md`; remaining parser families and
+structural validation stay open. Broader Strict object graphs and conversion remain OOTD-021.

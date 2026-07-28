@@ -31,7 +31,7 @@ use office_common::{
 use office_opc::{CompressionMethod, OpcPackage};
 use quick_xml::escape::partial_escape;
 use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
-use quick_xml::name::ResolveResult;
+use quick_xml::name::{NamespaceResolver, ResolveResult};
 use quick_xml::{NsReader, Reader, Writer};
 
 mod active_content;
@@ -45,6 +45,7 @@ mod pivot;
 mod relationships;
 mod shared_strings;
 mod worksheet;
+mod xml;
 
 use encryption::is_encrypted_ooxml_compound_file;
 use external_data::collect_external_data_inventory;
@@ -70,6 +71,10 @@ use shared_strings::parse_shared_strings;
 use worksheet::{
     cell_reference, collect_support_part_dimension_coords, format_cell_error,
     parse_worksheet_cells, rewrite_worksheet_xml,
+};
+use xml::{
+    expanded_name_is, namespaced_attribute_is, qualified_name_like, resolved_element_is,
+    unqualified_attribute_is,
 };
 
 #[cfg(test)]
@@ -1633,7 +1638,10 @@ impl XlsxCodec {
                     main_document.dialect.spreadsheetml_namespace(),
                     &part.name,
                 )?;
-                parse_shared_strings(part.bytes.as_slice())
+                parse_shared_strings(
+                    part.bytes.as_slice(),
+                    main_document.dialect.spreadsheetml_namespace(),
+                )
             })
             .transpose()?
             .unwrap_or_default();
@@ -1664,8 +1672,11 @@ impl XlsxCodec {
                         main_document.dialect.spreadsheetml_namespace(),
                         part_uri,
                     )?;
-                    let parsed_cells =
-                        parse_worksheet_cells(sheet_part.bytes.as_slice(), &shared_strings)?;
+                    let parsed_cells = parse_worksheet_cells(
+                        sheet_part.bytes.as_slice(),
+                        &shared_strings,
+                        main_document.dialect.spreadsheetml_namespace(),
+                    )?;
                     worksheet_data.insert(
                         worksheet.id,
                         WorksheetData {
@@ -1942,7 +1953,7 @@ impl XlsxCodec {
             || worksheet_structure_changed
             || rewrite_calculation_properties
         {
-            let mut reader = Reader::from_reader(Cursor::new(workbook_xml.as_slice()));
+            let mut reader = NsReader::from_reader(Cursor::new(workbook_xml.as_slice()));
             reader.config_mut().trim_text(false);
             let mut writer = Writer::new(Cursor::new(Vec::new()));
             let mut buffer = Vec::new();
@@ -1951,12 +1962,15 @@ impl XlsxCodec {
             let mut wrote_defined_names = false;
             let mut wrote_calc_pr = false;
             let mut workbook_depth = 0usize;
+            let mut workbook_element_name = None::<Vec<u8>>;
+            let mut inside_sheets = false;
             let rewrite_sheet_element = |element: &BytesStart<'_>,
-                                         decoder: quick_xml::encoding::Decoder|
+                                         decoder: quick_xml::encoding::Decoder,
+                                         resolver: &NamespaceResolver|
              -> OmResult<BytesStart<'static>> {
                 let mut sheet_id = None::<u64>;
                 let mut relationship_id = None::<String>;
-                let mut attrs = Vec::<(String, String)>::new();
+                let mut attrs = Vec::<(String, String, bool, bool)>::new();
                 for attr in element.attributes() {
                     let attr = attr.map_err(xml_error)?;
                     let key = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
@@ -1964,12 +1978,22 @@ impl XlsxCodec {
                         .decode_and_unescape_value(decoder)
                         .map_err(xml_error)?
                         .into_owned();
-                    if attr.key.as_ref() == b"sheetId" {
+                    let is_name = unqualified_attribute_is(resolver, attr.key, b"name");
+                    let is_state = unqualified_attribute_is(resolver, attr.key, b"state");
+                    if unqualified_attribute_is(resolver, attr.key, b"sheetId") {
                         sheet_id = value.parse::<u64>().ok();
-                    } else if attr.key.as_ref() == b"r:id" {
+                    } else if namespaced_attribute_is(
+                        resolver,
+                        attr.key,
+                        main_document
+                            .dialect
+                            .office_document_relationships_namespace()
+                            .as_bytes(),
+                        b"id",
+                    ) {
                         relationship_id = Some(value.clone());
                     }
-                    attrs.push((key, value));
+                    attrs.push((key, value, is_name, is_state));
                 }
                 let Some(worksheet) = workbook.state.worksheets.iter().find(|worksheet| {
                     sheet_id == Some(worksheet.id.0)
@@ -1980,13 +2004,13 @@ impl XlsxCodec {
                 let mut rewritten =
                     BytesStart::new(String::from_utf8_lossy(element.name().as_ref()).into_owned());
                 let mut has_name_attr = false;
-                for (key, value) in attrs {
-                    if key == "name" {
-                        rewritten.push_attribute(("name", worksheet.name.as_str()));
+                for (key, value, is_name, is_state) in attrs {
+                    if is_name {
+                        rewritten.push_attribute((key.as_str(), worksheet.name.as_str()));
                         has_name_attr = true;
                         continue;
                     }
-                    if key == "state" {
+                    if is_state {
                         continue;
                     }
                     rewritten.push_attribute((key.as_str(), value.as_str()));
@@ -2000,14 +2024,17 @@ impl XlsxCodec {
                 Ok(rewritten)
             };
             let rewrite_workbook_pr_element = |element: &BytesStart<'_>,
-                                               decoder: quick_xml::encoding::Decoder|
+                                               decoder: quick_xml::encoding::Decoder,
+                                               resolver: &NamespaceResolver|
              -> OmResult<BytesStart<'static>> {
                 let mut rewritten =
                     BytesStart::new(String::from_utf8_lossy(element.name().as_ref()).into_owned());
                 for attr in element.attributes() {
                     let attr = attr.map_err(xml_error)?;
                     let key = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
-                    if matches!(key.as_str(), "date1904" | "isAddin") {
+                    if unqualified_attribute_is(resolver, attr.key, b"date1904")
+                        || unqualified_attribute_is(resolver, attr.key, b"isAddin")
+                    {
                         continue;
                     }
                     let value = attr
@@ -2025,22 +2052,25 @@ impl XlsxCodec {
                 Ok(rewritten)
             };
             let rewrite_calc_pr_element = |element: &BytesStart<'_>,
-                                           decoder: quick_xml::encoding::Decoder|
+                                           decoder: quick_xml::encoding::Decoder,
+                                           resolver: Option<&NamespaceResolver>|
              -> OmResult<BytesStart<'static>> {
                 let mut rewritten =
                     BytesStart::new(String::from_utf8_lossy(element.name().as_ref()).into_owned());
                 for attr in element.attributes() {
                     let attr = attr.map_err(xml_error)?;
                     let key = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
-                    if key == "calcMode"
+                    let typed_attribute = |local_name: &[u8]| {
+                        resolver.is_some_and(|resolver| {
+                            unqualified_attribute_is(resolver, attr.key, local_name)
+                        })
+                    };
+                    if typed_attribute(b"calcMode")
                         || (effective_calculation_state.is_some()
-                            && matches!(
-                                key.as_str(),
-                                "calcId"
-                                    | "calcCompleted"
-                                    | "fullCalcOnLoad"
-                                    | "forceFullCalc"
-                            ))
+                            && (typed_attribute(b"calcId")
+                                || typed_attribute(b"calcCompleted")
+                                || typed_attribute(b"fullCalcOnLoad")
+                                || typed_attribute(b"forceFullCalc")))
                     {
                         continue;
                     }
@@ -2074,10 +2104,15 @@ impl XlsxCodec {
             };
             let write_new_calc_pr =
                 |writer: &mut Writer<Cursor<Vec<u8>>>,
-                 decoder: quick_xml::encoding::Decoder|
+                 decoder: quick_xml::encoding::Decoder,
+                 workbook_element_name: &[u8]|
                  -> OmResult<()> {
-                    let calc_pr =
-                        rewrite_calc_pr_element(&BytesStart::new("calcPr"), decoder)?;
+                    let calc_pr_name = qualified_name_like(workbook_element_name, "calcPr");
+                    let calc_pr = rewrite_calc_pr_element(
+                        &BytesStart::new(calc_pr_name.as_str()),
+                        decoder,
+                        None,
+                    )?;
                     writer.write_event(Event::Empty(calc_pr)).map_err(xml_error)
                 };
 
@@ -2097,33 +2132,72 @@ impl XlsxCodec {
             };
 
             loop {
-                let event = match reader.read_event_into(&mut buffer) {
+                let decoder = reader.decoder();
+                let (namespace, event) = match reader.read_resolved_event_into(&mut buffer) {
                     Ok(event) => event,
                     Err(error) => return Err(xml_error(error)),
                 };
+                let namespace = match namespace {
+                    ResolveResult::Bound(namespace) => Some(namespace.as_ref().to_vec()),
+                    ResolveResult::Unbound | ResolveResult::Unknown(_) => None,
+                };
+                let resolver = reader.resolver().clone();
                 if matches!(&event, Event::Eof) {
                     break;
                 }
+                let event_is = |local_name: &[u8]| match &event {
+                    Event::Start(element) | Event::Empty(element) => expanded_name_is(
+                        namespace.as_deref(),
+                        element.local_name(),
+                        main_document.dialect.spreadsheetml_namespace().as_bytes(),
+                        local_name,
+                    ),
+                    Event::End(element) => expanded_name_is(
+                        namespace.as_deref(),
+                        element.local_name(),
+                        main_document.dialect.spreadsheetml_namespace().as_bytes(),
+                        local_name,
+                    ),
+                    _ => false,
+                };
                 let enters_element = matches!(&event, Event::Start(_));
                 let exits_element = matches!(&event, Event::End(_));
                 let at_workbook_child = workbook_depth == 1;
                 let closes_workbook = at_workbook_child
-                    && matches!(
-                        &event,
-                        Event::End(element) if element.name().as_ref() == b"workbook"
-                    );
+                    && matches!(&event, Event::End(_))
+                    && event_is(b"workbook");
                 let insert_before_following_element = at_workbook_child
-                    && matches!(
-                        &event,
-                        Event::Start(element) | Event::Empty(element)
-                            if follows_calc_pr(element.name().as_ref())
-                    );
+                    && matches!(&event, Event::Start(_) | Event::Empty(_))
+                    && match &event {
+                        Event::Start(element) | Event::Empty(element) => {
+                            expanded_name_is(
+                                namespace.as_deref(),
+                                element.local_name(),
+                                main_document.dialect.spreadsheetml_namespace().as_bytes(),
+                                element.local_name().as_ref(),
+                            ) && follows_calc_pr(element.local_name().as_ref())
+                        }
+                        _ => false,
+                    };
+                let enters_sheets = at_workbook_child
+                    && matches!(&event, Event::Start(_))
+                    && event_is(b"sheets");
+                let exits_sheets = inside_sheets
+                    && workbook_depth == 2
+                    && matches!(&event, Event::End(_))
+                    && event_is(b"sheets");
                 if rewrite_calculation_properties
                     && !saved_workbook.has_calc_pr
                     && !wrote_calc_pr
                     && insert_before_following_element
                 {
-                    write_new_calc_pr(&mut writer, reader.decoder())?;
+                    write_new_calc_pr(
+                        &mut writer,
+                        decoder,
+                        workbook_element_name.as_deref().ok_or_else(|| {
+                            OmError::invalid_state("workbook root QName was not captured")
+                        })?,
+                    )?;
                     wrote_calc_pr = true;
                 }
                 if rewrite_calculation_properties
@@ -2132,18 +2206,38 @@ impl XlsxCodec {
                     && closes_workbook
                     && (!rewrite_defined_names || wrote_defined_names)
                 {
-                    write_new_calc_pr(&mut writer, reader.decoder())?;
+                    write_new_calc_pr(
+                        &mut writer,
+                        decoder,
+                        workbook_element_name.as_deref().ok_or_else(|| {
+                            OmError::invalid_state("workbook root QName was not captured")
+                        })?,
+                    )?;
                     wrote_calc_pr = true;
                 }
 
                 match event {
                     Event::Start(element)
-                        if rewrite_defined_names && element.name().as_ref() == b"definedNames" =>
+                        if rewrite_defined_names
+                            && at_workbook_child
+                            && expanded_name_is(
+                                namespace.as_deref(),
+                                element.local_name(),
+                                main_document.dialect.spreadsheetml_namespace().as_bytes(),
+                                b"definedNames",
+                            ) =>
                     {
                         skip_defined_names_depth = 1;
                     }
                     Event::Empty(element)
-                        if rewrite_defined_names && element.name().as_ref() == b"definedNames" => {}
+                        if rewrite_defined_names
+                            && at_workbook_child
+                            && expanded_name_is(
+                                namespace.as_deref(),
+                                element.local_name(),
+                                main_document.dialect.spreadsheetml_namespace().as_bytes(),
+                                b"definedNames",
+                            ) => {}
                     Event::Start(_) if skip_defined_names_depth > 0 => {
                         skip_defined_names_depth += 1;
                     }
@@ -2151,14 +2245,25 @@ impl XlsxCodec {
                         skip_defined_names_depth -= 1;
                     }
                     _ if skip_defined_names_depth > 0 => {}
-                    Event::Start(element) if element.name().as_ref() == b"workbook" => {
+                    Event::Start(element)
+                        if workbook_depth == 0
+                            && expanded_name_is(
+                                namespace.as_deref(),
+                                element.local_name(),
+                                main_document.dialect.spreadsheetml_namespace().as_bytes(),
+                                b"workbook",
+                            ) =>
+                    {
+                        workbook_element_name = Some(element.name().as_ref().to_vec());
+                        let workbook_pr_name =
+                            qualified_name_like(element.name().as_ref(), "workbookPr");
                         writer
                             .write_event(Event::Start(element.into_owned()))
                             .map_err(xml_error)?;
                         if !saved_workbook.has_workbook_pr
                             && (workbook.state.model.date1904 || workbook.state.model.is_addin)
                         {
-                            let mut workbook_pr = BytesStart::new("workbookPr");
+                            let mut workbook_pr = BytesStart::new(workbook_pr_name.as_str());
                             if workbook.state.model.date1904 {
                                 workbook_pr.push_attribute(("date1904", "1"));
                             }
@@ -2170,56 +2275,104 @@ impl XlsxCodec {
                                 .map_err(xml_error)?;
                         }
                     }
-                    Event::Start(element) if element.name().as_ref() == b"workbookPr" => writer
+                    Event::Start(element)
+                        if at_workbook_child
+                            && expanded_name_is(
+                                namespace.as_deref(),
+                                element.local_name(),
+                                main_document.dialect.spreadsheetml_namespace().as_bytes(),
+                                b"workbookPr",
+                            ) => writer
                         .write_event(Event::Start(rewrite_workbook_pr_element(
                             &element,
-                            reader.decoder(),
+                            decoder,
+                            &resolver,
                         )?))
                         .map_err(xml_error)?,
-                    Event::Empty(element) if element.name().as_ref() == b"workbookPr" => writer
+                    Event::Empty(element)
+                        if at_workbook_child
+                            && expanded_name_is(
+                                namespace.as_deref(),
+                                element.local_name(),
+                                main_document.dialect.spreadsheetml_namespace().as_bytes(),
+                                b"workbookPr",
+                            ) => writer
                         .write_event(Event::Empty(rewrite_workbook_pr_element(
                             &element,
-                            reader.decoder(),
+                            decoder,
+                            &resolver,
                         )?))
                         .map_err(xml_error)?,
                     Event::Start(element)
                         if rewrite_calculation_properties
-                            && element.name().as_ref() == b"calcPr" =>
+                            && at_workbook_child
+                            && expanded_name_is(
+                                namespace.as_deref(),
+                                element.local_name(),
+                                main_document.dialect.spreadsheetml_namespace().as_bytes(),
+                                b"calcPr",
+                            ) =>
                     {
                         writer
                             .write_event(Event::Start(rewrite_calc_pr_element(
                                 &element,
-                                reader.decoder(),
+                                decoder,
+                                Some(&resolver),
                             )?))
                             .map_err(xml_error)?;
                         wrote_calc_pr = true;
                     }
                     Event::Empty(element)
                         if rewrite_calculation_properties
-                            && element.name().as_ref() == b"calcPr" =>
+                            && at_workbook_child
+                            && expanded_name_is(
+                                namespace.as_deref(),
+                                element.local_name(),
+                                main_document.dialect.spreadsheetml_namespace().as_bytes(),
+                                b"calcPr",
+                            ) =>
                     {
                         writer
                             .write_event(Event::Empty(rewrite_calc_pr_element(
                                 &element,
-                                reader.decoder(),
+                                decoder,
+                                Some(&resolver),
                             )?))
                             .map_err(xml_error)?;
                         wrote_calc_pr = true;
                     }
-                    Event::Start(element) if element.name().as_ref() == b"sheet" => writer
+                    Event::Start(element)
+                        if inside_sheets
+                            && workbook_depth == 2
+                            && expanded_name_is(
+                                namespace.as_deref(),
+                                element.local_name(),
+                                main_document.dialect.spreadsheetml_namespace().as_bytes(),
+                                b"sheet",
+                            ) => writer
                         .write_event(Event::Start(rewrite_sheet_element(
                             &element,
-                            reader.decoder(),
+                            decoder,
+                            &resolver,
                         )?))
                         .map_err(xml_error)?,
-                    Event::Empty(element) if element.name().as_ref() == b"sheet" => writer
+                    Event::Empty(element)
+                        if inside_sheets
+                            && workbook_depth == 2
+                            && expanded_name_is(
+                                namespace.as_deref(),
+                                element.local_name(),
+                                main_document.dialect.spreadsheetml_namespace().as_bytes(),
+                                b"sheet",
+                            ) => writer
                         .write_event(Event::Empty(rewrite_sheet_element(
                             &element,
-                            reader.decoder(),
+                            decoder,
+                            &resolver,
                         )?))
                         .map_err(xml_error)?,
                     Event::End(element)
-                        if rewrite_defined_names && element.name().as_ref() == b"sheets" =>
+                        if rewrite_defined_names && exits_sheets =>
                     {
                         writer
                             .write_event(Event::End(element.into_owned()))
@@ -2228,25 +2381,33 @@ impl XlsxCodec {
                             &mut writer,
                             &workbook.state.defined_names,
                             &workbook.state.worksheets,
+                            workbook_element_name.as_deref().ok_or_else(|| {
+                                OmError::invalid_state("workbook root QName was not captured")
+                            })?,
                         )?;
                         wrote_defined_names = true;
                     }
                     Event::End(element)
                         if rewrite_defined_names
                             && !wrote_defined_names
-                            && element.name().as_ref() == b"workbook" =>
+                            && closes_workbook =>
                     {
                         write_defined_names(
                             &mut writer,
                             &workbook.state.defined_names,
                             &workbook.state.worksheets,
+                            element.name().as_ref(),
                         )?;
                         wrote_defined_names = true;
                         if rewrite_calculation_properties
                             && !saved_workbook.has_calc_pr
                             && !wrote_calc_pr
                         {
-                            write_new_calc_pr(&mut writer, reader.decoder())?;
+                            write_new_calc_pr(
+                                &mut writer,
+                                decoder,
+                                element.name().as_ref(),
+                            )?;
                             wrote_calc_pr = true;
                         }
                         writer
@@ -2254,6 +2415,11 @@ impl XlsxCodec {
                             .map_err(xml_error)?;
                     }
                     event => writer.write_event(event.into_owned()).map_err(xml_error)?,
+                }
+                if enters_sheets {
+                    inside_sheets = true;
+                } else if exits_sheets {
+                    inside_sheets = false;
                 }
                 if enters_element {
                     workbook_depth += 1;
@@ -2763,6 +2929,10 @@ impl XlsxCodec {
             let bytes = rewrite_worksheet_xml(
                 sheet_data,
                 workbook.worksheet_support_parts.get(&worksheet.id),
+                workbook
+                    .support_parts
+                    .ooxml_dialect
+                    .spreadsheetml_namespace(),
             )?;
             package.replace_part_bytes(part_uri, bytes)?;
         }
@@ -3518,7 +3688,7 @@ fn parse_workbook(
         dialect.spreadsheetml_namespace(),
         "workbook.xml",
     )?;
-    let mut reader = Reader::from_reader(Cursor::new(workbook_xml));
+    let mut reader = NsReader::from_reader(Cursor::new(workbook_xml));
     reader.config_mut().trim_text(false);
     let mut buffer = Vec::new();
     let mut date1904 = false;
@@ -3535,34 +3705,60 @@ fn parse_workbook(
     let mut current_defined_name = None::<ParsedDefinedNameRecord>;
 
     loop {
-        match reader.read_event_into(&mut buffer) {
-            Ok(Event::Start(element)) if element.name().as_ref() == b"definedName" => {
+        match reader.read_resolved_event_into(&mut buffer) {
+            Ok((namespace, Event::Start(element)))
+                if resolved_element_is(
+                    &namespace,
+                    element.local_name(),
+                    dialect.spreadsheetml_namespace().as_bytes(),
+                    b"definedName",
+                ) =>
+            {
                 current_defined_name = Some(parse_defined_name_record(&element, reader.decoder())?);
             }
-            Ok(Event::Empty(element)) if element.name().as_ref() == b"definedName" => {
+            Ok((namespace, Event::Empty(element)))
+                if resolved_element_is(
+                    &namespace,
+                    element.local_name(),
+                    dialect.spreadsheetml_namespace().as_bytes(),
+                    b"definedName",
+                ) =>
+            {
                 defined_name_records.push(parse_defined_name_record(&element, reader.decoder())?);
             }
-            Ok(Event::Text(text)) if current_defined_name.is_some() => {
+            Ok((_, Event::Text(text))) if current_defined_name.is_some() => {
                 if let Some(record) = &mut current_defined_name {
                     record
                         .text
                         .push_str(&text.xml_content().map_err(xml_error)?);
                 }
             }
-            Ok(Event::CData(text)) if current_defined_name.is_some() => {
+            Ok((_, Event::CData(text))) if current_defined_name.is_some() => {
                 if let Some(record) = &mut current_defined_name {
                     record
                         .text
                         .push_str(&text.xml_content().map_err(xml_error)?);
                 }
             }
-            Ok(Event::End(element)) if element.name().as_ref() == b"definedName" => {
+            Ok((namespace, Event::End(element)))
+                if resolved_element_is(
+                    &namespace,
+                    element.local_name(),
+                    dialect.spreadsheetml_namespace().as_bytes(),
+                    b"definedName",
+                ) =>
+            {
                 if let Some(record) = current_defined_name.take() {
                     defined_name_records.push(record);
                 }
             }
-            Ok(Event::Start(element)) | Ok(Event::Empty(element))
-                if element.name().as_ref() == b"workbookPr" =>
+            Ok((namespace, Event::Start(element) | Event::Empty(element)))
+                if resolved_element_is(
+                    &namespace,
+                    element.local_name(),
+                    dialect.spreadsheetml_namespace().as_bytes(),
+                    b"workbookPr",
+                ) =>
             {
                 has_workbook_pr = true;
                 for attr in element.attributes() {
@@ -3571,15 +3767,20 @@ fn parse_workbook(
                         .decode_and_unescape_value(reader.decoder())
                         .map_err(xml_error)?
                         .into_owned();
-                    if attr.key.as_ref() == b"date1904" {
+                    if unqualified_attribute_is(reader.resolver(), attr.key, b"date1904") {
                         date1904 = parse_ooxml_bool(value.as_str())?;
-                    } else if attr.key.as_ref() == b"isAddin" {
+                    } else if unqualified_attribute_is(reader.resolver(), attr.key, b"isAddin") {
                         is_addin = parse_ooxml_bool(value.as_str())?;
                     }
                 }
             }
-            Ok(Event::Start(element)) | Ok(Event::Empty(element))
-                if element.name().as_ref() == b"calcPr" =>
+            Ok((namespace, Event::Start(element) | Event::Empty(element)))
+                if resolved_element_is(
+                    &namespace,
+                    element.local_name(),
+                    dialect.spreadsheetml_namespace().as_bytes(),
+                    b"calcPr",
+                ) =>
             {
                 has_calc_pr = true;
                 for attr in element.attributes() {
@@ -3588,33 +3789,43 @@ fn parse_workbook(
                         .decode_and_unescape_value(reader.decoder())
                         .map_err(xml_error)?
                         .into_owned();
-                    match attr.key.as_ref() {
-                        b"calcMode" => {
-                            calculation_mode = WorkbookCalculationMode::parse(value.as_str())?
-                        }
-                        b"calcId" => {
-                            calculation_id = Some(value.parse::<u32>().map_err(|_| {
-                                OmError::new(
-                                    OmErrorCode::Parse,
-                                    format!("invalid workbook calculation id: {value}"),
-                                )
-                            })?)
-                        }
-                        b"calcCompleted" => {
-                            calculation_completed = Some(parse_ooxml_bool(value.as_str())?)
-                        }
-                        b"fullCalcOnLoad" => {
-                            full_calculation_on_load = Some(parse_ooxml_bool(value.as_str())?)
-                        }
-                        b"forceFullCalc" => {
-                            force_full_calculation = Some(parse_ooxml_bool(value.as_str())?)
-                        }
-                        _ => {}
+                    if unqualified_attribute_is(reader.resolver(), attr.key, b"calcMode") {
+                        calculation_mode = WorkbookCalculationMode::parse(value.as_str())?;
+                    } else if unqualified_attribute_is(reader.resolver(), attr.key, b"calcId") {
+                        calculation_id = Some(value.parse::<u32>().map_err(|_| {
+                            OmError::new(
+                                OmErrorCode::Parse,
+                                format!("invalid workbook calculation id: {value}"),
+                            )
+                        })?);
+                    } else if unqualified_attribute_is(
+                        reader.resolver(),
+                        attr.key,
+                        b"calcCompleted",
+                    ) {
+                        calculation_completed = Some(parse_ooxml_bool(value.as_str())?);
+                    } else if unqualified_attribute_is(
+                        reader.resolver(),
+                        attr.key,
+                        b"fullCalcOnLoad",
+                    ) {
+                        full_calculation_on_load = Some(parse_ooxml_bool(value.as_str())?);
+                    } else if unqualified_attribute_is(
+                        reader.resolver(),
+                        attr.key,
+                        b"forceFullCalc",
+                    ) {
+                        force_full_calculation = Some(parse_ooxml_bool(value.as_str())?);
                     }
                 }
             }
-            Ok(Event::Start(element)) | Ok(Event::Empty(element))
-                if element.name().as_ref() == b"sheet" =>
+            Ok((namespace, Event::Start(element) | Event::Empty(element)))
+                if resolved_element_is(
+                    &namespace,
+                    element.local_name(),
+                    dialect.spreadsheetml_namespace().as_bytes(),
+                    b"sheet",
+                ) =>
             {
                 let mut name = None;
                 let mut sheet_id = None;
@@ -3626,12 +3837,19 @@ fn parse_workbook(
                         .decode_and_unescape_value(reader.decoder())
                         .map_err(xml_error)?
                         .into_owned();
-                    match attr.key.as_ref() {
-                        b"name" => name = Some(value),
-                        b"sheetId" => sheet_id = value.parse::<u64>().ok(),
-                        b"r:id" => relationship_id = Some(value),
-                        b"state" => visibility = parse_sheet_visibility_state(value.as_str())?,
-                        _ => {}
+                    if unqualified_attribute_is(reader.resolver(), attr.key, b"name") {
+                        name = Some(value);
+                    } else if unqualified_attribute_is(reader.resolver(), attr.key, b"sheetId") {
+                        sheet_id = value.parse::<u64>().ok();
+                    } else if namespaced_attribute_is(
+                        reader.resolver(),
+                        attr.key,
+                        dialect.office_document_relationships_namespace().as_bytes(),
+                        b"id",
+                    ) {
+                        relationship_id = Some(value);
+                    } else if unqualified_attribute_is(reader.resolver(), attr.key, b"state") {
+                        visibility = parse_sheet_visibility_state(value.as_str())?;
                     }
                 }
                 let next_id = sheet_id.unwrap_or_else(|| worksheets.len() as u64 + 1);
@@ -3655,7 +3873,7 @@ fn parse_workbook(
                     part_uri,
                 });
             }
-            Ok(Event::Eof) => break,
+            Ok((_, Event::Eof)) => break,
             Ok(_) => {}
             Err(error) => return Err(xml_error(error)),
         }
@@ -26932,16 +27150,19 @@ fn write_defined_names<W: Write>(
     writer: &mut Writer<W>,
     defined_names: &DefinedNameTable,
     worksheets: &[WorksheetModel],
+    workbook_element_name: &[u8],
 ) -> OmResult<()> {
     if defined_names.is_empty() {
         return Ok(());
     }
 
+    let defined_names_name = qualified_name_like(workbook_element_name, "definedNames");
+    let defined_name_name = qualified_name_like(workbook_element_name, "definedName");
     writer
-        .write_event(Event::Start(BytesStart::new("definedNames")))
+        .write_event(Event::Start(BytesStart::new(defined_names_name.as_str())))
         .map_err(xml_error)?;
     for defined_name in defined_names.iter() {
-        let mut element = BytesStart::new("definedName");
+        let mut element = BytesStart::new(defined_name_name.as_str());
         element.push_attribute(("name", defined_name.display_name.as_str()));
         let local_sheet_id = match defined_name.scope {
             NameScope::Workbook => None,
@@ -26997,11 +27218,11 @@ fn write_defined_names<W: Write>(
             ))))
             .map_err(xml_error)?;
         writer
-            .write_event(Event::End(BytesEnd::new("definedName")))
+            .write_event(Event::End(BytesEnd::new(defined_name_name.as_str())))
             .map_err(xml_error)?;
     }
     writer
-        .write_event(Event::End(BytesEnd::new("definedNames")))
+        .write_event(Event::End(BytesEnd::new(defined_names_name.as_str())))
         .map_err(xml_error)?;
     Ok(())
 }

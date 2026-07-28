@@ -12,6 +12,10 @@ pub(crate) const STRICT_SPREADSHEETML_NAMESPACE: &str =
 pub(crate) const TRANSITIONAL_DRAWINGML_NAMESPACE: &str =
     "http://schemas.openxmlformats.org/drawingml/2006/main";
 pub(crate) const STRICT_DRAWINGML_NAMESPACE: &str = "http://purl.oclc.org/ooxml/drawingml/main";
+pub(crate) const TRANSITIONAL_OFFICE_DOCUMENT_RELATIONSHIPS_NAMESPACE: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+pub(crate) const STRICT_OFFICE_DOCUMENT_RELATIONSHIPS_NAMESPACE: &str =
+    "http://purl.oclc.org/ooxml/officeDocument/relationships";
 
 pub(crate) const TRANSITIONAL_OFFICE_DOCUMENT_RELATIONSHIP_TYPE: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument";
@@ -92,6 +96,13 @@ impl OoxmlDialect {
         match self {
             Self::Transitional => TRANSITIONAL_DRAWINGML_NAMESPACE,
             Self::Strict => STRICT_DRAWINGML_NAMESPACE,
+        }
+    }
+
+    pub fn office_document_relationships_namespace(self) -> &'static str {
+        match self {
+            Self::Transitional => TRANSITIONAL_OFFICE_DOCUMENT_RELATIONSHIPS_NAMESPACE,
+            Self::Strict => STRICT_OFFICE_DOCUMENT_RELATIONSHIPS_NAMESPACE,
         }
     }
 }

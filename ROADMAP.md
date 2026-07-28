@@ -89,9 +89,15 @@ Active order:
    SpreadsheetML namespace, core relationship, and main-content-type tables now drive discovery
    and format detection. Strict same-dialect load/no-op/cell edit/save/reopen and runtime SaveAs are
    covered; mixed dialects and unknown content types fail closed. Cross-dialect conversion and
-   Strict chart/drawing/structural mutation remain explicitly unsupported. **Active:**
-   `OOTD-015`/`OOTD-049` QName-aware parsing, followed by strict/repair structure separation.
-23. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
+   Strict chart/drawing/structural mutation remain explicitly unsupported.
+23. `OOTD-015`/`OOTD-049` stage 1 complete (2026-07-28, synthetic): workbook core, shared-string,
+   and worksheet-cell parsing now uses namespace URI plus local name; arbitrary valid prefixes and
+   relationship-attribute prefixes load correctly. Targeted rewrites inherit existing owner
+   prefixes while foreign same-local elements and clean part bytes remain opaque and unchanged.
+   Remaining parser families, structural validation, and Markup Compatibility stay open.
+   **Active:** `OOTD-029`/`OOTD-030` QName-strict package metadata, followed by strict/repair
+   structure separation.
+24. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
    claiming practical chart/pivot/style parity.
 
 Every numbered work unit starts with a failing regression and lands as its own reviewable commit.
