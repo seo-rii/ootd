@@ -1676,6 +1676,7 @@ impl XlsxCodec {
                         sheet_part.bytes.as_slice(),
                         &shared_strings,
                         main_document.dialect.spreadsheetml_namespace(),
+                        part_uri,
                     )?;
                     worksheet_data.insert(
                         worksheet.id,
@@ -6886,11 +6887,15 @@ fn ensure_workbook_style_ids_are_valid(
                 continue;
             };
             if style_id.0 as usize >= styles_summary.cell_xfs.len() {
+                let worksheet_context = worksheet.part_uri.as_deref().map_or_else(
+                    || worksheet.name.clone(),
+                    |part_uri| format!("{} ({part_uri})", worksheet.name),
+                );
                 return Err(OmError::new(
                     OmErrorCode::InvalidState,
                     format!(
                         "worksheet {} cell {} has style id {} outside styles.xml cellXfs range {}",
-                        worksheet.name,
+                        worksheet_context,
                         cell_reference(row, col),
                         style_id.0,
                         styles_summary.cell_xfs.len()

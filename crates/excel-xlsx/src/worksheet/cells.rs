@@ -123,6 +123,7 @@ pub(crate) fn parse_worksheet_cells(
     worksheet_xml: &[u8],
     shared_strings: &[String],
     spreadsheet_namespace: &str,
+    worksheet_part_uri: &str,
 ) -> OmResult<ParsedWorksheetCells> {
     let mut reader = NsReader::from_reader(Cursor::new(worksheet_xml));
     reader.config_mut().trim_text(false);
@@ -130,6 +131,7 @@ pub(crate) fn parse_worksheet_cells(
     let mut cells = BTreeMap::new();
     let mut dynamic_array_formulas = BTreeSet::new();
     let mut spill_ranges = BTreeMap::new();
+    let mut seen_cells = BTreeSet::new();
     let mut current_row = None;
     let mut current_field = None;
     let mut current_cell: Option<(
@@ -161,7 +163,17 @@ pub(crate) fn parse_worksheet_cells(
                         .map_err(xml_error)?
                         .into_owned();
                     if unqualified_attribute_is(reader.resolver(), attr.key, b"r") {
-                        row_index = value.parse::<u32>().ok();
+                        let parsed = value.parse::<u32>().map_err(|_| {
+                            OmError::parse(format!(
+                                "{worksheet_part_uri}: invalid worksheet row index: {value}"
+                            ))
+                        })?;
+                        if parsed == 0 {
+                            return Err(OmError::parse(format!(
+                                "{worksheet_part_uri}: invalid worksheet row index: {value}"
+                            )));
+                        }
+                        row_index = Some(parsed);
                     }
                 }
                 current_row = row_index;
@@ -186,7 +198,7 @@ pub(crate) fn parse_worksheet_cells(
             {
                 let mut reference = None;
                 let mut cell_type = None;
-                let mut style_id = None;
+                let mut style_index = None;
                 for attr in element.attributes() {
                     let attr = attr.map_err(xml_error)?;
                     let value = attr
@@ -198,16 +210,43 @@ pub(crate) fn parse_worksheet_cells(
                     } else if unqualified_attribute_is(reader.resolver(), attr.key, b"t") {
                         cell_type = Some(value);
                     } else if unqualified_attribute_is(reader.resolver(), attr.key, b"s") {
-                        style_id = value.parse::<u64>().ok().map(StyleId);
+                        style_index = Some(value);
                     }
                 }
                 let reference = reference.ok_or_else(|| {
                     OmError::new(
                         OmErrorCode::Parse,
-                        "worksheet cell is missing an A1 reference",
+                        format!("{worksheet_part_uri}: worksheet cell is missing an A1 reference"),
                     )
                 })?;
-                let (row, col) = parse_cell_reference(reference.as_str(), current_row)?;
+                let (row, col) =
+                    parse_cell_reference(reference.as_str(), current_row).map_err(|error| {
+                        OmError::new(
+                            error.code,
+                            format!("{worksheet_part_uri}: {}", error.message),
+                        )
+                    })?;
+                if let Some(row_index) = current_row
+                    && row != row_index
+                {
+                    return Err(OmError::parse(format!(
+                        "{worksheet_part_uri}: cell {reference} is contained by row {row_index}"
+                    )));
+                }
+                let style_id = style_index
+                    .map(|value| {
+                        value.parse::<u64>().map(StyleId).map_err(|_| {
+                            OmError::parse(format!(
+                                "{worksheet_part_uri}: cell {reference} has invalid style index: {value}"
+                            ))
+                        })
+                    })
+                    .transpose()?;
+                if !seen_cells.insert((row, col)) {
+                    return Err(OmError::parse(format!(
+                        "{worksheet_part_uri}: duplicate worksheet cell coordinate: {reference}"
+                    )));
+                }
                 current_cell = Some((
                     row,
                     col,
@@ -228,7 +267,7 @@ pub(crate) fn parse_worksheet_cells(
                 ) =>
             {
                 let mut reference = None;
-                let mut style_id = None;
+                let mut style_index = None;
                 for attr in element.attributes() {
                     let attr = attr.map_err(xml_error)?;
                     let value = attr
@@ -238,16 +277,43 @@ pub(crate) fn parse_worksheet_cells(
                     if unqualified_attribute_is(reader.resolver(), attr.key, b"r") {
                         reference = Some(value);
                     } else if unqualified_attribute_is(reader.resolver(), attr.key, b"s") {
-                        style_id = value.parse::<u64>().ok().map(StyleId);
+                        style_index = Some(value);
                     }
                 }
                 let reference = reference.ok_or_else(|| {
                     OmError::new(
                         OmErrorCode::Parse,
-                        "worksheet cell is missing an A1 reference",
+                        format!("{worksheet_part_uri}: worksheet cell is missing an A1 reference"),
                     )
                 })?;
-                let (row, col) = parse_cell_reference(reference.as_str(), current_row)?;
+                let (row, col) =
+                    parse_cell_reference(reference.as_str(), current_row).map_err(|error| {
+                        OmError::new(
+                            error.code,
+                            format!("{worksheet_part_uri}: {}", error.message),
+                        )
+                    })?;
+                if let Some(row_index) = current_row
+                    && row != row_index
+                {
+                    return Err(OmError::parse(format!(
+                        "{worksheet_part_uri}: cell {reference} is contained by row {row_index}"
+                    )));
+                }
+                let style_id = style_index
+                    .map(|value| {
+                        value.parse::<u64>().map(StyleId).map_err(|_| {
+                            OmError::parse(format!(
+                                "{worksheet_part_uri}: cell {reference} has invalid style index: {value}"
+                            ))
+                        })
+                    })
+                    .transpose()?;
+                if !seen_cells.insert((row, col)) {
+                    return Err(OmError::parse(format!(
+                        "{worksheet_part_uri}: duplicate worksheet cell coordinate: {reference}"
+                    )));
+                }
                 if style_id.is_some() {
                     cells.insert(
                         (row, col),
@@ -293,8 +359,20 @@ pub(crate) fn parse_worksheet_cells(
                         (normalized.as_str(), normalized.as_str()),
                         |(first, last)| (first, last),
                     );
-                    let (row_first, col_first) = parse_cell_reference(first, None)?;
-                    let (row_last, col_last) = parse_cell_reference(last, None)?;
+                    let (row_first, col_first) =
+                        parse_cell_reference(first, None).map_err(|error| {
+                            OmError::new(
+                                error.code,
+                                format!("{worksheet_part_uri}: {}", error.message),
+                            )
+                        })?;
+                    let (row_last, col_last) =
+                        parse_cell_reference(last, None).map_err(|error| {
+                            OmError::new(
+                                error.code,
+                                format!("{worksheet_part_uri}: {}", error.message),
+                            )
+                        })?;
                     if row_first > row_last || col_first > col_last {
                         return Err(OmError::new(
                             OmErrorCode::Parse,

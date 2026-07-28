@@ -1530,6 +1530,7 @@
 </worksheet>"#,
             &shared_strings,
             "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
+            "/xl/worksheets/sheet1.xml",
         )
         .expect("worksheet cells")
         .cells;
@@ -1606,6 +1607,7 @@
 </worksheet>"#,
             &[],
             "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
+            "/xl/worksheets/sheet1.xml",
         )
         .expect("worksheet cells")
         .cells;
@@ -1634,6 +1636,7 @@
 </worksheet>"#,
             &[],
             "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
+            "/xl/worksheets/sheet1.xml",
         )
         .expect_err("parse should fail when worksheet cell reference is missing");
 
@@ -1642,6 +1645,113 @@
             error
                 .message
                 .contains("worksheet cell is missing an A1 reference")
+        );
+    }
+
+    #[test]
+    fn malformed_worksheet_row_and_cell_records_fail_closed() {
+        let cases = [
+            (
+                "invalid row index",
+                r#"<row r="not-a-row"><c r="A1"><v>1</v></c></row>"#,
+                "invalid worksheet row index: not-a-row",
+            ),
+            (
+                "zero row index",
+                r#"<row r="0"><c r="A1"><v>1</v></c></row>"#,
+                "invalid worksheet row index: 0",
+            ),
+            (
+                "invalid cell reference",
+                r#"<row r="1"><c r="A0"><v>1</v></c></row>"#,
+                "invalid worksheet cell reference: A0",
+            ),
+            (
+                "invalid populated-cell style",
+                r#"<row r="1"><c r="A1" s="not-a-style"><v>1</v></c></row>"#,
+                "cell A1 has invalid style index: not-a-style",
+            ),
+            (
+                "invalid blank-cell style",
+                r#"<row r="1"><c r="A1" s="not-a-style"/></row>"#,
+                "cell A1 has invalid style index: not-a-style",
+            ),
+            (
+                "row and cell address mismatch",
+                r#"<row r="2"><c r="A1"><v>1</v></c></row>"#,
+                "cell A1 is contained by row 2",
+            ),
+            (
+                "duplicate populated cell",
+                r#"<row r="1"><c r="A1"><v>1</v></c><c r="A1"><v>2</v></c></row>"#,
+                "duplicate worksheet cell coordinate: A1",
+            ),
+            (
+                "duplicate after ignored blank cell",
+                r#"<row r="1"><c r="A1"/><c r="A1"><v>2</v></c></row>"#,
+                "duplicate worksheet cell coordinate: A1",
+            ),
+        ];
+
+        for (case, row_xml, expected_message) in cases {
+            let worksheet_xml = format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>{row_xml}</sheetData>
+</worksheet>"#
+            );
+            let error = parse_worksheet_cells(
+                worksheet_xml.as_bytes(),
+                &[],
+                "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
+                "/xl/worksheets/sheet1.xml",
+            )
+            .expect_err(case);
+
+            assert_eq!(error.code, OmErrorCode::Parse, "{case}");
+            assert!(
+                error.message.contains("/xl/worksheets/sheet1.xml"),
+                "{case}: missing worksheet part URI in {:?}",
+                error.message
+            );
+            assert!(
+                error.message.contains(expected_message),
+                "{case}: expected {expected_message:?}, got {:?}",
+                error.message
+            );
+        }
+    }
+
+    #[test]
+    fn codec_load_reports_part_and_cell_for_duplicate_worksheet_coordinate() {
+        let mut package =
+            OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("synthetic package");
+        package
+            .replace_part_bytes(
+                "xl/worksheets/sheet1.xml",
+                br#"<?xml version="1.0" encoding="UTF-8"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r="1"><c r="A1"><v>1</v></c><c r="A1"><v>2</v></c></row>
+  </sheetData>
+</worksheet>"#
+                    .to_vec(),
+            )
+            .expect("replace worksheet part");
+
+        let error = XlsxCodec
+            .load(
+                &package.to_bytes().expect("malformed workbook bytes"),
+                CommonLoadOptions::default(),
+            )
+            .expect_err("codec load must reject duplicate worksheet coordinates");
+
+        assert_eq!(error.code, OmErrorCode::Parse);
+        assert!(error.message.contains("xl/worksheets/sheet1.xml"));
+        assert!(
+            error
+                .message
+                .contains("duplicate worksheet cell coordinate: A1")
         );
     }
 
@@ -1658,6 +1768,7 @@
 </worksheet>"#,
             &[],
             "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
+            "/xl/worksheets/sheet1.xml",
         )
         .expect("worksheet cells")
         .cells;
@@ -1688,6 +1799,7 @@
 </worksheet>"#,
             &["only".to_string()],
             "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
+            "/xl/worksheets/sheet1.xml",
         )
         .expect_err("parse should fail when shared string index is out of range");
 
@@ -1712,6 +1824,7 @@
 </worksheet>"#,
             &[],
             "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
+            "/xl/worksheets/sheet1.xml",
         )
         .expect("worksheet cells")
         .cells;
@@ -1743,6 +1856,7 @@
 </worksheet>"#,
             &[],
             "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
+            "/xl/worksheets/sheet1.xml",
         )
         .expect("worksheet cells")
         .cells;
@@ -23139,6 +23253,8 @@
             )
             .expect_err("load should fail when cellXfs container is missing");
         assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("xl/worksheets/sheet1.xml"));
+        assert!(error.message.contains("cell A1"));
         assert!(error.message.contains("outside styles.xml cellXfs range 0"));
     }
 

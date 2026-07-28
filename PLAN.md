@@ -216,26 +216,32 @@ Wave 2 exit gate:
    identity로 이름을 갱신한 뒤 최종 workbook part를 strict 재검증한다. implicit repair는 없으며
    explicit report가 있는 RepairMode는 아직 unsupported다. 세부 계약은
    `docs/interfaces/workbook_sheet_records.md`에 있다.
-   **다음:** `OOTD-017` worksheet attribute/duplicate-cell strict parse.
-6. `OOTD-018` + `OOTD-019` + `OOTD-048`: A1/R1C1/range/sheet quoting/grid limits를 checked
+6. `OOTD-017` 완료 (2026-07-28, synthetic): worksheet `row@r`의 malformed/zero 값을
+   fail-closed하고, `c@r`의 container-row 불일치와 `c@s` lexical 오류를 거부한다. 좌표는
+   blank-cell elision 전에 선점하므로 empty/populated 조합을 포함한 duplicate cell이 map
+   overwrite로 숨지 않는다. 오류는 worksheet part와 가능한 cell 주소를 포함하며 numeric
+   style ID의 `cellXfs` 범위 진단도 part/cell 문맥을 사용한다. implicit repair는 없고 세부
+   계약은 `docs/interfaces/worksheet_cell_records.md`에 있다.
+   **다음:** `OOTD-018`/`OOTD-019`/`OOTD-048` checked reference subsystem.
+7. `OOTD-018` + `OOTD-019` + `OOTD-048`: A1/R1C1/range/sheet quoting/grid limits를 checked
    reference subsystem으로 통합한다.
-7. `OOTD-021`: bounded Strict preservation과 일반 target-format capability를 분리하고,
+8. `OOTD-021`: bounded Strict preservation과 일반 target-format capability를 분리하고,
    drawing/chart 등 남은 Strict graph와 cross-dialect conversion을 단계적으로 구현한다.
-8. `OOTD-029` 완료 (2026-07-28, synthetic): `[Content_Types].xml`은 package content-types
+9. `OOTD-029` 완료 (2026-07-28, synthetic): `[Content_Types].xml`은 package content-types
    namespace의 `Types` root만 수용하고 arbitrary bound prefix를 해석한다. 같은 namespace의
    direct `Default`/`Override`만 typed declaration으로 사용하며 required unqualified attribute,
    case-insensitive extension duplicate, canonical/absolute part-name duplicate와 empty-content
    구조를 fail-closed한다. opaque extension subtree의 same-local poison은 적용하지 않는다.
    세부 계약은 `docs/interfaces/opc_content_types.md`에 있다.
-9. `OOTD-030` 완료 (2026-07-28, synthetic): 모든 typed `.rels` parse 경로가 package
+10. `OOTD-030` 완료 (2026-07-28, synthetic): 모든 typed `.rels` parse 경로가 package
    relationships namespace의 `Relationships` root와 direct `Relationship` expanded name을
    요구하고 arbitrary bound prefix를 수용한다. wrong/missing root namespace, foreign 또는
    nested same-local element, root text/CDATA를 fail-closed하며 기존 required unqualified
    attribute, duplicate ID, target mode와 internal target validation을 유지한다. 세부 계약은
    `docs/interfaces/opc_relationships.md`에 있다.
-10. `OOTD-031` + `OOTD-032` + `OOTD-033` + `OOTD-054`: mutable public state를 validated
+11. `OOTD-031` + `OOTD-032` + `OOTD-033` + `OOTD-054`: mutable public state를 validated
    command/transaction으로 닫고 workbook identity assignment를 fallible/atomic하게 만든다.
-11. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
+12. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
    structured error에 추가한다.
 
 Wave 3 exit gate:

@@ -110,9 +110,14 @@ Active order:
    ASCII-case-insensitive names, and relationship IDs fail closed; load/save validation no longer
    invents sequential IDs, `SheetN`, default kinds, or empty part URIs. Save rewrites may reconcile
    transient source-name lag by identity, but the final workbook part must pass the full strict
-   parser before serialization. Implicit repair remains unsupported. **Active:** `OOTD-017`
-   worksheet attribute and duplicate-cell strict parsing.
-27. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
+   parser before serialization. Implicit repair remains unsupported.
+27. `OOTD-017` complete (2026-07-28, synthetic): malformed or zero row indices, invalid cell style
+   lexicals, and row/cell address mismatches now fail closed with worksheet-part and cell context.
+   Coordinate ownership is recorded before blank-cell elision, so duplicate empty or populated
+   cells cannot overwrite each other. Numeric style-range diagnostics also identify their part and
+   cell; implicit worksheet repair remains unsupported. **Active:** `OOTD-018`/`OOTD-019`/
+   `OOTD-048` checked reference parsing and Excel limits.
+28. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
    claiming practical chart/pivot/style parity.
 
 Every numbered work unit starts with a failing regression and lands as its own reviewable commit.
