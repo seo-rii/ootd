@@ -214,11 +214,17 @@ Wave 2 exit gate:
    reference subsystem으로 통합한다.
 7. `OOTD-021`: bounded Strict preservation과 일반 target-format capability를 분리하고,
    drawing/chart 등 남은 Strict graph와 cross-dialect conversion을 단계적으로 구현한다.
-8. `OOTD-029` + `OOTD-030`: content-types와 relationships root/namespace/duplicate 검증을
-   fail-closed한다.
-9. `OOTD-031` + `OOTD-032` + `OOTD-033` + `OOTD-054`: mutable public state를 validated
+8. `OOTD-029` 완료 (2026-07-28, synthetic): `[Content_Types].xml`은 package content-types
+   namespace의 `Types` root만 수용하고 arbitrary bound prefix를 해석한다. 같은 namespace의
+   direct `Default`/`Override`만 typed declaration으로 사용하며 required unqualified attribute,
+   case-insensitive extension duplicate, canonical/absolute part-name duplicate와 empty-content
+   구조를 fail-closed한다. opaque extension subtree의 same-local poison은 적용하지 않는다.
+   세부 계약은 `docs/interfaces/opc_content_types.md`에 있다.
+9. `OOTD-030`: package relationships root/namespace/direct-child 구조와 duplicate 검증을
+   QName-aware하게 fail-closed한다.
+10. `OOTD-031` + `OOTD-032` + `OOTD-033` + `OOTD-054`: mutable public state를 validated
    command/transaction으로 닫고 workbook identity assignment를 fallible/atomic하게 만든다.
-10. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
+11. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
    structured error에 추가한다.
 
 Wave 3 exit gate:

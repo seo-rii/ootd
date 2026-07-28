@@ -1,6 +1,7 @@
 use office_common::{OmError, OmErrorCode, OmResult};
-use quick_xml::Reader;
 use quick_xml::events::Event;
+use quick_xml::name::ResolveResult;
+use quick_xml::{NsReader, Reader};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Cursor, Read, Write};
 pub use zip::CompressionMethod;
@@ -752,50 +753,126 @@ fn encode_hex(nibble: u8) -> u8 {
 }
 
 fn parse_content_types(xml: &[u8]) -> OmResult<ContentTypesManifest> {
+    const CONTENT_TYPES_NAMESPACE: &[u8] =
+        b"http://schemas.openxmlformats.org/package/2006/content-types";
+
     let mut manifest = ContentTypesManifest::default();
-    let mut reader = Reader::from_reader(Cursor::new(xml));
+    let mut reader = NsReader::from_reader(Cursor::new(xml));
     reader.config_mut().trim_text(true);
     let mut buffer = Vec::new();
+    let mut root_seen = false;
+    let mut depth = 0_usize;
+    let mut open_declaration = None::<&'static str>;
 
     loop {
-        match reader.read_event_into(&mut buffer) {
-            Ok(Event::Start(element)) | Ok(Event::Empty(element)) => {
-                match element.name().as_ref() {
-                    b"Default" => {
-                        let mut extension = None;
-                        let mut content_type = None;
-                        for attr in element.attributes() {
-                            let attr = attr.map_err(xml_error)?;
-                            let value = attr
-                                .decode_and_unescape_value(reader.decoder())
-                                .map_err(xml_error)?
-                                .into_owned();
-                            match attr.key.as_ref() {
-                                b"Extension" => extension = Some(value.to_ascii_lowercase()),
-                                b"ContentType" => content_type = Some(value),
-                                _ => {}
-                            }
-                        }
-                        if let (Some(extension), Some(content_type)) = (extension, content_type) {
-                            manifest.defaults.insert(extension, content_type);
-                        }
+        match reader.read_resolved_event_into(&mut buffer) {
+            Ok((namespace, event @ (Event::Start(_) | Event::Empty(_)))) => {
+                let (element, remains_open) = match event {
+                    Event::Start(element) => (element, true),
+                    Event::Empty(element) => (element, false),
+                    _ => unreachable!("matched content types element event"),
+                };
+                let local_name = element.local_name();
+                let in_content_types_namespace = matches!(
+                    namespace,
+                    ResolveResult::Bound(namespace)
+                        if namespace.as_ref() == CONTENT_TYPES_NAMESPACE
+                );
+                let mut direct_declaration = None;
+
+                if depth == 0 {
+                    if root_seen {
+                        return Err(OmError::parse(
+                            "invalid OPC content types root: document has more than one root",
+                        ));
                     }
-                    b"Override" => {
-                        let mut part_name = None;
-                        let mut content_type = None;
-                        for attr in element.attributes() {
-                            let attr = attr.map_err(xml_error)?;
-                            let value = attr
-                                .decode_and_unescape_value(reader.decoder())
-                                .map_err(xml_error)?
-                                .into_owned();
-                            match attr.key.as_ref() {
-                                b"PartName" => part_name = Some(value),
-                                b"ContentType" => content_type = Some(value),
-                                _ => {}
+                    if !in_content_types_namespace || local_name.as_ref() != b"Types" {
+                        return Err(OmError::parse(
+                            "invalid OPC content types root: expected Types in the package content-types namespace",
+                        ));
+                    }
+                    root_seen = true;
+                } else if let Some(declaration) = open_declaration {
+                    return Err(OmError::parse(format!(
+                        "OPC content type {declaration} declaration must not contain child elements"
+                    )));
+                } else if depth == 1 && in_content_types_namespace {
+                    match local_name.as_ref() {
+                        b"Default" => {
+                            direct_declaration = Some("Default");
+                            let mut extension = None;
+                            let mut content_type = None;
+                            for attr in element.attributes() {
+                                let attr = attr.map_err(xml_error)?;
+                                let value = attr
+                                    .decode_and_unescape_value(reader.decoder())
+                                    .map_err(xml_error)?
+                                    .into_owned();
+                                let (attribute_namespace, attribute_local_name) =
+                                    reader.resolver().resolve_attribute(attr.key);
+                                if !matches!(attribute_namespace, ResolveResult::Unbound) {
+                                    continue;
+                                }
+                                match attribute_local_name.as_ref() {
+                                    b"Extension" => extension = Some(value),
+                                    b"ContentType" => content_type = Some(value),
+                                    _ => {}
+                                }
+                            }
+                            let (Some(extension), Some(content_type)) = (extension, content_type)
+                            else {
+                                return Err(OmError::parse(
+                                    "OPC content type Default requires Extension and ContentType attributes",
+                                ));
+                            };
+                            if extension.is_empty() {
+                                return Err(OmError::parse(
+                                    "OPC content type Default requires a non-empty Extension attribute",
+                                ));
+                            }
+                            let normalized_extension = extension.to_ascii_lowercase();
+                            if manifest
+                                .defaults
+                                .insert(normalized_extension, content_type)
+                                .is_some()
+                            {
+                                return Err(OmError::parse(format!(
+                                    "duplicate OPC content type default extension: {extension}"
+                                )));
                             }
                         }
-                        if let (Some(part_name), Some(content_type)) = (part_name, content_type) {
+                        b"Override" => {
+                            direct_declaration = Some("Override");
+                            let mut part_name = None;
+                            let mut content_type = None;
+                            for attr in element.attributes() {
+                                let attr = attr.map_err(xml_error)?;
+                                let value = attr
+                                    .decode_and_unescape_value(reader.decoder())
+                                    .map_err(xml_error)?
+                                    .into_owned();
+                                let (attribute_namespace, attribute_local_name) =
+                                    reader.resolver().resolve_attribute(attr.key);
+                                if !matches!(attribute_namespace, ResolveResult::Unbound) {
+                                    continue;
+                                }
+                                match attribute_local_name.as_ref() {
+                                    b"PartName" => part_name = Some(value),
+                                    b"ContentType" => content_type = Some(value),
+                                    _ => {}
+                                }
+                            }
+                            let (Some(part_name), Some(content_type)) = (part_name, content_type)
+                            else {
+                                return Err(OmError::parse(
+                                    "OPC content type Override requires PartName and ContentType attributes",
+                                ));
+                            };
+                            if !part_name.starts_with('/') {
+                                return Err(OmError::parse(format!(
+                                    "OPC content type Override requires an absolute PartName: {part_name}"
+                                )));
+                            }
                             let canonical_name =
                                 canonical_part_name(&part_name, OmErrorCode::Parse)?;
                             if manifest
@@ -808,11 +885,49 @@ fn parse_content_types(xml: &[u8]) -> OmResult<ContentTypesManifest> {
                                 )));
                             }
                         }
+                        _ => {}
                     }
-                    _ => {}
+                }
+
+                if remains_open {
+                    depth += 1;
+                    if direct_declaration.is_some() {
+                        open_declaration = direct_declaration;
+                    }
                 }
             }
-            Ok(Event::Eof) => break,
+            Ok((_, Event::End(_))) => {
+                if depth == 0 {
+                    return Err(OmError::parse(
+                        "invalid OPC content types structure: unmatched closing element",
+                    ));
+                }
+                if depth == 2 && open_declaration.is_some() {
+                    open_declaration = None;
+                }
+                depth -= 1;
+            }
+            Ok((_, Event::Text(text))) => {
+                let text = text.xml_content().map_err(xml_error)?;
+                if !text.trim().is_empty() && (depth <= 1 || open_declaration.is_some()) {
+                    return Err(OmError::parse(
+                        "invalid text in OPC content types manifest structure",
+                    ));
+                }
+            }
+            Ok((_, Event::CData(_))) if depth <= 1 || open_declaration.is_some() => {
+                return Err(OmError::parse(
+                    "invalid CDATA in OPC content types manifest structure",
+                ));
+            }
+            Ok((_, Event::Eof)) => {
+                if !root_seen {
+                    return Err(OmError::parse(
+                        "invalid OPC content types root: Types element is missing",
+                    ));
+                }
+                break;
+            }
             Ok(_) => {}
             Err(error) => return Err(xml_error(error)),
         }
@@ -888,6 +1003,122 @@ mod tests {
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"
                     .to_string()
             )
+        );
+    }
+
+    #[test]
+    fn content_types_manifest_accepts_bound_prefixes() {
+        let bytes = package_bytes_with_content_types(
+            br#"<ct:Types xmlns:ct="http://schemas.openxmlformats.org/package/2006/content-types">
+  <ct:Default Extension="xml" ContentType="application/xml"/>
+  <ct:Override PartName="/xl/workbook.xml" ContentType="application/workbook"/>
+</ct:Types>"#,
+        );
+
+        let package = OpcPackage::from_bytes(&bytes).expect("prefixed content types manifest");
+
+        assert_eq!(
+            package
+                .part("xl/workbook.xml")
+                .and_then(|part| part.content_type.as_deref()),
+            Some("application/workbook")
+        );
+    }
+
+    #[test]
+    fn content_types_manifest_rejects_wrong_root_or_namespace() {
+        let cases: [(&str, &[u8]); 3] = [
+            (
+                "missing namespace",
+                br#"<Types><Default Extension="xml" ContentType="application/xml"/></Types>"#,
+            ),
+            (
+                "wrong namespace",
+                br#"<Types xmlns="urn:ootd:wrong"><Default Extension="xml" ContentType="application/xml"/></Types>"#,
+            ),
+            (
+                "wrong root",
+                br#"<Manifest xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/></Manifest>"#,
+            ),
+        ];
+
+        for (name, manifest) in cases {
+            let bytes = package_bytes_with_content_types(manifest);
+            let error = OpcPackage::from_bytes(&bytes)
+                .expect_err("invalid content types root should fail closed");
+            assert_eq!(error.code, OmErrorCode::Parse, "case: {name}");
+            assert!(
+                error.message.contains("content types root"),
+                "case: {name}; error: {error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn content_types_manifest_rejects_ambiguous_typed_declarations() {
+        let cases: [(&str, &[u8], &str); 6] = [
+            (
+                "duplicate default",
+                br#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/first"/><Default Extension="XML" ContentType="application/second"/></Types>"#,
+                "duplicate OPC content type default",
+            ),
+            (
+                "missing default extension",
+                br#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default ContentType="application/xml"/></Types>"#,
+                "Default requires Extension and ContentType",
+            ),
+            (
+                "missing override content type",
+                br#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/xl/workbook.xml"/></Types>"#,
+                "Override requires PartName and ContentType",
+            ),
+            (
+                "non-absolute override part name",
+                br#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="xl/workbook.xml" ContentType="application/workbook"/></Types>"#,
+                "absolute PartName",
+            ),
+            (
+                "canonical duplicate override",
+                br#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/XL/WORKBOOK.XML" ContentType="application/first"/><Override PartName="/xl/workbook.xml" ContentType="application/second"/></Types>"#,
+                "duplicate OPC content type override",
+            ),
+            (
+                "nonempty default declaration",
+                br#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"><child/></Default></Types>"#,
+                "Default declaration must not contain child elements",
+            ),
+        ];
+
+        for (name, manifest, expected_message) in cases {
+            let bytes = package_bytes_with_content_types(manifest);
+            let error = OpcPackage::from_bytes(&bytes)
+                .expect_err("ambiguous content type declaration should fail closed");
+            assert_eq!(error.code, OmErrorCode::Parse, "case: {name}");
+            assert!(
+                error.message.contains(expected_message),
+                "case: {name}; error: {error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn content_types_manifest_ignores_typed_names_nested_in_opaque_extensions() {
+        let bytes = package_bytes_with_content_types(
+            br#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types" data-root="preserve">
+  <Default Extension="xml" ContentType="application/xml"/>
+  <extension preserve="true">
+    <Default Extension="xml" ContentType="application/poison"/>
+  </extension>
+</Types>"#,
+        );
+
+        let package = OpcPackage::from_bytes(&bytes).expect("opaque content types extension");
+
+        assert_eq!(
+            package
+                .part("xl/workbook.xml")
+                .and_then(|part| part.content_type.as_deref()),
+            Some("application/xml")
         );
     }
 
@@ -1072,7 +1303,9 @@ mod tests {
             )
             .expect("content types");
         writer
-            .write_all(br#"<Types/>"#)
+            .write_all(
+                br#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>"#,
+            )
             .expect("write content types");
         writer
             .start_file(
@@ -1685,5 +1918,16 @@ mod tests {
             writer.write_all(bytes).expect("write ZIP entry");
         }
         writer.finish().expect("finish ZIP").into_inner()
+    }
+
+    fn package_bytes_with_content_types(content_types: &[u8]) -> Vec<u8> {
+        zip_bytes(&[
+            (
+                "[Content_Types].xml",
+                CompressionMethod::Stored,
+                content_types,
+            ),
+            ("xl/workbook.xml", CompressionMethod::Stored, b"<workbook/>"),
+        ])
     }
 }

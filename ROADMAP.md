@@ -95,9 +95,13 @@ Active order:
    relationship-attribute prefixes load correctly. Targeted rewrites inherit existing owner
    prefixes while foreign same-local elements and clean part bytes remain opaque and unchanged.
    Remaining parser families, structural validation, and Markup Compatibility stay open.
-   **Active:** `OOTD-029`/`OOTD-030` QName-strict package metadata, followed by strict/repair
-   structure separation.
-24. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
+24. `OOTD-029` complete (2026-07-28, synthetic): `[Content_Types].xml` now requires the exact OPC
+   root namespace/local name while accepting arbitrary bound prefixes. Only direct typed
+   declarations affect resolution; duplicate defaults/overrides, missing required attributes,
+   non-absolute or noncanonical override names, and nonempty declarations fail closed. Opaque
+   extension subtrees cannot inject same-local declarations. **Active:** `OOTD-030` QName-strict
+   package relationships, followed by strict/repair structure separation.
+25. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
    claiming practical chart/pivot/style parity.
 
 Every numbered work unit starts with a failing regression and lands as its own reviewable commit.
