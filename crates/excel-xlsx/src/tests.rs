@@ -1907,8 +1907,133 @@
         assert!(!relationships.contains_key("rId2"));
     }
 
+    fn workbook_worksheet_relationships(
+        count: usize,
+    ) -> BTreeMap<String, super::RelationshipEntry> {
+        (1..=count)
+            .map(|index| {
+                let id = format!("rId{index}");
+                (
+                    id.clone(),
+                    super::RelationshipEntry {
+                        id,
+                        relationship_type: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet".to_string(),
+                        target: format!("xl/worksheets/sheet{index}.xml"),
+                        target_mode: None,
+                    },
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn malformed_workbook_sheet_records_fail_closed_without_invention() {
+        let relationships = workbook_worksheet_relationships(2);
+        let cases = [
+            (
+                "missing name",
+                r#"<sheet sheetId="1" r:id="rId1"/>"#,
+                "missing required name",
+            ),
+            (
+                "empty name",
+                r#"<sheet name="" sheetId="1" r:id="rId1"/>"#,
+                "name cannot be empty",
+            ),
+            (
+                "whitespace-only name",
+                r#"<sheet name="   " sheetId="1" r:id="rId1"/>"#,
+                "name cannot be empty",
+            ),
+            (
+                "overlong name",
+                r#"<sheet name="12345678901234567890123456789012" sheetId="1" r:id="rId1"/>"#,
+                "name cannot exceed 31 characters",
+            ),
+            (
+                "invalid name character",
+                r#"<sheet name="Bad/Name" sheetId="1" r:id="rId1"/>"#,
+                "name contains invalid characters",
+            ),
+            (
+                "missing sheet id",
+                r#"<sheet name="Sheet1" r:id="rId1"/>"#,
+                "missing required sheetId",
+            ),
+            (
+                "nonnumeric sheet id",
+                r#"<sheet name="Sheet1" sheetId="invalid" r:id="rId1"/>"#,
+                "invalid workbook sheetId",
+            ),
+            (
+                "zero sheet id",
+                r#"<sheet name="Sheet1" sheetId="0" r:id="rId1"/>"#,
+                "workbook sheetId is outside the supported unsigned 32-bit range",
+            ),
+            (
+                "overflowing sheet id",
+                r#"<sheet name="Sheet1" sheetId="4294967296" r:id="rId1"/>"#,
+                "workbook sheetId is outside the supported unsigned 32-bit range",
+            ),
+            (
+                "missing relationship id",
+                r#"<sheet name="Sheet1" sheetId="1"/>"#,
+                "missing required relationship id",
+            ),
+            (
+                "empty relationship id",
+                r#"<sheet name="Sheet1" sheetId="1" r:id=""/>"#,
+                "relationship id cannot be empty",
+            ),
+            (
+                "unknown relationship id",
+                r#"<sheet name="Sheet1" sheetId="1" r:id="rIdMissing"/>"#,
+                "references unknown workbook relationship id",
+            ),
+            (
+                "duplicate sheet id",
+                r#"<sheet name="Sheet1" sheetId="1" r:id="rId1"/><sheet name="Sheet2" sheetId="1" r:id="rId2"/>"#,
+                "duplicate workbook sheetId",
+            ),
+            (
+                "duplicate sheet name",
+                r#"<sheet name="Sheet1" sheetId="1" r:id="rId1"/><sheet name="sheet1" sheetId="2" r:id="rId2"/>"#,
+                "duplicate workbook sheet name",
+            ),
+            (
+                "reused relationship id",
+                r#"<sheet name="Sheet1" sheetId="1" r:id="rId1"/><sheet name="Sheet2" sheetId="2" r:id="rId1"/>"#,
+                "duplicate workbook sheet relationship id",
+            ),
+        ];
+
+        for (label, sheet_records, expected_message) in cases {
+            let workbook_xml = format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+ xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets>{sheet_records}</sheets>
+</workbook>"#
+            );
+            let error = parse_workbook(
+                workbook_xml.as_bytes(),
+                &relationships,
+                OoxmlDialect::Transitional,
+            )
+            .expect_err(label);
+
+            assert_eq!(error.code, OmErrorCode::Parse, "{label}");
+            assert!(
+                error.message.contains(expected_message),
+                "{label}: expected {expected_message:?}, got {:?}",
+                error.message
+            );
+        }
+    }
+
     #[test]
     fn parses_workbook_sheet_visibility_states() {
+        let relationships = workbook_worksheet_relationships(4);
         let workbook = parse_workbook(
             br#"<?xml version="1.0" encoding="UTF-8"?>
 <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
@@ -1920,7 +2045,7 @@
     <sheet name="DefaultVisible" sheetId="4" r:id="rId4"/>
   </sheets>
 </workbook>"#,
-            &BTreeMap::new(),
+            &relationships,
             OoxmlDialect::Transitional,
         )
         .expect("workbook sheets");
@@ -1936,6 +2061,7 @@
 
     #[test]
     fn parses_workbook_date1904_property() {
+        let relationships = workbook_worksheet_relationships(1);
         let workbook = parse_workbook(
             br#"<?xml version="1.0" encoding="UTF-8"?>
 <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
@@ -1945,7 +2071,7 @@
     <sheet name="Sheet1" sheetId="1" r:id="rId1"/>
   </sheets>
 </workbook>"#,
-            &BTreeMap::new(),
+            &relationships,
             OoxmlDialect::Transitional,
         )
         .expect("workbook date1904");
@@ -1957,6 +2083,7 @@
 
     #[test]
     fn parses_workbook_is_addin_property() {
+        let relationships = workbook_worksheet_relationships(1);
         let workbook = parse_workbook(
             br#"<?xml version="1.0" encoding="UTF-8"?>
 <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
@@ -1966,7 +2093,7 @@
     <sheet name="Sheet1" sheetId="1" r:id="rId1"/>
   </sheets>
 </workbook>"#,
-            &BTreeMap::new(),
+            &relationships,
             OoxmlDialect::Transitional,
         )
         .expect("workbook isAddin");
@@ -1978,6 +2105,7 @@
 
     #[test]
     fn parses_workbook_defined_names_into_model_table() {
+        let relationships = workbook_worksheet_relationships(2);
         let workbook = parse_workbook(
             br#"<?xml version="1.0" encoding="UTF-8"?>
 <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
@@ -1991,7 +2119,7 @@
     <definedName name="_xlnm.Print_Area" localSheetId="1">Sheet2!$A:$D</definedName>
   </definedNames>
 </workbook>"#,
-            &BTreeMap::new(),
+            &relationships,
             OoxmlDialect::Transitional,
         )
         .expect("workbook defined names");

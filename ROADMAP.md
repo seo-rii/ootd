@@ -104,9 +104,15 @@ Active order:
    `Relationships` root expanded name and direct namespace-matching `Relationship` children while
    accepting arbitrary bound prefixes. Wrong/missing namespaces and foreign/nested same-local
    entries fail closed; required attributes, duplicate IDs, target modes, and normalized internal
-   targets retain their strict contract. **Active:** `OOTD-016`/`OOTD-017` strict parse versus
-   explicit repair separation.
-26. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
+   targets retain their strict contract.
+26. `OOTD-016` complete (2026-07-28, synthetic): workbook sheet records now require a valid name,
+   bounded nonzero sheet ID, and resolvable typed workbook relationship. Duplicate sheet IDs,
+   ASCII-case-insensitive names, and relationship IDs fail closed; load/save validation no longer
+   invents sequential IDs, `SheetN`, default kinds, or empty part URIs. Save rewrites may reconcile
+   transient source-name lag by identity, but the final workbook part must pass the full strict
+   parser before serialization. Implicit repair remains unsupported. **Active:** `OOTD-017`
+   worksheet attribute and duplicate-cell strict parsing.
+27. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
    claiming practical chart/pivot/style parity.
 
 Every numbered work unit starts with a failing regression and lands as its own reviewable commit.

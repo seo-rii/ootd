@@ -208,8 +208,15 @@ Wave 2 exit gate:
    splice는 계속 열린다. 세부 계약은 `docs/interfaces/spreadsheetml_qnames.md`에 있다.
 4. `OOTD-061`: Markup Compatibility/AlternateContent/extLst owner-aware 보존 정책을
    QName layer 위에 도입한다.
-5. `OOTD-016` + `OOTD-017`: workbook/worksheet strict parse와 explicit repair report를
-   분리한다.
+5. `OOTD-016` 완료 (2026-07-28, synthetic): workbook `sheet` record는 유효한 name,
+   `1..=u32::MAX` sheetId와 실제 workbook relationship을 모두 요구하며 sheet ID,
+   ASCII-case-insensitive name, relationship ID 중복을 fail-closed한다. 순번 ID, `SheetN`,
+   default kind, 빈 part URI를 더는 발명하지 않고 save preflight도 실제 owner `.rels` graph로
+   같은 검증을 수행한다. runtime copy/rename 뒤 source XML name이 잠시 뒤처지는 save rewrite는
+   identity로 이름을 갱신한 뒤 최종 workbook part를 strict 재검증한다. implicit repair는 없으며
+   explicit report가 있는 RepairMode는 아직 unsupported다. 세부 계약은
+   `docs/interfaces/workbook_sheet_records.md`에 있다.
+   **다음:** `OOTD-017` worksheet attribute/duplicate-cell strict parse.
 6. `OOTD-018` + `OOTD-019` + `OOTD-048`: A1/R1C1/range/sheet quoting/grid limits를 checked
    reference subsystem으로 통합한다.
 7. `OOTD-021`: bounded Strict preservation과 일반 target-format capability를 분리하고,

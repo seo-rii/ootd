@@ -1908,10 +1908,24 @@ impl XlsxCodec {
             })?
             .bytes
             .clone();
-        let saved_workbook = parse_workbook(
+        let workbook_relationships = package
+            .part(&main_document.relationships_part_uri)
+            .map(|part| {
+                parse_relationship_entries_for_part(
+                    part.bytes.as_slice(),
+                    &main_document.part_uri,
+                )
+            })
+            .transpose()?
+            .unwrap_or_default()
+            .into_iter()
+            .map(|relationship| (relationship.id.clone(), relationship))
+            .collect::<BTreeMap<_, _>>();
+        let saved_workbook = parse_workbook_with_mode(
             workbook_xml.as_slice(),
-            &BTreeMap::new(),
+            &workbook_relationships,
             main_document.dialect,
+            WorkbookParseMode::PendingSaveRewrite,
         )?;
         let has_dirty_worksheets = workbook
             .state
@@ -2434,6 +2448,20 @@ impl XlsxCodec {
                 writer.into_inner().into_inner(),
             )?;
         }
+        let final_workbook_part = package.part(&main_document.part_uri).ok_or_else(|| {
+            OmError::new(
+                OmErrorCode::Parse,
+                format!(
+                    "workbook package is missing discovered main part {}",
+                    main_document.part_uri
+                ),
+            )
+        })?;
+        parse_workbook(
+            final_workbook_part.bytes.as_slice(),
+            &workbook_relationships,
+            main_document.dialect,
+        )?;
         let mut dirty_worksheet_ids = BTreeSet::new();
         let mut worksheet_xml_rewrite_recovery_ids = BTreeSet::new();
         let mut worksheet_relationship_part_rewrite_recovery_ids = BTreeSet::new();
@@ -3677,10 +3705,30 @@ struct ParsedDefinedNameRecord {
     text: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WorkbookParseMode {
+    Strict,
+    PendingSaveRewrite,
+}
+
 fn parse_workbook(
     workbook_xml: &[u8],
     relationships: &BTreeMap<String, RelationshipEntry>,
     dialect: OoxmlDialect,
+) -> OmResult<ParsedWorkbook> {
+    parse_workbook_with_mode(
+        workbook_xml,
+        relationships,
+        dialect,
+        WorkbookParseMode::Strict,
+    )
+}
+
+fn parse_workbook_with_mode(
+    workbook_xml: &[u8],
+    relationships: &BTreeMap<String, RelationshipEntry>,
+    dialect: OoxmlDialect,
+    mode: WorkbookParseMode,
 ) -> OmResult<ParsedWorkbook> {
     validate_xml_root_namespace(
         workbook_xml,
@@ -3701,6 +3749,9 @@ fn parse_workbook(
     let mut full_calculation_on_load = None;
     let mut force_full_calculation = None;
     let mut worksheets = Vec::new();
+    let mut worksheet_ids = BTreeSet::new();
+    let mut worksheet_names = BTreeSet::new();
+    let mut worksheet_relationship_ids = BTreeSet::new();
     let mut defined_name_records = Vec::<ParsedDefinedNameRecord>::new();
     let mut current_defined_name = None::<ParsedDefinedNameRecord>;
 
@@ -3840,7 +3891,9 @@ fn parse_workbook(
                     if unqualified_attribute_is(reader.resolver(), attr.key, b"name") {
                         name = Some(value);
                     } else if unqualified_attribute_is(reader.resolver(), attr.key, b"sheetId") {
-                        sheet_id = value.parse::<u64>().ok();
+                        sheet_id = Some(value.parse::<u64>().map_err(|_| {
+                            OmError::parse(format!("invalid workbook sheetId: {value}"))
+                        })?);
                     } else if namespaced_attribute_is(
                         reader.resolver(),
                         attr.key,
@@ -3852,25 +3905,71 @@ fn parse_workbook(
                         visibility = parse_sheet_visibility_state(value.as_str())?;
                     }
                 }
-                let next_id = sheet_id.unwrap_or_else(|| worksheets.len() as u64 + 1);
-                let relationship = relationship_id
-                    .as_ref()
-                    .and_then(|id| relationships.get(id));
-                let part_uri = relationship.map(|relationship| relationship.target.clone());
-                let kind = relationship
-                    .map(|relationship| {
-                        workbook_sheet_kind(&relationship.relationship_type, dialect)
-                    })
-                    .transpose()?
-                    .unwrap_or_default();
+                let name = name.ok_or_else(|| {
+                    OmError::parse("workbook sheet is missing required name attribute")
+                })?;
+                if name.trim().is_empty() {
+                    return Err(OmError::parse("workbook sheet name cannot be empty"));
+                }
+                if name.chars().count() > 31 {
+                    return Err(OmError::parse(
+                        "workbook sheet name cannot exceed 31 characters",
+                    ));
+                }
+                if name.chars().any(|ch| {
+                    matches!(ch, ':' | '\\' | '/' | '?' | '*' | '[' | ']') || ch.is_control()
+                }) {
+                    return Err(OmError::parse(
+                        "workbook sheet name contains invalid characters",
+                    ));
+                }
+                let sheet_id = sheet_id.ok_or_else(|| {
+                    OmError::parse("workbook sheet is missing required sheetId attribute")
+                })?;
+                if sheet_id == 0 || sheet_id > u64::from(u32::MAX) {
+                    return Err(OmError::parse(format!(
+                        "workbook sheetId is outside the supported unsigned 32-bit range: {sheet_id}"
+                    )));
+                }
+                let relationship_id = relationship_id.ok_or_else(|| {
+                    OmError::parse("workbook sheet is missing required relationship id attribute")
+                })?;
+                if relationship_id.is_empty() {
+                    return Err(OmError::parse(
+                        "workbook sheet relationship id cannot be empty",
+                    ));
+                }
+                let relationship = relationships.get(&relationship_id).ok_or_else(|| {
+                    OmError::parse(format!(
+                        "workbook sheet references unknown workbook relationship id: {relationship_id}"
+                    ))
+                })?;
+                if !worksheet_ids.insert(sheet_id) {
+                    return Err(OmError::parse(format!(
+                        "duplicate workbook sheetId: {sheet_id}"
+                    )));
+                }
+                if !worksheet_names.insert(name.to_ascii_lowercase())
+                    && mode == WorkbookParseMode::Strict
+                {
+                    return Err(OmError::parse(format!(
+                        "duplicate workbook sheet name: {name}"
+                    )));
+                }
+                if !worksheet_relationship_ids.insert(relationship_id.clone()) {
+                    return Err(OmError::parse(format!(
+                        "duplicate workbook sheet relationship id: {relationship_id}"
+                    )));
+                }
+                let kind = workbook_sheet_kind(&relationship.relationship_type, dialect)?;
                 worksheets.push(WorksheetModel {
-                    id: SheetId(next_id),
+                    id: SheetId(sheet_id),
                     workbook_id: WorkbookId(0),
-                    name: name.unwrap_or_else(|| format!("Sheet{}", worksheets.len() + 1)),
+                    name,
                     kind,
                     visibility,
-                    relationship_id,
-                    part_uri,
+                    relationship_id: Some(relationship_id),
+                    part_uri: Some(relationship.target.clone()),
                 });
             }
             Ok((_, Event::Eof)) => break,
