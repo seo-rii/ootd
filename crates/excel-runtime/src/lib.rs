@@ -29517,6 +29517,11 @@ fn retag_loaded_workbook_format(
         ));
     }
     let content_type = workbook_main_content_type(format)?;
+    let workbook_part_name = loaded
+        .support_parts
+        .workbook_part_uri
+        .as_deref()
+        .unwrap_or(WORKBOOK_PART_NAME);
 
     let mut retagged = loaded.clone();
     let content_types_xml = retagged
@@ -29532,14 +29537,17 @@ fn retag_loaded_workbook_format(
         .clone();
     let content_types_xml = set_content_type_override(
         content_types_xml.as_slice(),
-        WORKBOOK_PART_NAME,
+        workbook_part_name,
         content_type,
     )?;
     retagged
         .package
         .replace_part_bytes(CONTENT_TYPES_PART_NAME, content_types_xml)?;
-    retagged.package =
-        retag_package_part_content_type(retagged.package, WORKBOOK_PART_NAME, content_type);
+    retagged.package = retag_package_part_content_type(
+        retagged.package,
+        workbook_part_name,
+        content_type,
+    );
     retagged.support_parts.content_types_source_bytes = None;
     retagged.support_parts.content_types_summary = None;
     retagged.detected_format = format;

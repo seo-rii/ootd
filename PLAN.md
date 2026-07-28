@@ -190,7 +190,8 @@ Wave 2 exit gate:
    `officeDocument` 관계에서 workbook main part와 owner `.rels` URI를 계산한다. 비표준
    `documents/book/main.xml`, 상위 경로를 거치는 worksheet target, 이동된 calc-chain으로
    sniff/load/no-op save/cell edit/save/reopen과 dangling/external/duplicate fail-closed를
-   고정했다. 세부 계약은 `docs/interfaces/ooxml_main_document.md`에 있다.
+   고정했다. runtime format retag/SaveAs도 발견된 main part의 content-type override를
+   갱신한다. 세부 계약은 `docs/interfaces/ooxml_main_document.md`에 있다.
 2. `OOTD-060`: Strict/Transitional namespace·relationship·content-type dialect table과
    `StrictXlsx` load/no-op/targeted-edit 보존 계약을 구현한다.
 3. `OOTD-015` + `OOTD-049` + `OOTD-061`: bounded QName-aware XML layer, prefix preservation,

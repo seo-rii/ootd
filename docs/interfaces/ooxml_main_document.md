@@ -21,6 +21,8 @@ No-op and targeted saves rewrite the discovered workbook part, never an invented
 `xl/workbook.xml`. The package-root relationship bytes and calculated workbook relationship part are
 kept in the lossless support snapshot. Calculation-chain invalidation also uses the discovered owner
 and the relationship-resolved calculation-chain part, so relocated metadata does not become stale.
+Runtime format retagging and SaveAs update the discovered main part's content-type override and
+in-memory OPC content type instead of inventing an `xl/workbook.xml` entry.
 
 The synthetic regression uses `documents/book/main.xml`, a worksheet relationship that climbs back
 to `xl/worksheets/sheet1.xml`, and a relocated calculation chain. It covers sniff, load, no-op save,

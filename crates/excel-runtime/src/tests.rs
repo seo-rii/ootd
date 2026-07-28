@@ -2279,6 +2279,85 @@
     }
 
     #[test]
+    fn save_conversion_retags_discovered_nonstandard_workbook_part() {
+        let package =
+            OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("base workbook package");
+        let mut parts = package.parts().to_vec();
+        for part in &mut parts {
+            match part.name.as_str() {
+                "[Content_Types].xml" => {
+                    part.bytes = String::from_utf8(part.bytes.clone())
+                        .expect("content types utf8")
+                        .replace("/xl/workbook.xml", "/documents/book/main.xml")
+                        .into_bytes();
+                }
+                "_rels/.rels" => {
+                    part.bytes = String::from_utf8(part.bytes.clone())
+                        .expect("package relationships utf8")
+                        .replace("xl/workbook.xml", "documents/book/main.xml")
+                        .into_bytes();
+                }
+                "xl/workbook.xml" => {
+                    part.name = "documents/book/main.xml".to_string();
+                }
+                "xl/_rels/workbook.xml.rels" => {
+                    part.name = "documents/book/_rels/main.xml.rels".to_string();
+                    part.bytes = String::from_utf8(part.bytes.clone())
+                        .expect("workbook relationships utf8")
+                        .replace(
+                            "worksheets/sheet1.xml",
+                            "../../xl/worksheets/sheet1.xml",
+                        )
+                        .into_bytes();
+                }
+                _ => {}
+            }
+        }
+        let source_bytes = OpcPackage::new(parts)
+            .to_bytes()
+            .expect("nonstandard-main workbook bytes");
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: source_bytes,
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open nonstandard-main workbook");
+
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xltx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("convert nonstandard-main workbook to xltx");
+        let package = OpcPackage::from_bytes(&saved).expect("converted package");
+        let workbook_part = package
+            .part("documents/book/main.xml")
+            .expect("discovered workbook part");
+        assert_eq!(
+            workbook_part.content_type.as_deref(),
+            Some("application/vnd.openxmlformats-officedocument.spreadsheetml.template.main+xml")
+        );
+        assert!(package.part("xl/workbook.xml").is_none());
+
+        let mut reopened_runtime = ExcelRuntime::new();
+        reopened_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: saved,
+                format_hint: Some(FileFormat::Xltx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("reopen converted nonstandard-main workbook");
+    }
+
+    #[test]
     fn supports_format_rejects_strict_xlsx() {
         assert!(supports_format(FileFormat::Xlsx));
         assert!(!supports_format(FileFormat::StrictXlsx));

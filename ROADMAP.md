@@ -83,8 +83,8 @@ Active order:
 21. `OOTD-014` complete (2026-07-28, synthetic): workbook main-part and owner-relationship-part
    discovery now follows the single internal package-root `officeDocument` relationship. A
    nonstandard main URI survives no-op and targeted save/reopen, including relocated calc-chain
-   invalidation; missing, external, dangling, and duplicate roots fail closed. **Active:**
-   `OOTD-060` Strict/Transitional dialect separation.
+   invalidation and runtime format retagging; missing, external, dangling, and duplicate roots fail
+   closed. **Active:** `OOTD-060` Strict/Transitional dialect separation.
 22. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
    claiming practical chart/pivot/style parity.
 
