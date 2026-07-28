@@ -84,8 +84,14 @@ Active order:
    discovery now follows the single internal package-root `officeDocument` relationship. A
    nonstandard main URI survives no-op and targeted save/reopen, including relocated calc-chain
    invalidation and runtime format retagging; missing, external, dangling, and duplicate roots fail
-   closed. **Active:** `OOTD-060` Strict/Transitional dialect separation.
-22. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
+   closed.
+22. `OOTD-060`/`OOTD-020` complete (2026-07-28, synthetic): exact Strict/Transitional root,
+   SpreadsheetML namespace, core relationship, and main-content-type tables now drive discovery
+   and format detection. Strict same-dialect load/no-op/cell edit/save/reopen and runtime SaveAs are
+   covered; mixed dialects and unknown content types fail closed. Cross-dialect conversion and
+   Strict chart/drawing/structural mutation remain explicitly unsupported. **Active:**
+   `OOTD-015`/`OOTD-049` QName-aware parsing, followed by strict/repair structure separation.
+23. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
    claiming practical chart/pivot/style parity.
 
 Every numbered work unit starts with a failing regression and lands as its own reviewable commit.

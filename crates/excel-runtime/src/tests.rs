@@ -2279,6 +2279,122 @@
     }
 
     #[test]
+    fn strict_workbook_load_and_same_dialect_save_are_preserved() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: strict_synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::StrictXlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open Strict workbook");
+
+        assert_eq!(
+            runtime.workbook_model(workbook).expect("Strict model").format,
+            FileFormat::StrictXlsx
+        );
+        let saved = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::StrictXlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect("same-dialect Strict save");
+        let reopened = ExcelRuntime::new()
+            .codec
+            .load(&saved, LoadOptions::default())
+            .expect("reopen saved Strict workbook");
+        assert_eq!(reopened.detected_format, FileFormat::StrictXlsx);
+
+        let conversion_error = runtime
+            .save_workbook(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+            )
+            .expect_err("Strict-to-Transitional conversion must fail closed");
+        assert_eq!(conversion_error.code, OmErrorCode::Unsupported);
+        assert!(conversion_error.message.contains("Strict and Transitional"));
+    }
+
+    #[test]
+    fn strict_workbook_save_as_xlsx_without_file_format_preserves_dialect() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock")
+            .as_nanos();
+        let base_dir = std::env::temp_dir().join(format!("ootd-strict-saveas-{unique}"));
+        fs::create_dir_all(&base_dir).expect("create Strict SaveAs directory");
+        let source_path = base_dir.join("source.xlsx");
+        let target_path = base_dir.join("target.xlsx");
+        let rejected_target_path = base_dir.join("transitional.xlsx");
+        fs::write(&source_path, strict_synthetic_workbook_bytes())
+            .expect("write Strict source workbook");
+
+        let mut runtime = ExcelRuntime::new();
+        let workbooks = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "Workbooks", &[])
+                .expect("Workbooks"),
+        );
+        let workbook = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    workbooks,
+                    "Open",
+                    &[OmValue::Text(source_path.to_string_lossy().into_owned())],
+                )
+                .expect("open Strict source workbook"),
+        );
+        assert_eq!(
+            expect_number(
+                runtime
+                    .dispatch_get(workbook, "FileFormat", &[])
+                    .expect("Strict Workbook.FileFormat")
+            ),
+            f64::from(super::XL_OPEN_XML_STRICT_WORKBOOK)
+        );
+
+        runtime
+            .dispatch_invoke(
+                workbook,
+                "SaveAs",
+                &[OmValue::Text(target_path.to_string_lossy().into_owned())],
+            )
+            .expect("SaveAs Strict workbook without FileFormat");
+        let saved = ExcelRuntime::new()
+            .codec
+            .load(
+                &fs::read(&target_path).expect("read Strict SaveAs target"),
+                LoadOptions::default(),
+            )
+            .expect("reopen Strict SaveAs target");
+        assert_eq!(saved.detected_format, FileFormat::StrictXlsx);
+
+        let conversion_error = runtime
+            .dispatch_invoke(
+                workbook,
+                "SaveAs",
+                &[
+                    OmValue::Text(rejected_target_path.to_string_lossy().into_owned()),
+                    OmValue::Number(f64::from(super::XL_OPEN_XML_WORKBOOK)),
+                ],
+            )
+            .expect_err("explicit Transitional SaveAs must fail");
+        assert_eq!(conversion_error.code, OmErrorCode::Unsupported);
+        assert!(!rejected_target_path.exists());
+
+        fs::remove_dir_all(&base_dir).expect("cleanup Strict SaveAs fixture");
+    }
+
+    #[test]
     fn save_conversion_retags_discovered_nonstandard_workbook_part() {
         let package =
             OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("base workbook package");
@@ -125656,6 +125772,47 @@
             ),
             workbook.0
         );
+    }
+
+    fn strict_synthetic_workbook_bytes() -> Vec<u8> {
+        let package =
+            OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("synthetic workbook");
+        let mut parts = package.parts().to_vec();
+        for part in &mut parts {
+            if matches!(
+                part.name.as_str(),
+                "[Content_Types].xml"
+                    | "_rels/.rels"
+                    | "xl/workbook.xml"
+                    | "xl/_rels/workbook.xml.rels"
+                    | "xl/sharedStrings.xml"
+                    | "xl/worksheets/sheet1.xml"
+            ) {
+                let mut xml = String::from_utf8(part.bytes.clone()).expect("synthetic XML utf8");
+                xml = xml.replace(
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml",
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.main+xml",
+                );
+                xml = xml.replace(
+                    "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
+                    "http://purl.oclc.org/ooxml/spreadsheetml/main",
+                );
+                xml = xml.replace(
+                    "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
+                    "http://purl.oclc.org/ooxml/officeDocument/relationships",
+                );
+                if part.name == "xl/_rels/workbook.xml.rels" {
+                    xml = xml.replace(
+                        "</Relationships>",
+                        "  <Relationship Id=\"rId2\" Type=\"http://purl.oclc.org/ooxml/officeDocument/relationships/sharedStrings\" Target=\"sharedStrings.xml\"/>\n</Relationships>",
+                    );
+                }
+                part.bytes = xml.into_bytes();
+            }
+        }
+        OpcPackage::new(parts)
+            .to_bytes()
+            .expect("Strict synthetic workbook bytes")
     }
 
     fn synthetic_workbook_bytes() -> Vec<u8> {

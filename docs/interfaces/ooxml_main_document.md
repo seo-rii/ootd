@@ -6,8 +6,11 @@ relationship in `/_rels/.rels`. It does not assume that the part is named `xl/wo
 ## Load Contract
 
 - `[Content_Types].xml` and `/_rels/.rels` must exist.
-- Exactly one Transitional `officeDocument` relationship must be present at the package root.
+- Exactly one recognized Strict or Transitional `officeDocument` relationship must be present at
+  the package root.
 - Its target must be internal, normalize to a canonical package part, and exist.
+- The workbook root namespace must match the relationship dialect, and its resolved main content
+  type must be valid for that dialect. Unknown or contradictory combinations fail closed.
 - The workbook relationship-part URI is calculated from the discovered owner. For example,
   `documents/book/main.xml` owns `documents/book/_rels/main.xml.rels`.
 - Relative workbook relationships are resolved against the discovered owner's parent path.
@@ -24,13 +27,14 @@ and the relationship-resolved calculation-chain part, so relocated metadata does
 Runtime format retagging and SaveAs update the discovered main part's content-type override and
 in-memory OPC content type instead of inventing an `xl/workbook.xml` entry.
 
-The synthetic regression uses `documents/book/main.xml`, a worksheet relationship that climbs back
-to `xl/worksheets/sheet1.xml`, and a relocated calculation chain. It covers sniff, load, no-op save,
-single-cell edit, calculation metadata rewrite, chain removal, and reopen.
+The Transitional and Strict synthetic regressions use `documents/book/main.xml`, a worksheet
+relationship that climbs back to `xl/worksheets/sheet1.xml`, and a relocated calculation chain.
+They cover sniff, load, no-op save, single-cell edit, calculation metadata rewrite, chain removal,
+and reopen. Strict-specific format and relationship rules are documented in
+`docs/interfaces/ooxml_dialect.md`.
 
 ## Remaining Dialect Scope
 
-This contract currently recognizes the Transitional `officeDocument` relationship URI. Strict
-OOXML relationship and SpreadsheetML namespaces, dialect-aware relationship matching, and
-`FileFormat::StrictXlsx` detection remain OOTD-060/OOTD-021 work. Arbitrary XML prefixes remain
-OOTD-015/OOTD-049 work.
+Strict and Transitional main-document discovery is implemented, including exact relationship,
+namespace, and content-type agreement. General Strict graph mutation and cross-dialect conversion
+remain OOTD-021 work. Arbitrary XML prefixes below the validated roots remain OOTD-015/OOTD-049.

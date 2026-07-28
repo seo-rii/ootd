@@ -9,8 +9,9 @@
         ChartTickMark, ChartView3DModel, CommentPartSummary, DrawingAnchorKind, DrawingAnchorSummary,
         DrawingCellMarkerSummary, DrawingOpaqueRelationshipSummary, DrawingPointSummary,
         DrawingSizeSummary, DxfSummary, FileFormat, FillSummary, FontSummary,
-        HYPERLINK_RELATIONSHIP_TYPE, OpcPackage, PivotPackagePartKind, STYLES_RELATIONSHIP_TYPE,
-        THEME_RELATIONSHIP_TYPE, VML_DRAWING_RELATIONSHIP_TYPE, WORKBOOK_RELS_PART_NAME,
+        HYPERLINK_RELATIONSHIP_TYPE, OoxmlDialect, OpcPackage, PivotPackagePartKind,
+        STYLES_RELATIONSHIP_TYPE, THEME_RELATIONSHIP_TYPE, VML_DRAWING_RELATIONSHIP_TYPE,
+        WORKBOOK_RELS_PART_NAME,
         WorksheetCommentSummary,
         WorksheetData, WorksheetHyperlinkBinding, WorksheetHyperlinkSummary,
         WorksheetRelationshipBinding, WorksheetSupportParts, XlsxCodec, chart_object_anchor_xml,
@@ -278,6 +279,337 @@
                 .expect("B2")
                 .value,
             CellValue::Number(99.0)
+        );
+    }
+
+    #[test]
+    fn strict_nonstandard_main_part_round_trips_targeted_edit() {
+        let codec = XlsxCodec;
+        let source_bytes = strict_workbook_with_nonstandard_main_part_bytes();
+        let source_package = OpcPackage::from_bytes(&source_bytes).expect("source Strict package");
+
+        assert!(codec.sniff(&source_bytes));
+        let mut loaded = codec
+            .load(&source_bytes, CommonLoadOptions::default())
+            .expect("load Strict workbook");
+        assert_eq!(loaded.detected_format, FileFormat::StrictXlsx);
+        assert_eq!(loaded.support_parts.ooxml_dialect, OoxmlDialect::Strict);
+        assert_eq!(
+            loaded.support_parts.workbook_part_uri.as_deref(),
+            Some("documents/book/main.xml")
+        );
+        assert_eq!(
+            loaded
+                .state
+                .worksheet_data_for_sheet(SheetId(1))
+                .expect("Strict worksheet")
+                .cells
+                .get(&(1, 1))
+                .expect("A1")
+                .value,
+            CellValue::Text("strict shared".to_string())
+        );
+
+        let clean_saved = codec
+            .save(&loaded, CommonSaveOptions::default())
+            .expect("clean-save Strict workbook");
+        let clean_package = OpcPackage::from_bytes(&clean_saved).expect("clean Strict package");
+        for part_uri in [
+            "_rels/.rels",
+            "documents/book/main.xml",
+            "documents/book/_rels/main.xml.rels",
+            "xl/data/strings.xml",
+            "xl/worksheets/sheet1.xml",
+            "xl/worksheets/_rels/sheet1.xml.rels",
+            "documents/book/calc/calcChain.xml",
+        ] {
+            assert_eq!(
+                clean_package.part(part_uri).expect("clean part").bytes,
+                source_package.part(part_uri).expect("source part").bytes,
+                "clean save changed {part_uri}"
+            );
+        }
+
+        loaded.state.insert_cell(
+            SheetId(1),
+            2,
+            2,
+            CellData {
+                value: CellValue::Number(99.0),
+                formula: None,
+                style_id: None,
+            },
+        );
+        let edited_saved = codec
+            .save(&loaded, CommonSaveOptions::default())
+            .expect("targeted-save Strict workbook");
+        let edited_package = OpcPackage::from_bytes(&edited_saved).expect("edited Strict package");
+        assert!(!edited_package.contains("documents/book/calc/calcChain.xml"));
+        let root_relationships = std::str::from_utf8(
+            &edited_package
+                .part("_rels/.rels")
+                .expect("root relationships")
+                .bytes,
+        )
+        .expect("root relationships utf8");
+        let workbook_relationships = std::str::from_utf8(
+            &edited_package
+                .part("documents/book/_rels/main.xml.rels")
+                .expect("workbook relationships")
+                .bytes,
+        )
+        .expect("workbook relationships utf8");
+        let workbook_xml = std::str::from_utf8(
+            &edited_package
+                .part("documents/book/main.xml")
+                .expect("workbook")
+                .bytes,
+        )
+        .expect("workbook utf8");
+        let worksheet_xml = std::str::from_utf8(
+            &edited_package
+                .part("xl/worksheets/sheet1.xml")
+                .expect("worksheet")
+                .bytes,
+        )
+        .expect("worksheet utf8");
+        let worksheet_relationships = std::str::from_utf8(
+            &edited_package
+                .part("xl/worksheets/_rels/sheet1.xml.rels")
+                .expect("worksheet relationships")
+                .bytes,
+        )
+        .expect("worksheet relationships utf8");
+        assert!(root_relationships.contains(
+            "http://purl.oclc.org/ooxml/officeDocument/relationships/officeDocument"
+        ));
+        assert!(workbook_relationships
+            .contains("http://purl.oclc.org/ooxml/officeDocument/relationships/worksheet"));
+        assert!(!workbook_relationships.contains("calcChain"));
+        assert!(workbook_xml.contains("http://purl.oclc.org/ooxml/spreadsheetml/main"));
+        assert!(workbook_xml.contains("<calcPr"));
+        assert!(worksheet_xml.contains("http://purl.oclc.org/ooxml/spreadsheetml/main"));
+        assert!(worksheet_relationships
+            .contains("http://purl.oclc.org/ooxml/officeDocument/relationships/hyperlink"));
+        assert!(!root_relationships.contains(
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+        ));
+        assert!(!workbook_relationships.contains(
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+        ));
+        assert!(!workbook_xml
+            .contains("http://schemas.openxmlformats.org/spreadsheetml/2006/main"));
+        assert!(!worksheet_xml
+            .contains("http://schemas.openxmlformats.org/spreadsheetml/2006/main"));
+        assert!(!worksheet_relationships.contains(
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+        ));
+
+        let reopened = codec
+            .load(&edited_saved, CommonLoadOptions::default())
+            .expect("reopen edited Strict workbook");
+        assert_eq!(reopened.detected_format, FileFormat::StrictXlsx);
+        let reopened_sheet = reopened
+            .state
+            .worksheet_data_for_sheet(SheetId(1))
+            .expect("reopened Strict worksheet");
+        assert_eq!(
+            reopened_sheet.cells.get(&(1, 1)).expect("A1").value,
+            CellValue::Text("strict shared".to_string())
+        );
+        assert_eq!(
+            reopened_sheet.cells.get(&(2, 2)).expect("B2").value,
+            CellValue::Number(99.0)
+        );
+    }
+
+    #[test]
+    fn strict_and_transitional_dialect_mismatches_fail_closed() {
+        let codec = XlsxCodec;
+        let cases = [
+            (
+                "Strict root with Transitional workbook namespace",
+                "documents/book/main.xml",
+                br#"<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://purl.oclc.org/ooxml/officeDocument/relationships"><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>"#.as_slice(),
+            ),
+            (
+                "Strict workbook with Transitional worksheet relationship",
+                "documents/book/_rels/main.xml.rels",
+                br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="../../xl/worksheets/sheet1.xml"/></Relationships>"#.as_slice(),
+            ),
+            (
+                "Strict relationship with Transitional worksheet namespace",
+                "xl/worksheets/sheet1.xml",
+                br#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData></worksheet>"#.as_slice(),
+            ),
+        ];
+
+        for (label, part_uri, replacement) in cases {
+            let mut package = OpcPackage::from_bytes(
+                &strict_workbook_with_nonstandard_main_part_bytes(),
+            )
+            .expect("Strict package");
+            package
+                .replace_part_bytes(part_uri, replacement.to_vec())
+                .expect("replace mismatch part");
+            let bytes = package.to_bytes().expect("mismatched Strict bytes");
+            let error = codec
+                .load(&bytes, CommonLoadOptions::default())
+                .expect_err("mixed OOXML dialect must fail");
+            assert_eq!(error.code, OmErrorCode::Parse, "{label}: {error:?}");
+        }
+
+        let mut dual_root_package = OpcPackage::from_bytes(
+            &strict_workbook_with_nonstandard_main_part_bytes(),
+        )
+        .expect("Strict package");
+        dual_root_package
+            .replace_part_bytes(
+                "_rels/.rels",
+                br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="strict" Type="http://purl.oclc.org/ooxml/officeDocument/relationships/officeDocument" Target="documents/book/main.xml"/><Relationship Id="transitional" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="documents/book/main.xml"/></Relationships>"#.to_vec(),
+            )
+            .expect("replace dual root relationships");
+        let dual_root_bytes = dual_root_package.to_bytes().expect("dual root bytes");
+        let dual_root_error = codec
+            .load(&dual_root_bytes, CommonLoadOptions::default())
+            .expect_err("dual dialect officeDocument relationships must fail");
+        assert_eq!(dual_root_error.code, OmErrorCode::Parse);
+        assert!(dual_root_error.message.contains("multiple officeDocument"));
+
+        let mut excel_strict_content_type_package = OpcPackage::from_bytes(
+            &strict_workbook_with_nonstandard_main_part_bytes(),
+        )
+        .expect("Strict package");
+        let excel_strict_content_types = String::from_utf8(
+            excel_strict_content_type_package
+                .part("[Content_Types].xml")
+                .expect("content types")
+                .bytes
+                .clone(),
+        )
+        .expect("content types utf8")
+        .replace(
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.main+xml",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml",
+        );
+        excel_strict_content_type_package
+            .replace_part_bytes(
+                "[Content_Types].xml",
+                excel_strict_content_types.into_bytes(),
+            )
+            .expect("replace Excel Strict content type");
+        let excel_strict_content_type_bytes = excel_strict_content_type_package
+            .to_bytes()
+            .expect("Excel Strict content type bytes");
+        let excel_strict_loaded = codec
+            .load(
+                &excel_strict_content_type_bytes,
+                CommonLoadOptions::default(),
+            )
+            .expect("Excel-compatible Strict main content type");
+        assert_eq!(excel_strict_loaded.detected_format, FileFormat::StrictXlsx);
+
+        let mut strict_template_package = OpcPackage::from_bytes(
+            &strict_workbook_with_nonstandard_main_part_bytes(),
+        )
+        .expect("Strict package");
+        let strict_template_content_types = String::from_utf8(
+            strict_template_package
+                .part("[Content_Types].xml")
+                .expect("content types")
+                .bytes
+                .clone(),
+        )
+        .expect("content types utf8")
+        .replace(
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.main+xml",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.template.main+xml",
+        );
+        strict_template_package
+            .replace_part_bytes(
+                "[Content_Types].xml",
+                strict_template_content_types.into_bytes(),
+            )
+            .expect("replace Strict template content type");
+        let strict_template_bytes = strict_template_package
+            .to_bytes()
+            .expect("Strict template bytes");
+        let strict_template_error = codec
+            .load(&strict_template_bytes, CommonLoadOptions::default())
+            .expect_err("unrepresented Strict template must fail closed");
+        assert_eq!(strict_template_error.code, OmErrorCode::Unsupported);
+
+        let mut unknown_content_type_package = OpcPackage::from_bytes(
+            &strict_workbook_with_nonstandard_main_part_bytes(),
+        )
+        .expect("Strict package");
+        let content_types = String::from_utf8(
+            unknown_content_type_package
+                .part("[Content_Types].xml")
+                .expect("content types")
+                .bytes
+                .clone(),
+        )
+        .expect("content types utf8")
+        .replace(
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.main+xml",
+            "application/vnd.example.unknown-workbook+xml",
+        );
+        unknown_content_type_package
+            .replace_part_bytes("[Content_Types].xml", content_types.into_bytes())
+            .expect("replace content types");
+        let unknown_content_type_bytes = unknown_content_type_package
+            .to_bytes()
+            .expect("unknown content type bytes");
+        let unknown_content_type_error = codec
+            .load(&unknown_content_type_bytes, CommonLoadOptions::default())
+            .expect_err("unknown main content type must fail");
+        assert_eq!(unknown_content_type_error.code, OmErrorCode::Parse);
+        assert!(
+            unknown_content_type_error
+                .message
+                .contains("unsupported workbook main content type")
+        );
+
+        let mut transitional_unknown_package =
+            OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("Transitional package");
+        let transitional_content_types = String::from_utf8(
+            transitional_unknown_package
+                .part("[Content_Types].xml")
+                .expect("content types")
+                .bytes
+                .clone(),
+        )
+        .expect("content types utf8")
+        .replace(
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml",
+            "application/vnd.example.unknown-transitional-workbook+xml",
+        );
+        transitional_unknown_package
+            .replace_part_bytes("[Content_Types].xml", transitional_content_types.into_bytes())
+            .expect("replace Transitional content types");
+        transitional_unknown_package
+            .add_part(OpcPart {
+                name: "xl/vbaProject.bin".to_string(),
+                content_type: Some("application/vnd.ms-office.vbaProject".to_string()),
+                compression: CompressionMethod::Stored,
+                bytes: b"vba".to_vec(),
+            })
+            .expect("add VBA marker");
+        let transitional_unknown_bytes = transitional_unknown_package
+            .to_bytes()
+            .expect("unknown Transitional content type bytes");
+        let transitional_unknown_error = codec
+            .load(
+                &transitional_unknown_bytes,
+                CommonLoadOptions::default(),
+            )
+            .expect_err("unknown Transitional main content type must not infer XLSM from VBA");
+        assert_eq!(transitional_unknown_error.code, OmErrorCode::Parse);
+        assert!(
+            transitional_unknown_error
+                .message
+                .contains("unsupported workbook main content type")
         );
     }
 
@@ -1431,6 +1763,7 @@
   </sheets>
 </workbook>"#,
             &BTreeMap::new(),
+            OoxmlDialect::Transitional,
         )
         .expect("workbook sheets");
 
@@ -1455,6 +1788,7 @@
   </sheets>
 </workbook>"#,
             &BTreeMap::new(),
+            OoxmlDialect::Transitional,
         )
         .expect("workbook date1904");
 
@@ -1475,6 +1809,7 @@
   </sheets>
 </workbook>"#,
             &BTreeMap::new(),
+            OoxmlDialect::Transitional,
         )
         .expect("workbook isAddin");
 
@@ -1499,6 +1834,7 @@
   </definedNames>
 </workbook>"#,
             &BTreeMap::new(),
+            OoxmlDialect::Transitional,
         )
         .expect("workbook defined names");
 
@@ -12812,6 +13148,7 @@
                     relationship_id: "rId3".to_string(),
                     target: "xl/comments1.xml".to_string(),
                 }],
+                COMMENTS_RELATIONSHIP_TYPE,
                 None,
             )
             .expect("rewrite tracked comment relationships"),
@@ -14352,6 +14689,7 @@
             }],
             &package,
             "xl/workbook.xml",
+            OoxmlDialect::Transitional,
         )
         .expect_err("collect should fail when explicit styles part is missing");
 
@@ -14375,6 +14713,7 @@
             }],
             &package,
             "xl/workbook.xml",
+            OoxmlDialect::Transitional,
         )
         .expect_err("collect should fail when explicit theme part is missing");
 
@@ -50598,8 +50937,12 @@
                 .expect("base workbook package");
         package.remove_part("xl/comments1.xml");
 
-        let error = super::collect_worksheet_support_parts("xl/worksheets/sheet1.xml", &package)
-            .expect_err("collect should fail when explicit worksheet comment part is missing");
+        let error = super::collect_worksheet_support_parts(
+            "xl/worksheets/sheet1.xml",
+            &package,
+            OoxmlDialect::Transitional,
+        )
+        .expect_err("collect should fail when explicit worksheet comment part is missing");
 
         assert_eq!(error.code, OmErrorCode::InvalidState);
         assert!(
@@ -50617,8 +50960,12 @@
                 .expect("base workbook package");
         package.remove_part("xl/drawings/vmlDrawing1.vml");
 
-        let error = super::collect_worksheet_support_parts("xl/worksheets/sheet1.xml", &package)
-            .expect_err("collect should fail when explicit worksheet VML drawing part is missing");
+        let error = super::collect_worksheet_support_parts(
+            "xl/worksheets/sheet1.xml",
+            &package,
+            OoxmlDialect::Transitional,
+        )
+        .expect_err("collect should fail when explicit worksheet VML drawing part is missing");
 
         assert_eq!(error.code, OmErrorCode::InvalidState);
         assert!(
@@ -50635,8 +50982,12 @@
             OpcPackage::from_bytes(&workbook_with_hyperlink_comment_and_calc_chain_bytes())
                 .expect("base workbook package");
 
-        let error = super::collect_worksheet_support_parts("xl/worksheets/missing.xml", &package)
-            .expect_err("collect should fail when worksheet part is missing");
+        let error = super::collect_worksheet_support_parts(
+            "xl/worksheets/missing.xml",
+            &package,
+            OoxmlDialect::Transitional,
+        )
+        .expect_err("collect should fail when worksheet part is missing");
 
         assert_eq!(error.code, OmErrorCode::NotFound);
         assert!(error.message.contains("worksheet part is missing"));
@@ -50650,8 +51001,12 @@
                 .expect("base workbook package");
         package.remove_part("xl/worksheets/_rels/sheet1.xml.rels");
 
-        let error = super::collect_worksheet_support_parts("xl/worksheets/sheet1.xml", &package)
-            .expect_err("collect should fail when tracked relationship ids lose their rels part");
+        let error = super::collect_worksheet_support_parts(
+            "xl/worksheets/sheet1.xml",
+            &package,
+            OoxmlDialect::Transitional,
+        )
+        .expect_err("collect should fail when tracked relationship ids lose their rels part");
 
         assert_eq!(error.code, OmErrorCode::InvalidState);
         assert!(
@@ -50671,9 +51026,12 @@
             OpcPackage::from_bytes(&workbook_with_blank_internal_hyperlink_anchor_bytes())
                 .expect("base workbook package");
 
-        let support_parts =
-            super::collect_worksheet_support_parts("xl/worksheets/sheet1.xml", &package)
-                .expect("worksheet support parts");
+        let support_parts = super::collect_worksheet_support_parts(
+            "xl/worksheets/sheet1.xml",
+            &package,
+            OoxmlDialect::Transitional,
+        )
+        .expect("worksheet support parts");
 
         assert_eq!(
             support_parts.worksheet_part_uri.as_deref(),
@@ -50709,9 +51067,12 @@
             .part("xl/worksheets/sheet1.xml")
             .expect("sheet part");
 
-        let support_parts =
-            super::collect_sheet_drawing_support_parts("xl/worksheets/sheet1.xml", &package)
-                .expect("sheet drawing support parts");
+        let support_parts = super::collect_sheet_drawing_support_parts(
+            "xl/worksheets/sheet1.xml",
+            &package,
+            OoxmlDialect::Transitional,
+        )
+        .expect("sheet drawing support parts");
 
         assert_eq!(
             support_parts.sheet_part_uri.as_deref(),
@@ -50745,9 +51106,12 @@
         let mut package = loaded.package.clone();
         package.remove_part("xl/worksheets/_rels/sheet1.xml.rels");
 
-        let error =
-            super::ensure_single_worksheet_support_parts_present(&package, &worksheet_support)
-                .expect_err("ensure should fail when worksheet relationships part is missing");
+        let error = super::ensure_single_worksheet_support_parts_present(
+            &package,
+            &worksheet_support,
+            OoxmlDialect::Transitional,
+        )
+        .expect_err("ensure should fail when worksheet relationships part is missing");
 
         assert_eq!(error.code, OmErrorCode::InvalidState);
         assert!(
@@ -50780,9 +51144,12 @@
         let mut package = loaded.package.clone();
         package.remove_part("xl/comments1.xml");
 
-        let error =
-            super::ensure_single_worksheet_support_parts_present(&package, &worksheet_support)
-                .expect_err("ensure should fail when worksheet comment part is missing");
+        let error = super::ensure_single_worksheet_support_parts_present(
+            &package,
+            &worksheet_support,
+            OoxmlDialect::Transitional,
+        )
+        .expect_err("ensure should fail when worksheet comment part is missing");
 
         assert_eq!(error.code, OmErrorCode::InvalidState);
         assert!(
@@ -50811,9 +51178,12 @@
         let mut package = loaded.package.clone();
         package.remove_part("xl/drawings/vmlDrawing1.vml");
 
-        let error =
-            super::ensure_single_worksheet_support_parts_present(&package, &worksheet_support)
-                .expect_err("ensure should fail when worksheet VML drawing part is missing");
+        let error = super::ensure_single_worksheet_support_parts_present(
+            &package,
+            &worksheet_support,
+            OoxmlDialect::Transitional,
+        )
+        .expect_err("ensure should fail when worksheet VML drawing part is missing");
 
         assert_eq!(error.code, OmErrorCode::InvalidState);
         assert!(
@@ -50842,9 +51212,12 @@
         let mut package = loaded.package.clone();
         package.remove_part("xl/worksheets/sheet1.xml");
 
-        let error =
-            super::ensure_single_worksheet_support_parts_present(&package, &worksheet_support)
-                .expect_err("ensure should fail when worksheet part is missing");
+        let error = super::ensure_single_worksheet_support_parts_present(
+            &package,
+            &worksheet_support,
+            OoxmlDialect::Transitional,
+        )
+        .expect_err("ensure should fail when worksheet part is missing");
 
         assert_eq!(error.code, OmErrorCode::InvalidState);
         assert!(error.message.contains("explicit worksheet part is missing"));
@@ -116773,6 +117146,116 @@
             )
             .expect("retarget package office document relationship");
         package.to_bytes().expect("nonstandard workbook bytes")
+    }
+
+    fn strict_workbook_with_nonstandard_main_part_bytes() -> Vec<u8> {
+        let package = OpcPackage::new(vec![
+            OpcPart {
+                name: "[Content_Types].xml".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/documents/book/main.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.main+xml"/>
+  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+  <Override PartName="/xl/data/strings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>
+  <Override PartName="/documents/book/calc/calcChain.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.calcChain+xml"/>
+</Types>"#
+                    .to_vec(),
+            },
+            OpcPart {
+                name: "_rels/.rels".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://purl.oclc.org/ooxml/officeDocument/relationships/officeDocument" Target="documents/book/main.xml"/>
+</Relationships>"#
+                    .to_vec(),
+            },
+            OpcPart {
+                name: "documents/book/main.xml".to_string(),
+                content_type: Some(
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.main+xml"
+                        .to_string(),
+                ),
+                compression: CompressionMethod::Stored,
+                bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
+<workbook xmlns="http://purl.oclc.org/ooxml/spreadsheetml/main"
+ xmlns:r="http://purl.oclc.org/ooxml/officeDocument/relationships">
+  <sheets>
+    <sheet name="Sheet1" sheetId="1" r:id="rId1"/>
+  </sheets>
+</workbook>"#
+                    .to_vec(),
+            },
+            OpcPart {
+                name: "documents/book/_rels/main.xml.rels".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://purl.oclc.org/ooxml/officeDocument/relationships/worksheet" Target="../../xl/worksheets/sheet1.xml"/>
+  <Relationship Id="rId2" Type="http://purl.oclc.org/ooxml/officeDocument/relationships/sharedStrings" Target="../../xl/data/strings.xml"/>
+  <Relationship Id="rId3" Type="http://purl.oclc.org/ooxml/officeDocument/relationships/calcChain" Target="calc/calcChain.xml"/>
+</Relationships>"#
+                    .to_vec(),
+            },
+            OpcPart {
+                name: "xl/data/strings.xml".to_string(),
+                content_type: Some(
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"
+                        .to_string(),
+                ),
+                compression: CompressionMethod::Stored,
+                bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
+<sst xmlns="http://purl.oclc.org/ooxml/spreadsheetml/main">
+  <si><t>strict shared</t></si>
+</sst>"#
+                    .to_vec(),
+            },
+            OpcPart {
+                name: "xl/worksheets/sheet1.xml".to_string(),
+                content_type: Some(
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"
+                        .to_string(),
+                ),
+                compression: CompressionMethod::Stored,
+                bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
+<worksheet xmlns="http://purl.oclc.org/ooxml/spreadsheetml/main"
+ xmlns:r="http://purl.oclc.org/ooxml/officeDocument/relationships">
+  <dimension ref="A1"/>
+  <sheetData>
+    <row r="1"><c r="A1" t="s"><v>0</v></c></row>
+  </sheetData>
+  <hyperlinks><hyperlink ref="A1" r:id="rIdHyperlink"/></hyperlinks>
+</worksheet>"#
+                    .to_vec(),
+            },
+            OpcPart {
+                name: "xl/worksheets/_rels/sheet1.xml.rels".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rIdHyperlink" Type="http://purl.oclc.org/ooxml/officeDocument/relationships/hyperlink" Target="https://example.com/strict" TargetMode="External"/>
+</Relationships>"#
+                    .to_vec(),
+            },
+            OpcPart {
+                name: "documents/book/calc/calcChain.xml".to_string(),
+                content_type: Some(
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.calcChain+xml"
+                        .to_string(),
+                ),
+                compression: CompressionMethod::Stored,
+                bytes: br#"<calcChain xmlns="http://purl.oclc.org/ooxml/spreadsheetml/main"><c r="A1" i="1"/></calcChain>"#.to_vec(),
+            },
+        ]);
+
+        package.to_bytes().expect("Strict workbook bytes")
     }
 
     fn synthetic_workbook_bytes() -> Vec<u8> {

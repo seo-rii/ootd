@@ -226,8 +226,8 @@ impl ExcelRuntime {
                 };
                 let format = match args.get(1) {
                     None | Some(OmValue::Missing | OmValue::Empty | OmValue::Null) => {
-                        file_format_from_path(&path)
-                            .unwrap_or(self.workbook_model(workbook)?.format)
+                        let current_format = self.workbook_model(workbook)?.format;
+                        file_format_from_path(&path, current_format).unwrap_or(current_format)
                     }
                     Some(OmValue::Number(format)) => {
                         if !format.is_finite()
@@ -544,10 +544,11 @@ impl ExcelRuntime {
                             "Workbook.Close with SaveChanges=true requires a Filename or source path",
                         )
                     })?;
-                    let filename_format = file_format_from_path(&save_path);
+                    let current_format = self.workbook_model(workbook)?.format;
+                    let filename_format = file_format_from_path(&save_path, current_format);
                     let format = match filename_format {
                         Some(format) => format,
-                        None => self.workbook_model(workbook)?.format,
+                        None => current_format,
                     };
                     let prepared = self.prepare_workbook_save(
                         workbook,

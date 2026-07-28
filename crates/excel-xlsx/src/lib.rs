@@ -37,6 +37,7 @@ use quick_xml::{NsReader, Reader, Writer};
 mod active_content;
 mod chart_encoder;
 mod chart_graph;
+mod dialect;
 mod digital_signature;
 mod encryption;
 mod external_data;
@@ -47,6 +48,12 @@ mod worksheet;
 
 use encryption::is_encrypted_ooxml_compound_file;
 use external_data::collect_external_data_inventory;
+pub use dialect::OoxmlDialect;
+use dialect::{
+    OoxmlRelationshipKind, classify_relationship_type, relationship_type,
+    relationship_type_is, validate_known_relationship_dialect, validate_xml_root_namespace,
+    workbook_format,
+};
 pub use active_content::ActiveContentInventory;
 use active_content::{collect_active_content_inventory, strip_active_content_from_package};
 pub use digital_signature::DigitalSignatureInventory;
@@ -81,36 +88,30 @@ use pivot::{collect_pivot_package_inventory, ensure_pivot_package_inventory_pres
 
 const CALC_CHAIN_PART_NAME: &str = "xl/calcChain.xml";
 const PACKAGE_RELATIONSHIPS_PART_NAME: &str = "_rels/.rels";
-const OFFICE_DOCUMENT_RELATIONSHIP_TYPE: &str =
-    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument";
 const CALC_CHAIN_RELATIONSHIP_TYPE: &str =
-    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/calcChain";
-const WORKSHEET_RELATIONSHIP_TYPE: &str =
-    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet";
-const CHARTSHEET_RELATIONSHIP_TYPE: &str =
-    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chartsheet";
-const DIALOGSHEET_RELATIONSHIP_TYPE: &str =
-    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/dialogsheet";
+    dialect::TRANSITIONAL_CALC_CHAIN_RELATIONSHIP_TYPE;
 const MACROSHEET_RELATIONSHIP_TYPE: &str =
     "http://schemas.microsoft.com/office/2006/relationships/xlMacrosheet";
-const DRAWING_RELATIONSHIP_TYPE: &str =
-    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing";
 const CHART_RELATIONSHIP_TYPE: &str =
-    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart";
+    dialect::TRANSITIONAL_CHART_RELATIONSHIP_TYPE;
 const CHART_STYLE_RELATIONSHIP_TYPE: &str =
     "http://schemas.microsoft.com/office/2011/relationships/chartStyle";
 const CHART_COLOR_STYLE_RELATIONSHIP_TYPE: &str =
     "http://schemas.microsoft.com/office/2011/relationships/chartColorStyle";
+#[cfg(test)]
 const STYLES_RELATIONSHIP_TYPE: &str =
-    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles";
+    dialect::TRANSITIONAL_STYLES_RELATIONSHIP_TYPE;
+#[cfg(test)]
 const THEME_RELATIONSHIP_TYPE: &str =
-    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme";
+    dialect::TRANSITIONAL_THEME_RELATIONSHIP_TYPE;
 const HYPERLINK_RELATIONSHIP_TYPE: &str =
-    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink";
+    dialect::TRANSITIONAL_HYPERLINK_RELATIONSHIP_TYPE;
+#[cfg(test)]
 const COMMENTS_RELATIONSHIP_TYPE: &str =
-    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments";
+    dialect::TRANSITIONAL_COMMENTS_RELATIONSHIP_TYPE;
+#[cfg(test)]
 const VML_DRAWING_RELATIONSHIP_TYPE: &str =
-    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/vmlDrawing";
+    dialect::TRANSITIONAL_VML_DRAWING_RELATIONSHIP_TYPE;
 const WORKBOOK_RELS_PART_NAME: &str = "xl/_rels/workbook.xml.rels";
 
 type ThemeExtLevel8Names = Vec<Vec<Vec<Vec<Vec<Vec<Vec<Vec<String>>>>>>>>;
@@ -320,6 +321,7 @@ fn ensure_supported_codec_profile(profile: ExcelProfile, operation: &str) -> OmR
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct WorkbookSupportParts {
+    pub ooxml_dialect: OoxmlDialect,
     pub pivot_inventory: PivotPackageInventory,
     pub content_types_source_bytes: Option<Vec<u8>>,
     pub content_types_summary: Option<ContentTypesPartSummary>,
@@ -1411,6 +1413,8 @@ pub struct ChartOpaqueRelationshipSummary {
 struct WorkbookMainDocument {
     part_uri: String,
     relationships_part_uri: String,
+    dialect: OoxmlDialect,
+    format: FileFormat,
 }
 
 fn discover_workbook_main_document(package: &OpcPackage) -> OmResult<WorkbookMainDocument> {
@@ -1426,12 +1430,11 @@ fn discover_workbook_main_document(package: &OpcPackage) -> OmResult<WorkbookMai
         &[],
         true,
     )?;
-    let mut office_documents = relationships
-        .into_iter()
-        .filter(|relationship| {
-            relationship.relationship_type == OFFICE_DOCUMENT_RELATIONSHIP_TYPE
-        });
-    let office_document = office_documents.next().ok_or_else(|| {
+    let mut office_documents = relationships.into_iter().filter_map(|relationship| {
+        let (dialect, kind) = classify_relationship_type(&relationship.relationship_type)?;
+        (kind == OoxmlRelationshipKind::OfficeDocument).then_some((relationship, dialect))
+    });
+    let (office_document, dialect) = office_documents.next().ok_or_else(|| {
         OmError::parse("package root relationships are missing an officeDocument relationship")
     })?;
     if office_documents.next().is_some() {
@@ -1454,11 +1457,56 @@ fn discover_workbook_main_document(package: &OpcPackage) -> OmResult<WorkbookMai
             office_document.target
         )));
     }
+    let workbook_part = package.part(&office_document.target).ok_or_else(|| {
+        OmError::parse(format!(
+            "package officeDocument relationship target is missing: {}",
+            office_document.target
+        ))
+    })?;
+    validate_xml_root_namespace(
+        workbook_part.bytes.as_slice(),
+        b"workbook",
+        dialect.spreadsheetml_namespace(),
+        &office_document.target,
+    )?;
+    let mut resolved_content_type = workbook_part.content_type.clone();
+    if resolved_content_type.is_none()
+        && let Some(content_types_part) = package.part("[Content_Types].xml")
+    {
+        let content_types =
+            parse_content_types_part_summary(content_types_part.bytes.as_slice())?;
+        let expected_part_name = format!("/{}", office_document.target);
+        resolved_content_type = content_types
+            .override_part_names
+            .iter()
+            .zip(&content_types.override_attr_maps)
+            .find(|(part_name, _)| part_name.eq_ignore_ascii_case(&expected_part_name))
+            .and_then(|(_, attrs)| attrs.get("ContentType"))
+            .cloned();
+        if resolved_content_type.is_none()
+            && let Some(extension) = office_document.target.rsplit('.').next()
+        {
+            resolved_content_type = content_types
+                .default_extensions
+                .iter()
+                .zip(&content_types.default_attr_maps)
+                .find(|(candidate, _)| candidate.eq_ignore_ascii_case(extension))
+                .and_then(|(_, attrs)| attrs.get("ContentType"))
+                .cloned();
+        }
+    }
+    let format = workbook_format(
+        dialect,
+        resolved_content_type.as_deref(),
+        &office_document.target,
+    )?;
     let relationships_part_uri = relationships_part_uri_for_part(&office_document.target)
         .ok_or_else(|| OmError::parse("package officeDocument target is not a valid part URI"))?;
     Ok(WorkbookMainDocument {
         part_uri: office_document.target,
         relationships_part_uri,
+        dialect,
+        format,
     })
 }
 
@@ -1511,7 +1559,7 @@ impl XlsxCodec {
                 ),
             )
         })?;
-        let detected_format = detect_format(&package, &main_document.part_uri);
+        let detected_format = main_document.format;
         let relationship_entries = package
             .part(&main_document.relationships_part_uri)
             .map(|part| {
@@ -1522,19 +1570,71 @@ impl XlsxCodec {
             })
             .transpose()?
             .unwrap_or_default();
+        validate_known_relationship_dialect(
+            main_document.dialect,
+            relationship_entries
+                .iter()
+                .map(|relationship| relationship.relationship_type.as_str()),
+            &main_document.relationships_part_uri,
+        )?;
         let relationships = relationship_entries
             .iter()
             .map(|relationship| (relationship.id.clone(), relationship.clone()))
             .collect::<BTreeMap<_, _>>();
-        let parsed_workbook = parse_workbook(workbook_part.bytes.as_slice(), &relationships)?;
+        let parsed_workbook = parse_workbook(
+            workbook_part.bytes.as_slice(),
+            &relationships,
+            main_document.dialect,
+        )?;
         let date1904 = parsed_workbook.date1904;
         let is_addin = parsed_workbook.is_addin;
         let calculation_properties = parsed_workbook.calculation_properties;
         let worksheets = parsed_workbook.worksheets;
         let defined_names = parsed_workbook.defined_names;
-        let shared_strings = package
-            .part("xl/sharedStrings.xml")
-            .map(|part| parse_shared_strings(part.bytes.as_slice()))
+        let mut shared_string_relationships = relationship_entries.iter().filter(|relationship| {
+            relationship_type_is(
+                main_document.dialect,
+                &relationship.relationship_type,
+                OoxmlRelationshipKind::SharedStrings,
+            )
+        });
+        let shared_string_relationship = shared_string_relationships.next();
+        if shared_string_relationships.next().is_some() {
+            return Err(OmError::parse(format!(
+                "{} contains multiple sharedStrings relationships",
+                main_document.relationships_part_uri
+            )));
+        }
+        let shared_strings_part = shared_string_relationship
+            .map(|relationship| {
+                if relationship_target_mode_is_external(relationship.target_mode.as_deref()) {
+                    return Err(OmError::parse(
+                        "workbook sharedStrings relationship must target an internal part",
+                    ));
+                }
+                package.part(&relationship.target).ok_or_else(|| {
+                    OmError::parse(format!(
+                        "workbook sharedStrings relationship target is missing: {}",
+                        relationship.target
+                    ))
+                })
+            })
+            .transpose()?
+            .or_else(|| {
+                (main_document.dialect == OoxmlDialect::Transitional)
+                    .then(|| package.part("xl/sharedStrings.xml"))
+                    .flatten()
+            });
+        let shared_strings = shared_strings_part
+            .map(|part| {
+                validate_xml_root_namespace(
+                    part.bytes.as_slice(),
+                    b"sst",
+                    main_document.dialect.spreadsheetml_namespace(),
+                    &part.name,
+                )?;
+                parse_shared_strings(part.bytes.as_slice())
+            })
             .transpose()?
             .unwrap_or_default();
         let mut worksheet_data = BTreeMap::new();
@@ -1558,6 +1658,12 @@ impl XlsxCodec {
                         },
                     );
                 } else {
+                    validate_xml_root_namespace(
+                        sheet_part.bytes.as_slice(),
+                        b"worksheet",
+                        main_document.dialect.spreadsheetml_namespace(),
+                        part_uri,
+                    )?;
                     let parsed_cells =
                         parse_worksheet_cells(sheet_part.bytes.as_slice(), &shared_strings)?;
                     worksheet_data.insert(
@@ -1574,11 +1680,18 @@ impl XlsxCodec {
                     );
                     worksheet_support_parts.insert(
                         worksheet.id,
-                        collect_worksheet_support_parts(part_uri, &package)?,
+                        collect_worksheet_support_parts(
+                            part_uri,
+                            &package,
+                            main_document.dialect,
+                        )?,
                     );
                 }
-                let drawing_support_parts =
-                    collect_sheet_drawing_support_parts(part_uri, &package)?;
+                let drawing_support_parts = collect_sheet_drawing_support_parts(
+                    part_uri,
+                    &package,
+                    main_document.dialect,
+                )?;
                 if worksheet.kind == SheetKind::ChartSheet || !drawing_support_parts.is_empty() {
                     sheet_drawing_support_parts.insert(worksheet.id, drawing_support_parts);
                 }
@@ -1598,6 +1711,7 @@ impl XlsxCodec {
             &relationship_entries,
             &package,
             &main_document.part_uri,
+            main_document.dialect,
         )?;
         let workbook_display_name = "Workbook";
         let (charts, drawings, chart_sheets) = build_chart_model_overlay(
@@ -1721,6 +1835,17 @@ impl XlsxCodec {
             &workbook.support_parts.pivot_inventory,
         )?;
         ensure_workbook_style_ids_are_valid(&workbook.state, &workbook.support_parts)?;
+        if workbook.support_parts.ooxml_dialect == OoxmlDialect::Strict
+            && (chart_graph::has_state_only_chart_graphs(workbook)
+                || !workbook.pending_drawing_relationship_graphs.is_empty()
+                || !workbook.pending_chart_relationship_graphs.is_empty()
+                || workbook.state.charts.values().any(|chart| chart.dirty)
+                || workbook.state.drawings.values().any(|drawing| drawing.dirty))
+        {
+            return Err(OmError::unsupported(
+                "Strict OOXML chart and drawing graph mutation is not implemented",
+            ));
+        }
         let mut materialized_workbook = if chart_graph::has_state_only_chart_graphs(workbook) {
             let mut materialized = workbook.clone();
             chart_graph::materialize_state_only_chart_graphs_in_place(&mut materialized)?;
@@ -1736,6 +1861,15 @@ impl XlsxCodec {
             None => (workbook, workbook.package.clone()),
         };
         let main_document = discover_workbook_main_document(&package)?;
+        if workbook.support_parts.ooxml_dialect != main_document.dialect {
+            return Err(OmError::new(
+                OmErrorCode::InvalidState,
+                format!(
+                    "discovered {:?} OOXML dialect does not match the loaded {:?} snapshot",
+                    main_document.dialect, workbook.support_parts.ooxml_dialect
+                ),
+            ));
+        }
         if workbook
             .support_parts
             .workbook_part_uri
@@ -1763,7 +1897,11 @@ impl XlsxCodec {
             })?
             .bytes
             .clone();
-        let saved_workbook = parse_workbook(workbook_xml.as_slice(), &BTreeMap::new())?;
+        let saved_workbook = parse_workbook(
+            workbook_xml.as_slice(),
+            &BTreeMap::new(),
+            main_document.dialect,
+        )?;
         let has_dirty_worksheets = workbook
             .state
             .worksheet_data
@@ -1780,6 +1918,11 @@ impl XlsxCodec {
                             || saved.name != current.name
                             || saved.visibility != current.visibility
                     });
+        if main_document.dialect == OoxmlDialect::Strict && worksheet_structure_changed {
+            return Err(OmError::unsupported(
+                "Strict OOXML worksheet collection mutation is not implemented",
+            ));
+        }
         let calculation_inputs_changed = has_dirty_worksheets
             || saved_workbook.date1904 != workbook.state.model.date1904
             || workbook.state.defined_names.is_dirty()
@@ -2226,6 +2369,15 @@ impl XlsxCodec {
                 rewrite_tracked_comment_relationships(
                     rels_xml.as_slice(),
                     &support_parts.comment_relationships,
+                    relationship_type(
+                        workbook.support_parts.ooxml_dialect,
+                        OoxmlRelationshipKind::Comments,
+                    )
+                    .ok_or_else(|| {
+                        OmError::invalid_state(
+                            "comment relationship is unavailable for dialect",
+                        )
+                    })?,
                     support_parts.worksheet_part_uri.as_deref(),
                 )?,
             )?;
@@ -2249,7 +2401,15 @@ impl XlsxCodec {
                 rewrite_tracked_worksheet_relationships(
                     rels_xml.as_slice(),
                     &support_parts.legacy_drawing_relationships,
-                    VML_DRAWING_RELATIONSHIP_TYPE,
+                    relationship_type(
+                        workbook.support_parts.ooxml_dialect,
+                        OoxmlRelationshipKind::VmlDrawing,
+                    )
+                    .ok_or_else(|| {
+                        OmError::invalid_state(
+                            "VML drawing relationship is unavailable for dialect",
+                        )
+                    })?,
                     support_parts.worksheet_part_uri.as_deref(),
                 )?,
             )?;
@@ -2280,6 +2440,7 @@ impl XlsxCodec {
             &package,
             &workbook.worksheet_support_parts,
             &worksheet_xml_rewrite_recovery_ids,
+            workbook.support_parts.ooxml_dialect,
         )?;
         let ensure_sheet_drawing_part_bytes = |package: &OpcPackage,
                                                part_uri: &str,
@@ -3239,7 +3400,11 @@ impl XlsxCodec {
         }
 
         ensure_support_parts_present_for_save(&package, &workbook.support_parts)?;
-        ensure_worksheet_support_parts_present(&package, &workbook.worksheet_support_parts)?;
+        ensure_worksheet_support_parts_present(
+            &package,
+            &workbook.worksheet_support_parts,
+            workbook.support_parts.ooxml_dialect,
+        )?;
         ensure_pivot_package_inventory_preserved(
             &package,
             &workbook.support_parts.pivot_inventory,
@@ -3314,24 +3479,6 @@ impl XlsxCodec {
     }
 }
 
-fn detect_format(package: &OpcPackage, workbook_part_uri: &str) -> FileFormat {
-    match package
-        .part(workbook_part_uri)
-        .and_then(|part| part.content_type.as_deref())
-    {
-        Some("application/vnd.ms-excel.sheet.macroEnabled.main+xml") => FileFormat::Xlsm,
-        Some("application/vnd.ms-excel.template.macroEnabled.main+xml") => FileFormat::Xltm,
-        Some("application/vnd.openxmlformats-officedocument.spreadsheetml.template.main+xml") => {
-            FileFormat::Xltx
-        }
-        Some("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml") => {
-            FileFormat::Xlsx
-        }
-        _ if package.contains("xl/vbaProject.bin") => FileFormat::Xlsm,
-        _ => FileFormat::Xlsx,
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ParsedWorkbook {
     date1904: bool,
@@ -3363,7 +3510,14 @@ struct ParsedDefinedNameRecord {
 fn parse_workbook(
     workbook_xml: &[u8],
     relationships: &BTreeMap<String, RelationshipEntry>,
+    dialect: OoxmlDialect,
 ) -> OmResult<ParsedWorkbook> {
+    validate_xml_root_namespace(
+        workbook_xml,
+        b"workbook",
+        dialect.spreadsheetml_namespace(),
+        "workbook.xml",
+    )?;
     let mut reader = Reader::from_reader(Cursor::new(workbook_xml));
     reader.config_mut().trim_text(false);
     let mut buffer = Vec::new();
@@ -3486,7 +3640,10 @@ fn parse_workbook(
                     .and_then(|id| relationships.get(id));
                 let part_uri = relationship.map(|relationship| relationship.target.clone());
                 let kind = relationship
-                    .map(|relationship| workbook_sheet_kind(&relationship.relationship_type))
+                    .map(|relationship| {
+                        workbook_sheet_kind(&relationship.relationship_type, dialect)
+                    })
+                    .transpose()?
                     .unwrap_or_default();
                 worksheets.push(WorksheetModel {
                     id: SheetId(next_id),
@@ -3579,13 +3736,34 @@ fn parse_workbook(
     })
 }
 
-fn workbook_sheet_kind(relationship_type: &str) -> SheetKind {
-    match relationship_type {
-        WORKSHEET_RELATIONSHIP_TYPE => SheetKind::Worksheet,
-        CHARTSHEET_RELATIONSHIP_TYPE => SheetKind::ChartSheet,
-        DIALOGSHEET_RELATIONSHIP_TYPE => SheetKind::DialogSheet,
-        MACROSHEET_RELATIONSHIP_TYPE => SheetKind::MacroSheet,
-        _ => SheetKind::Worksheet,
+fn workbook_sheet_kind(
+    relationship_type_value: &str,
+    dialect: OoxmlDialect,
+) -> OmResult<SheetKind> {
+    if relationship_type_is(
+        dialect,
+        relationship_type_value,
+        OoxmlRelationshipKind::Worksheet,
+    ) {
+        Ok(SheetKind::Worksheet)
+    } else if relationship_type_is(
+        dialect,
+        relationship_type_value,
+        OoxmlRelationshipKind::ChartSheet,
+    ) {
+        Ok(SheetKind::ChartSheet)
+    } else if relationship_type_is(
+        dialect,
+        relationship_type_value,
+        OoxmlRelationshipKind::DialogSheet,
+    ) {
+        Ok(SheetKind::DialogSheet)
+    } else if relationship_type_value == MACROSHEET_RELATIONSHIP_TYPE {
+        Ok(SheetKind::MacroSheet)
+    } else {
+        Err(OmError::parse(format!(
+            "unsupported workbook sheet relationship type for {dialect:?} OOXML: {relationship_type_value}"
+        )))
     }
 }
 
@@ -4282,6 +4460,7 @@ fn collect_workbook_support_parts(
     relationships: &[RelationshipEntry],
     package: &OpcPackage,
     workbook_part_uri: &str,
+    dialect: OoxmlDialect,
 ) -> OmResult<WorkbookSupportParts> {
     let content_types_source_bytes = package
         .part("[Content_Types].xml")
@@ -4313,7 +4492,13 @@ fn collect_workbook_support_parts(
         .transpose()?;
     let styles_relationship = relationships
         .iter()
-        .find(|relationship| relationship.relationship_type == STYLES_RELATIONSHIP_TYPE)
+        .find(|relationship| {
+            relationship_type_is(
+                dialect,
+                &relationship.relationship_type,
+                OoxmlRelationshipKind::Styles,
+            )
+        })
         .map(|relationship| WorkbookSupportRelationship {
             id: relationship.id.clone(),
             target: relationship.target.clone(),
@@ -4324,23 +4509,34 @@ fn collect_workbook_support_parts(
     let styles_summary = styles_part_uri
         .as_deref()
         .map(|styles_part_uri| {
+            let styles_part = package.part(styles_part_uri).ok_or_else(|| {
+                OmError::new(
+                    OmErrorCode::InvalidState,
+                    format!("explicit styles part is missing: {styles_part_uri}"),
+                )
+            })?;
+            if dialect == OoxmlDialect::Strict {
+                validate_xml_root_namespace(
+                    styles_part.bytes.as_slice(),
+                    b"styleSheet",
+                    dialect.spreadsheetml_namespace(),
+                    styles_part_uri,
+                )?;
+            }
             parse_stylesheet_summary(
-                package
-                    .part(styles_part_uri)
-                    .ok_or_else(|| {
-                        OmError::new(
-                            OmErrorCode::InvalidState,
-                            format!("explicit styles part is missing: {styles_part_uri}"),
-                        )
-                    })?
-                    .bytes
-                    .as_slice(),
+                styles_part.bytes.as_slice(),
             )
         })
         .transpose()?;
     let theme_relationships = relationships
         .iter()
-        .filter(|relationship| relationship.relationship_type == THEME_RELATIONSHIP_TYPE)
+        .filter(|relationship| {
+            relationship_type_is(
+                dialect,
+                &relationship.relationship_type,
+                OoxmlRelationshipKind::Theme,
+            )
+        })
         .map(|relationship| WorkbookSupportRelationship {
             id: relationship.id.clone(),
             target: relationship.target.clone(),
@@ -4352,20 +4548,23 @@ fn collect_workbook_support_parts(
         .collect::<Vec<_>>();
     let mut theme_summaries = BTreeMap::new();
     for theme_part_uri in &theme_part_uris {
+        let theme_part = package.part(theme_part_uri).ok_or_else(|| {
+            OmError::new(
+                OmErrorCode::InvalidState,
+                format!("explicit theme part is missing: {theme_part_uri}"),
+            )
+        })?;
+        if dialect == OoxmlDialect::Strict {
+            validate_xml_root_namespace(
+                theme_part.bytes.as_slice(),
+                b"theme",
+                dialect.drawingml_namespace(),
+                theme_part_uri,
+            )?;
+        }
         theme_summaries.insert(
             theme_part_uri.clone(),
-            parse_theme_part_summary(
-                package
-                    .part(theme_part_uri)
-                    .ok_or_else(|| {
-                        OmError::new(
-                            OmErrorCode::InvalidState,
-                            format!("explicit theme part is missing: {theme_part_uri}"),
-                        )
-                    })?
-                    .bytes
-                    .as_slice(),
-            )
+            parse_theme_part_summary(theme_part.bytes.as_slice())
             .map_err(|error| {
                 OmError::new(error.code, format!("{}: {}", theme_part_uri, error.message))
             })?,
@@ -4373,22 +4572,44 @@ fn collect_workbook_support_parts(
     }
     let calc_chain_part_uri = relationships
         .iter()
-        .find(|relationship| relationship.relationship_type == CALC_CHAIN_RELATIONSHIP_TYPE)
+        .find(|relationship| {
+            relationship_type_is(
+                dialect,
+                &relationship.relationship_type,
+                OoxmlRelationshipKind::CalcChain,
+            )
+        })
         .map(|relationship| relationship.target.clone())
         .or_else(|| {
-            package
-                .contains(CALC_CHAIN_PART_NAME)
+            (dialect == OoxmlDialect::Transitional && package.contains(CALC_CHAIN_PART_NAME))
                 .then(|| CALC_CHAIN_PART_NAME.to_string())
         });
     let calc_chain_relationship = relationships
         .iter()
-        .find(|relationship| relationship.relationship_type == CALC_CHAIN_RELATIONSHIP_TYPE)
+        .find(|relationship| {
+            relationship_type_is(
+                dialect,
+                &relationship.relationship_type,
+                OoxmlRelationshipKind::CalcChain,
+            )
+        })
         .map(|relationship| WorkbookSupportRelationship {
             id: relationship.id.clone(),
             target: relationship.target.clone(),
         });
+    if let Some(calc_chain_part_uri) = calc_chain_part_uri.as_deref()
+        && let Some(calc_chain_part) = package.part(calc_chain_part_uri)
+    {
+        validate_xml_root_namespace(
+            calc_chain_part.bytes.as_slice(),
+            b"calcChain",
+            dialect.spreadsheetml_namespace(),
+            calc_chain_part_uri,
+        )?;
+    }
 
     let support_parts = WorkbookSupportParts {
+        ooxml_dialect: dialect,
         pivot_inventory: collect_pivot_package_inventory(package)?,
         content_types_source_bytes,
         content_types_summary,
@@ -4414,6 +4635,7 @@ fn collect_workbook_support_parts(
 fn collect_worksheet_support_parts(
     worksheet_part_uri: &str,
     package: &OpcPackage,
+    dialect: OoxmlDialect,
 ) -> OmResult<WorksheetSupportParts> {
     let worksheet_part = package.part(worksheet_part_uri).ok_or_else(|| {
         OmError::new(
@@ -4507,12 +4729,12 @@ fn collect_worksheet_support_parts(
     };
     let Some(relationships_part_uri) = worksheet_relationships_part_uri(worksheet_part_uri) else {
         let support_parts = empty_support_parts(None);
-        ensure_single_worksheet_support_parts_present(package, &support_parts)?;
+        ensure_single_worksheet_support_parts_present(package, &support_parts, dialect)?;
         return Ok(support_parts);
     };
     if !package.contains(&relationships_part_uri) {
         let support_parts = empty_support_parts(None);
-        ensure_single_worksheet_support_parts_present(package, &support_parts)?;
+        ensure_single_worksheet_support_parts_present(package, &support_parts, dialect)?;
         return Ok(support_parts);
     }
 
@@ -4540,13 +4762,26 @@ fn collect_worksheet_support_parts(
         &base_segments,
         true,
     )?;
+    validate_known_relationship_dialect(
+        dialect,
+        relationship_entries
+            .iter()
+            .map(|relationship| relationship.relationship_type.as_str()),
+        &relationships_part_uri,
+    )?;
     let relationships_summary = Some(parse_worksheet_relationships_part_summary(
         relationships_part_source_bytes.as_slice(),
         &base_segments,
     )?);
     let comment_part_uris = relationship_entries
         .iter()
-        .filter(|relationship| relationship.relationship_type == COMMENTS_RELATIONSHIP_TYPE)
+        .filter(|relationship| {
+            relationship_type_is(
+                dialect,
+                &relationship.relationship_type,
+                OoxmlRelationshipKind::Comments,
+            )
+        })
         .map(|relationship| relationship.target.clone())
         .collect::<Vec<_>>();
     let mut comment_anchor_refs = BTreeMap::new();
@@ -4578,7 +4813,11 @@ fn collect_worksheet_support_parts(
                 .iter()
                 .find(|relationship| {
                     relationship.id == relationship_id
-                        && relationship.relationship_type == HYPERLINK_RELATIONSHIP_TYPE
+                        && relationship_type_is(
+                            dialect,
+                            &relationship.relationship_type,
+                            OoxmlRelationshipKind::Hyperlink,
+                        )
                 })
                 .map(|relationship| WorksheetHyperlinkBinding {
                     reference,
@@ -4595,7 +4834,11 @@ fn collect_worksheet_support_parts(
                 .iter()
                 .find(|relationship| {
                     relationship.id == *relationship_id
-                        && relationship.relationship_type == VML_DRAWING_RELATIONSHIP_TYPE
+                        && relationship_type_is(
+                            dialect,
+                            &relationship.relationship_type,
+                            OoxmlRelationshipKind::VmlDrawing,
+                        )
                 })
                 .map(|relationship| WorksheetRelationshipBinding {
                     relationship_id: relationship.id.clone(),
@@ -4605,7 +4848,13 @@ fn collect_worksheet_support_parts(
         .collect::<Vec<_>>();
     let comment_relationships = relationship_entries
         .iter()
-        .filter(|relationship| relationship.relationship_type == COMMENTS_RELATIONSHIP_TYPE)
+        .filter(|relationship| {
+            relationship_type_is(
+                dialect,
+                &relationship.relationship_type,
+                OoxmlRelationshipKind::Comments,
+            )
+        })
         .map(|relationship| WorksheetRelationshipBinding {
             relationship_id: relationship.id.clone(),
             target: relationship.target.clone(),
@@ -4613,7 +4862,13 @@ fn collect_worksheet_support_parts(
         .collect::<Vec<_>>();
     let vml_drawing_part_uris = relationship_entries
         .iter()
-        .filter(|relationship| relationship.relationship_type == VML_DRAWING_RELATIONSHIP_TYPE)
+        .filter(|relationship| {
+            relationship_type_is(
+                dialect,
+                &relationship.relationship_type,
+                OoxmlRelationshipKind::VmlDrawing,
+            )
+        })
         .map(|relationship| relationship.target.clone())
         .collect::<Vec<_>>();
     let mut vml_drawing_part_source_bytes = BTreeMap::new();
@@ -4657,7 +4912,7 @@ fn collect_worksheet_support_parts(
             .map(|relationship| relationship.relationship_id.clone())
             .collect(),
     };
-    ensure_single_worksheet_support_parts_present(package, &support_parts)?;
+    ensure_single_worksheet_support_parts_present(package, &support_parts, dialect)?;
     Ok(support_parts)
 }
 
@@ -4668,6 +4923,7 @@ fn relationship_target_mode_is_external(target_mode: Option<&str>) -> bool {
 fn collect_sheet_drawing_support_parts(
     sheet_part_uri: &str,
     package: &OpcPackage,
+    dialect: OoxmlDialect,
 ) -> OmResult<SheetDrawingSupportParts> {
     let sheet_part = package.part(sheet_part_uri).ok_or_else(|| {
         OmError::new(
@@ -4677,6 +4933,11 @@ fn collect_sheet_drawing_support_parts(
     })?;
     let drawing_relationship_ids =
         parse_worksheet_relationship_ids(sheet_part.bytes.as_slice(), b"drawing")?;
+    if dialect == OoxmlDialect::Strict && !drawing_relationship_ids.is_empty() {
+        return Err(OmError::unsupported(
+            "Strict OOXML drawing graph decoding is not implemented",
+        ));
+    }
     let Some(relationships_part_uri) = worksheet_relationships_part_uri(sheet_part_uri) else {
         if drawing_relationship_ids.is_empty() {
             return Ok(SheetDrawingSupportParts {
@@ -4725,13 +4986,24 @@ fn collect_sheet_drawing_support_parts(
     })?;
     let relationship_entries =
         parse_relationship_entries(relationships_part.bytes.as_slice(), &base_segments)?;
+    validate_known_relationship_dialect(
+        dialect,
+        relationship_entries
+            .iter()
+            .map(|relationship| relationship.relationship_type.as_str()),
+        &relationships_part_uri,
+    )?;
     let mut drawing_relationships = Vec::new();
     for relationship_id in &drawing_relationship_ids {
         let relationship = relationship_entries
             .iter()
             .find(|relationship| {
                 relationship.id == *relationship_id
-                    && relationship.relationship_type == DRAWING_RELATIONSHIP_TYPE
+                    && relationship_type_is(
+                        dialect,
+                        &relationship.relationship_type,
+                        OoxmlRelationshipKind::Drawing,
+                    )
             })
             .ok_or_else(|| {
                 OmError::new(
@@ -6049,6 +6321,18 @@ fn ensure_support_parts_present_with_options(
     } else {
         None
     };
+    if let Some(workbook_relationships) = workbook_relationships.as_ref() {
+        validate_known_relationship_dialect(
+            support_parts.ooxml_dialect,
+            workbook_relationships
+                .iter()
+                .map(|relationship| relationship.relationship_type.as_str()),
+            support_parts
+                .workbook_relationships_part_uri
+                .as_deref()
+                .unwrap_or(WORKBOOK_RELS_PART_NAME),
+        )?;
+    }
     if let Some(workbook_rels) = &support_parts.workbook_relationships_part_uri
         && !package.contains(workbook_rels)
     {
@@ -6108,7 +6392,12 @@ fn ensure_support_parts_present_with_options(
         }
     };
     if let Some(styles_relationship) = &support_parts.styles_relationship {
-        ensure_relationship_binding(styles_relationship, STYLES_RELATIONSHIP_TYPE)?;
+        let expected_relationship_type = relationship_type(
+            support_parts.ooxml_dialect,
+            OoxmlRelationshipKind::Styles,
+        )
+        .ok_or_else(|| OmError::invalid_state("styles relationship is unavailable for dialect"))?;
+        ensure_relationship_binding(styles_relationship, expected_relationship_type)?;
     }
     if let Some(styles_part) = &support_parts.styles_part_uri
         && !package.contains(styles_part)
@@ -6122,18 +6411,21 @@ fn ensure_support_parts_present_with_options(
         support_parts.styles_part_uri.as_deref(),
         support_parts.styles_summary.as_ref(),
     ) {
-        let actual_summary = parse_stylesheet_summary(
-            package
-                .part(styles_part)
-                .ok_or_else(|| {
-                    OmError::new(
-                        OmErrorCode::InvalidState,
-                        format!("explicit styles part is missing: {styles_part}"),
-                    )
-                })?
-                .bytes
-                .as_slice(),
-        )
+        let actual_part = package.part(styles_part).ok_or_else(|| {
+            OmError::new(
+                OmErrorCode::InvalidState,
+                format!("explicit styles part is missing: {styles_part}"),
+            )
+        })?;
+        if support_parts.ooxml_dialect == OoxmlDialect::Strict {
+            validate_xml_root_namespace(
+                actual_part.bytes.as_slice(),
+                b"styleSheet",
+                support_parts.ooxml_dialect.spreadsheetml_namespace(),
+                styles_part,
+            )?;
+        }
+        let actual_summary = parse_stylesheet_summary(actual_part.bytes.as_slice())
         .map_err(|error| OmError::new(error.code, format!("{styles_part}: {}", error.message)))?;
         if &actual_summary != expected_summary {
             return Err(OmError::new(
@@ -6143,7 +6435,12 @@ fn ensure_support_parts_present_with_options(
         }
     }
     for theme_relationship in &support_parts.theme_relationships {
-        ensure_relationship_binding(theme_relationship, THEME_RELATIONSHIP_TYPE)?;
+        let expected_relationship_type = relationship_type(
+            support_parts.ooxml_dialect,
+            OoxmlRelationshipKind::Theme,
+        )
+        .ok_or_else(|| OmError::invalid_state("theme relationship is unavailable for dialect"))?;
+        ensure_relationship_binding(theme_relationship, expected_relationship_type)?;
     }
     for theme_part in &support_parts.theme_part_uris {
         if !package.contains(theme_part) {
@@ -6154,18 +6451,21 @@ fn ensure_support_parts_present_with_options(
         }
     }
     for (theme_part, expected_summary) in &support_parts.theme_summaries {
-        let actual_summary = parse_theme_part_summary(
-            package
-                .part(theme_part)
-                .ok_or_else(|| {
-                    OmError::new(
-                        OmErrorCode::InvalidState,
-                        format!("explicit theme part is missing: {theme_part}"),
-                    )
-                })?
-                .bytes
-                .as_slice(),
-        )
+        let actual_part = package.part(theme_part).ok_or_else(|| {
+            OmError::new(
+                OmErrorCode::InvalidState,
+                format!("explicit theme part is missing: {theme_part}"),
+            )
+        })?;
+        if support_parts.ooxml_dialect == OoxmlDialect::Strict {
+            validate_xml_root_namespace(
+                actual_part.bytes.as_slice(),
+                b"theme",
+                support_parts.ooxml_dialect.drawingml_namespace(),
+                theme_part,
+            )?;
+        }
+        let actual_summary = parse_theme_part_summary(actual_part.bytes.as_slice())
         .map_err(|error| OmError::new(error.code, format!("{theme_part}: {}", error.message)))?;
         if &actual_summary != expected_summary {
             return Err(OmError::new(
@@ -6179,7 +6479,26 @@ fn ensure_support_parts_present_with_options(
         support_parts.calc_chain_part_uri.as_deref(),
     ) && package.contains(calc_chain_part_uri)
     {
-        ensure_relationship_binding(calc_chain_relationship, CALC_CHAIN_RELATIONSHIP_TYPE)?;
+        let expected_relationship_type = relationship_type(
+            support_parts.ooxml_dialect,
+            OoxmlRelationshipKind::CalcChain,
+        )
+        .ok_or_else(|| {
+            OmError::invalid_state("calculation-chain relationship is unavailable for dialect")
+        })?;
+        ensure_relationship_binding(calc_chain_relationship, expected_relationship_type)?;
+        let calc_chain_part = package.part(calc_chain_part_uri).ok_or_else(|| {
+            OmError::new(
+                OmErrorCode::InvalidState,
+                format!("explicit calculation-chain part is missing: {calc_chain_part_uri}"),
+            )
+        })?;
+        validate_xml_root_namespace(
+            calc_chain_part.bytes.as_slice(),
+            b"calcChain",
+            support_parts.ooxml_dialect.spreadsheetml_namespace(),
+            calc_chain_part_uri,
+        )?;
     }
     if let (Some(workbook_rels), Some(expected_summary)) = (
         support_parts.workbook_relationships_part_uri.as_deref(),
@@ -20221,12 +20540,14 @@ fn parse_theme_part_summary(theme_xml: &[u8]) -> OmResult<ThemePartSummary> {
 fn ensure_worksheet_support_parts_present(
     package: &OpcPackage,
     support_parts: &BTreeMap<SheetId, WorksheetSupportParts>,
+    dialect: OoxmlDialect,
 ) -> OmResult<()> {
     for worksheet_support_parts in support_parts.values() {
         ensure_single_worksheet_support_parts_present_with_options(
             package,
             worksheet_support_parts,
             false,
+            dialect,
         )?;
     }
     Ok(())
@@ -20235,20 +20556,28 @@ fn ensure_worksheet_support_parts_present(
 fn ensure_single_worksheet_support_parts_present(
     package: &OpcPackage,
     support_parts: &WorksheetSupportParts,
+    dialect: OoxmlDialect,
 ) -> OmResult<()> {
-    ensure_single_worksheet_support_parts_present_with_options(package, support_parts, false)
+    ensure_single_worksheet_support_parts_present_with_options(
+        package,
+        support_parts,
+        false,
+        dialect,
+    )
 }
 
 fn ensure_worksheet_support_parts_present_for_save(
     package: &OpcPackage,
     support_parts: &BTreeMap<SheetId, WorksheetSupportParts>,
     worksheet_xml_rewrite_recovery_ids: &BTreeSet<SheetId>,
+    dialect: OoxmlDialect,
 ) -> OmResult<()> {
     for (sheet_id, worksheet_support_parts) in support_parts {
         ensure_single_worksheet_support_parts_present_with_options(
             package,
             worksheet_support_parts,
             worksheet_xml_rewrite_recovery_ids.contains(sheet_id),
+            dialect,
         )?;
     }
     Ok(())
@@ -20258,6 +20587,7 @@ fn ensure_single_worksheet_support_parts_present_with_options(
     package: &OpcPackage,
     support_parts: &WorksheetSupportParts,
     skip_worksheet_xml_validation: bool,
+    dialect: OoxmlDialect,
 ) -> OmResult<()> {
     let relationship_entries = if let Some(rels_part) = &support_parts.relationships_part_uri {
         if !package.contains(rels_part) {
@@ -20296,6 +20626,18 @@ fn ensure_single_worksheet_support_parts_present_with_options(
     } else {
         None
     };
+    if let Some(relationship_entries) = relationship_entries.as_ref() {
+        validate_known_relationship_dialect(
+            dialect,
+            relationship_entries
+                .iter()
+                .map(|relationship| relationship.relationship_type.as_str()),
+            support_parts
+                .relationships_part_uri
+                .as_deref()
+                .unwrap_or_default(),
+        )?;
+    }
     for comment_part in &support_parts.comment_part_uris {
         if !package.contains(comment_part) {
             return Err(OmError::new(
@@ -20617,26 +20959,47 @@ fn ensure_single_worksheet_support_parts_present_with_options(
         }
     };
     for binding in &support_parts.hyperlink_bindings {
+        let expected_relationship_type = relationship_type(
+            dialect,
+            OoxmlRelationshipKind::Hyperlink,
+        )
+        .ok_or_else(|| {
+            OmError::invalid_state("hyperlink relationship is unavailable for dialect")
+        })?;
         ensure_relationship_binding(
             binding.relationship_id.as_str(),
             binding.target.as_str(),
-            HYPERLINK_RELATIONSHIP_TYPE,
+            expected_relationship_type,
             binding.target_mode.as_deref(),
         )?;
     }
     for binding in &support_parts.legacy_drawing_relationships {
+        let expected_relationship_type = relationship_type(
+            dialect,
+            OoxmlRelationshipKind::VmlDrawing,
+        )
+        .ok_or_else(|| {
+            OmError::invalid_state("VML drawing relationship is unavailable for dialect")
+        })?;
         ensure_relationship_binding(
             binding.relationship_id.as_str(),
             binding.target.as_str(),
-            VML_DRAWING_RELATIONSHIP_TYPE,
+            expected_relationship_type,
             None,
         )?;
     }
     for binding in &support_parts.comment_relationships {
+        let expected_relationship_type = relationship_type(
+            dialect,
+            OoxmlRelationshipKind::Comments,
+        )
+        .ok_or_else(|| {
+            OmError::invalid_state("comment relationship is unavailable for dialect")
+        })?;
         ensure_relationship_binding(
             binding.relationship_id.as_str(),
             binding.target.as_str(),
-            COMMENTS_RELATIONSHIP_TYPE,
+            expected_relationship_type,
             None,
         )?;
     }
@@ -26357,12 +26720,13 @@ fn rewrite_tracked_hyperlink_relationship_target(
 fn rewrite_tracked_comment_relationships(
     rels_xml: &[u8],
     comment_relationships: &[WorksheetRelationshipBinding],
+    expected_relationship_type: &str,
     worksheet_part_uri: Option<&str>,
 ) -> OmResult<Vec<u8>> {
     rewrite_tracked_worksheet_relationships(
         rels_xml,
         comment_relationships,
-        COMMENTS_RELATIONSHIP_TYPE,
+        expected_relationship_type,
         worksheet_part_uri,
     )
 }

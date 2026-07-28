@@ -186,14 +186,19 @@ Wave 2 exit gate:
 
 ### Audit Wave 3 — OOXML Discovery, Parsing, References And Invariants
 
-1. `OOTD-014` 완료 (2026-07-28, synthetic): `/_rels/.rels`의 단일 internal Transitional
+1. `OOTD-014` 완료 (2026-07-28, synthetic): `/_rels/.rels`의 단일 internal
    `officeDocument` 관계에서 workbook main part와 owner `.rels` URI를 계산한다. 비표준
    `documents/book/main.xml`, 상위 경로를 거치는 worksheet target, 이동된 calc-chain으로
    sniff/load/no-op save/cell edit/save/reopen과 dangling/external/duplicate fail-closed를
    고정했다. runtime format retag/SaveAs도 발견된 main part의 content-type override를
    갱신한다. 세부 계약은 `docs/interfaces/ooxml_main_document.md`에 있다.
-2. `OOTD-060`: Strict/Transitional namespace·relationship·content-type dialect table과
-   `StrictXlsx` load/no-op/targeted-edit 보존 계약을 구현한다.
+2. `OOTD-060` + `OOTD-020` 완료 (2026-07-28, synthetic): exact
+   Strict/Transitional namespace·relationship·content-type table을 package-derived dialect로
+   연결했다. Strict 비표준 main/shared-string/calc-chain fixture의 load/no-op/cell edit/reopen,
+   runtime same-format SaveAs, mixed dialect·duplicate root·unknown content-type fail-closed를
+   고정했다. Strict↔Transitional 변환과 Strict drawing/chart/worksheet-structure mutation은
+   `Unsupported`이며 실제 Excel evidence는 아직 없다. 세부 계약은
+   `docs/interfaces/ooxml_dialect.md`에 있다.
 3. `OOTD-015` + `OOTD-049` + `OOTD-061`: bounded QName-aware XML layer, prefix preservation,
    root schema validation, Markup Compatibility/AlternateContent/extLst owner-aware 보존과
    raw-fragment splice를 도입한다.
@@ -201,8 +206,8 @@ Wave 2 exit gate:
    분리한다.
 5. `OOTD-018` + `OOTD-019` + `OOTD-048`: A1/R1C1/range/sheet quoting/grid limits를 checked
    reference subsystem으로 통합한다.
-6. `OOTD-020` + `OOTD-021`: source format, macro/template kind와 OOXML dialect를 분리하고
-   unknown/Strict capability를 정확히 제한한다.
+6. `OOTD-021`: bounded Strict preservation과 일반 target-format capability를 분리하고,
+   drawing/chart 등 남은 Strict graph와 cross-dialect conversion을 단계적으로 구현한다.
 7. `OOTD-029` + `OOTD-030`: content-types와 relationships root/namespace/duplicate 검증을
    fail-closed한다.
 8. `OOTD-031` + `OOTD-032` + `OOTD-033` + `OOTD-054`: mutable public state를 validated

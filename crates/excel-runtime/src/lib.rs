@@ -29468,13 +29468,16 @@ fn file_format_to_excel_value(format: FileFormat) -> i32 {
     }
 }
 
-fn file_format_from_path(path: &Path) -> Option<FileFormat> {
+fn file_format_from_path(path: &Path, current_format: FileFormat) -> Option<FileFormat> {
     match path
         .extension()
         .and_then(|value| value.to_str())
         .map(|value| value.to_ascii_lowercase())
         .as_deref()
     {
+        Some("xlsx") if current_format == FileFormat::StrictXlsx => {
+            Some(FileFormat::StrictXlsx)
+        }
         Some("xlsx") => Some(FileFormat::Xlsx),
         Some("xlsm") => Some(FileFormat::Xlsm),
         Some("xltx") => Some(FileFormat::Xltx),
@@ -29505,6 +29508,13 @@ fn retag_loaded_workbook_format(
 ) -> OmResult<LoadedXlsxWorkbook> {
     if format == loaded.detected_format && loaded.state.model.format == format {
         return Ok(loaded.clone());
+    }
+    let source_is_strict = loaded.detected_format == FileFormat::StrictXlsx
+        || loaded.state.model.format == FileFormat::StrictXlsx;
+    if source_is_strict != (format == FileFormat::StrictXlsx) {
+        return Err(OmError::unsupported(
+            "Strict and Transitional OOXML conversion is not implemented",
+        ));
     }
     let source_is_macro_enabled = format_allows_vba_project(loaded.detected_format)
         || format_allows_vba_project(loaded.state.model.format);
