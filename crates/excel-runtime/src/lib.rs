@@ -3534,8 +3534,10 @@ impl ExcelRuntime {
                                 "Worksheet.Name",
                             )?;
                             let old_worksheets = runtime.loaded.state.worksheets.clone();
-                            runtime.loaded.state.worksheets[worksheet_index].name =
-                                new_name.clone();
+                            runtime
+                                .loaded
+                                .state
+                                .rename_worksheet(sheet_id, new_name.clone())?;
                             let workbook_id = runtime.loaded.state.model().id;
                             let workbook_display_name =
                                 runtime.loaded.state.model().display_name.clone();
@@ -4023,17 +4025,11 @@ impl ExcelRuntime {
                                         .map(|worksheet| worksheet.id);
                                 }
                             }
-                            let worksheet = runtime
+                            if runtime
                                 .loaded
                                 .state
-                                .worksheets
-                                .iter_mut()
-                                .find(|worksheet| worksheet.id == sheet_id)
-                                .ok_or_else(|| {
-                                    OmError::new(OmErrorCode::NotFound, "unknown worksheet")
-                                })?;
-                            if worksheet.visibility != new_visibility {
-                                worksheet.visibility = new_visibility;
+                                .set_worksheet_visibility(sheet_id, new_visibility)?
+                            {
                                 runtime.mark_semantic_dirty();
                                 changed = true;
                             }
@@ -21843,15 +21839,10 @@ impl ExcelRuntime {
                         .state
                         .charts
                         .insert(chart_binding.chart_id, copied_chart);
-                    if let Some(worksheet) = runtime
+                    runtime
                         .loaded
                         .state
-                        .worksheets
-                        .iter_mut()
-                        .find(|worksheet| worksheet.id == added_sheet_id)
-                    {
-                        worksheet.visibility = source_visibility;
-                    }
+                        .set_worksheet_visibility(added_sheet_id, source_visibility)?;
                     runtime.mark_semantic_dirty();
                 }
                 self.find_state = None;
@@ -21987,15 +21978,10 @@ impl ExcelRuntime {
                         ..WorksheetData::default()
                     },
                 )?;
-                if let Some(worksheet) = runtime
+                runtime
                     .loaded
                     .state
-                    .worksheets
-                    .iter_mut()
-                    .find(|worksheet| worksheet.id == added_sheet_id)
-                {
-                    worksheet.visibility = source_visibility;
-                }
+                    .set_worksheet_visibility(added_sheet_id, source_visibility)?;
                 runtime.mark_semantic_dirty();
             }
             self.find_state = None;
@@ -22540,15 +22526,10 @@ impl ExcelRuntime {
                     .loaded
                     .state
                     .replace_worksheet_data_for_sheet(added_sheet_id, copied_sheet_data)?;
-                if let Some(worksheet) = runtime
+                runtime
                     .loaded
                     .state
-                    .worksheets
-                    .iter_mut()
-                    .find(|worksheet| worksheet.id == added_sheet_id)
-                {
-                    worksheet.visibility = source_visibility;
-                }
+                    .set_worksheet_visibility(added_sheet_id, source_visibility)?;
 
                 let mut copied_support_parts = source_support_parts;
                 copied_support_parts.worksheet_part_uri = Some(target_part_uri.clone());
@@ -22968,12 +22949,17 @@ impl ExcelRuntime {
             return Ok(());
         }
 
-        let worksheet = runtime.loaded.state.worksheets.remove(current_index);
+        let mut reordered_worksheets = runtime.loaded.state.worksheets.clone();
+        let worksheet = reordered_worksheets.remove(current_index);
+        reordered_worksheets.insert(target_index, worksheet);
+        let ordered_sheet_ids = reordered_worksheets
+            .iter()
+            .map(|worksheet| worksheet.id)
+            .collect::<Vec<_>>();
         runtime
             .loaded
             .state
-            .worksheets
-            .insert(target_index, worksheet);
+            .validate_worksheet_reorder(ordered_sheet_ids.as_slice())?;
         let workbook_xml = runtime
             .loaded
             .package
@@ -22990,9 +22976,13 @@ impl ExcelRuntime {
             WORKBOOK_PART_NAME,
             reorder_workbook_sheet_entries(
                 workbook_xml.as_slice(),
-                &runtime.loaded.state.worksheets,
+                &reordered_worksheets,
             )?,
         )?;
+        runtime
+            .loaded
+            .state
+            .reorder_worksheets(ordered_sheet_ids.as_slice())?;
         runtime.mark_semantic_dirty();
         self.find_state = None;
         self.cut_copy_mode = None;

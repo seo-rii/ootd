@@ -346,8 +346,16 @@ Wave 2 exit gate:
    경계를 사용한다. format command는 package content type과 detected format을 함께 갱신하는
    기존 retag transaction의 마지막 단계로만 사용하며 단독 format conversion을 주장하지
    않는다. `excel-model` 91개 회귀가 통과한다.
-   **다음:** worksheet collection identity와 `WorksheetData` payload field를 별도
-   `OOTD-054` 단계로 닫은 뒤 `OOTD-018`/`OOTD-048` common reference subsystem을 진행한다.
+   3단계 완료 (2026-07-29, synthetic): worksheet rename/visibility, chart-sheet package
+   binding과 exact-permutation reorder를 validated command로 전환했다. chart binding은 완전
+   unbound 또는 동일한 complete binding만 허용하고 partial/retarget/duplicate를 mutation 전에
+   거부하며 세 owner field를 함께 commit한다. runtime move는 모델 permutation을 먼저
+   preflight하고 workbook XML 생성·교체 성공 뒤에만 order를 commit하며 collection move의
+   destructive drain을 제거했다. visibility의 read-only/last-visible/selection 정책은 기존
+   runtime에 유지한다. `excel-model` 94개 회귀가 통과한다.
+   **다음:** worksheet collection 자체를 private read/command 경계로 닫고 compound
+   rename/chart-sheet lifecycle transaction과 `WorksheetData` payload field를 별도
+   `OOTD-054` 단계로 진행한 뒤 `OOTD-018`/`OOTD-048` common reference subsystem을 진행한다.
 16. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
    structured error에 추가한다.
 

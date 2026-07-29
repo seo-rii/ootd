@@ -47,6 +47,29 @@ chart-sheet record so the XLSX graph layer can separately validate and materiali
 chart/drawing binding. A partial pair is never serializable and returns
 `OmErrorCode::InvalidState`.
 
+### Worksheet metadata and ordering commands
+
+Production mutation of worksheet metadata and order uses validated `WorkbookState` commands:
+
+- `rename_worksheet` requires a live sheet, validates the candidate worksheet metadata, rejects an
+  ASCII-case-insensitive duplicate name, and commits only the selected record;
+- `set_worksheet_visibility` requires a live sheet and reports a no-op without exposing a mutable
+  record. Read-only, last-visible-sheet, and active-selection policy remains a runtime concern;
+- `bind_chart_sheet_package` accepts only a wholly unbound chart sheet or the exact same complete
+  binding. It rejects partial bindings, retargeting, duplicate relationship IDs, and duplicate
+  case-insensitive part URIs before atomically updating the worksheet relationship, worksheet part
+  URI, and chart-sheet raw part URI; and
+- `validate_worksheet_reorder` and `reorder_worksheets` require an exact permutation of the current
+  unique sheet IDs. Runtime move paths preflight that permutation and prepare the workbook XML
+  rewrite before committing the model order; collection move no longer drains the live vector
+  before fallible XML work.
+
+These commands own model invariants, not every workbook-level side effect. Worksheet rename still
+has a larger runtime transaction that retargets defined names and chart sources after the model
+rename, and chart-sheet add/copy/delete still coordinate worksheet, binding, drawing, chart,
+support-snapshot, and package state above the model. Those compound transactions remain later
+`OOTD-054` stages.
+
 ## Worksheet Data Mutation
 
 Worksheet-data lookup and mutation require a worksheet record before consulting the data map.
@@ -80,10 +103,10 @@ paths use the paired commands. Chart-sheet materialization no longer calls
 instead of being invented.
 
 This boundary closes external orphan-key insertion and rekeying. The worksheet collection and the
-fields inside each `WorksheetData` remain public in this stage, so worksheet-ID drift and
+fields inside each `WorksheetData` remain public in this stage, so external worksheet-ID drift and
 cell/spill/dirty-state invariant bypasses remain explicit `OOTD-054` follow-ups and continue to be
-rejected by save preflight. Workbook model metadata is separately closed by the command boundary
-above.
+rejected by save preflight. Production worksheet metadata and ordering paths use the command
+boundary above; workbook model metadata is separately private.
 
 ## Workbook Identity Reassignment
 
@@ -142,10 +165,11 @@ supported workbook-XML rewrites and may lag the model until save. Discovery uses
 ## Deliberate Follow-up Boundaries
 
 The worksheet-data ownership map and live workbook model metadata are the first two `OOTD-054`
-private-field stages. The worksheet collection, defined-name, chart, drawing, chart-sheet,
-opaque-part, and `WorksheetData` payload fields remain public. Callers can still create malformed
-state through those surfaces, but model save and identity-reassignment boundaries reject it
-deterministically.
+private-field stages; the third routes production worksheet metadata, package binding, and order
+changes through validated commands. The worksheet collection itself, defined-name, chart, drawing,
+chart-sheet, opaque-part, and `WorksheetData` payload fields remain public. Callers can still create
+malformed state through those surfaces, but model save and identity-reassignment boundaries reject
+it deterministically.
 
 Manifest/content-type coherence and typed chart/drawing model-to-package ownership are enforced by
 later `OOTD-031` stages. The chart/drawing boundary is documented in

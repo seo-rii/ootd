@@ -187,16 +187,19 @@ Active order:
    `InvalidState` without partial mutation; runtime registration consumes a handle only after
    success, and reload/save callers propagate failure. The contract is
    `docs/interfaces/workbook_state_save_validation.md`.
-32. `OOTD-054` stages 1-2 are complete (2026-07-29, synthetic): the worksheet-data ownership map
+32. `OOTD-054` stages 1-3 are complete (2026-07-29, synthetic): the worksheet-data ownership map
    and live workbook-model metadata are private, decoded construction is validated, and runtime
    add/copy/delete use paired owner/data commands. Read-only access cannot insert or rekey orphan
    data; model metadata changes use explicit commands while workbook-ID changes remain atomic; and
    chart materialization fails rather than inventing a missing entry. Format metadata changes stay
-   inside the broader package-retag transaction. The contract is
+   inside the broader package-retag transaction. Worksheet rename/visibility, chart-sheet package
+   binding, and ordering now use validated commands; partial or retargeted chart bindings fail
+   closed, and runtime reorder preflights the exact identity permutation before XML replacement.
+   The contract is
    `docs/interfaces/workbook_state_save_validation.md`.
-   **Active:** continue `OOTD-054` with worksheet-collection identity and `WorksheetData` payload
-   command boundaries, then build the common reference AST and complete `OOTD-048` consumer
-   migration.
+   **Active:** continue `OOTD-054` by making the worksheet collection private and closing compound
+   rename/chart-sheet lifecycle plus `WorksheetData` payload command boundaries, then build the
+   common reference AST and complete `OOTD-048` consumer migration.
 33. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
    claiming practical chart/pivot/style parity.
 

@@ -3,8 +3,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use office_common::{
     CellValue, ChartId, DefinedName, DefinedNameId, DrawingId, ExcelLimits, FormulaSource,
     NameScope, NameValidationMode, OmArray, OmError, OmErrorCode, OmResult, OmValue, OpaquePart,
-    RangeRef, RangeSet, Rect, ReferenceTarget, SheetId, SheetScope, StyleId, WorkbookId,
-    WorkbookModel, WorksheetModel,
+    RangeRef, RangeSet, Rect, ReferenceTarget, SheetId, SheetKind, SheetScope, SheetVisibility,
+    StyleId, WorkbookId, WorkbookModel, WorksheetModel,
 };
 
 mod charts;
@@ -201,6 +201,201 @@ impl WorkbookState {
         }
         self.model.format = format;
         true
+    }
+
+    pub fn rename_worksheet(
+        &mut self,
+        sheet_id: SheetId,
+        name: impl Into<String>,
+    ) -> OmResult<bool> {
+        let worksheet_index = self.worksheet_index(sheet_id)?;
+        let mut renamed = self.worksheets[worksheet_index].clone();
+        renamed.name = name.into();
+        self.validate_worksheet_metadata(&renamed)?;
+        if self.worksheets.iter().any(|worksheet| {
+            worksheet.id != sheet_id && worksheet.name.eq_ignore_ascii_case(&renamed.name)
+        }) {
+            return Err(OmError::new(
+                OmErrorCode::InvalidState,
+                format!("duplicate worksheet name: {}", renamed.name),
+            ));
+        }
+        if self.worksheets[worksheet_index].name == renamed.name {
+            return Ok(false);
+        }
+        self.worksheets[worksheet_index] = renamed;
+        Ok(true)
+    }
+
+    pub fn set_worksheet_visibility(
+        &mut self,
+        sheet_id: SheetId,
+        visibility: SheetVisibility,
+    ) -> OmResult<bool> {
+        let worksheet_index = self.worksheet_index(sheet_id)?;
+        let current_visibility = self.worksheets[worksheet_index].visibility;
+        if current_visibility == visibility {
+            return Ok(false);
+        }
+        self.worksheets[worksheet_index].visibility = visibility;
+        Ok(true)
+    }
+
+    pub fn bind_chart_sheet_package(
+        &mut self,
+        sheet_id: SheetId,
+        relationship_id: impl Into<String>,
+        part_uri: impl Into<String>,
+    ) -> OmResult<bool> {
+        let worksheet_index = self.worksheet_index(sheet_id)?;
+        let relationship_id = relationship_id.into();
+        let part_uri = part_uri.into();
+        let worksheet = &self.worksheets[worksheet_index];
+        if worksheet.kind != SheetKind::ChartSheet {
+            return Err(OmError::new(
+                OmErrorCode::InvalidState,
+                format!("worksheet {} is not a chart sheet", sheet_id.0),
+            ));
+        }
+        let chart_sheet = self.chart_sheets.get(&sheet_id).ok_or_else(|| {
+            OmError::new(
+                OmErrorCode::InvalidState,
+                format!("chart sheet {} has no chart binding", sheet_id.0),
+            )
+        })?;
+        if chart_sheet.sheet_id != sheet_id {
+            return Err(OmError::new(
+                OmErrorCode::InvalidState,
+                format!(
+                    "chart sheet binding key {} does not match model sheet {}",
+                    sheet_id.0, chart_sheet.sheet_id.0
+                ),
+            ));
+        }
+        match (
+            worksheet.relationship_id.as_deref(),
+            worksheet.part_uri.as_deref(),
+            chart_sheet.raw_part_uri.as_deref(),
+        ) {
+            (None, None, None) => {}
+            (Some(current_relationship_id), Some(current_part_uri), Some(current_raw_part_uri))
+                if current_relationship_id == relationship_id
+                    && current_part_uri == part_uri
+                    && current_raw_part_uri == part_uri => {}
+            (Some(_), Some(_), Some(_)) => {
+                return Err(OmError::new(
+                    OmErrorCode::InvalidState,
+                    format!(
+                        "chart sheet {} is already bound to a different package part",
+                        sheet_id.0
+                    ),
+                ));
+            }
+            _ => {
+                return Err(OmError::new(
+                    OmErrorCode::InvalidState,
+                    format!(
+                        "chart sheet {} has an incomplete package binding",
+                        sheet_id.0
+                    ),
+                ));
+            }
+        }
+
+        let mut bound = worksheet.clone();
+        bound.relationship_id = Some(relationship_id.clone());
+        bound.part_uri = Some(part_uri.clone());
+        self.validate_worksheet_metadata(&bound)?;
+        if self.worksheets.iter().any(|existing| {
+            existing.id != sheet_id
+                && existing.relationship_id.as_deref() == Some(relationship_id.as_str())
+        }) {
+            return Err(OmError::new(
+                OmErrorCode::InvalidState,
+                format!("duplicate worksheet relationship id {relationship_id}"),
+            ));
+        }
+        if self.worksheets.iter().any(|existing| {
+            existing.id != sheet_id
+                && existing
+                    .part_uri
+                    .as_deref()
+                    .is_some_and(|current| current.eq_ignore_ascii_case(&part_uri))
+        }) {
+            return Err(OmError::new(
+                OmErrorCode::InvalidState,
+                format!("duplicate worksheet part URI {part_uri}"),
+            ));
+        }
+
+        let changed = self.worksheets[worksheet_index] != bound
+            || chart_sheet.raw_part_uri.as_deref() != Some(part_uri.as_str());
+        if !changed {
+            return Ok(false);
+        }
+        self.worksheets[worksheet_index] = bound;
+        self.chart_sheets
+            .get_mut(&sheet_id)
+            .expect("chart sheet binding presence was checked before mutation")
+            .raw_part_uri = Some(part_uri);
+        Ok(true)
+    }
+
+    pub fn validate_worksheet_reorder(&self, ordered_sheet_ids: &[SheetId]) -> OmResult<bool> {
+        if ordered_sheet_ids.len() != self.worksheets.len() {
+            return Err(OmError::new(
+                OmErrorCode::InvalidState,
+                format!(
+                    "worksheet order contains {} ids for {} worksheets",
+                    ordered_sheet_ids.len(),
+                    self.worksheets.len()
+                ),
+            ));
+        }
+
+        let current_ids = self
+            .worksheets
+            .iter()
+            .map(|worksheet| worksheet.id)
+            .collect::<Vec<_>>();
+        let current_id_set = current_ids.iter().copied().collect::<BTreeSet<_>>();
+        if current_id_set.len() != current_ids.len() {
+            return Err(OmError::new(
+                OmErrorCode::InvalidState,
+                "worksheet collection contains duplicate ids",
+            ));
+        }
+        let requested_ids = ordered_sheet_ids.iter().copied().collect::<BTreeSet<_>>();
+        if requested_ids.len() != ordered_sheet_ids.len() || requested_ids != current_id_set {
+            return Err(OmError::new(
+                OmErrorCode::InvalidState,
+                "worksheet order must be an exact permutation of the current worksheet ids",
+            ));
+        }
+
+        Ok(current_ids != ordered_sheet_ids)
+    }
+
+    pub fn reorder_worksheets(&mut self, ordered_sheet_ids: &[SheetId]) -> OmResult<bool> {
+        if !self.validate_worksheet_reorder(ordered_sheet_ids)? {
+            return Ok(false);
+        }
+        let worksheets_by_id = self
+            .worksheets
+            .iter()
+            .map(|worksheet| (worksheet.id, worksheet.clone()))
+            .collect::<BTreeMap<_, _>>();
+        let reordered = ordered_sheet_ids
+            .iter()
+            .map(|sheet_id| {
+                worksheets_by_id
+                    .get(sheet_id)
+                    .expect("worksheet order identity set was validated above")
+                    .clone()
+            })
+            .collect::<Vec<_>>();
+        self.worksheets = reordered;
+        Ok(true)
     }
 
     pub fn validate_for_save(&self) -> OmResult<()> {
@@ -757,17 +952,19 @@ impl WorkbookState {
     }
 
     fn ensure_worksheet_exists(&self, sheet_id: SheetId) -> OmResult<()> {
-        if self
-            .worksheets
+        self.worksheet_index(sheet_id).map(|_| ())
+    }
+
+    fn worksheet_index(&self, sheet_id: SheetId) -> OmResult<usize> {
+        self.worksheets
             .iter()
-            .any(|worksheet| worksheet.id == sheet_id)
-        {
-            return Ok(());
-        }
-        Err(OmError::new(
-            OmErrorCode::NotFound,
-            format!("unknown worksheet {}", sheet_id.0),
-        ))
+            .position(|worksheet| worksheet.id == sheet_id)
+            .ok_or_else(|| {
+                OmError::new(
+                    OmErrorCode::NotFound,
+                    format!("unknown worksheet {}", sheet_id.0),
+                )
+            })
     }
 
     pub fn get_range_values(&self, range: &RangeRef) -> OmResult<OmArray> {
@@ -2723,6 +2920,167 @@ mod tests {
         assert_eq!(error.code, OmErrorCode::InvalidState);
         assert!(error.message.contains("duplicate worksheet name"));
         assert_eq!(state, original);
+    }
+
+    #[test]
+    fn worksheet_metadata_commands_validate_before_mutation() {
+        let mut state = sample_state();
+        add_second_worksheet(&mut state);
+
+        assert!(
+            state
+                .rename_worksheet(SheetId(4), "Renamed")
+                .expect("rename second worksheet")
+        );
+        assert!(
+            !state
+                .rename_worksheet(SheetId(4), "Renamed")
+                .expect("same worksheet name should be a no-op")
+        );
+        assert_eq!(state.worksheets[1].name, "Renamed");
+
+        let renamed = state.clone();
+        let error = state
+            .rename_worksheet(SheetId(4), "sHeEt1")
+            .expect_err("case-insensitive duplicate name should be rejected");
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert_eq!(state, renamed);
+
+        let error = state
+            .rename_worksheet(SheetId(404), "Missing")
+            .expect_err("unknown worksheet rename should be rejected");
+        assert_eq!(error.code, OmErrorCode::NotFound);
+        assert_eq!(state, renamed);
+
+        assert!(
+            state
+                .set_worksheet_visibility(SheetId(4), SheetVisibility::Hidden)
+                .expect("hide second worksheet")
+        );
+        assert!(
+            !state
+                .set_worksheet_visibility(SheetId(4), SheetVisibility::Hidden)
+                .expect("same visibility should be a no-op")
+        );
+
+        let hidden = state.clone();
+        let error = state
+            .set_worksheet_visibility(SheetId(404), SheetVisibility::VeryHidden)
+            .expect_err("unknown worksheet visibility should be rejected");
+        assert_eq!(error.code, OmErrorCode::NotFound);
+        assert_eq!(state, hidden);
+    }
+
+    #[test]
+    fn chart_sheet_package_binding_command_updates_owner_atomically() {
+        let mut state = sample_state();
+        state
+            .insert_worksheet_with_data(
+                1,
+                WorksheetModel {
+                    id: SheetId(4),
+                    workbook_id: state.model.id,
+                    name: "Chart1".to_string(),
+                    kind: SheetKind::ChartSheet,
+                    visibility: SheetVisibility::Visible,
+                    relationship_id: None,
+                    part_uri: None,
+                },
+                WorksheetData::default(),
+            )
+            .expect("insert unbound chart sheet");
+        state.chart_sheets.insert(
+            SheetId(4),
+            ChartSheetBinding {
+                sheet_id: SheetId(4),
+                chart_id: ChartId(1),
+                drawing_id: Some(DrawingId(1)),
+                raw_part_uri: None,
+            },
+        );
+
+        let original = state.clone();
+        let error = state
+            .bind_chart_sheet_package(SheetId(4), "rId1", "xl/chartsheets/sheet1.xml")
+            .expect_err("duplicate relationship id should be rejected");
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert_eq!(state, original);
+
+        let mut partial = original.clone();
+        partial.worksheets[1].relationship_id = Some("rId2".to_string());
+        let partial_original = partial.clone();
+        let error = partial
+            .bind_chart_sheet_package(SheetId(4), "rId2", "xl/chartsheets/sheet1.xml")
+            .expect_err("partial chart sheet package identity should be rejected");
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert_eq!(partial, partial_original);
+
+        assert!(
+            state
+                .bind_chart_sheet_package(SheetId(4), "rId2", "xl/chartsheets/sheet1.xml",)
+                .expect("bind chart sheet package identity")
+        );
+        assert!(
+            !state
+                .bind_chart_sheet_package(SheetId(4), "rId2", "xl/chartsheets/sheet1.xml",)
+                .expect("same chart sheet package identity should be a no-op")
+        );
+        assert_eq!(state.worksheets[1].relationship_id.as_deref(), Some("rId2"));
+        assert_eq!(
+            state.worksheets[1].part_uri.as_deref(),
+            Some("xl/chartsheets/sheet1.xml")
+        );
+        assert_eq!(
+            state.chart_sheets[&SheetId(4)].raw_part_uri.as_deref(),
+            Some("xl/chartsheets/sheet1.xml")
+        );
+
+        let bound = state.clone();
+        let error = state
+            .bind_chart_sheet_package(SheetId(4), "rId3", "xl/chartsheets/sheet2.xml")
+            .expect_err("a bound chart sheet should not be retargeted");
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert_eq!(state, bound);
+    }
+
+    #[test]
+    fn worksheet_reorder_command_requires_exact_identity_permutation() {
+        let mut state = sample_state();
+        add_second_worksheet(&mut state);
+        let original_data = state.worksheet_data.clone();
+
+        assert!(
+            state
+                .reorder_worksheets(&[SheetId(4), SheetId(3)])
+                .expect("reverse worksheet order")
+        );
+        assert!(
+            !state
+                .reorder_worksheets(&[SheetId(4), SheetId(3)])
+                .expect("same worksheet order should be a no-op")
+        );
+        assert_eq!(
+            state
+                .worksheets
+                .iter()
+                .map(|worksheet| worksheet.id)
+                .collect::<Vec<_>>(),
+            vec![SheetId(4), SheetId(3)]
+        );
+        assert_eq!(state.worksheet_data, original_data);
+
+        let reordered = state.clone();
+        for invalid_order in [
+            vec![SheetId(4)],
+            vec![SheetId(4), SheetId(4)],
+            vec![SheetId(4), SheetId(404)],
+        ] {
+            let error = state
+                .reorder_worksheets(invalid_order.as_slice())
+                .expect_err("invalid worksheet order should be rejected");
+            assert_eq!(error.code, OmErrorCode::InvalidState);
+            assert_eq!(state, reordered);
+        }
     }
 
     #[test]

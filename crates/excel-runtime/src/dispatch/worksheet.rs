@@ -660,7 +660,7 @@ impl ExcelRuntime {
                                     .len()
                                     .saturating_sub(sheet_ids.len()),
                             );
-                            for worksheet in runtime.loaded.state.worksheets.drain(..) {
+                            for worksheet in runtime.loaded.state.worksheets.iter().cloned() {
                                 if moving_sheet_ids.contains(&worksheet.id) {
                                     moving_sheets.push(worksheet);
                                 } else {
@@ -679,7 +679,14 @@ impl ExcelRuntime {
                             for (offset, worksheet) in moving_sheets.into_iter().enumerate() {
                                 remaining_sheets.insert(adjusted_index + offset, worksheet);
                             }
-                            runtime.loaded.state.worksheets = remaining_sheets;
+                            let ordered_sheet_ids = remaining_sheets
+                                .iter()
+                                .map(|worksheet| worksheet.id)
+                                .collect::<Vec<_>>();
+                            runtime
+                                .loaded
+                                .state
+                                .validate_worksheet_reorder(ordered_sheet_ids.as_slice())?;
                             let workbook_xml = runtime
                                 .loaded
                                 .package
@@ -696,9 +703,13 @@ impl ExcelRuntime {
                                 WORKBOOK_PART_NAME,
                                 reorder_workbook_sheet_entries(
                                     workbook_xml.as_slice(),
-                                    &runtime.loaded.state.worksheets,
+                                    &remaining_sheets,
                                 )?,
                             )?;
+                            runtime
+                                .loaded
+                                .state
+                                .reorder_worksheets(ordered_sheet_ids.as_slice())?;
                             runtime.prompt_dirty = true;
                         }
                         self.find_state = None;

@@ -893,7 +893,7 @@ fn materialize_chart_sheet_shells(
         let sheet = workbook
             .state
             .worksheets
-            .iter_mut()
+            .iter()
             .find(|sheet| sheet.id == sheet_id)
             .expect("state-only chart sheet id collected above");
         workbook_xml = insert_sheet_into_workbook_xml(
@@ -924,14 +924,9 @@ fn materialize_chart_sheet_shells(
             part_uri.as_str(),
             CHARTSHEET_PART_CONTENT_TYPE,
         )?;
-        sheet.relationship_id = Some(relationship_id);
-        sheet.part_uri = Some(part_uri.clone());
         workbook
             .state
-            .chart_sheets
-            .get_mut(&sheet_id)
-            .expect("chart sheet binding validated above")
-            .raw_part_uri = Some(part_uri.clone());
+            .bind_chart_sheet_package(sheet_id, relationship_id, part_uri.clone())?;
         workbook
             .state
             .set_worksheet_source_xml(sheet_id, sheet_xml)?;
