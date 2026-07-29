@@ -45,6 +45,7 @@ mod external_data;
 mod pivot;
 mod relationships;
 mod shared_strings;
+mod support_snapshot;
 mod worksheet;
 mod xml;
 
@@ -1754,7 +1755,7 @@ impl XlsxCodec {
         ensure_workbook_grid_coordinates_are_valid(&state)?;
         ensure_workbook_style_ids_are_valid(&state, &support_parts)?;
 
-        Ok(LoadedXlsxWorkbook {
+        let loaded = LoadedXlsxWorkbook {
             state,
             package,
             detected_format,
@@ -1767,7 +1768,12 @@ impl XlsxCodec {
             active_content_inventory,
             digital_signature_inventory,
             external_data_inventory,
-        })
+        };
+        support_snapshot::validate_support_snapshots(
+            &loaded,
+            support_snapshot::RetainedTargetPolicy::AllowSourceDangling,
+        )?;
+        Ok(loaded)
     }
 
     pub fn save(&self, workbook: &LoadedXlsxWorkbook, options: SaveOptions) -> OmResult<Vec<u8>> {
@@ -2047,6 +2053,7 @@ impl XlsxCodec {
                 }
             }
         }
+        support_snapshot::validate_support_snapshot_owners(workbook)?;
         let has_dirty_worksheets = workbook
             .state
             .worksheet_data
@@ -3063,6 +3070,10 @@ impl XlsxCodec {
                 )?;
             }
         }
+        support_snapshot::validate_support_snapshot_graph(
+            workbook,
+            support_snapshot::RetainedTargetPolicy::RequireDeclared,
+        )?;
         chart_graph::validate_chart_graphs_for_save(workbook, &package)?;
         for worksheet in &workbook.state.worksheets {
             if !dirty_worksheet_ids.contains(&worksheet.id) {

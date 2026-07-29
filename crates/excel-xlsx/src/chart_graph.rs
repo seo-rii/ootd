@@ -88,6 +88,10 @@ pub(crate) fn materialize_state_only_chart_graphs_in_place(
     workbook: &mut LoadedXlsxWorkbook,
 ) -> OmResult<()> {
     workbook.state.validate_for_save()?;
+    super::support_snapshot::validate_support_snapshots(
+        workbook,
+        super::support_snapshot::RetainedTargetPolicy::RequireDeclared,
+    )?;
     validate_chart_graphs_for_save(workbook, &workbook.package)?;
     if !has_state_only_chart_graphs(workbook) {
         return Ok(());
@@ -131,6 +135,10 @@ pub(crate) fn materialize_state_only_chart_graphs_in_place(
         .replace_part_bytes(CONTENT_TYPES_PART_NAME, content_types_xml)?;
     invalidate_changed_preservation_snapshots(workbook);
     ensure_all_state_only_charts_materialized(workbook)?;
+    super::support_snapshot::validate_support_snapshots(
+        workbook,
+        super::support_snapshot::RetainedTargetPolicy::RequireDeclared,
+    )?;
     validate_chart_graphs_for_save(workbook, &workbook.package)
 }
 

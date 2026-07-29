@@ -170,8 +170,14 @@ Active order:
    remain preserve-only, and loaded shared materialized charts remain valid while new shared graph
    allocation stays unsupported. The contract is
    `docs/interfaces/chart_drawing_graph_validation.md`.
-   **Active:** `OOTD-031` support-snapshot key/owner graph invariants, then `OOTD-032`/`OOTD-033`,
-   the common reference AST, and `OOTD-048` consumer migration.
+   `OOTD-031` stage 8 is complete (2026-07-29, synthetic): codec load, public graph materialization,
+   and direct save validate worksheet/drawing snapshot keys against live sheet owners, bind host and
+   owner-relative relationship parts, and require canonical inventory, source-map, retained-summary,
+   and internal-target coherence. Newly materialized graphs need no historical snapshot, while
+   invalidated drawing source/summary and relationship-source subsets remain valid. The contract is
+   `docs/interfaces/support_snapshot_validation.md`.
+   **Active:** `OOTD-032` orphan worksheet-data prevention, then `OOTD-033`, the common reference
+   AST, and `OOTD-048` consumer migration.
 30. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
    claiming practical chart/pivot/style parity.
 

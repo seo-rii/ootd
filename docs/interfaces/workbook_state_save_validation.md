@@ -66,9 +66,10 @@ fields private (`OOTD-054`) or make workbook-ID reassignment atomic (`OOTD-033`)
 
 Manifest/content-type coherence and typed chart/drawing model-to-package ownership are enforced by
 later `OOTD-031` stages. The chart/drawing boundary is documented in
-`chart_drawing_graph_validation.md`; support-snapshot key/owner coherence remains open. Generic
-internal relationship-target closure is enforced at the final package save boundary and documented
-in `opc_relationships.md`. Excel grid coordinates and style indices retain their existing codec
+`chart_drawing_graph_validation.md`; loaded worksheet/drawing/chart snapshot ownership and internal
+inventory coherence are documented in `support_snapshot_validation.md`. Generic internal
+relationship-target closure is enforced at the final package save boundary and documented in
+`opc_relationships.md`. Excel grid coordinates and style indices retain their existing codec
 preflight contracts. Spill-overlap validation currently has quadratic worst-case behavior, shared
 with the existing worksheet parser; resource/performance hardening remains a later gate.
 

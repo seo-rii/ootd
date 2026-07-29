@@ -10,8 +10,8 @@
         DrawingCellMarkerSummary, DrawingOpaqueRelationshipSummary, DrawingPointSummary,
         DrawingSizeSummary, DxfSummary, FileFormat, FillSummary, FontSummary,
         HYPERLINK_RELATIONSHIP_TYPE, OoxmlDialect, OpcPackage, PivotPackagePartKind,
-        STYLES_RELATIONSHIP_TYPE, THEME_RELATIONSHIP_TYPE, VML_DRAWING_RELATIONSHIP_TYPE,
-        WORKBOOK_RELS_PART_NAME,
+        STYLES_RELATIONSHIP_TYPE, SheetDrawingSupportParts, THEME_RELATIONSHIP_TYPE,
+        VML_DRAWING_RELATIONSHIP_TYPE, WORKBOOK_RELS_PART_NAME,
         WorksheetCommentSummary,
         WorksheetData, WorksheetHyperlinkBinding, WorksheetHyperlinkSummary,
         WorksheetRelationshipBinding, WorksheetSupportParts, XlsxCodec, chart_object_anchor_xml,
@@ -92,6 +92,40 @@
 
     fn test_package(parts: Vec<OpcPart>) -> OpcPackage {
         OpcPackage::try_new(parts).expect("test OPC package should have valid part identities")
+    }
+
+    fn loaded_synthetic_workbook() -> super::LoadedXlsxWorkbook {
+        XlsxCodec
+            .load(
+                synthetic_workbook_bytes().as_slice(),
+                CommonLoadOptions::default(),
+            )
+            .expect("load synthetic workbook")
+    }
+
+    fn drawing_support_snapshot_for_sheet(
+        workbook: &super::LoadedXlsxWorkbook,
+        sheet_id: SheetId,
+    ) -> SheetDrawingSupportParts {
+        let sheet = workbook
+            .state
+            .worksheets
+            .iter()
+            .find(|sheet| sheet.id == sheet_id)
+            .expect("sheet");
+        let part_uri = sheet.part_uri.as_deref().expect("sheet part uri");
+        SheetDrawingSupportParts {
+            sheet_part_uri: Some(part_uri.to_string()),
+            sheet_part_source_bytes: Some(
+                workbook
+                    .package
+                    .part(part_uri)
+                    .expect("sheet package part")
+                    .bytes
+                    .clone(),
+            ),
+            ..SheetDrawingSupportParts::default()
+        }
     }
 
     #[test]
@@ -226,6 +260,278 @@
         assert_eq!(error.code, OmErrorCode::InvalidState);
         assert!(error.message.contains("worksheet Sheet1"));
         assert!(error.message.contains("workbook id 99"));
+    }
+
+    #[test]
+    fn save_rejects_worksheet_support_snapshot_key_drift() {
+        let codec = XlsxCodec;
+        let mut loaded = loaded_synthetic_workbook();
+        let sheet_id = loaded.state.worksheets[0].id;
+        let support = loaded
+            .worksheet_support_parts
+            .remove(&sheet_id)
+            .expect("worksheet support snapshot");
+        loaded.worksheet_support_parts.insert(SheetId(99), support);
+
+        let error = codec
+            .save(&loaded, CommonSaveOptions::default())
+            .expect_err("save must reject a worksheet support snapshot with no owner");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(
+            error
+                .message
+                .contains("worksheet support snapshot key 99 has no worksheet owner")
+        );
+    }
+
+    #[test]
+    fn save_rejects_worksheet_support_snapshot_host_part_drift() {
+        let codec = XlsxCodec;
+        let mut loaded = loaded_synthetic_workbook();
+        let sheet_id = loaded.state.worksheets[0].id;
+        loaded
+            .worksheet_support_parts
+            .get_mut(&sheet_id)
+            .expect("worksheet support snapshot")
+            .worksheet_part_uri = Some("xl/workbook.xml".to_string());
+
+        let error = codec
+            .save(&loaded, CommonSaveOptions::default())
+            .expect_err("save must reject worksheet support owned by another package part");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains(
+            "worksheet support snapshot for sheet 1 owns xl/workbook.xml instead of xl/worksheets/sheet1.xml"
+        ));
+    }
+
+    #[test]
+    fn save_rejects_drawing_support_snapshot_key_drift() {
+        let codec = XlsxCodec;
+        let mut loaded = loaded_synthetic_workbook();
+        let sheet_id = loaded.state.worksheets[0].id;
+        let support = drawing_support_snapshot_for_sheet(&loaded, sheet_id);
+        loaded
+            .sheet_drawing_support_parts
+            .insert(SheetId(99), support);
+
+        let error = codec
+            .save(&loaded, CommonSaveOptions::default())
+            .expect_err("save must reject a drawing support snapshot with no owner");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(
+            error
+                .message
+                .contains("drawing support snapshot key 99 has no sheet owner")
+        );
+    }
+
+    #[test]
+    fn public_materializer_rejects_drawing_support_snapshot_key_drift() {
+        let mut loaded = loaded_synthetic_workbook();
+        let sheet_id = loaded.state.worksheets[0].id;
+        let support = drawing_support_snapshot_for_sheet(&loaded, sheet_id);
+        loaded
+            .sheet_drawing_support_parts
+            .insert(SheetId(99), support);
+
+        let error = super::materialize_state_only_chart_graphs(loaded)
+            .expect_err("materializer must reject a drawing support snapshot with no owner");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(
+            error
+                .message
+                .contains("drawing support snapshot key 99 has no sheet owner")
+        );
+    }
+
+    #[test]
+    fn save_rejects_drawing_support_snapshot_host_part_drift() {
+        let codec = XlsxCodec;
+        let mut loaded = loaded_synthetic_workbook();
+        let sheet_id = loaded.state.worksheets[0].id;
+        let mut support = drawing_support_snapshot_for_sheet(&loaded, sheet_id);
+        support.sheet_part_uri = Some("xl/workbook.xml".to_string());
+        support.sheet_part_source_bytes = Some(
+            loaded
+                .package
+                .part("xl/workbook.xml")
+                .expect("workbook part")
+                .bytes
+                .clone(),
+        );
+        loaded.sheet_drawing_support_parts.insert(sheet_id, support);
+
+        let error = codec
+            .save(&loaded, CommonSaveOptions::default())
+            .expect_err("save must reject drawing support owned by another package part");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains(
+            "drawing support snapshot for sheet 1 owns xl/workbook.xml instead of xl/worksheets/sheet1.xml"
+        ));
+    }
+
+    #[test]
+    fn save_rejects_drawing_support_snapshot_relationship_owner_drift() {
+        let codec = XlsxCodec;
+        let mut loaded = loaded_synthetic_workbook();
+        let sheet_id = loaded.state.worksheets[0].id;
+        let mut support = drawing_support_snapshot_for_sheet(&loaded, sheet_id);
+        support.relationships_part_uri = Some("xl/_rels/workbook.xml.rels".to_string());
+        support.relationships_part_source_bytes = Some(
+            loaded
+                .package
+                .part("xl/_rels/workbook.xml.rels")
+                .expect("workbook relationships part")
+                .bytes
+                .clone(),
+        );
+        loaded.sheet_drawing_support_parts.insert(sheet_id, support);
+
+        let error = codec
+            .save(&loaded, CommonSaveOptions::default())
+            .expect_err("save must reject a relationships snapshot owned by another part");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains(
+            "drawing support snapshot for sheet 1 owns relationships part xl/_rels/workbook.xml.rels instead of xl/worksheets/_rels/sheet1.xml.rels"
+        ));
+    }
+
+    #[test]
+    fn save_rejects_unlisted_drawing_part_source_snapshot() {
+        let codec = XlsxCodec;
+        let mut loaded = loaded_synthetic_workbook();
+        let sheet_id = loaded.state.worksheets[0].id;
+        let mut support = drawing_support_snapshot_for_sheet(&loaded, sheet_id);
+        support.drawing_part_source_bytes.insert(
+            "xl/workbook.xml".to_string(),
+            loaded
+                .package
+                .part("xl/workbook.xml")
+                .expect("workbook part")
+                .bytes
+                .clone(),
+        );
+        loaded.sheet_drawing_support_parts.insert(sheet_id, support);
+
+        let error = codec
+            .save(&loaded, CommonSaveOptions::default())
+            .expect_err("save must reject an unlisted drawing part source snapshot");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(
+            error
+                .message
+                .contains("drawing part source snapshot xl/workbook.xml is not declared by sheet 1")
+        );
+    }
+
+    #[test]
+    fn save_rejects_unbound_drawing_relationship_id_snapshot() {
+        let codec = XlsxCodec;
+        let mut loaded = loaded_synthetic_workbook();
+        let sheet_id = loaded.state.worksheets[0].id;
+        let mut support = drawing_support_snapshot_for_sheet(&loaded, sheet_id);
+        support
+            .drawing_relationship_ids
+            .push("rIdGhost".to_string());
+        loaded.sheet_drawing_support_parts.insert(sheet_id, support);
+
+        let error = codec
+            .save(&loaded, CommonSaveOptions::default())
+            .expect_err("save must reject a drawing relationship id without a binding");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(
+            error
+                .message
+                .contains("drawing relationship ids and bindings differ for sheet 1")
+        );
+    }
+
+    #[test]
+    fn save_rejects_unlisted_chart_support_source_snapshot() {
+        let codec = XlsxCodec;
+        let mut loaded = loaded_synthetic_workbook();
+        let sheet_id = loaded.state.worksheets[0].id;
+        let mut support = drawing_support_snapshot_for_sheet(&loaded, sheet_id);
+        support.chart_support_part_source_bytes.insert(
+            "xl/workbook.xml".to_string(),
+            loaded
+                .package
+                .part("xl/workbook.xml")
+                .expect("workbook part")
+                .bytes
+                .clone(),
+        );
+        loaded.sheet_drawing_support_parts.insert(sheet_id, support);
+
+        let error = codec
+            .save(&loaded, CommonSaveOptions::default())
+            .expect_err("save must reject an unlisted chart support source snapshot");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(
+            error
+                .message
+                .contains("chart support source snapshot xl/workbook.xml is not declared by sheet 1")
+        );
+    }
+
+    #[test]
+    fn support_snapshot_allows_invalidated_drawing_source_subset() {
+        let mut loaded = loaded_synthetic_workbook();
+        let sheet_id = loaded.state.worksheets[0].id;
+        let mut support = drawing_support_snapshot_for_sheet(&loaded, sheet_id);
+        support.relationships_part_uri = Some("xl/worksheets/_rels/sheet1.xml.rels".to_string());
+        support
+            .drawing_relationship_ids
+            .push("rIdDrawing1".to_string());
+        support
+            .drawing_relationships
+            .push(WorksheetRelationshipBinding {
+                relationship_id: "rIdDrawing1".to_string(),
+                target: "xl/drawings/drawing1.xml".to_string(),
+            });
+        support
+            .drawing_part_uris
+            .push("xl/drawings/drawing1.xml".to_string());
+        loaded.sheet_drawing_support_parts.insert(sheet_id, support);
+
+        super::support_snapshot::validate_support_snapshots(
+            &loaded,
+            super::support_snapshot::RetainedTargetPolicy::RequireDeclared,
+        )
+            .expect("invalidated drawing source and summary snapshots may remain a subset");
+    }
+
+    #[test]
+    fn support_snapshot_allows_rewritten_worksheet_relationship_source_without_summary() {
+        let mut loaded = loaded_synthetic_workbook();
+        let sheet_id = loaded.state.worksheets[0].id;
+        let support = loaded
+            .worksheet_support_parts
+            .get_mut(&sheet_id)
+            .expect("worksheet support snapshot");
+        support.relationships_part_uri =
+            Some("xl/worksheets/_rels/sheet1.xml.rels".to_string());
+        support.relationships_part_source_bytes = Some(
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>"#
+                .to_vec(),
+        );
+        support.relationships_summary = None;
+
+        super::support_snapshot::validate_support_snapshots(
+            &loaded,
+            super::support_snapshot::RetainedTargetPolicy::RequireDeclared,
+        )
+        .expect("rewritten relationship source bytes need not retain a parsed source summary");
     }
 
     #[test]

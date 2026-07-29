@@ -48,16 +48,19 @@ relationship, and resolves to the chart model's package part. These checks form 
 sheet-to-drawing-to-chart ownership chain.
 
 Loaded support snapshots are checked first so a missing or changed preserved part keeps its more
-specific diagnostic. Package-wide content-type coherence and internal relationship closure remain
-the final OPC gates. Active-content Strip runs only after the preserved graph has passed this
-preflight; the stripped package then passes the existing post-cleanup OPC gates.
+specific diagnostic. Snapshot keys, owner parts, inventories, source maps, and retained summary
+targets are validated separately before this typed graph boundary; that contract is documented in
+`support_snapshot_validation.md`. Package-wide content-type coherence and internal relationship
+closure remain the final OPC gates. Active-content Strip runs only after the preserved graph has
+passed this preflight; the stripped package then passes the existing post-cleanup OPC gates.
 
 ## Deliberate Follow-up Boundaries
 
 This contract does not require a `sheet_drawing_support_parts` entry for every typed graph. Newly
-materialized graphs do not rebuild the loaded preservation snapshot, so snapshot-key and snapshot
-owner coherence remain a separate OOTD-031 stage. Exact host-XML `<drawing r:id>` ownership beyond
-the relationship edge also remains with that support-snapshot boundary.
+materialized graphs do not rebuild the loaded preservation snapshot, and changed materialized
+drawing bytes invalidate the matching source/summary pair while retaining the historical part
+inventory. Exact host-XML `<drawing r:id>` ownership beyond the recorded relationship edge remains
+a later QName/owner-aware rewrite boundary.
 
 Public DTO fields remain open until OOTD-054; this preflight prevents those mutations from being
 serialized but does not prevent their temporary construction. Strict OOXML chart/drawing decoding

@@ -305,8 +305,15 @@ Wave 2 exit gate:
    fail-closed한다. package-bound drawingless chart sheet와 materialized shared chart는 preserve-only
    예외로 유지하되 새 state-only shared graph 생성은 계속 거부한다. 세부 계약은
    `docs/interfaces/chart_drawing_graph_validation.md`에 있다.
-   **다음:** `OOTD-031` support-snapshot key/owner graph validation을 독립 work unit으로 닫은 뒤
-   `OOTD-032`/`OOTD-033`과 `OOTD-054` private command 전환을 진행한다.
+   8단계 완료 (2026-07-29, synthetic): codec load, public chart/drawing materializer의 pre/post
+   경계와 direct save가 worksheet/drawing support snapshot의 live sheet key, host part와
+   owner-relative `.rels`를 검증한다. drawing relationship ID/binding/part inventory, canonical
+   part uniqueness, source/summary map과 internal summary target도 일관되어야 한다. 새로
+   materialize된 graph는 historical snapshot을 요구하지 않고, 변경된 drawing source/summary와
+   relationship source가 inventory의 subset으로 invalidate되는 정상 경로는 유지한다. 세부 계약은
+   `docs/interfaces/support_snapshot_validation.md`에 있다.
+   **다음:** `OOTD-032` orphan `worksheet_data` 생성을 fail-closed한 뒤 `OOTD-033` atomic
+   workbook-ID reassignment와 `OOTD-054` private command 전환을 진행한다.
 13. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
    structured error에 추가한다.
 
