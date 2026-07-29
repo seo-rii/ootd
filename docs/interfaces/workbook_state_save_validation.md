@@ -17,12 +17,26 @@ Each worksheet must satisfy all of the following:
 - nonempty relationship IDs and case-insensitive part URIs are unique;
 - its relationship ID and part URI are both nonempty, except that an unbound chart-sheet record
   may omit both pending separate XLSX graph preflight; and
-- a corresponding `WorksheetData` entry exists.
+- a corresponding `WorksheetData` entry exists, while every data entry has exactly one worksheet
+  owner.
 
 The fully absent relationship/part pair is intentional. The model gate admits an unbound
 chart-sheet record so the XLSX graph layer can separately validate and materialize the complete
 chart/drawing binding. A partial pair is never serializable and returns
 `OmErrorCode::InvalidState`.
+
+## Worksheet Data Mutation
+
+Worksheet-data lookup and mutation require a worksheet record before consulting the data map.
+`insert_cell` and `set_worksheet_source_xml` therefore return `OmErrorCode::NotFound` without
+changing state when a `SheetId` is unknown; they never create a default data entry implicitly.
+`set_worksheet_source_xml` is fallible for the same reason. A pre-seeded orphan map entry does not
+make the ID mutable through `worksheet_data_for_sheet_mut`.
+
+Worksheet creation, decode, and copy operations remain responsible for installing the worksheet
+record and its data as one higher-level operation. Raw public fields can still bypass that command
+boundary until `OOTD-054`, but `validate_for_save` rejects the resulting orphan with
+`OmErrorCode::InvalidState` before serialization or graph materialization.
 
 ## Scoped Names And Spill Topology
 
@@ -60,9 +74,9 @@ supported workbook-XML rewrites and may lag the model until save. Discovery uses
 
 ## Deliberate Follow-up Boundaries
 
-This stage does not reject extra `worksheet_data` keys that have no worksheet owner; `OOTD-032`
-owns removing the auto-creating mutation path and orphan state. It also does not make public model
-fields private (`OOTD-054`) or make workbook-ID reassignment atomic (`OOTD-033`).
+This stage does not make public model fields private (`OOTD-054`) or make workbook-ID reassignment
+atomic (`OOTD-033`). Until field encapsulation lands, callers can construct malformed state
+directly, but the model save boundary rejects it deterministically.
 
 Manifest/content-type coherence and typed chart/drawing model-to-package ownership are enforced by
 later `OOTD-031` stages. The chart/drawing boundary is documented in

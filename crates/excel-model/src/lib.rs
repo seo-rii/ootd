@@ -264,6 +264,12 @@ impl WorkbookState {
         }
 
         for (&sheet_id, worksheet) in &self.worksheet_data {
+            if !worksheet_ids.contains(&sheet_id) {
+                return Err(OmError::new(
+                    OmErrorCode::InvalidState,
+                    format!("worksheet data references unknown worksheet {}", sheet_id.0),
+                ));
+            }
             for &anchor in &worksheet.dynamic_array_formulas {
                 if worksheet
                     .cells
@@ -414,8 +420,13 @@ impl WorkbookState {
         }
     }
 
-    pub fn set_worksheet_source_xml(&mut self, sheet_id: SheetId, source_xml: Vec<u8>) {
-        self.worksheet_data(sheet_id).source_xml = source_xml;
+    pub fn set_worksheet_source_xml(
+        &mut self,
+        sheet_id: SheetId,
+        source_xml: Vec<u8>,
+    ) -> OmResult<()> {
+        self.worksheet_data_for_sheet_mut(sheet_id)?.source_xml = source_xml;
+        Ok(())
     }
 
     pub fn insert_cell(
@@ -426,7 +437,7 @@ impl WorkbookState {
         cell: CellData,
     ) -> OmResult<()> {
         ExcelLimits::validate_cell(row, col)?;
-        let worksheet = self.worksheet_data(sheet_id);
+        let worksheet = self.worksheet_data_for_sheet_mut(sheet_id)?;
         worksheet.cells.insert((row, col), cell);
         worksheet.dirty = true;
         worksheet.dirty_cells.insert((row, col));
@@ -499,6 +510,7 @@ impl WorkbookState {
     }
 
     pub fn worksheet_data_for_sheet(&self, sheet_id: SheetId) -> OmResult<&WorksheetData> {
+        self.ensure_worksheet_exists(sheet_id)?;
         self.worksheet_data.get(&sheet_id).ok_or_else(|| {
             OmError::new(
                 OmErrorCode::NotFound,
@@ -511,12 +523,27 @@ impl WorkbookState {
         &mut self,
         sheet_id: SheetId,
     ) -> OmResult<&mut WorksheetData> {
+        self.ensure_worksheet_exists(sheet_id)?;
         self.worksheet_data.get_mut(&sheet_id).ok_or_else(|| {
             OmError::new(
                 OmErrorCode::NotFound,
                 format!("unknown worksheet data for sheet {}", sheet_id.0),
             )
         })
+    }
+
+    fn ensure_worksheet_exists(&self, sheet_id: SheetId) -> OmResult<()> {
+        if self
+            .worksheets
+            .iter()
+            .any(|worksheet| worksheet.id == sheet_id)
+        {
+            return Ok(());
+        }
+        Err(OmError::new(
+            OmErrorCode::NotFound,
+            format!("unknown worksheet {}", sheet_id.0),
+        ))
     }
 
     pub fn get_range_values(&self, range: &RangeRef) -> OmResult<OmArray> {
@@ -907,10 +934,6 @@ impl WorkbookState {
         Ok(changed_any)
     }
 
-    fn worksheet_data(&mut self, sheet_id: SheetId) -> &mut WorksheetData {
-        self.worksheet_data.entry(sheet_id).or_default()
-    }
-
     fn single_sheet_rect(&self, range: &RangeRef) -> OmResult<(SheetId, Rect)> {
         let (sheet_id, rects) = self.same_sheet_rects(range)?;
         if rects.len() != 1 {
@@ -949,16 +972,7 @@ impl WorkbookState {
             }
         };
 
-        if !self
-            .worksheets
-            .iter()
-            .any(|worksheet| worksheet.id == sheet_id)
-        {
-            return Err(OmError::new(
-                OmErrorCode::NotFound,
-                format!("unknown worksheet {}", sheet_id.0),
-            ));
-        }
+        self.ensure_worksheet_exists(sheet_id)?;
 
         Ok((sheet_id, range.areas.clone()))
     }
@@ -1287,6 +1301,21 @@ mod tests {
                 .message
                 .contains("worksheet Sheet1 (3) has no worksheet data")
         );
+    }
+
+    #[test]
+    fn workbook_state_validate_for_save_rejects_orphan_worksheet_data() {
+        let mut state = sample_state();
+        state
+            .worksheet_data
+            .insert(SheetId(404), WorksheetData::default());
+
+        let error = state
+            .validate_for_save()
+            .expect_err("orphan worksheet data should fail validation");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("unknown worksheet 404"));
     }
 
     #[test]
@@ -1939,6 +1968,59 @@ mod tests {
     }
 
     #[test]
+    fn insert_cell_rejects_unknown_sheet_without_creating_worksheet_data() {
+        let mut state = sample_state();
+        let original = state.clone();
+
+        let error = state
+            .insert_cell(
+                SheetId(404),
+                1,
+                1,
+                CellData {
+                    value: CellValue::Number(9.0),
+                    formula: None,
+                    style_id: None,
+                },
+            )
+            .expect_err("unknown sheet insertion should fail");
+
+        assert_eq!(error.code, OmErrorCode::NotFound);
+        assert_eq!(state, original);
+    }
+
+    #[test]
+    fn set_worksheet_source_xml_rejects_unknown_sheet_without_creating_worksheet_data() {
+        let mut state = sample_state();
+        let original = state.clone();
+
+        let error = state
+            .set_worksheet_source_xml(SheetId(404), b"<worksheet/>".to_vec())
+            .expect_err("unknown sheet source update should fail");
+
+        assert_eq!(error.code, OmErrorCode::NotFound);
+        assert_eq!(state, original);
+    }
+
+    #[test]
+    fn set_worksheet_source_xml_updates_existing_worksheet_data() {
+        let mut state = sample_state();
+        let source_xml = b"<worksheet><sheetData/></worksheet>".to_vec();
+
+        state
+            .set_worksheet_source_xml(SheetId(3), source_xml.clone())
+            .expect("existing worksheet source update should succeed");
+
+        assert_eq!(
+            state
+                .worksheet_data_for_sheet(SheetId(3))
+                .expect("worksheet data")
+                .source_xml,
+            source_xml
+        );
+    }
+
+    #[test]
     fn range_operations_reject_coordinates_outside_the_excel_grid() {
         let state = sample_state();
 
@@ -2231,6 +2313,21 @@ mod tests {
 
         assert_eq!(error.code, OmErrorCode::NotFound);
         assert!(error.message.contains("999"));
+    }
+
+    #[test]
+    fn worksheet_data_mutation_rejects_preexisting_orphan_entry() {
+        let mut state = sample_state();
+        state
+            .worksheet_data
+            .insert(SheetId(404), WorksheetData::default());
+
+        let error = state
+            .worksheet_data_for_sheet_mut(SheetId(404))
+            .expect_err("orphan worksheet data must not be mutable through the command accessor");
+
+        assert_eq!(error.code, OmErrorCode::NotFound);
+        assert!(error.message.contains("unknown worksheet 404"));
     }
 
     #[test]

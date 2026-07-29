@@ -176,9 +176,14 @@ Active order:
    and internal-target coherence. Newly materialized graphs need no historical snapshot, while
    invalidated drawing source/summary and relationship-source subsets remain valid. The contract is
    `docs/interfaces/support_snapshot_validation.md`.
-   **Active:** `OOTD-032` orphan worksheet-data prevention, then `OOTD-033`, the common reference
-   AST, and `OOTD-048` consumer migration.
-30. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
+30. `OOTD-032` is complete (2026-07-29, synthetic): cell/source-XML mutation and worksheet-data
+   access require a live worksheet owner and fail without state changes for unknown IDs. The
+   auto-creating default-entry helper is gone, pre-seeded orphan entries are not mutable through the
+   accessor, and save preflight rejects any extra data key introduced through public fields. The
+   contract is `docs/interfaces/workbook_state_save_validation.md`.
+   **Active:** `OOTD-033` atomic workbook-ID reassignment, then the common reference AST and
+   `OOTD-048` consumer migration.
+31. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
    claiming practical chart/pivot/style parity.
 
 Every numbered work unit starts with a failing regression and lands as its own reviewable commit.

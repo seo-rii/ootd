@@ -312,9 +312,17 @@ Wave 2 exit gate:
    materialize된 graph는 historical snapshot을 요구하지 않고, 변경된 drawing source/summary와
    relationship source가 inventory의 subset으로 invalidate되는 정상 경로는 유지한다. 세부 계약은
    `docs/interfaces/support_snapshot_validation.md`에 있다.
-   **다음:** `OOTD-032` orphan `worksheet_data` 생성을 fail-closed한 뒤 `OOTD-033` atomic
-   workbook-ID reassignment와 `OOTD-054` private command 전환을 진행한다.
-13. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
+13. `OOTD-032` 완료 (2026-07-29, synthetic): `insert_cell`,
+   `set_worksheet_source_xml`과 worksheet-data accessor가 live worksheet collection에 없는
+   `SheetId`를 `NotFound`로 거부하고 전체 state를 유지한다. private
+   `entry(...).or_default()` mutation helper를 제거했으며, pre-seeded orphan entry도 public
+   mutable accessor로 열리지 않는다. `validate_for_save`는 public field 우회로 생긴 extra
+   `worksheet_data` key를 `InvalidState`로 serialization/graph materialization 전에
+   거부한다. `excel-model` 84개 회귀가 통과하며 세부 계약은
+   `docs/interfaces/workbook_state_save_validation.md`에 있다.
+   **다음:** `OOTD-033` atomic workbook-ID reassignment를 완료한 뒤 `OOTD-054` private
+   command 전환을 진행한다.
+14. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
    structured error에 추가한다.
 
 Wave 3 exit gate:
