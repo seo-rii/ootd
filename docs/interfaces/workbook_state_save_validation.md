@@ -47,6 +47,13 @@ chart-sheet record so the XLSX graph layer can separately validate and materiali
 chart/drawing binding. A partial pair is never serializable and returns
 `OmErrorCode::InvalidState`.
 
+The live worksheet vector is private. `worksheets()` exposes only an immutable slice, and there is
+no mutable collection or element getter. `into_parts()` consumes the state when a caller needs to
+transform its construction DTO; the result can become live state again only through
+`WorkbookState::try_new`, which reruns the complete model invariant gate. This preserves package
+mismatch tests without adding an unchecked mutation surface: tests reconstruct an internally valid
+model and then verify that the separate XLSX package-to-model boundary rejects the mismatch.
+
 ### Worksheet metadata and ordering commands
 
 Production mutation of worksheet metadata and order uses validated `WorkbookState` commands:
@@ -102,11 +109,12 @@ paths use the paired commands. Chart-sheet materialization no longer calls
 `entry(...).or_default()`; a missing data owner now fails through `set_worksheet_source_xml`
 instead of being invented.
 
-This boundary closes external orphan-key insertion and rekeying. The worksheet collection and the
-fields inside each `WorksheetData` remain public in this stage, so external worksheet-ID drift and
-cell/spill/dirty-state invariant bypasses remain explicit `OOTD-054` follow-ups and continue to be
-rejected by save preflight. Production worksheet metadata and ordering paths use the command
-boundary above; workbook model metadata is separately private.
+This boundary closes external orphan-key insertion and rekeying. The live worksheet collection is
+also private, so callers cannot insert, remove, reorder, or mutate worksheet identity through a
+borrowed element. `WorksheetData` payload fields remain public through the existing live-owner
+accessor, so cell/spill/dirty-state invariant bypasses remain explicit `OOTD-054` follow-ups and
+continue to be rejected by save preflight. Production worksheet metadata and ordering paths use the
+command boundary above; workbook model metadata is separately private.
 
 ## Workbook Identity Reassignment
 
@@ -166,10 +174,10 @@ supported workbook-XML rewrites and may lag the model until save. Discovery uses
 
 The worksheet-data ownership map and live workbook model metadata are the first two `OOTD-054`
 private-field stages; the third routes production worksheet metadata, package binding, and order
-changes through validated commands. The worksheet collection itself, defined-name, chart, drawing,
-chart-sheet, opaque-part, and `WorksheetData` payload fields remain public. Callers can still create
-malformed state through those surfaces, but model save and identity-reassignment boundaries reject
-it deterministically.
+changes through validated commands; and the fourth makes the live worksheet collection immutable
+outside the model. Defined-name, chart, drawing, chart-sheet, opaque-part, and `WorksheetData`
+payload fields remain public. Callers can still create malformed state through those surfaces, but
+model save and identity-reassignment boundaries reject it deterministically.
 
 Manifest/content-type coherence and typed chart/drawing model-to-package ownership are enforced by
 later `OOTD-031` stages. The chart/drawing boundary is documented in

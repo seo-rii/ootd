@@ -109,7 +109,7 @@
     ) -> SheetDrawingSupportParts {
         let sheet = workbook
             .state
-            .worksheets
+            .worksheets()
             .iter()
             .find(|sheet| sheet.id == sheet_id)
             .expect("sheet");
@@ -242,19 +242,19 @@
     }
 
     #[test]
-    fn save_rejects_public_worksheet_workbook_id_drift() {
+    fn workbook_state_construction_rejects_worksheet_workbook_id_drift() {
         let codec = XlsxCodec;
-        let mut loaded = codec
+        let loaded = codec
             .load(
                 synthetic_workbook_bytes().as_slice(),
                 CommonLoadOptions::default(),
             )
             .expect("load workbook");
-        loaded.state.worksheets[0].workbook_id = WorkbookId(99);
+        let mut parts = loaded.state.into_parts();
+        parts.worksheets[0].workbook_id = WorkbookId(99);
 
-        let error = codec
-            .save(&loaded, CommonSaveOptions::default())
-            .expect_err("save must reject worksheet ownership drift");
+        let error = excel_model::WorkbookState::try_new(parts)
+            .expect_err("validated construction must reject worksheet ownership drift");
 
         assert_eq!(error.code, OmErrorCode::InvalidState);
         assert!(error.message.contains("worksheet Sheet1"));
@@ -265,7 +265,7 @@
     fn save_rejects_worksheet_support_snapshot_key_drift() {
         let codec = XlsxCodec;
         let mut loaded = loaded_synthetic_workbook();
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let support = loaded
             .worksheet_support_parts
             .remove(&sheet_id)
@@ -288,7 +288,7 @@
     fn save_rejects_worksheet_support_snapshot_host_part_drift() {
         let codec = XlsxCodec;
         let mut loaded = loaded_synthetic_workbook();
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         loaded
             .worksheet_support_parts
             .get_mut(&sheet_id)
@@ -309,7 +309,7 @@
     fn save_rejects_drawing_support_snapshot_key_drift() {
         let codec = XlsxCodec;
         let mut loaded = loaded_synthetic_workbook();
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let support = drawing_support_snapshot_for_sheet(&loaded, sheet_id);
         loaded
             .sheet_drawing_support_parts
@@ -330,7 +330,7 @@
     #[test]
     fn public_materializer_rejects_drawing_support_snapshot_key_drift() {
         let mut loaded = loaded_synthetic_workbook();
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let support = drawing_support_snapshot_for_sheet(&loaded, sheet_id);
         loaded
             .sheet_drawing_support_parts
@@ -351,7 +351,7 @@
     fn save_rejects_drawing_support_snapshot_host_part_drift() {
         let codec = XlsxCodec;
         let mut loaded = loaded_synthetic_workbook();
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let mut support = drawing_support_snapshot_for_sheet(&loaded, sheet_id);
         support.sheet_part_uri = Some("xl/workbook.xml".to_string());
         support.sheet_part_source_bytes = Some(
@@ -378,7 +378,7 @@
     fn save_rejects_drawing_support_snapshot_relationship_owner_drift() {
         let codec = XlsxCodec;
         let mut loaded = loaded_synthetic_workbook();
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let mut support = drawing_support_snapshot_for_sheet(&loaded, sheet_id);
         support.relationships_part_uri = Some("xl/_rels/workbook.xml.rels".to_string());
         support.relationships_part_source_bytes = Some(
@@ -405,7 +405,7 @@
     fn save_rejects_unlisted_drawing_part_source_snapshot() {
         let codec = XlsxCodec;
         let mut loaded = loaded_synthetic_workbook();
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let mut support = drawing_support_snapshot_for_sheet(&loaded, sheet_id);
         support.drawing_part_source_bytes.insert(
             "xl/workbook.xml".to_string(),
@@ -434,7 +434,7 @@
     fn save_rejects_unbound_drawing_relationship_id_snapshot() {
         let codec = XlsxCodec;
         let mut loaded = loaded_synthetic_workbook();
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let mut support = drawing_support_snapshot_for_sheet(&loaded, sheet_id);
         support
             .drawing_relationship_ids
@@ -457,7 +457,7 @@
     fn save_rejects_unlisted_chart_support_source_snapshot() {
         let codec = XlsxCodec;
         let mut loaded = loaded_synthetic_workbook();
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let mut support = drawing_support_snapshot_for_sheet(&loaded, sheet_id);
         support.chart_support_part_source_bytes.insert(
             "xl/workbook.xml".to_string(),
@@ -485,7 +485,7 @@
     #[test]
     fn support_snapshot_allows_invalidated_drawing_source_subset() {
         let mut loaded = loaded_synthetic_workbook();
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let mut support = drawing_support_snapshot_for_sheet(&loaded, sheet_id);
         support.relationships_part_uri = Some("xl/worksheets/_rels/sheet1.xml.rels".to_string());
         support
@@ -512,7 +512,7 @@
     #[test]
     fn support_snapshot_allows_rewritten_worksheet_relationship_source_without_summary() {
         let mut loaded = loaded_synthetic_workbook();
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let support = loaded
             .worksheet_support_parts
             .get_mut(&sheet_id)
@@ -534,7 +534,7 @@
     }
 
     #[test]
-    fn save_rejects_public_worksheet_count_drift_from_package() {
+    fn save_rejects_validated_model_worksheet_count_drift_from_package() {
         let codec = XlsxCodec;
         let mut loaded = codec
             .load(
@@ -542,7 +542,7 @@
                 CommonLoadOptions::default(),
             )
             .expect("load workbook");
-        let mut second = loaded.state.worksheets[0].clone();
+        let mut second = loaded.state.worksheets()[0].clone();
         second.id = SheetId(2);
         second.name = "Sheet2".to_string();
         second.relationship_id = Some("rId99".to_string());
@@ -550,7 +550,7 @@
         loaded
             .state
             .insert_worksheet_with_data(
-                loaded.state.worksheets.len(),
+                loaded.state.worksheets().len(),
                 second,
                 WorksheetData::default(),
             )
@@ -566,7 +566,7 @@
     }
 
     #[test]
-    fn save_rejects_public_worksheet_sheet_id_drift_from_package() {
+    fn save_rejects_validated_model_worksheet_sheet_id_drift_from_package() {
         let codec = XlsxCodec;
         let mut loaded = codec
             .load(
@@ -579,7 +579,7 @@
             .worksheet_data_for_sheet(SheetId(1))
             .expect("worksheet data")
             .clone();
-        let mut replacement = loaded.state.worksheets[0].clone();
+        let mut replacement = loaded.state.worksheets()[0].clone();
         replacement.id = SheetId(2);
         replacement.name = "Temporary".to_string();
         replacement.relationship_id = Some("rId99".to_string());
@@ -592,9 +592,12 @@
             .state
             .remove_worksheet_with_data(SheetId(1))
             .expect("remove original worksheet and data");
-        loaded.state.worksheets[0].name = "Sheet1".to_string();
-        loaded.state.worksheets[0].relationship_id = Some("rId1".to_string());
-        loaded.state.worksheets[0].part_uri = Some("xl/worksheets/sheet1.xml".to_string());
+        let mut parts = loaded.state.clone().into_parts();
+        parts.worksheets[0].name = "Sheet1".to_string();
+        parts.worksheets[0].relationship_id = Some("rId1".to_string());
+        parts.worksheets[0].part_uri = Some("xl/worksheets/sheet1.xml".to_string());
+        loaded.state = excel_model::WorkbookState::try_new(parts)
+            .expect("rebuild a model that intentionally drifts from the package sheet id");
 
         let error = codec
             .save(&loaded, CommonSaveOptions::default())
@@ -606,7 +609,7 @@
     }
 
     #[test]
-    fn save_rejects_public_worksheet_relationship_id_drift_from_package() {
+    fn save_rejects_validated_model_worksheet_relationship_id_drift_from_package() {
         let codec = XlsxCodec;
         let mut loaded = codec
             .load(
@@ -614,7 +617,10 @@
                 CommonLoadOptions::default(),
             )
             .expect("load workbook");
-        loaded.state.worksheets[0].relationship_id = Some("rId99".to_string());
+        let mut parts = loaded.state.clone().into_parts();
+        parts.worksheets[0].relationship_id = Some("rId99".to_string());
+        loaded.state = excel_model::WorkbookState::try_new(parts)
+            .expect("rebuild a model that intentionally drifts from the package relationship");
 
         let error = codec
             .save(&loaded, CommonSaveOptions::default())
@@ -626,7 +632,7 @@
     }
 
     #[test]
-    fn save_rejects_public_worksheet_part_uri_drift_from_package() {
+    fn save_rejects_validated_model_worksheet_part_uri_drift_from_package() {
         let codec = XlsxCodec;
         let mut loaded = codec
             .load(
@@ -634,7 +640,10 @@
                 CommonLoadOptions::default(),
             )
             .expect("load workbook");
-        loaded.state.worksheets[0].part_uri = Some("xl/worksheets/sheet99.xml".to_string());
+        let mut parts = loaded.state.clone().into_parts();
+        parts.worksheets[0].part_uri = Some("xl/worksheets/sheet99.xml".to_string());
+        loaded.state = excel_model::WorkbookState::try_new(parts)
+            .expect("rebuild a model that intentionally drifts from the package part");
 
         let error = codec
             .save(&loaded, CommonSaveOptions::default())
@@ -646,7 +655,7 @@
     }
 
     #[test]
-    fn save_rejects_public_worksheet_kind_drift_from_package_relationship() {
+    fn save_rejects_validated_model_worksheet_kind_drift_from_package_relationship() {
         let codec = XlsxCodec;
         let mut loaded = codec
             .load(
@@ -654,7 +663,10 @@
                 CommonLoadOptions::default(),
             )
             .expect("load workbook");
-        loaded.state.worksheets[0].kind = SheetKind::ChartSheet;
+        let mut parts = loaded.state.clone().into_parts();
+        parts.worksheets[0].kind = SheetKind::ChartSheet;
+        loaded.state = excel_model::WorkbookState::try_new(parts)
+            .expect("rebuild a model that intentionally drifts from the package sheet kind");
 
         let error = codec
             .save(&loaded, CommonSaveOptions::default())
@@ -729,8 +741,15 @@
                 CommonLoadOptions::default(),
             )
             .expect("load workbook");
-        loaded.state.worksheets[0].name = "Renamed".to_string();
-        loaded.state.worksheets[0].visibility = SheetVisibility::Hidden;
+        let sheet_id = loaded.state.worksheets()[0].id;
+        loaded
+            .state
+            .rename_worksheet(sheet_id, "Renamed")
+            .expect("rename worksheet");
+        loaded
+            .state
+            .set_worksheet_visibility(sheet_id, SheetVisibility::Hidden)
+            .expect("hide worksheet");
 
         let saved = codec
             .save(&loaded, CommonSaveOptions::default())
@@ -739,17 +758,17 @@
             .load(&saved, CommonLoadOptions::default())
             .expect("reopen rewritten workbook");
 
-        assert_eq!(reopened.state.worksheets[0].name, "Renamed");
+        assert_eq!(reopened.state.worksheets()[0].name, "Renamed");
         assert_eq!(
-            reopened.state.worksheets[0].visibility,
+            reopened.state.worksheets()[0].visibility,
             SheetVisibility::Hidden
         );
         assert_eq!(
-            reopened.state.worksheets[0].relationship_id.as_deref(),
+            reopened.state.worksheets()[0].relationship_id.as_deref(),
             Some("rId1")
         );
         assert_eq!(
-            reopened.state.worksheets[0].part_uri.as_deref(),
+            reopened.state.worksheets()[0].part_uri.as_deref(),
             Some("xl/worksheets/sheet1.xml")
         );
     }
@@ -2058,8 +2077,8 @@
             .load(&source_bytes, CommonLoadOptions::default())
             .expect("load prefixed SpreadsheetML workbook");
 
-        assert_eq!(loaded.state.worksheets.len(), 1);
-        assert_eq!(loaded.state.worksheets[0].name, "Prefixed");
+        assert_eq!(loaded.state.worksheets().len(), 1);
+        assert_eq!(loaded.state.worksheets()[0].name, "Prefixed");
         let source_sheet = loaded
             .state
             .worksheet_data_for_sheet(SheetId(1))
@@ -2799,8 +2818,8 @@
             .load(&stripped.bytes, CommonLoadOptions::default())
             .expect("stripped package reloads");
         assert!(!reloaded.active_content_inventory().has_artifacts());
-        assert_eq!(reloaded.state.worksheets.len(), 1);
-        assert_eq!(reloaded.state.worksheets[0].name, "Sheet1");
+        assert_eq!(reloaded.state.worksheets().len(), 1);
+        assert_eq!(reloaded.state.worksheets()[0].name, "Sheet1");
 
         let prepared = codec
             .prepare_save(
@@ -2819,7 +2838,7 @@
                 .active_content_inventory()
                 .has_artifacts()
         );
-        assert_eq!(prepared.next_loaded.state.worksheets.len(), 1);
+        assert_eq!(prepared.next_loaded.state.worksheets().len(), 1);
     }
 
     #[test]
@@ -3859,16 +3878,16 @@
             .load(bytes.as_slice(), CommonLoadOptions::default())
             .expect("load workbook with chartsheet");
 
-        assert_eq!(loaded.state.worksheets[0].kind, SheetKind::ChartSheet);
+        assert_eq!(loaded.state.worksheets()[0].kind, SheetKind::ChartSheet);
         assert_eq!(
-            loaded.state.worksheets[0].part_uri.as_deref(),
+            loaded.state.worksheets()[0].part_uri.as_deref(),
             Some("xl/chartsheets/sheet1.xml")
         );
         assert!(
             loaded
                 .state
                 .worksheet_data()
-                .get(&loaded.state.worksheets[0].id)
+                .get(&loaded.state.worksheets()[0].id)
                 .expect("chartsheet data placeholder")
                 .cells
                 .is_empty()
@@ -3877,12 +3896,12 @@
             !loaded
                 .state
                 .worksheet_data()
-                .get(&loaded.state.worksheets[0].id)
+                .get(&loaded.state.worksheets()[0].id)
                 .expect("chartsheet data placeholder")
                 .source_xml
                 .is_empty()
         );
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let drawing_support = loaded
             .sheet_drawing_support_parts
             .get(&sheet_id)
@@ -3977,16 +3996,16 @@
             .load(bytes.as_slice(), CommonLoadOptions::default())
             .expect("load workbook with dialogsheet");
 
-        assert_eq!(loaded.state.worksheets[0].kind, SheetKind::DialogSheet);
+        assert_eq!(loaded.state.worksheets()[0].kind, SheetKind::DialogSheet);
         assert_eq!(
-            loaded.state.worksheets[0].part_uri.as_deref(),
+            loaded.state.worksheets()[0].part_uri.as_deref(),
             Some("xl/dialogsheets/sheet1.xml")
         );
         assert!(
             loaded
                 .state
                 .worksheet_data()
-                .get(&loaded.state.worksheets[0].id)
+                .get(&loaded.state.worksheets()[0].id)
                 .expect("dialogsheet data placeholder")
                 .cells
                 .is_empty()
@@ -3995,7 +4014,7 @@
             !loaded
                 .state
                 .worksheet_data()
-                .get(&loaded.state.worksheets[0].id)
+                .get(&loaded.state.worksheets()[0].id)
                 .expect("dialogsheet data placeholder")
                 .source_xml
                 .is_empty()
@@ -4035,16 +4054,16 @@
             .load(bytes.as_slice(), CommonLoadOptions::default())
             .expect("load workbook with macrosheet");
 
-        assert_eq!(loaded.state.worksheets[0].kind, SheetKind::MacroSheet);
+        assert_eq!(loaded.state.worksheets()[0].kind, SheetKind::MacroSheet);
         assert_eq!(
-            loaded.state.worksheets[0].part_uri.as_deref(),
+            loaded.state.worksheets()[0].part_uri.as_deref(),
             Some("xl/macrosheets/sheet1.xml")
         );
         assert!(
             loaded
                 .state
                 .worksheet_data()
-                .get(&loaded.state.worksheets[0].id)
+                .get(&loaded.state.worksheets()[0].id)
                 .expect("macrosheet data placeholder")
                 .cells
                 .is_empty()
@@ -4053,7 +4072,7 @@
             !loaded
                 .state
                 .worksheet_data()
-                .get(&loaded.state.worksheets[0].id)
+                .get(&loaded.state.worksheets()[0].id)
                 .expect("macrosheet data placeholder")
                 .source_xml
                 .is_empty()
@@ -4227,8 +4246,8 @@
         let loaded = codec
             .load(bytes.as_slice(), CommonLoadOptions::default())
             .expect("load workbook with chart sheet drawing");
-        let sheet_id = loaded.state.worksheets[0].id;
-        assert_eq!(loaded.state.worksheets[0].kind, SheetKind::ChartSheet);
+        let sheet_id = loaded.state.worksheets()[0].id;
+        assert_eq!(loaded.state.worksheets()[0].kind, SheetKind::ChartSheet);
         let drawing_support = loaded
             .sheet_drawing_support_parts
             .get(&sheet_id)
@@ -5160,8 +5179,8 @@
         let loaded = codec
             .load(bytes.as_slice(), CommonLoadOptions::default())
             .expect("load chartsheet with chart and picture");
-        let sheet_id = loaded.state.worksheets[0].id;
-        assert_eq!(loaded.state.worksheets[0].kind, SheetKind::ChartSheet);
+        let sheet_id = loaded.state.worksheets()[0].id;
+        assert_eq!(loaded.state.worksheets()[0].kind, SheetKind::ChartSheet);
         let drawing_support = loaded
             .sheet_drawing_support_parts
             .get(&sheet_id)
@@ -5415,8 +5434,8 @@
         let loaded = codec
             .load(bytes.as_slice(), CommonLoadOptions::default())
             .expect("load chartsheet with chart user shapes");
-        let sheet_id = loaded.state.worksheets[0].id;
-        assert_eq!(loaded.state.worksheets[0].kind, SheetKind::ChartSheet);
+        let sheet_id = loaded.state.worksheets()[0].id;
+        assert_eq!(loaded.state.worksheets()[0].kind, SheetKind::ChartSheet);
         let drawing_support = loaded
             .sheet_drawing_support_parts
             .get(&sheet_id)
@@ -5703,8 +5722,8 @@
         let loaded = codec
             .load(bytes.as_slice(), CommonLoadOptions::default())
             .expect("load chartsheet with chart external data");
-        let sheet_id = loaded.state.worksheets[0].id;
-        assert_eq!(loaded.state.worksheets[0].kind, SheetKind::ChartSheet);
+        let sheet_id = loaded.state.worksheets()[0].id;
+        assert_eq!(loaded.state.worksheets()[0].kind, SheetKind::ChartSheet);
         let drawing_support = loaded
             .sheet_drawing_support_parts
             .get(&sheet_id)
@@ -5981,8 +6000,8 @@
         let loaded = codec
             .load(bytes.as_slice(), CommonLoadOptions::default())
             .expect("load chartsheet with chart external target");
-        let sheet_id = loaded.state.worksheets[0].id;
-        assert_eq!(loaded.state.worksheets[0].kind, SheetKind::ChartSheet);
+        let sheet_id = loaded.state.worksheets()[0].id;
+        assert_eq!(loaded.state.worksheets()[0].kind, SheetKind::ChartSheet);
         let drawing_support = loaded
             .sheet_drawing_support_parts
             .get(&sheet_id)
@@ -6280,7 +6299,7 @@
         let loaded = codec
             .load(bytes.as_slice(), CommonLoadOptions::default())
             .expect("load workbook with embedded chart");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let drawing_support = loaded
             .sheet_drawing_support_parts
             .get(&sheet_id)
@@ -7396,7 +7415,7 @@
         let loaded = codec
             .load(bytes.as_slice(), CommonLoadOptions::default())
             .expect("load workbook with chart and raw shape");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let drawing_support = loaded
             .sheet_drawing_support_parts
             .get(&sheet_id)
@@ -7603,8 +7622,8 @@
         let loaded = codec
             .load(bytes.as_slice(), CommonLoadOptions::default())
             .expect("load chartsheet with chart and raw shape");
-        let sheet_id = loaded.state.worksheets[0].id;
-        assert_eq!(loaded.state.worksheets[0].kind, SheetKind::ChartSheet);
+        let sheet_id = loaded.state.worksheets()[0].id;
+        assert_eq!(loaded.state.worksheets()[0].kind, SheetKind::ChartSheet);
         let drawing_support = loaded
             .sheet_drawing_support_parts
             .get(&sheet_id)
@@ -7811,7 +7830,7 @@
         let mut loaded = codec
             .load(bytes.as_slice(), CommonLoadOptions::default())
             .expect("load workbook with drawing unknown rels");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let drawing_support = loaded
             .sheet_drawing_support_parts
             .get(&sheet_id)
@@ -8367,8 +8386,8 @@
         let loaded = codec
             .load(bytes.as_slice(), CommonLoadOptions::default())
             .expect("load chartsheet with drawing unknown rels");
-        let sheet_id = loaded.state.worksheets[0].id;
-        assert_eq!(loaded.state.worksheets[0].kind, SheetKind::ChartSheet);
+        let sheet_id = loaded.state.worksheets()[0].id;
+        assert_eq!(loaded.state.worksheets()[0].kind, SheetKind::ChartSheet);
         let drawing_support = loaded
             .sheet_drawing_support_parts
             .get(&sheet_id)
@@ -8610,7 +8629,7 @@
         let loaded = codec
             .load(bytes.as_slice(), CommonLoadOptions::default())
             .expect("load workbook with drawing external unknown rels");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let drawing_support = loaded
             .sheet_drawing_support_parts
             .get(&sheet_id)
@@ -8807,8 +8826,8 @@
         let loaded = codec
             .load(bytes.as_slice(), CommonLoadOptions::default())
             .expect("load chartsheet with drawing external unknown rels");
-        let sheet_id = loaded.state.worksheets[0].id;
-        assert_eq!(loaded.state.worksheets[0].kind, SheetKind::ChartSheet);
+        let sheet_id = loaded.state.worksheets()[0].id;
+        assert_eq!(loaded.state.worksheets()[0].kind, SheetKind::ChartSheet);
         let drawing_support = loaded
             .sheet_drawing_support_parts
             .get(&sheet_id)
@@ -9014,7 +9033,7 @@
         let loaded = codec
             .load(bytes.as_slice(), CommonLoadOptions::default())
             .expect("load workbook with chart and picture");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let drawing_support = loaded
             .sheet_drawing_support_parts
             .get(&sheet_id)
@@ -9232,7 +9251,7 @@
         let loaded = codec
             .load(bytes.as_slice(), CommonLoadOptions::default())
             .expect("load workbook with chart user shapes");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let drawing_support = loaded
             .sheet_drawing_support_parts
             .get(&sheet_id)
@@ -9498,7 +9517,7 @@
         let loaded = codec
             .load(bytes.as_slice(), CommonLoadOptions::default())
             .expect("load workbook with chart external data");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let drawing_support = loaded
             .sheet_drawing_support_parts
             .get(&sheet_id)
@@ -9754,7 +9773,7 @@
         let loaded = codec
             .load(bytes.as_slice(), CommonLoadOptions::default())
             .expect("load workbook with chart external target");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let drawing_support = loaded
             .sheet_drawing_support_parts
             .get(&sheet_id)
@@ -9967,7 +9986,7 @@
         let loaded = codec
             .load(bytes.as_slice(), CommonLoadOptions::default())
             .expect("load workbook with chart without chart rels");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let drawing_support = loaded
             .sheet_drawing_support_parts
             .get(&sheet_id)
@@ -10143,7 +10162,7 @@
         let loaded = codec
             .load(bytes.as_slice(), CommonLoadOptions::default())
             .expect("load workbook with empty chart rels");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let drawing_support = loaded
             .sheet_drawing_support_parts
             .get(&sheet_id)
@@ -10332,7 +10351,7 @@
         let loaded = codec
             .load(bytes.as_slice(), CommonLoadOptions::default())
             .expect("load workbook with chart hyperlink rels");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let drawing_support = loaded
             .sheet_drawing_support_parts
             .get(&sheet_id)
@@ -10546,7 +10565,7 @@
         let loaded = codec
             .load(bytes.as_slice(), CommonLoadOptions::default())
             .expect("load workbook with chart package rels");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let drawing_support = loaded
             .sheet_drawing_support_parts
             .get(&sheet_id)
@@ -10767,7 +10786,7 @@
         let loaded = codec
             .load(bytes.as_slice(), CommonLoadOptions::default())
             .expect("load workbook with chart image rels");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let drawing_support = loaded
             .sheet_drawing_support_parts
             .get(&sheet_id)
@@ -10975,7 +10994,7 @@
         let loaded = codec
             .load(bytes.as_slice(), CommonLoadOptions::default())
             .expect("load workbook with chart vml rels");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let drawing_support = loaded
             .sheet_drawing_support_parts
             .get(&sheet_id)
@@ -11182,7 +11201,7 @@
         let loaded = codec
             .load(bytes.as_slice(), CommonLoadOptions::default())
             .expect("load workbook with chart custom xml rels");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let drawing_support = loaded
             .sheet_drawing_support_parts
             .get(&sheet_id)
@@ -11389,7 +11408,7 @@
         let loaded = codec
             .load(bytes.as_slice(), CommonLoadOptions::default())
             .expect("load workbook with chart unknown rels");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let drawing_support = loaded
             .sheet_drawing_support_parts
             .get(&sheet_id)
@@ -11586,8 +11605,8 @@
         let loaded = codec
             .load(bytes.as_slice(), CommonLoadOptions::default())
             .expect("load workbook with chartsheet chart without chart rels");
-        let sheet_id = loaded.state.worksheets[0].id;
-        assert_eq!(loaded.state.worksheets[0].kind, SheetKind::ChartSheet);
+        let sheet_id = loaded.state.worksheets()[0].id;
+        assert_eq!(loaded.state.worksheets()[0].kind, SheetKind::ChartSheet);
         let drawing_support = loaded
             .sheet_drawing_support_parts
             .get(&sheet_id)
@@ -11784,8 +11803,8 @@
         let loaded = codec
             .load(bytes.as_slice(), CommonLoadOptions::default())
             .expect("load workbook with chartsheet empty chart rels");
-        let sheet_id = loaded.state.worksheets[0].id;
-        assert_eq!(loaded.state.worksheets[0].kind, SheetKind::ChartSheet);
+        let sheet_id = loaded.state.worksheets()[0].id;
+        assert_eq!(loaded.state.worksheets()[0].kind, SheetKind::ChartSheet);
         let drawing_support = loaded
             .sheet_drawing_support_parts
             .get(&sheet_id)
@@ -11995,8 +12014,8 @@
         let loaded = codec
             .load(bytes.as_slice(), CommonLoadOptions::default())
             .expect("load workbook with chartsheet chart hyperlink rels");
-        let sheet_id = loaded.state.worksheets[0].id;
-        assert_eq!(loaded.state.worksheets[0].kind, SheetKind::ChartSheet);
+        let sheet_id = loaded.state.worksheets()[0].id;
+        assert_eq!(loaded.state.worksheets()[0].kind, SheetKind::ChartSheet);
         let drawing_support = loaded
             .sheet_drawing_support_parts
             .get(&sheet_id)
@@ -12231,8 +12250,8 @@
         let loaded = codec
             .load(bytes.as_slice(), CommonLoadOptions::default())
             .expect("load workbook with chartsheet chart package rels");
-        let sheet_id = loaded.state.worksheets[0].id;
-        assert_eq!(loaded.state.worksheets[0].kind, SheetKind::ChartSheet);
+        let sheet_id = loaded.state.worksheets()[0].id;
+        assert_eq!(loaded.state.worksheets()[0].kind, SheetKind::ChartSheet);
         let drawing_support = loaded
             .sheet_drawing_support_parts
             .get(&sheet_id)
@@ -12474,8 +12493,8 @@
         let loaded = codec
             .load(bytes.as_slice(), CommonLoadOptions::default())
             .expect("load workbook with chartsheet chart image rels");
-        let sheet_id = loaded.state.worksheets[0].id;
-        assert_eq!(loaded.state.worksheets[0].kind, SheetKind::ChartSheet);
+        let sheet_id = loaded.state.worksheets()[0].id;
+        assert_eq!(loaded.state.worksheets()[0].kind, SheetKind::ChartSheet);
         let drawing_support = loaded
             .sheet_drawing_support_parts
             .get(&sheet_id)
@@ -12704,8 +12723,8 @@
         let loaded = codec
             .load(bytes.as_slice(), CommonLoadOptions::default())
             .expect("load workbook with chartsheet chart vml rels");
-        let sheet_id = loaded.state.worksheets[0].id;
-        assert_eq!(loaded.state.worksheets[0].kind, SheetKind::ChartSheet);
+        let sheet_id = loaded.state.worksheets()[0].id;
+        assert_eq!(loaded.state.worksheets()[0].kind, SheetKind::ChartSheet);
         let drawing_support = loaded
             .sheet_drawing_support_parts
             .get(&sheet_id)
@@ -12934,8 +12953,8 @@
         let loaded = codec
             .load(bytes.as_slice(), CommonLoadOptions::default())
             .expect("load workbook with chartsheet chart custom xml rels");
-        let sheet_id = loaded.state.worksheets[0].id;
-        assert_eq!(loaded.state.worksheets[0].kind, SheetKind::ChartSheet);
+        let sheet_id = loaded.state.worksheets()[0].id;
+        assert_eq!(loaded.state.worksheets()[0].kind, SheetKind::ChartSheet);
         let drawing_support = loaded
             .sheet_drawing_support_parts
             .get(&sheet_id)
@@ -13163,8 +13182,8 @@
         let loaded = codec
             .load(bytes.as_slice(), CommonLoadOptions::default())
             .expect("load workbook with chartsheet chart unknown rels");
-        let sheet_id = loaded.state.worksheets[0].id;
-        assert_eq!(loaded.state.worksheets[0].kind, SheetKind::ChartSheet);
+        let sheet_id = loaded.state.worksheets()[0].id;
+        assert_eq!(loaded.state.worksheets()[0].kind, SheetKind::ChartSheet);
         let drawing_support = loaded
             .sheet_drawing_support_parts
             .get(&sheet_id)
@@ -14063,7 +14082,7 @@
         let loaded = codec
             .load(bytes.as_slice(), CommonLoadOptions::default())
             .expect("load workbook with named chart source");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let chart = loaded.state.charts.values().next().expect("chart model");
         let values = chart.series[0]
             .values
@@ -14151,7 +14170,7 @@
                 CommonLoadOptions::default(),
             )
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         loaded
             .state
             .add_defined_name(
@@ -14342,7 +14361,11 @@
                 CommonLoadOptions::default(),
             )
             .expect("load workbook");
-        loaded.state.worksheets[0].visibility = SheetVisibility::Hidden;
+        let sheet_id = loaded.state.worksheets()[0].id;
+        loaded
+            .state
+            .set_worksheet_visibility(sheet_id, SheetVisibility::Hidden)
+            .expect("hide worksheet");
 
         let hidden_bytes = codec
             .save(&loaded, office_common::SaveOptions::default())
@@ -14363,10 +14386,13 @@
             .load(hidden_bytes.as_slice(), CommonLoadOptions::default())
             .expect("reopen hidden workbook");
         assert_eq!(
-            reopened.state.worksheets[0].visibility,
+            reopened.state.worksheets()[0].visibility,
             SheetVisibility::Hidden
         );
-        reopened.state.worksheets[0].visibility = SheetVisibility::Visible;
+        reopened
+            .state
+            .set_worksheet_visibility(sheet_id, SheetVisibility::Visible)
+            .expect("show worksheet");
 
         let visible_bytes = codec
             .save(&reopened, office_common::SaveOptions::default())
@@ -17368,7 +17394,7 @@
             expected_inventory,
         );
 
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         loaded
             .state
             .set_range_values(
@@ -17639,7 +17665,7 @@
         let mut loaded = codec
             .load(input.as_slice(), CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         loaded
             .state
             .set_range_values(
@@ -17735,7 +17761,7 @@
         let mut loaded = codec
             .load(input.as_slice(), CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         loaded
             .state
             .set_range_values(
@@ -17772,7 +17798,7 @@
         let mut loaded = codec
             .load(input.as_slice(), CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         loaded
             .state
             .set_range_values(
@@ -17826,7 +17852,7 @@
         let mut loaded = codec
             .load(input.as_slice(), CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         loaded
             .state
             .set_range_values(
@@ -17914,7 +17940,7 @@
         let mut loaded = codec
             .load(input.as_slice(), CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         loaded
             .state
             .set_range_values(
@@ -17954,7 +17980,7 @@
         let mut loaded = codec
             .load(input.as_slice(), CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         loaded
             .state
             .set_range_values(
@@ -17984,7 +18010,7 @@
         let mut loaded = codec
             .load(input.as_slice(), CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         loaded
             .state
             .set_range_values(
@@ -52842,7 +52868,7 @@
                 .map(|relationship| (relationship.id.as_str(), relationship.target.as_str())),
             Some(("rId2", "xl/calcChain.xml"))
         );
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let worksheet_support = loaded
             .worksheet_support_parts
             .get(&sheet_id)
@@ -53135,7 +53161,7 @@
                 CommonLoadOptions::default(),
             )
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let worksheet_support = loaded
             .worksheet_support_parts
             .get(&sheet_id)
@@ -53173,7 +53199,7 @@
                 CommonLoadOptions::default(),
             )
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let worksheet_support = loaded
             .worksheet_support_parts
             .get(&sheet_id)
@@ -53207,7 +53233,7 @@
                 CommonLoadOptions::default(),
             )
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let worksheet_support = loaded
             .worksheet_support_parts
             .get(&sheet_id)
@@ -53241,7 +53267,7 @@
                 CommonLoadOptions::default(),
             )
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let worksheet_support = loaded
             .worksheet_support_parts
             .get(&sheet_id)
@@ -53271,7 +53297,7 @@
                 CommonLoadOptions::default(),
             )
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let worksheet_support = loaded
             .worksheet_support_parts
             .get(&sheet_id)
@@ -53386,7 +53412,7 @@
                 CommonLoadOptions::default(),
             )
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let worksheet_support = loaded
             .worksheet_support_parts
             .get(&sheet_id)
@@ -53421,7 +53447,7 @@
                 CommonLoadOptions::default(),
             )
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let worksheet_support = loaded
             .worksheet_support_parts
             .get(&sheet_id)
@@ -53448,7 +53474,7 @@
                 CommonLoadOptions::default(),
             )
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let worksheet_support = loaded
             .worksheet_support_parts
             .get(&sheet_id)
@@ -53499,7 +53525,7 @@
                 CommonLoadOptions::default(),
             )
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let worksheet_support = loaded
             .worksheet_support_parts
             .get(&sheet_id)
@@ -53592,7 +53618,7 @@
                 CommonLoadOptions::default(),
             )
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let worksheet_support = loaded
             .worksheet_support_parts
             .get(&sheet_id)
@@ -53661,7 +53687,7 @@
                 CommonLoadOptions::default(),
             )
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let worksheet_support = loaded
             .worksheet_support_parts
             .get(&sheet_id)
@@ -53706,7 +53732,7 @@
                 CommonLoadOptions::default(),
             )
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let worksheet_support = loaded
             .worksheet_support_parts
             .get(&sheet_id)
@@ -53763,7 +53789,7 @@
                 CommonLoadOptions::default(),
             )
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let worksheet_support = loaded
             .worksheet_support_parts
             .get(&sheet_id)
@@ -54402,7 +54428,7 @@
                 CommonLoadOptions::default(),
             )
             .expect("load dynamic-array workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let worksheet = loaded
             .state
             .worksheet_data_for_sheet(sheet_id)
@@ -54443,7 +54469,7 @@
                 CommonLoadOptions::default(),
             )
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let anchor = (10, 10);
         let spill_rect = Rect {
             row_first: 10,
@@ -54531,7 +54557,7 @@
                 CommonLoadOptions::default(),
             )
             .expect("load dynamic-array workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         loaded
             .state
             .set_range_formulas(
@@ -54567,16 +54593,16 @@
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
         assert_eq!(loaded.detected_format, FileFormat::Xlsx);
-        assert_eq!(loaded.state.worksheets.len(), 1);
-        assert_eq!(loaded.state.worksheets[0].name, "Sheet1");
+        assert_eq!(loaded.state.worksheets().len(), 1);
+        assert_eq!(loaded.state.worksheets()[0].name, "Sheet1");
         assert_eq!(
-            loaded.state.worksheets[0].part_uri.as_deref(),
+            loaded.state.worksheets()[0].part_uri.as_deref(),
             Some("xl/worksheets/sheet1.xml")
         );
         assert_eq!(
             loaded
                 .state
-                .cell(loaded.state.worksheets[0].id, 1, 1)
+                .cell(loaded.state.worksheets()[0].id, 1, 1)
                 .expect("A1")
                 .value,
             CellValue::Number(42.0)
@@ -54584,7 +54610,7 @@
         assert_eq!(
             loaded
                 .state
-                .cell(loaded.state.worksheets[0].id, 1, 2)
+                .cell(loaded.state.worksheets()[0].id, 1, 2)
                 .expect("B1")
                 .value,
             CellValue::Text("SHARED".to_string())
@@ -54592,7 +54618,7 @@
         assert_eq!(
             loaded
                 .state
-                .cell(loaded.state.worksheets[0].id, 1, 3)
+                .cell(loaded.state.worksheets()[0].id, 1, 3)
                 .expect("C1")
                 .value,
             CellValue::Text("shared".to_string())
@@ -54626,7 +54652,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         loaded
             .state
             .set_range_values(
@@ -54663,7 +54689,7 @@
         assert_eq!(
             reopened
                 .state
-                .cell(reopened.state.worksheets[0].id, 2, 1)
+                .cell(reopened.state.worksheets()[0].id, 2, 1)
                 .expect("A2")
                 .value,
             CellValue::Text("changed".to_string())
@@ -54733,13 +54759,13 @@
             .expect("load workbook");
 
         assert_eq!(
-            loaded.state.worksheets[0].part_uri.as_deref(),
+            loaded.state.worksheets()[0].part_uri.as_deref(),
             Some("xl/worksheets/sheet1.xml")
         );
         assert_eq!(
             loaded
                 .state
-                .cell(loaded.state.worksheets[0].id, 1, 1)
+                .cell(loaded.state.worksheets()[0].id, 1, 1)
                 .expect("A1")
                 .value,
             CellValue::Number(7.0)
@@ -54753,7 +54779,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         loaded
             .state
             .set_range_values(
@@ -54772,7 +54798,7 @@
         assert_eq!(
             reparsed
                 .state
-                .cell(reparsed.state.worksheets[0].id, 1, 1)
+                .cell(reparsed.state.worksheets()[0].id, 1, 1)
                 .expect("A1")
                 .value,
             CellValue::Number(3.5)
@@ -54786,7 +54812,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         loaded
             .state
             .set_range_values(
@@ -54818,7 +54844,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let initial_formula_text = loaded
             .state
             .cell(sheet_id, 1, 2)
@@ -54865,7 +54891,7 @@
         assert_eq!(
             reopened
                 .state
-                .cell(reopened.state.worksheets[0].id, 1, 1)
+                .cell(reopened.state.worksheets()[0].id, 1, 1)
                 .expect("A1")
                 .value,
             CellValue::Number(2.0)
@@ -54873,7 +54899,7 @@
         assert_eq!(
             reopened
                 .state
-                .cell(reopened.state.worksheets[0].id, 1, 2)
+                .cell(reopened.state.worksheets()[0].id, 1, 2)
                 .expect("B1")
                 .formula
                 .as_ref()
@@ -55041,7 +55067,7 @@
                 .any(|attrs| attrs.get("Type").map(String::as_str)
                     == Some(super::CALC_CHAIN_RELATIONSHIP_TYPE))
         );
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         loaded
             .state
             .set_range_values(
@@ -55150,7 +55176,7 @@
         let reopened = codec
             .load(&saved, CommonLoadOptions::default())
             .expect("reload workbook");
-        let reopened_sheet_id = reopened.state.worksheets[0].id;
+        let reopened_sheet_id = reopened.state.worksheets()[0].id;
         assert_eq!(
             reopened
                 .state
@@ -55260,7 +55286,7 @@
         let mut loaded = codec
             .load(input.as_slice(), CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         loaded
             .state
             .set_range_values(
@@ -55336,7 +55362,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         loaded
             .state
             .set_range_values(
@@ -55373,7 +55399,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         loaded
             .state
             .set_range_values(
@@ -55410,7 +55436,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         loaded
             .state
             .set_range_values(
@@ -55447,7 +55473,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let worksheet_support = loaded
             .worksheet_support_parts
             .get_mut(&sheet_id)
@@ -55517,7 +55543,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let worksheet_support = loaded
             .worksheet_support_parts
             .get_mut(&sheet_id)
@@ -56330,7 +56356,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         loaded
             .state
             .set_range_values(
@@ -56373,7 +56399,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let worksheet_support = loaded
             .worksheet_support_parts
             .get_mut(&sheet_id)
@@ -56422,7 +56448,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let worksheet_support = loaded
             .worksheet_support_parts
             .get_mut(&sheet_id)
@@ -56470,7 +56496,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let worksheet_support = loaded
             .worksheet_support_parts
             .get_mut(&sheet_id)
@@ -56512,7 +56538,7 @@
         let reopened = codec
             .load(&saved, CommonLoadOptions::default())
             .expect("reopen workbook");
-        let reopened_sheet_id = reopened.state.worksheets[0].id;
+        let reopened_sheet_id = reopened.state.worksheets()[0].id;
         assert_eq!(
             reopened
                 .state
@@ -56531,7 +56557,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         loaded
             .state
             .set_range_values(
@@ -56559,7 +56585,7 @@
         let reopened = codec
             .load(&saved, CommonLoadOptions::default())
             .expect("reopen workbook");
-        let reopened_sheet_id = reopened.state.worksheets[0].id;
+        let reopened_sheet_id = reopened.state.worksheets()[0].id;
         assert_eq!(
             reopened
                 .state
@@ -56578,7 +56604,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         insert_test_cell(&mut loaded.state,
             sheet_id,
             3,
@@ -56626,7 +56652,7 @@
         let reopened = codec
             .load(&saved, CommonLoadOptions::default())
             .expect("reopen workbook");
-        let reopened_sheet_id = reopened.state.worksheets[0].id;
+        let reopened_sheet_id = reopened.state.worksheets()[0].id;
         assert!(reopened.state.cell(reopened_sheet_id, 3, 3).is_none());
     }
 
@@ -56638,7 +56664,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let worksheet_support = loaded
             .worksheet_support_parts
             .get_mut(&sheet_id)
@@ -56715,7 +56741,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let worksheet_support = loaded
             .worksheet_support_parts
             .get_mut(&sheet_id)
@@ -56782,7 +56808,7 @@
         let reopened = codec
             .load(&saved, CommonLoadOptions::default())
             .expect("reopen workbook");
-        let reopened_sheet_id = reopened.state.worksheets[0].id;
+        let reopened_sheet_id = reopened.state.worksheets()[0].id;
         assert!(reopened.state.cell(reopened_sheet_id, 3, 3).is_none());
     }
 
@@ -56794,7 +56820,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let expected_summary = loaded
             .worksheet_support_parts
             .get(&sheet_id)
@@ -56874,7 +56900,7 @@
         let reopened = codec
             .load(&saved, CommonLoadOptions::default())
             .expect("reopen workbook");
-        let reopened_sheet_id = reopened.state.worksheets[0].id;
+        let reopened_sheet_id = reopened.state.worksheets()[0].id;
         assert!(reopened.state.cell(reopened_sheet_id, 3, 3).is_none());
     }
 
@@ -56886,7 +56912,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let worksheet_support = loaded
             .worksheet_support_parts
             .get_mut(&sheet_id)
@@ -56939,7 +56965,7 @@
         let reopened = codec
             .load(&saved, CommonLoadOptions::default())
             .expect("reopen workbook");
-        let reopened_sheet_id = reopened.state.worksheets[0].id;
+        let reopened_sheet_id = reopened.state.worksheets()[0].id;
         assert!(reopened.state.cell(reopened_sheet_id, 3, 3).is_none());
     }
 
@@ -56951,7 +56977,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let worksheet_support = loaded
             .worksheet_support_parts
             .get_mut(&sheet_id)
@@ -57037,7 +57063,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let worksheet_support = loaded
             .worksheet_support_parts
             .get_mut(&sheet_id)
@@ -57129,7 +57155,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let expected_summary = loaded
             .worksheet_support_parts
             .get(&sheet_id)
@@ -57216,7 +57242,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let worksheet_support = loaded
             .worksheet_support_parts
             .get_mut(&sheet_id)
@@ -57284,7 +57310,7 @@
         let reopened = codec
             .load(&saved, CommonLoadOptions::default())
             .expect("reopen workbook");
-        let reopened_sheet_id = reopened.state.worksheets[0].id;
+        let reopened_sheet_id = reopened.state.worksheets()[0].id;
         assert!(reopened.state.cell(reopened_sheet_id, 3, 3).is_none());
     }
 
@@ -57302,7 +57328,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let worksheet_support = loaded
             .worksheet_support_parts
             .get_mut(&sheet_id)
@@ -57374,7 +57400,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let worksheet_support = loaded
             .worksheet_support_parts
             .get_mut(&sheet_id)
@@ -57452,7 +57478,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let worksheet_support = loaded
             .worksheet_support_parts
             .get_mut(&sheet_id)
@@ -57533,7 +57559,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let expected_summary = loaded
             .worksheet_support_parts
             .get(&sheet_id)
@@ -57610,7 +57636,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let worksheet_support = loaded
             .worksheet_support_parts
             .get_mut(&sheet_id)
@@ -57684,7 +57710,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let worksheet_support = loaded
             .worksheet_support_parts
             .get_mut(&sheet_id)
@@ -57737,7 +57763,7 @@
         let reopened = codec
             .load(&saved, CommonLoadOptions::default())
             .expect("reopen workbook");
-        let reopened_sheet_id = reopened.state.worksheets[0].id;
+        let reopened_sheet_id = reopened.state.worksheets()[0].id;
         assert!(reopened.state.cell(reopened_sheet_id, 3, 3).is_none());
         assert_eq!(
             reopened
@@ -57778,7 +57804,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let worksheet_support = loaded
             .worksheet_support_parts
             .get_mut(&sheet_id)
@@ -57841,7 +57867,7 @@
         let reopened = codec
             .load(&saved, CommonLoadOptions::default())
             .expect("reopen workbook");
-        let reopened_sheet_id = reopened.state.worksheets[0].id;
+        let reopened_sheet_id = reopened.state.worksheets()[0].id;
         assert_eq!(
             reopened
                 .state
@@ -57861,7 +57887,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let worksheet_support = loaded
             .worksheet_support_parts
             .get_mut(&sheet_id)
@@ -57894,7 +57920,7 @@
         let reopened = codec
             .load(&saved, CommonLoadOptions::default())
             .expect("reopen workbook");
-        let reopened_sheet_id = reopened.state.worksheets[0].id;
+        let reopened_sheet_id = reopened.state.worksheets()[0].id;
         assert_eq!(
             reopened
                 .state
@@ -57914,7 +57940,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let worksheet_support = loaded
             .worksheet_support_parts
             .get_mut(&sheet_id)
@@ -57958,7 +57984,7 @@
         let reopened = codec
             .load(&saved, CommonLoadOptions::default())
             .expect("reopen workbook");
-        let reopened_sheet_id = reopened.state.worksheets[0].id;
+        let reopened_sheet_id = reopened.state.worksheets()[0].id;
         assert!(reopened.state.cell(reopened_sheet_id, 3, 3).is_none());
         assert_eq!(
             reopened
@@ -57977,7 +58003,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let worksheet_support = loaded
             .worksheet_support_parts
             .get_mut(&sheet_id)
@@ -58036,7 +58062,7 @@
         let reopened = codec
             .load(&saved, CommonLoadOptions::default())
             .expect("reopen workbook");
-        let reopened_sheet_id = reopened.state.worksheets[0].id;
+        let reopened_sheet_id = reopened.state.worksheets()[0].id;
         assert!(reopened.state.cell(reopened_sheet_id, 3, 3).is_none());
     }
 
@@ -58048,7 +58074,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let worksheet_support = loaded
             .worksheet_support_parts
             .get_mut(&sheet_id)
@@ -58107,7 +58133,7 @@
         let reopened = codec
             .load(&saved, CommonLoadOptions::default())
             .expect("reopen workbook");
-        let reopened_sheet_id = reopened.state.worksheets[0].id;
+        let reopened_sheet_id = reopened.state.worksheets()[0].id;
         assert!(reopened.state.cell(reopened_sheet_id, 3, 3).is_none());
     }
 
@@ -58118,7 +58144,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         insert_test_cell(&mut loaded.state,
             sheet_id,
             3,
@@ -58157,7 +58183,7 @@
         let reopened = codec
             .load(&saved, CommonLoadOptions::default())
             .expect("reopen workbook");
-        let reopened_sheet_id = reopened.state.worksheets[0].id;
+        let reopened_sheet_id = reopened.state.worksheets()[0].id;
         assert!(reopened.state.cell(reopened_sheet_id, 3, 3).is_none());
     }
 
@@ -58169,7 +58195,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let worksheet_support = loaded
             .worksheet_support_parts
             .get_mut(&sheet_id)
@@ -58213,7 +58239,7 @@
         let reopened = codec
             .load(&saved, CommonLoadOptions::default())
             .expect("reopen workbook");
-        let reopened_sheet_id = reopened.state.worksheets[0].id;
+        let reopened_sheet_id = reopened.state.worksheets()[0].id;
         assert!(reopened.state.cell(reopened_sheet_id, 3, 3).is_none());
         assert_eq!(
             reopened
@@ -58239,7 +58265,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let worksheet_support = loaded
             .worksheet_support_parts
             .get_mut(&sheet_id)
@@ -58290,7 +58316,7 @@
         let reopened = codec
             .load(&saved, CommonLoadOptions::default())
             .expect("reopen workbook");
-        let reopened_sheet_id = reopened.state.worksheets[0].id;
+        let reopened_sheet_id = reopened.state.worksheets()[0].id;
         assert!(reopened.state.cell(reopened_sheet_id, 3, 3).is_none());
     }
 
@@ -58303,7 +58329,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let expected_summary = loaded
             .worksheet_support_parts
             .get(&sheet_id)
@@ -58388,7 +58414,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let worksheet_support = loaded
             .worksheet_support_parts
             .get_mut(&sheet_id)
@@ -58456,7 +58482,7 @@
         let reopened = codec
             .load(&saved, CommonLoadOptions::default())
             .expect("reopen workbook");
-        let reopened_sheet_id = reopened.state.worksheets[0].id;
+        let reopened_sheet_id = reopened.state.worksheets()[0].id;
         assert!(reopened.state.cell(reopened_sheet_id, 3, 3).is_none());
     }
 
@@ -58469,7 +58495,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let worksheet_support = loaded
             .worksheet_support_parts
             .get_mut(&sheet_id)
@@ -58538,7 +58564,7 @@
         let reopened = codec
             .load(&saved, CommonLoadOptions::default())
             .expect("reopen workbook");
-        let reopened_sheet_id = reopened.state.worksheets[0].id;
+        let reopened_sheet_id = reopened.state.worksheets()[0].id;
         assert!(reopened.state.cell(reopened_sheet_id, 3, 3).is_none());
     }
 
@@ -58551,7 +58577,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let worksheet_support = loaded
             .worksheet_support_parts
             .get_mut(&sheet_id)
@@ -58631,7 +58657,7 @@
         let reopened = codec
             .load(&saved, CommonLoadOptions::default())
             .expect("reopen workbook");
-        let reopened_sheet_id = reopened.state.worksheets[0].id;
+        let reopened_sheet_id = reopened.state.worksheets()[0].id;
         assert!(reopened.state.cell(reopened_sheet_id, 3, 3).is_none());
     }
 
@@ -58644,7 +58670,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let worksheet_support = loaded
             .worksheet_support_parts
             .get_mut(&sheet_id)
@@ -58704,7 +58730,7 @@
         let reopened = codec
             .load(&saved, CommonLoadOptions::default())
             .expect("reopen workbook");
-        let reopened_sheet_id = reopened.state.worksheets[0].id;
+        let reopened_sheet_id = reopened.state.worksheets()[0].id;
         assert!(reopened.state.cell(reopened_sheet_id, 3, 3).is_none());
     }
 
@@ -58717,7 +58743,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let worksheet_support = loaded
             .worksheet_support_parts
             .get_mut(&sheet_id)
@@ -58777,7 +58803,7 @@
         let reopened = codec
             .load(&saved, CommonLoadOptions::default())
             .expect("reopen workbook");
-        let reopened_sheet_id = reopened.state.worksheets[0].id;
+        let reopened_sheet_id = reopened.state.worksheets()[0].id;
         assert!(reopened.state.cell(reopened_sheet_id, 3, 3).is_none());
     }
 
@@ -58789,7 +58815,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let worksheet_support = loaded
             .worksheet_support_parts
             .get_mut(&sheet_id)
@@ -58860,7 +58886,7 @@
         let reopened = codec
             .load(&saved, CommonLoadOptions::default())
             .expect("reopen workbook");
-        let reopened_sheet_id = reopened.state.worksheets[0].id;
+        let reopened_sheet_id = reopened.state.worksheets()[0].id;
         assert!(reopened.state.cell(reopened_sheet_id, 3, 3).is_none());
     }
 
@@ -58872,7 +58898,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let worksheet_support = loaded
             .worksheet_support_parts
             .get_mut(&sheet_id)
@@ -58941,7 +58967,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let worksheet_support = loaded
             .worksheet_support_parts
             .get_mut(&sheet_id)
@@ -59009,7 +59035,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let worksheet_support = loaded
             .worksheet_support_parts
             .get_mut(&sheet_id)
@@ -59082,7 +59108,7 @@
         let reopened = codec
             .load(&saved, CommonLoadOptions::default())
             .expect("reopen workbook");
-        let reopened_sheet_id = reopened.state.worksheets[0].id;
+        let reopened_sheet_id = reopened.state.worksheets()[0].id;
         assert!(reopened.state.cell(reopened_sheet_id, 3, 3).is_none());
     }
 
@@ -59094,7 +59120,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let worksheet_support = loaded
             .worksheet_support_parts
             .get_mut(&sheet_id)
@@ -59167,7 +59193,7 @@
         let reopened = codec
             .load(&saved, CommonLoadOptions::default())
             .expect("reopen workbook");
-        let reopened_sheet_id = reopened.state.worksheets[0].id;
+        let reopened_sheet_id = reopened.state.worksheets()[0].id;
         assert!(reopened.state.cell(reopened_sheet_id, 3, 3).is_none());
     }
 
@@ -59179,7 +59205,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let worksheet_support = loaded
             .worksheet_support_parts
             .get_mut(&sheet_id)
@@ -59252,7 +59278,7 @@
         let reopened = codec
             .load(&saved, CommonLoadOptions::default())
             .expect("reopen workbook");
-        let reopened_sheet_id = reopened.state.worksheets[0].id;
+        let reopened_sheet_id = reopened.state.worksheets()[0].id;
         assert!(reopened.state.cell(reopened_sheet_id, 3, 3).is_none());
     }
 
@@ -59264,7 +59290,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let worksheet_support = loaded
             .worksheet_support_parts
             .get_mut(&sheet_id)
@@ -59349,7 +59375,7 @@
         let reopened = codec
             .load(&saved, CommonLoadOptions::default())
             .expect("reopen workbook");
-        let reopened_sheet_id = reopened.state.worksheets[0].id;
+        let reopened_sheet_id = reopened.state.worksheets()[0].id;
         assert!(reopened.state.cell(reopened_sheet_id, 3, 3).is_none());
     }
 
@@ -59361,7 +59387,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let worksheet_support = loaded
             .worksheet_support_parts
             .get_mut(&sheet_id)
@@ -59437,7 +59463,7 @@
         let reopened = codec
             .load(&saved, CommonLoadOptions::default())
             .expect("reopen workbook");
-        let reopened_sheet_id = reopened.state.worksheets[0].id;
+        let reopened_sheet_id = reopened.state.worksheets()[0].id;
         assert!(reopened.state.cell(reopened_sheet_id, 3, 3).is_none());
     }
 
@@ -59449,7 +59475,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let worksheet_support = loaded
             .worksheet_support_parts
             .get_mut(&sheet_id)
@@ -59526,7 +59552,7 @@
         let reopened = codec
             .load(&saved, CommonLoadOptions::default())
             .expect("reopen workbook");
-        let reopened_sheet_id = reopened.state.worksheets[0].id;
+        let reopened_sheet_id = reopened.state.worksheets()[0].id;
         assert!(reopened.state.cell(reopened_sheet_id, 3, 3).is_none());
     }
 
@@ -59538,7 +59564,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let worksheet_support = loaded
             .worksheet_support_parts
             .get_mut(&sheet_id)
@@ -59615,7 +59641,7 @@
         let reopened = codec
             .load(&saved, CommonLoadOptions::default())
             .expect("reopen workbook");
-        let reopened_sheet_id = reopened.state.worksheets[0].id;
+        let reopened_sheet_id = reopened.state.worksheets()[0].id;
         assert!(reopened.state.cell(reopened_sheet_id, 3, 3).is_none());
     }
 
@@ -59627,7 +59653,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let worksheet_support = loaded
             .worksheet_support_parts
             .get_mut(&sheet_id)
@@ -59702,7 +59728,7 @@
         let reopened = codec
             .load(&saved, CommonLoadOptions::default())
             .expect("reopen workbook");
-        let reopened_sheet_id = reopened.state.worksheets[0].id;
+        let reopened_sheet_id = reopened.state.worksheets()[0].id;
         assert!(reopened.state.cell(reopened_sheet_id, 3, 3).is_none());
     }
 
@@ -59715,7 +59741,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let worksheet_support = loaded
             .worksheet_support_parts
             .get_mut(&sheet_id)
@@ -59791,7 +59817,7 @@
         let reopened = codec
             .load(&saved, CommonLoadOptions::default())
             .expect("reopen workbook");
-        let reopened_sheet_id = reopened.state.worksheets[0].id;
+        let reopened_sheet_id = reopened.state.worksheets()[0].id;
         assert!(reopened.state.cell(reopened_sheet_id, 3, 3).is_none());
     }
 
@@ -59803,7 +59829,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let worksheet_support = loaded
             .worksheet_support_parts
             .get_mut(&sheet_id)
@@ -59872,7 +59898,7 @@
         let reopened = codec
             .load(&saved, CommonLoadOptions::default())
             .expect("reopen workbook");
-        let reopened_sheet_id = reopened.state.worksheets[0].id;
+        let reopened_sheet_id = reopened.state.worksheets()[0].id;
         assert!(reopened.state.cell(reopened_sheet_id, 1, 2).is_none());
         assert!(reopened.state.cell(reopened_sheet_id, 1, 4).is_none());
     }
@@ -59903,7 +59929,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         loaded
             .state
             .set_range_values(
@@ -59941,7 +59967,7 @@
         let reopened = codec
             .load(&saved, CommonLoadOptions::default())
             .expect("reopen workbook");
-        let reopened_sheet_id = reopened.state.worksheets[0].id;
+        let reopened_sheet_id = reopened.state.worksheets()[0].id;
         assert!(reopened.state.cell(reopened_sheet_id, 1, 1).is_none());
     }
 
@@ -59971,7 +59997,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         loaded
             .state
             .set_range_values(
@@ -60011,7 +60037,7 @@
         let reopened = codec
             .load(&saved, CommonLoadOptions::default())
             .expect("reopen workbook");
-        let reopened_sheet_id = reopened.state.worksheets[0].id;
+        let reopened_sheet_id = reopened.state.worksheets()[0].id;
         assert!(reopened.state.cell(reopened_sheet_id, 1, 1).is_none());
     }
 
@@ -60042,7 +60068,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let worksheet_support = loaded
             .worksheet_support_parts
             .get_mut(&sheet_id)
@@ -60096,7 +60122,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         loaded
             .state
             .set_range_values(
@@ -60131,7 +60157,7 @@
         let reopened = codec
             .load(&saved, CommonLoadOptions::default())
             .expect("reload workbook");
-        let reopened_sheet_id = reopened.state.worksheets[0].id;
+        let reopened_sheet_id = reopened.state.worksheets()[0].id;
         assert_eq!(
             reopened
                 .state
@@ -60173,7 +60199,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         loaded
             .state
             .set_range_values(
@@ -60222,7 +60248,7 @@
         let reopened = codec
             .load(&saved, CommonLoadOptions::default())
             .expect("reload workbook");
-        let reopened_sheet_id = reopened.state.worksheets[0].id;
+        let reopened_sheet_id = reopened.state.worksheets()[0].id;
         assert_eq!(
             reopened
                 .state
@@ -60295,7 +60321,7 @@
         let reopened = codec
             .load(&saved, CommonLoadOptions::default())
             .expect("reload workbook");
-        let sheet_id = reopened.state.worksheets[0].id;
+        let sheet_id = reopened.state.worksheets()[0].id;
         let a1 = reopened.state.cell(sheet_id, 1, 1).expect("A1");
         assert_eq!(a1.style_id, Some(StyleId(1)));
         assert_eq!(a1.value, CellValue::Number(7.0));
@@ -60320,7 +60346,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         loaded
             .state
             .set_range_values(
@@ -60355,7 +60381,7 @@
         let reopened = codec
             .load(&saved, CommonLoadOptions::default())
             .expect("reload workbook");
-        let reopened_sheet_id = reopened.state.worksheets[0].id;
+        let reopened_sheet_id = reopened.state.worksheets()[0].id;
         assert_eq!(
             reopened
                 .state
@@ -76890,7 +76916,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         insert_test_cell(&mut loaded.state,
             sheet_id,
             1,
@@ -76936,7 +76962,7 @@
             .expect("reload workbook");
         let inserted = reopened
             .state
-            .cell(reopened.state.worksheets[0].id, 1, 3)
+            .cell(reopened.state.worksheets()[0].id, 1, 3)
             .expect("C1");
         assert_eq!(inserted.value, CellValue::Blank);
         assert_eq!(inserted.style_id, Some(StyleId(3)));
@@ -76949,7 +76975,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         loaded.package.remove_part("xl/styles.xml");
         loaded
             .state
@@ -76973,7 +76999,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let workbook_rels = String::from_utf8(
             loaded
                 .package
@@ -77015,7 +77041,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let workbook_rels = String::from_utf8(
             loaded
                 .package
@@ -77058,7 +77084,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let workbook_rels = String::from_utf8(
             loaded
                 .package
@@ -77100,7 +77126,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let workbook_rels = String::from_utf8(
             loaded
                 .package
@@ -77177,7 +77203,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         insert_test_cell(&mut loaded.state,
             sheet_id,
             2,
@@ -77205,7 +77231,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -77251,7 +77277,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -77292,7 +77318,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -77352,7 +77378,7 @@
                 CommonLoadOptions::default(),
             )
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -77409,7 +77435,7 @@
                 CommonLoadOptions::default(),
             )
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -77447,7 +77473,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -77485,7 +77511,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -77540,7 +77566,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -77578,7 +77604,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -77619,7 +77645,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -77657,7 +77683,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -77731,7 +77757,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -77769,7 +77795,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -77810,7 +77836,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -77865,7 +77891,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -77903,7 +77929,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -77941,7 +77967,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -77979,7 +78005,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -78017,7 +78043,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -78058,7 +78084,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -78096,7 +78122,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -78134,7 +78160,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -78175,7 +78201,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -78213,7 +78239,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -78254,7 +78280,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -78292,7 +78318,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -78330,7 +78356,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -78368,7 +78394,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -78406,7 +78432,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -78444,7 +78470,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -78482,7 +78508,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -78523,7 +78549,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -78578,7 +78604,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -78616,7 +78642,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -78654,7 +78680,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -78692,7 +78718,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -78747,7 +78773,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -78785,7 +78811,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -78823,7 +78849,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -78861,7 +78887,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -78899,7 +78925,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -78937,7 +78963,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -78978,7 +79004,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -79052,7 +79078,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -79090,7 +79116,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -79131,7 +79157,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -79172,7 +79198,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -79213,7 +79239,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -79251,7 +79277,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -79306,7 +79332,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -79344,7 +79370,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -79385,7 +79411,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -79423,7 +79449,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -79497,7 +79523,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -79535,7 +79561,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -79576,7 +79602,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -79617,7 +79643,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -79672,7 +79698,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -79710,7 +79736,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -79748,7 +79774,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -79786,7 +79812,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -79824,7 +79850,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -79862,7 +79888,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -79903,7 +79929,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -79941,7 +79967,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -79979,7 +80005,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -80017,7 +80043,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -80055,7 +80081,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -80096,7 +80122,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -80151,7 +80177,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -80189,7 +80215,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -80230,7 +80256,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -80268,7 +80294,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -80309,7 +80335,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -80347,7 +80373,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -80384,7 +80410,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -80421,7 +80447,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -80458,7 +80484,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -80495,7 +80521,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -80536,7 +80562,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -80577,7 +80603,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -80618,7 +80644,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -80659,7 +80685,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -80700,7 +80726,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -80741,7 +80767,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -80782,7 +80808,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -80823,7 +80849,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -81578,7 +81604,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -81619,7 +81645,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -81660,7 +81686,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -81698,7 +81724,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -81739,7 +81765,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -81779,7 +81805,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -81819,7 +81845,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -81857,7 +81883,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -81895,7 +81921,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -81935,7 +81961,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -81976,7 +82002,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -82035,7 +82061,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let drifted_styles_xml = String::from_utf8(
             loaded
                 .package
@@ -82094,7 +82120,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let drifted_styles_xml = String::from_utf8(
             loaded
                 .package
@@ -82151,7 +82177,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let drifted_styles_xml = String::from_utf8(
             loaded
                 .package
@@ -82211,7 +82237,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let drifted_styles_xml = String::from_utf8(
             loaded
                 .package
@@ -82271,7 +82297,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let drifted_styles_xml = String::from_utf8(
             loaded
                 .package
@@ -82333,7 +82359,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let drifted_styles_xml = String::from_utf8(
             loaded
                 .package
@@ -82395,7 +82421,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let drifted_styles_xml = String::from_utf8(
             loaded
                 .package
@@ -82457,7 +82483,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let drifted_styles_xml = String::from_utf8(
             loaded
                 .package
@@ -82519,7 +82545,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let drifted_styles_xml = String::from_utf8(
             loaded
                 .package
@@ -82581,7 +82607,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let drifted_styles_xml = String::from_utf8(
             loaded
                 .package
@@ -82643,7 +82669,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let drifted_styles_xml = String::from_utf8(
             loaded
                 .package
@@ -82705,7 +82731,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let drifted_styles_xml = String::from_utf8(
             loaded
                 .package
@@ -82767,7 +82793,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let drifted_styles_xml = String::from_utf8(
             loaded
                 .package
@@ -82828,7 +82854,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let drifted_styles_xml = String::from_utf8(
             loaded
                 .package
@@ -82889,7 +82915,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let drifted_styles_xml = String::from_utf8(
             loaded
                 .package
@@ -82950,7 +82976,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let drifted_styles_xml = String::from_utf8(
             loaded
                 .package
@@ -83011,7 +83037,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let drifted_styles_xml = String::from_utf8(
             loaded
                 .package
@@ -83072,7 +83098,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let drifted_styles_xml = String::from_utf8(
             loaded
                 .package
@@ -83133,7 +83159,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let drifted_styles_xml = String::from_utf8(
             loaded
                 .package
@@ -83191,7 +83217,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let drifted_styles_xml = String::from_utf8(
             loaded
                 .package
@@ -83248,7 +83274,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let drifted_styles_xml = String::from_utf8(
             loaded
                 .package
@@ -83307,7 +83333,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let drifted_styles_xml = String::from_utf8(
             loaded
                 .package
@@ -83364,7 +83390,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let drifted_styles_xml = String::from_utf8(
             loaded
                 .package
@@ -83426,7 +83452,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let drifted_styles_xml = String::from_utf8(
             loaded
                 .package
@@ -83488,7 +83514,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let drifted_styles_xml = String::from_utf8(
             loaded
                 .package
@@ -83550,7 +83576,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let drifted_styles_xml = String::from_utf8(
             loaded
                 .package
@@ -83612,7 +83638,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let drifted_styles_xml = String::from_utf8(
             loaded
                 .package
@@ -83671,7 +83697,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let drifted_styles_xml = String::from_utf8(
             loaded
                 .package
@@ -83728,7 +83754,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let drifted_styles_xml = String::from_utf8(
             loaded
                 .package
@@ -83787,7 +83813,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let drifted_styles_xml = String::from_utf8(
             loaded
                 .package
@@ -83846,7 +83872,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let drifted_styles_xml = String::from_utf8(
             loaded
                 .package
@@ -83903,7 +83929,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let drifted_styles_xml = String::from_utf8(
             loaded
                 .package
@@ -83962,7 +83988,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let drifted_styles_xml = String::from_utf8(
             loaded
                 .package
@@ -84024,7 +84050,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let drifted_styles_xml = String::from_utf8(
             loaded
                 .package
@@ -84083,7 +84109,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let drifted_styles_xml = String::from_utf8(
             loaded
                 .package
@@ -84142,7 +84168,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let drifted_styles_xml = String::from_utf8(
             loaded
                 .package
@@ -84203,7 +84229,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let drifted_styles_xml = String::from_utf8(
             loaded
                 .package
@@ -84245,7 +84271,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -84283,7 +84309,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -84325,7 +84351,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -84367,7 +84393,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -84409,7 +84435,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -84450,7 +84476,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -84507,7 +84533,7 @@
                 CommonLoadOptions::default(),
             )
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -84564,7 +84590,7 @@
                 CommonLoadOptions::default(),
             )
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -84602,7 +84628,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -84643,7 +84669,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -84684,7 +84710,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -84726,7 +84752,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -84769,7 +84795,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -84843,7 +84869,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -84916,7 +84942,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -85027,7 +85053,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -85207,7 +85233,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -85360,7 +85386,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -85398,7 +85424,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -85442,7 +85468,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -85484,7 +85510,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -85526,7 +85552,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -85568,7 +85594,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -85609,7 +85635,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -85650,7 +85676,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -85691,7 +85717,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -85732,7 +85758,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -85770,7 +85796,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -85808,7 +85834,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -85849,7 +85875,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -85889,7 +85915,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -85944,7 +85970,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -85982,7 +86008,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -86020,7 +86046,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -86058,7 +86084,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -86096,7 +86122,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -86134,7 +86160,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -86175,7 +86201,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -86213,7 +86239,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -86251,7 +86277,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -86292,7 +86318,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -86330,7 +86356,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -86371,7 +86397,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -86412,7 +86438,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -86453,7 +86479,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = br#"<?xml version="1.0" encoding="UTF-8"?>
 <a:notTheme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="Office Theme">
   <a:themeElements/>
@@ -86486,7 +86512,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = br#"<?xml version="1.0" encoding="UTF-8"?>
 <a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="Office Theme"/>"#
             .to_vec();
@@ -86517,7 +86543,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -86555,7 +86581,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -86593,7 +86619,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -86631,7 +86657,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -86669,7 +86695,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -86707,7 +86733,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -86745,7 +86771,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -86783,7 +86809,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -86821,7 +86847,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -86859,7 +86885,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -86897,7 +86923,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -86935,7 +86961,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -86973,7 +86999,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -87011,7 +87037,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -87052,7 +87078,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -87090,7 +87116,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -87131,7 +87157,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -87169,7 +87195,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -87210,7 +87236,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -87248,7 +87274,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -87286,7 +87312,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -87324,7 +87350,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -87362,7 +87388,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -87400,7 +87426,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -87438,7 +87464,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -87476,7 +87502,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -87514,7 +87540,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -87552,7 +87578,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -87590,7 +87616,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -87628,7 +87654,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -87669,7 +87695,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -87707,7 +87733,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -87745,7 +87771,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -87783,7 +87809,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -87822,7 +87848,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -87863,7 +87889,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -87901,7 +87927,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -87939,7 +87965,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -87977,7 +88003,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -88018,7 +88044,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -88056,7 +88082,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -88094,7 +88120,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -88132,7 +88158,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -88173,7 +88199,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -88211,7 +88237,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -88249,7 +88275,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -88287,7 +88313,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -88327,7 +88353,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -88368,7 +88394,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -88406,7 +88432,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -88444,7 +88470,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -88482,7 +88508,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -88522,7 +88548,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -88560,7 +88586,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -88598,7 +88624,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -88636,7 +88662,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -88677,7 +88703,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -88718,7 +88744,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -88759,7 +88785,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -88800,7 +88826,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -88838,7 +88864,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -88879,7 +88905,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -88920,7 +88946,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -88961,7 +88987,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -89002,7 +89028,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -89043,7 +89069,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -89084,7 +89110,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -89142,7 +89168,7 @@
                 CommonLoadOptions::default(),
             )
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -89197,7 +89223,7 @@
                 CommonLoadOptions::default(),
             )
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -89235,7 +89261,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -89273,7 +89299,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -89314,7 +89340,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -89352,7 +89378,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -89390,7 +89416,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -89428,7 +89454,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -89466,7 +89492,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -89504,7 +89530,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -89542,7 +89568,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -89580,7 +89606,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -89618,7 +89644,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -89656,7 +89682,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -89694,7 +89720,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -89732,7 +89758,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -89770,7 +89796,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -89808,7 +89834,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -89846,7 +89872,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -89884,7 +89910,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -89922,7 +89948,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -89960,7 +89986,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -89998,7 +90024,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -90036,7 +90062,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -90077,7 +90103,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -90115,7 +90141,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -90153,7 +90179,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -90194,7 +90220,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -90232,7 +90258,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -90273,7 +90299,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -90314,7 +90340,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -90352,7 +90378,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -90390,7 +90416,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -90428,7 +90454,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -90466,7 +90492,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -90507,7 +90533,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -90545,7 +90571,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -90586,7 +90612,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -90624,7 +90650,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -90665,7 +90691,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -90708,7 +90734,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -90749,7 +90775,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -90787,7 +90813,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -90841,7 +90867,7 @@
                 CommonLoadOptions::default(),
             )
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -90879,7 +90905,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -90920,7 +90946,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -90958,7 +90984,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -90996,7 +91022,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -91037,7 +91063,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -91078,7 +91104,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -91116,7 +91142,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -91154,7 +91180,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -91192,7 +91218,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -91233,7 +91259,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -91274,7 +91300,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -91315,7 +91341,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -91353,7 +91379,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -91394,7 +91420,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -91435,7 +91461,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -91476,7 +91502,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -91517,7 +91543,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -91555,7 +91581,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -91593,7 +91619,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -91634,7 +91660,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -91675,7 +91701,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -91713,7 +91739,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -91751,7 +91777,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -91794,7 +91820,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -91835,7 +91861,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -91876,7 +91902,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -91931,7 +91957,7 @@
                 CommonLoadOptions::default(),
             )
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -91969,7 +91995,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -92007,7 +92033,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -92045,7 +92071,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -92083,7 +92109,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -92121,7 +92147,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -92162,7 +92188,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -92203,7 +92229,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -92244,7 +92270,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -92285,7 +92311,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -92323,7 +92349,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -92361,7 +92387,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -92399,7 +92425,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -92437,7 +92463,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -92478,7 +92504,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -92517,7 +92543,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -92560,7 +92586,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -92598,7 +92624,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -92639,7 +92665,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -92680,7 +92706,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -92718,7 +92744,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -92756,7 +92782,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -92794,7 +92820,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -92832,7 +92858,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -92873,7 +92899,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -92911,7 +92937,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -92949,7 +92975,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -92987,7 +93013,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -93028,7 +93054,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -93066,7 +93092,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -93107,7 +93133,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -93148,7 +93174,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -93189,7 +93215,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -93230,7 +93256,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -93268,7 +93294,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -93309,7 +93335,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -93347,7 +93373,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -93385,7 +93411,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -93426,7 +93452,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -93464,7 +93490,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -93505,7 +93531,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -93543,7 +93569,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -93584,7 +93610,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -93625,7 +93651,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -93665,7 +93691,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -93703,7 +93729,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -93741,7 +93767,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -93782,7 +93808,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -93823,7 +93849,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -93865,7 +93891,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -93907,7 +93933,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -93947,7 +93973,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -93986,7 +94012,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -94026,7 +94052,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -94064,7 +94090,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -94102,7 +94128,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -94145,7 +94171,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -94183,7 +94209,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -94221,7 +94247,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -94263,7 +94289,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -94304,7 +94330,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -94342,7 +94368,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -94383,7 +94409,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -94421,7 +94447,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -94461,7 +94487,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -94499,7 +94525,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -94537,7 +94563,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -94579,7 +94605,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -94619,7 +94645,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -94660,7 +94686,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -94699,7 +94725,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -94738,7 +94764,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -94782,7 +94808,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -94824,7 +94850,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -94863,7 +94889,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -94904,7 +94930,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -94943,7 +94969,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -94982,7 +95008,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -95024,7 +95050,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -95066,7 +95092,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -95108,7 +95134,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -95147,7 +95173,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -95188,7 +95214,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -95232,7 +95258,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -95272,7 +95298,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -95313,7 +95339,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -95351,7 +95377,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -95392,7 +95418,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -95433,7 +95459,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -95473,7 +95499,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -95514,7 +95540,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -95571,7 +95597,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -95612,7 +95638,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -95653,7 +95679,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -95694,7 +95720,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -95737,7 +95763,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -95781,7 +95807,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -95822,7 +95848,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -95862,7 +95888,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -95905,7 +95931,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -95943,7 +95969,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -95984,7 +96010,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -96022,7 +96048,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -96063,7 +96089,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -96103,7 +96129,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -96143,7 +96169,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -96181,7 +96207,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -96238,7 +96264,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -96279,7 +96305,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -96320,7 +96346,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -96361,7 +96387,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -96404,7 +96430,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -96448,7 +96474,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -96489,7 +96515,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -96529,7 +96555,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -96572,7 +96598,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -96610,7 +96636,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -96651,7 +96677,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -96692,7 +96718,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -96730,7 +96756,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -96768,7 +96794,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -96806,7 +96832,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -96844,7 +96870,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -96902,7 +96928,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -96940,7 +96966,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -96998,7 +97024,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -97053,7 +97079,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -97108,7 +97134,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -97163,7 +97189,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -100449,7 +100475,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -100507,7 +100533,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -100545,7 +100571,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -100604,7 +100630,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -100660,7 +100686,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -100715,7 +100741,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -100770,7 +100796,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -100825,7 +100851,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -100880,7 +100906,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -100921,7 +100947,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -100962,7 +100988,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -101000,7 +101026,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -101041,7 +101067,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -101079,7 +101105,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -101120,7 +101146,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -101161,7 +101187,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -101201,7 +101227,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -101242,7 +101268,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -101280,7 +101306,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let original_theme_xml = String::from_utf8(
             loaded
                 .package
@@ -101319,7 +101345,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let original_theme_xml = String::from_utf8(
             loaded
                 .package
@@ -101358,7 +101384,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let original_theme_xml = String::from_utf8(
             loaded
                 .package
@@ -101398,7 +101424,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let original_theme_xml = String::from_utf8(
             loaded
                 .package
@@ -101437,7 +101463,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let original_theme_xml = String::from_utf8(
             loaded
                 .package
@@ -101479,7 +101505,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let original_theme_xml = String::from_utf8(
             loaded
                 .package
@@ -101521,7 +101547,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let original_theme_xml = String::from_utf8(
             loaded
                 .package
@@ -101560,7 +101586,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let original_theme_xml = String::from_utf8(
             loaded
                 .package
@@ -101602,7 +101628,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let original_theme_xml = String::from_utf8(
             loaded
                 .package
@@ -101641,7 +101667,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let original_theme_xml = String::from_utf8(
             loaded
                 .package
@@ -101686,7 +101712,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let original_theme_xml = String::from_utf8(
             loaded
                 .package
@@ -101727,7 +101753,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let original_theme_xml = String::from_utf8(
             loaded
                 .package
@@ -101767,7 +101793,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let original_theme_xml = String::from_utf8(
             loaded
                 .package
@@ -101811,7 +101837,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let original_theme_xml = String::from_utf8(
             loaded
                 .package
@@ -101854,7 +101880,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let original_theme_xml = String::from_utf8(
             loaded
                 .package
@@ -101895,7 +101921,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let original_theme_xml = String::from_utf8(
             loaded
                 .package
@@ -101938,7 +101964,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let original_theme_xml = String::from_utf8(
             loaded
                 .package
@@ -101982,7 +102008,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let original_theme_xml = String::from_utf8(
             loaded
                 .package
@@ -102024,7 +102050,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let original_theme_xml = String::from_utf8(
             loaded
                 .package
@@ -102063,7 +102089,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let original_theme_xml = String::from_utf8(
             loaded
                 .package
@@ -102105,7 +102131,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let original_theme_xml = String::from_utf8(
             loaded
                 .package
@@ -102149,7 +102175,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let original_theme_xml = String::from_utf8(
             loaded
                 .package
@@ -102193,7 +102219,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let original_theme_xml = String::from_utf8(
             loaded
                 .package
@@ -102237,7 +102263,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let original_theme_xml = String::from_utf8(
             loaded
                 .package
@@ -102278,7 +102304,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let original_theme_xml = String::from_utf8(
             loaded
                 .package
@@ -102320,7 +102346,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let original_theme_xml = String::from_utf8(
             loaded
                 .package
@@ -102361,7 +102387,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let original_theme_xml = String::from_utf8(
             loaded
                 .package
@@ -102403,7 +102429,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let original_theme_xml = String::from_utf8(
             loaded
                 .package
@@ -102442,7 +102468,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -102500,7 +102526,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -102538,7 +102564,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -102594,7 +102620,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -102647,7 +102673,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -102702,7 +102728,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -102757,7 +102783,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -102812,7 +102838,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -102867,7 +102893,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -102908,7 +102934,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -102949,7 +102975,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -102987,7 +103013,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -103028,7 +103054,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -103066,7 +103092,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -103107,7 +103133,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -103148,7 +103174,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -103186,7 +103212,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -103227,7 +103253,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let theme_xml = String::from_utf8(
             loaded
                 .package
@@ -103268,7 +103294,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let original_theme_xml = String::from_utf8(
             loaded
                 .package
@@ -103310,7 +103336,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let original_theme_xml = String::from_utf8(
             loaded
                 .package
@@ -103352,7 +103378,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let original_theme_xml = String::from_utf8(
             loaded
                 .package
@@ -103391,7 +103417,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let original_theme_xml = String::from_utf8(
             loaded
                 .package
@@ -103433,7 +103459,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let original_theme_xml = String::from_utf8(
             loaded
                 .package
@@ -103475,7 +103501,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let original_theme_xml = String::from_utf8(
             loaded
                 .package
@@ -103514,7 +103540,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let original_theme_xml = String::from_utf8(
             loaded
                 .package
@@ -103553,7 +103579,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let original_theme_xml = String::from_utf8(
             loaded
                 .package
@@ -103595,7 +103621,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let original_theme_xml = String::from_utf8(
             loaded
                 .package
@@ -103634,7 +103660,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let original_theme_xml = String::from_utf8(
             loaded
                 .package
@@ -103673,7 +103699,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let original_theme_xml = String::from_utf8(
             loaded
                 .package
@@ -103712,7 +103738,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let original_theme_xml = String::from_utf8(
             loaded
                 .package
@@ -103752,7 +103778,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let original_theme_xml = String::from_utf8(
             loaded
                 .package
@@ -103791,7 +103817,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let original_theme_xml = String::from_utf8(
             loaded
                 .package
@@ -103832,7 +103858,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let original_theme_xml = String::from_utf8(
             loaded
                 .package
@@ -103874,7 +103900,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let original_theme_xml = String::from_utf8(
             loaded
                 .package
@@ -103916,7 +103942,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let original_theme_xml = String::from_utf8(
             loaded
                 .package
@@ -103958,7 +103984,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let original_theme_xml = String::from_utf8(
             loaded
                 .package
@@ -104000,7 +104026,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let original_theme_xml = String::from_utf8(
             loaded
                 .package
@@ -104042,7 +104068,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let original_theme_xml = String::from_utf8(
             loaded
                 .package
@@ -104081,7 +104107,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let original_theme_xml = String::from_utf8(
             loaded
                 .package
@@ -104120,7 +104146,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let original_theme_xml = String::from_utf8(
             loaded
                 .package
@@ -104159,7 +104185,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let original_theme_xml = String::from_utf8(
             loaded
                 .package
@@ -104199,7 +104225,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let original_theme_xml = String::from_utf8(
             loaded
                 .package
@@ -104238,7 +104264,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let original_theme_xml = String::from_utf8(
             loaded
                 .package
@@ -105647,7 +105673,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -105688,7 +105714,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -108782,7 +108808,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -108824,7 +108850,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -108865,7 +108891,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -108907,7 +108933,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -108980,7 +109006,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -109027,7 +109053,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -109100,7 +109126,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -109147,7 +109173,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -109220,7 +109246,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -109267,7 +109293,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -109340,7 +109366,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -109387,7 +109413,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -109460,7 +109486,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -109505,7 +109531,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -109546,7 +109572,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -109588,7 +109614,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -109630,7 +109656,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -109669,7 +109695,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -109711,7 +109737,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -109785,7 +109811,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -109826,7 +109852,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -109867,7 +109893,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -109925,7 +109951,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -109999,7 +110025,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -110057,7 +110083,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -110098,7 +110124,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -110139,7 +110165,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -110180,7 +110206,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -110238,7 +110264,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -112416,7 +112442,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -112454,7 +112480,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -112495,7 +112521,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -112533,7 +112559,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -112591,7 +112617,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -112681,7 +112707,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -112719,7 +112745,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -112777,7 +112803,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -112832,7 +112858,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -112887,7 +112913,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -113901,7 +113927,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -113942,7 +113968,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -113983,7 +114009,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -114041,7 +114067,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package
@@ -114082,7 +114108,7 @@
         let mut loaded = codec
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
-        let sheet_id = loaded.state.worksheets[0].id;
+        let sheet_id = loaded.state.worksheets()[0].id;
         let styles_xml = String::from_utf8(
             loaded
                 .package

@@ -53,11 +53,11 @@ pub(super) fn calculation_input_digest(state: &WorkbookState) -> [u8; 32] {
 
     digest.update([u8::from(state.model().date1904)]);
     digest.update(
-        u64::try_from(state.worksheets.len())
+        u64::try_from(state.worksheets().len())
             .unwrap_or(u64::MAX)
             .to_le_bytes(),
     );
-    for worksheet in &state.worksheets {
+    for worksheet in state.worksheets() {
         digest.update(worksheet.id.0.to_le_bytes());
         update_bytes(&mut digest, worksheet.name.as_bytes());
         digest.update([match worksheet.kind {
@@ -206,7 +206,7 @@ impl ExcelRuntime {
             .runtime_workbook(workbook)?
             .loaded
             .state
-            .worksheets
+            .worksheets()
             .iter()
             .map(|worksheet| worksheet.id)
             .collect::<Vec<_>>();

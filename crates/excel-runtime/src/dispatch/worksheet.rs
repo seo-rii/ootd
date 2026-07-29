@@ -35,7 +35,7 @@ impl ExcelRuntime {
                     self.runtime_workbook(workbook)?
                         .loaded
                         .state
-                        .worksheets
+                        .worksheets()
                         .iter()
                         .filter(|worksheet| collection_kind.includes(worksheet.kind))
                         .count() as f64,
@@ -75,7 +75,7 @@ impl ExcelRuntime {
                     .runtime_workbook(workbook)?
                     .loaded
                     .state
-                    .worksheets
+                    .worksheets()
                     .iter()
                     .filter(|worksheet| collection_kind.includes(worksheet.kind))
                     .map(|worksheet| worksheet.visibility)
@@ -172,7 +172,7 @@ impl ExcelRuntime {
                     .runtime_workbook(workbook)?
                     .loaded
                     .state
-                    .worksheets
+                    .worksheets()
                     .iter()
                     .position(|worksheet| worksheet.id == sheet_id)
                     .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "unknown worksheet"))?;
@@ -185,7 +185,7 @@ impl ExcelRuntime {
                     )));
                 }
                 let adjacent_sheet_id = {
-                    let worksheets = &self.runtime_workbook(workbook)?.loaded.state.worksheets;
+                    let worksheets = self.runtime_workbook(workbook)?.loaded.state.worksheets();
                     let index = worksheets
                         .iter()
                         .position(|worksheet| worksheet.id == sheet_id)
@@ -609,7 +609,7 @@ impl ExcelRuntime {
                 )?;
                 let (source_read_only, source_sheet_count) = {
                     let runtime = self.runtime_workbook(workbook)?;
-                    (runtime.read_only, runtime.loaded.state.worksheets.len())
+                    (runtime.read_only, runtime.loaded.state.worksheets().len())
                 };
                 if source_read_only {
                     return Err(OmError::new(
@@ -642,11 +642,11 @@ impl ExcelRuntime {
                         {
                             let runtime = self.runtime_workbook_mut(workbook)?;
                             let target_index =
-                                base_insertion_index.min(runtime.loaded.state.worksheets.len());
+                                base_insertion_index.min(runtime.loaded.state.worksheets().len());
                             let removed_before = runtime
                                 .loaded
                                 .state
-                                .worksheets
+                                .worksheets()
                                 .iter()
                                 .take(target_index)
                                 .filter(|worksheet| moving_sheet_ids.contains(&worksheet.id))
@@ -656,11 +656,11 @@ impl ExcelRuntime {
                                 runtime
                                     .loaded
                                     .state
-                                    .worksheets
+                                    .worksheets()
                                     .len()
                                     .saturating_sub(sheet_ids.len()),
                             );
-                            for worksheet in runtime.loaded.state.worksheets.iter().cloned() {
+                            for worksheet in runtime.loaded.state.worksheets().iter().cloned() {
                                 if moving_sheet_ids.contains(&worksheet.id) {
                                     moving_sheets.push(worksheet);
                                 } else {
@@ -780,7 +780,7 @@ impl ExcelRuntime {
                         runtime
                             .loaded
                             .state
-                            .worksheets
+                            .worksheets()
                             .iter()
                             .filter(|worksheet| worksheet.kind == SheetKind::ChartSheet)
                             .map(|worksheet| {

@@ -353,9 +353,16 @@ Wave 2 exit gate:
    preflight하고 workbook XML 생성·교체 성공 뒤에만 order를 commit하며 collection move의
    destructive drain을 제거했다. visibility의 read-only/last-visible/selection 정책은 기존
    runtime에 유지한다. `excel-model` 94개 회귀가 통과한다.
-   **다음:** worksheet collection 자체를 private read/command 경계로 닫고 compound
-   rename/chart-sheet lifecycle transaction과 `WorksheetData` payload field를 별도
-   `OOTD-054` 단계로 진행한 뒤 `OOTD-018`/`OOTD-048` common reference subsystem을 진행한다.
+   4단계 완료 (2026-07-29, synthetic): live worksheet collection을 private으로 전환하고
+   immutable slice getter만 공개했다. mutable element/collection getter 없이 1,117개
+   cross-crate access를 read-only getter와 기존 rename/visibility/bind/reorder/insert/remove
+   command로 이관했다. by-value `into_parts`는 consumed state를 construction DTO로만 돌려주며
+   `try_new` 전체 invariant 검증 없이는 live state로 복원할 수 없다. package mismatch 회귀는
+   unchecked 우회 대신 이 validated reconstruction을 사용한다. `excel-model` 95개 회귀가
+   통과한다.
+   **다음:** compound rename/chart-sheet lifecycle transaction과 `WorksheetData` payload
+   field를 별도 `OOTD-054` 단계로 닫은 뒤 `OOTD-018`/`OOTD-048` common reference subsystem을
+   진행한다.
 16. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
    structured error에 추가한다.
 

@@ -17510,7 +17510,7 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         match info_type.as_str() {
             "directory" => Ok(FormulaValueProbe::Text(String::new())),
             "numfile" => Ok(FormulaValueProbe::Number(
-                self.evaluator.state.worksheets.len() as f64,
+                self.evaluator.state.worksheets().len() as f64,
             )),
             "origin" => Ok(FormulaValueProbe::Text("$A:$A".to_string())),
             "osversion" => Ok(FormulaValueProbe::Text(std::env::consts::OS.to_string())),
@@ -17739,7 +17739,7 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
     fn parse_sheets_function(&mut self) -> Result<f64, FormulaEvalError> {
         self.skip_whitespace();
         if self.consume_char(')') {
-            return Ok(self.evaluator.state.worksheets.len() as f64);
+            return Ok(self.evaluator.state.worksheets().len() as f64);
         }
         let reference = self.parse_reference_set_argument()?;
         self.skip_whitespace();
@@ -17757,7 +17757,7 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
     fn sheet_index(&self, sheet_id: SheetId) -> Result<f64, FormulaEvalError> {
         self.evaluator
             .state
-            .worksheets
+            .worksheets()
             .iter()
             .position(|worksheet| worksheet.id == sheet_id)
             .map(|index| index as f64 + 1.0)
@@ -21442,7 +21442,7 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
     fn resolve_sheet_name(&self, name: &str) -> Option<SheetId> {
         self.evaluator
             .state
-            .worksheets
+            .worksheets()
             .iter()
             .find(|worksheet| worksheet.name.eq_ignore_ascii_case(name))
             .map(|worksheet| worksheet.id)
@@ -21573,7 +21573,7 @@ fn resolve_formula_sheet_name_or_span(
 
 fn resolve_formula_sheet_name(state: &WorkbookState, name: &str) -> Option<SheetId> {
     state
-        .worksheets
+        .worksheets()
         .iter()
         .find(|worksheet| worksheet.name.eq_ignore_ascii_case(name))
         .map(|worksheet| worksheet.id)
@@ -21585,12 +21585,12 @@ fn formula_sheets_in_3d_span(
     end: SheetId,
 ) -> Result<Vec<SheetId>, FormulaEvalError> {
     let start_index = state
-        .worksheets
+        .worksheets()
         .iter()
         .position(|worksheet| worksheet.id == start)
         .ok_or(FormulaEvalError::Ref)?;
     let end_index = state
-        .worksheets
+        .worksheets()
         .iter()
         .position(|worksheet| worksheet.id == end)
         .ok_or(FormulaEvalError::Ref)?;
@@ -21599,7 +21599,7 @@ fn formula_sheets_in_3d_span(
     } else {
         (end_index, start_index)
     };
-    Ok(state.worksheets[first..=last]
+    Ok(state.worksheets()[first..=last]
         .iter()
         .map(|worksheet| worksheet.id)
         .collect())

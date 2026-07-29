@@ -1944,12 +1944,12 @@ impl XlsxCodec {
             main_document.dialect,
             WorkbookParseMode::PendingSaveRewrite,
         )?;
-        if saved_workbook.worksheets.len() != workbook.state.worksheets.len() {
+        if saved_workbook.worksheets.len() != workbook.state.worksheets().len() {
             return Err(OmError::new(
                 OmErrorCode::InvalidState,
                 format!(
                     "model worksheet count {} does not match package worksheet count {} in {}",
-                    workbook.state.worksheets.len(),
+                    workbook.state.worksheets().len(),
                     saved_workbook.worksheets.len(),
                     main_document.part_uri
                 ),
@@ -1959,7 +1959,7 @@ impl XlsxCodec {
         for (index, (package_worksheet, model_worksheet)) in saved_workbook
             .worksheets
             .iter()
-            .zip(&workbook.state.worksheets)
+            .zip(workbook.state.worksheets())
             .enumerate()
         {
             let position = index + 1;
@@ -2059,11 +2059,11 @@ impl XlsxCodec {
             .values()
             .any(|worksheet| worksheet.dirty);
         let worksheet_structure_changed =
-            saved_workbook.worksheets.len() != workbook.state.worksheets.len()
+            saved_workbook.worksheets.len() != workbook.state.worksheets().len()
                 || saved_workbook
                     .worksheets
                     .iter()
-                    .zip(&workbook.state.worksheets)
+                    .zip(workbook.state.worksheets())
                     .any(|(saved, current)| {
                         saved.id != current.id
                             || saved.name != current.name
@@ -2135,7 +2135,7 @@ impl XlsxCodec {
                     }
                     attrs.push((key, value, is_name, is_state));
                 }
-                let Some(worksheet) = workbook.state.worksheets.iter().find(|worksheet| {
+                let Some(worksheet) = workbook.state.worksheets().iter().find(|worksheet| {
                     sheet_id == Some(worksheet.id.0)
                         || relationship_id.as_deref() == worksheet.relationship_id.as_deref()
                 }) else {
@@ -2520,7 +2520,7 @@ impl XlsxCodec {
                         write_defined_names(
                             &mut writer,
                             &workbook.state.defined_names,
-                            &workbook.state.worksheets,
+                            workbook.state.worksheets(),
                             workbook_element_name.as_deref().ok_or_else(|| {
                                 OmError::invalid_state("workbook root QName was not captured")
                             })?,
@@ -2535,7 +2535,7 @@ impl XlsxCodec {
                         write_defined_names(
                             &mut writer,
                             &workbook.state.defined_names,
-                            &workbook.state.worksheets,
+                            workbook.state.worksheets(),
                             element.name().as_ref(),
                         )?;
                         wrote_defined_names = true;
@@ -2596,7 +2596,7 @@ impl XlsxCodec {
         let mut comment_part_rewrite_recovery_ids = BTreeSet::new();
         let mut legacy_drawing_relationship_rewrite_recovery_ids = BTreeSet::new();
         let mut vml_drawing_part_rewrite_recovery_ids = BTreeSet::new();
-        for worksheet in &workbook.state.worksheets {
+        for worksheet in workbook.state.worksheets() {
             let sheet_data = workbook.state.worksheet_data_for_sheet(worksheet.id)?;
             if sheet_data.dirty {
                 dirty_worksheet_ids.insert(worksheet.id);
@@ -3074,7 +3074,7 @@ impl XlsxCodec {
             support_snapshot::RetainedTargetPolicy::RequireDeclared,
         )?;
         chart_graph::validate_chart_graphs_for_save(workbook, &package)?;
-        for worksheet in &workbook.state.worksheets {
+        for worksheet in workbook.state.worksheets() {
             if !dirty_worksheet_ids.contains(&worksheet.id) {
                 continue;
             }
@@ -3738,7 +3738,7 @@ impl XlsxCodec {
             &package,
             &workbook.support_parts.pivot_inventory,
         )?;
-        for worksheet in &workbook.state.worksheets {
+        for worksheet in workbook.state.worksheets() {
             let part_uri = worksheet.part_uri.as_deref().ok_or_else(|| {
                 OmError::invalid_state(format!(
                     "worksheet {} ({}) has no part URI after graph materialization",
@@ -3793,7 +3793,7 @@ impl XlsxCodec {
         } else {
             let mut next_state = materialized.state;
             let sheet_ids = next_state
-                .worksheets
+                .worksheets()
                 .iter()
                 .map(|worksheet| worksheet.id)
                 .collect::<Vec<_>>();
@@ -7038,7 +7038,7 @@ fn ensure_workbook_style_ids_are_valid(
         return Ok(());
     };
 
-    for worksheet in &state.worksheets {
+    for worksheet in state.worksheets() {
         let Some(worksheet_data) = state.worksheet_data().get(&worksheet.id) else {
             continue;
         };

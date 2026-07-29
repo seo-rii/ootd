@@ -1747,7 +1747,7 @@
             .codec
             .load(&saved, office_common::LoadOptions::default())
             .expect("reopen saved workbook");
-        let reopened_sheet_id = reopened.state.worksheets[0].id;
+        let reopened_sheet_id = reopened.state.worksheets()[0].id;
         assert_eq!(
             reopened
                 .state
@@ -5875,7 +5875,7 @@
             .expect("calculation report runtime workbook")
             .loaded
             .state
-            .worksheets[0]
+            .worksheets()[0]
             .id;
         {
             let worksheet = runtime
@@ -29356,12 +29356,12 @@
             .expect("load blank workbook");
 
         assert_eq!(loaded.detected_format, FileFormat::Xlsx);
-        assert_eq!(loaded.state.worksheets.len(), 1);
-        assert_eq!(loaded.state.worksheets[0].name, "Sheet1");
+        assert_eq!(loaded.state.worksheets().len(), 1);
+        assert_eq!(loaded.state.worksheets()[0].name, "Sheet1");
         assert!(
             loaded
                 .state
-                .worksheet_data_for_sheet(loaded.state.worksheets[0].id)
+                .worksheet_data_for_sheet(loaded.state.worksheets()[0].id)
                 .expect("worksheet data")
                 .cells
                 .is_empty()
@@ -30105,7 +30105,7 @@
             .expect("runtime workbook")
             .loaded
             .state
-            .worksheets
+            .worksheets()
             .first()
             .expect("worksheet")
             .id;
@@ -30863,7 +30863,7 @@
                 .expect("runtime workbook")
                 .loaded
                 .state
-                .worksheets[0]
+                .worksheets()[0]
                 .id;
             let worksheet_data = runtime
                 .runtime_workbook_mut(workbook)
@@ -34955,7 +34955,7 @@
                 LoadOptions::default(),
             )
             .expect("reopen sequentially saved workbook");
-        let sheet_id = reopened.state.worksheets[0].id;
+        let sheet_id = reopened.state.worksheets()[0].id;
         assert_eq!(
             reopened.state.cell(sheet_id, 1, 1).map(|cell| &cell.value),
             Some(&CellValue::Text("first save".to_string()))
@@ -35321,11 +35321,11 @@
                 LoadOptions::default(),
             )
             .expect("reload created workbook");
-        assert_eq!(reopened.state.worksheets[0].name, "Sheet1");
+        assert_eq!(reopened.state.worksheets()[0].name, "Sheet1");
         assert_eq!(
             reopened
                 .state
-                .cell(reopened.state.worksheets[0].id, 1, 1)
+                .cell(reopened.state.worksheets()[0].id, 1, 1)
                 .map(|cell| cell.value.clone()),
             Some(CellValue::Text("created".to_string()))
         );
@@ -35625,13 +35625,13 @@
                 assert!(saved_package.contains("xl/drawings/_rels/drawing1.xml.rels"));
                 assert!(saved_package.contains("xl/charts/chart1.xml"));
                 assert!(!saved_package.contains("xl/worksheets/sheet1.xml"));
-                assert_eq!(reopened.state.worksheets.len(), 1);
+                assert_eq!(reopened.state.worksheets().len(), 1);
                 assert_eq!(
-                    reopened.state.worksheets[0].kind,
+                    reopened.state.worksheets()[0].kind,
                     office_common::SheetKind::ChartSheet
                 );
                 assert_eq!(
-                    reopened.state.worksheets[0].part_uri.as_deref(),
+                    reopened.state.worksheets()[0].part_uri.as_deref(),
                     Some("xl/chartsheets/sheet1.xml")
                 );
                 assert_eq!(reopened.state.chart_sheets.len(), 1);
@@ -35660,13 +35660,13 @@
                     .expect("reopen macro template workbook");
                 assert!(saved_package.contains("xl/macrosheets/sheet1.xml"));
                 assert!(!saved_package.contains("xl/worksheets/sheet1.xml"));
-                assert_eq!(reopened.state.worksheets.len(), 1);
+                assert_eq!(reopened.state.worksheets().len(), 1);
                 assert_eq!(
-                    reopened.state.worksheets[0].kind,
+                    reopened.state.worksheets()[0].kind,
                     office_common::SheetKind::MacroSheet
                 );
                 assert_eq!(
-                    reopened.state.worksheets[0].part_uri.as_deref(),
+                    reopened.state.worksheets()[0].part_uri.as_deref(),
                     Some("xl/macrosheets/sheet1.xml")
                 );
             }
@@ -36830,7 +36830,7 @@
                 LoadOptions::default(),
             )
             .expect("reload formula workbook");
-        let reopened_sheet_id = reopened.state.worksheets[0].id;
+        let reopened_sheet_id = reopened.state.worksheets()[0].id;
         let reopened_formula = reopened
             .state
             .cell(reopened_sheet_id, 2, 3)
@@ -37780,7 +37780,7 @@
             .codec
             .load(&saved, LoadOptions::default())
             .expect("reload cleared workbook");
-        let sheet_id = reopened.state.worksheets[0].id;
+        let sheet_id = reopened.state.worksheets()[0].id;
         assert!(reopened.state.cell(sheet_id, 1, 1).is_none());
         assert!(reopened.state.cell(sheet_id, 1, 2).is_none());
         assert!(reopened.state.cell(sheet_id, 1, 3).is_none());
@@ -37818,7 +37818,7 @@
             .expect("runtime workbook")
             .loaded
             .state
-            .worksheets
+            .worksheets()
             .first()
             .expect("worksheet")
             .id;
@@ -37916,7 +37916,7 @@
             .codec
             .load(&saved, LoadOptions::default())
             .expect("reload cleared workbook");
-        let reopened_sheet_id = reopened.state.worksheets[0].id;
+        let reopened_sheet_id = reopened.state.worksheets()[0].id;
         assert!(reopened.state.cell(reopened_sheet_id, 1, 1).is_none());
         assert!(reopened.state.cell(reopened_sheet_id, 1, 2).is_none());
         assert!(reopened.state.cell(reopened_sheet_id, 1, 3).is_none());
@@ -37997,7 +37997,7 @@
             .expect("runtime workbook")
             .loaded
             .state
-            .worksheets
+            .worksheets()
             .first()
             .expect("worksheet")
             .id;
@@ -39305,7 +39305,7 @@
             .expect("runtime workbook")
             .loaded
             .state
-            .worksheets
+            .worksheets()
             .first()
             .expect("worksheet")
             .id;
@@ -39451,7 +39451,7 @@
             .expect("runtime workbook")
             .loaded
             .state
-            .worksheets
+            .worksheets()
             .first()
             .expect("worksheet")
             .id;
@@ -44646,7 +44646,7 @@
                 office_common::LoadOptions::default(),
             )
             .expect("reload saved workbook");
-        assert_eq!(reopened.state.worksheets[0].name, "SavedName");
+        assert_eq!(reopened.state.worksheets()[0].name, "SavedName");
 
         fs::remove_file(path).expect("cleanup fixture");
     }
@@ -44728,7 +44728,7 @@
                 LoadOptions::default(),
             )
             .expect("reload atomic save source");
-        assert_eq!(reopened.state.worksheets[0].name, "AtomicallySaved");
+        assert_eq!(reopened.state.worksheets()[0].name, "AtomicallySaved");
 
         fs::remove_dir_all(base_dir).expect("cleanup atomic save fixture");
     }
@@ -45036,7 +45036,7 @@
             )
             .expect("replaced output remains valid after sync failure");
         assert_eq!(
-            reopened_after_error.state.worksheets[0].name,
+            reopened_after_error.state.worksheets()[0].name,
             "PostReplaceValid"
         );
         assert!(!expect_bool(
@@ -45229,7 +45229,7 @@
             .codec
             .load(&second_output, LoadOptions::default())
             .expect("reload second host stream output");
-        let sheet_id = reopened.state.worksheets[0].id;
+        let sheet_id = reopened.state.worksheets()[0].id;
         let cells = &reopened
             .state
             .worksheet_data()
@@ -45398,7 +45398,7 @@
                 LoadOptions::default(),
             )
             .expect("reload detached SaveAs target");
-        assert_eq!(reopened.state.worksheets[0].name, "WritableAfterSaveAs");
+        assert_eq!(reopened.state.worksheets()[0].name, "WritableAfterSaveAs");
         assert_eq!(
             fs::read(&source_path).expect("read original after detached Save"),
             source_bytes
@@ -45520,7 +45520,7 @@
             .load(&saved, office_common::LoadOptions::default())
             .expect("reopen saved workbook");
 
-        assert_eq!(reopened.state.worksheets[0].name, "Renamed");
+        assert_eq!(reopened.state.worksheets()[0].name, "Renamed");
     }
 
     #[test]
@@ -45756,20 +45756,20 @@
         assert_eq!(
             reopened
                 .state
-                .worksheets
+                .worksheets()
                 .iter()
                 .map(|worksheet| worksheet.name.clone())
                 .collect::<Vec<_>>(),
             vec!["Sheet2".to_string(), "Sheet1".to_string()]
         );
         assert_eq!(
-            reopened.state.worksheets[0].part_uri.as_deref(),
+            reopened.state.worksheets()[0].part_uri.as_deref(),
             Some("xl/worksheets/sheet2.xml")
         );
         assert!(
             reopened
                 .state
-                .worksheet_data_for_sheet(reopened.state.worksheets[0].id)
+                .worksheet_data_for_sheet(reopened.state.worksheets()[0].id)
                 .expect("added worksheet data")
                 .cells
                 .is_empty()
@@ -45886,7 +45886,7 @@
         assert_eq!(
             reopened
                 .state
-                .worksheets
+                .worksheets()
                 .iter()
                 .map(|worksheet| worksheet.name.clone())
                 .collect::<Vec<_>>(),
@@ -45986,7 +45986,7 @@
         assert_eq!(
             reopened
                 .state
-                .worksheets
+                .worksheets()
                 .iter()
                 .map(|worksheet| worksheet.name.clone())
                 .collect::<Vec<_>>(),
@@ -46095,7 +46095,7 @@
         assert_eq!(
             reopened
                 .state
-                .worksheets
+                .worksheets()
                 .iter()
                 .map(|worksheet| worksheet.name.clone())
                 .collect::<Vec<_>>(),
@@ -46486,7 +46486,7 @@
         assert_eq!(
             reopened
                 .state
-                .worksheets
+                .worksheets()
                 .iter()
                 .map(|worksheet| worksheet.name.clone())
                 .collect::<Vec<_>>(),
@@ -46499,7 +46499,7 @@
         );
         let reopened_chart_sheet = reopened
             .state
-            .worksheets
+            .worksheets()
             .iter()
             .find(|worksheet| worksheet.name == "Chart1")
             .expect("reopened chart sheet");
@@ -46532,7 +46532,7 @@
         ] {
             let reopened_macro_sheet = reopened
                 .state
-                .worksheets
+                .worksheets()
                 .iter()
                 .find(|worksheet| worksheet.name == name)
                 .expect("reopened macro sheet");
@@ -46690,7 +46690,7 @@
         assert_eq!(
             reopened
                 .state
-                .worksheets
+                .worksheets()
                 .iter()
                 .map(|worksheet| worksheet.name.clone())
                 .collect::<Vec<_>>(),
@@ -46698,7 +46698,7 @@
         );
         let reopened_dialog_sheet = reopened
             .state
-            .worksheets
+            .worksheets()
             .iter()
             .find(|worksheet| worksheet.name == "Dialog1")
             .expect("reopened dialog sheet");
@@ -46884,7 +46884,7 @@
         assert_eq!(
             reopened
                 .state
-                .worksheets
+                .worksheets()
                 .iter()
                 .map(|worksheet| worksheet.name.clone())
                 .collect::<Vec<_>>(),
@@ -46900,7 +46900,7 @@
         for name in ["Chart1", "Chart2"] {
             let chart_sheet = reopened
                 .state
-                .worksheets
+                .worksheets()
                 .iter()
                 .find(|worksheet| worksheet.name == name)
                 .expect("reopened chart sheet");
@@ -47088,14 +47088,14 @@
         assert_eq!(
             reopened
                 .state
-                .worksheets
+                .worksheets()
                 .iter()
                 .map(|worksheet| worksheet.name.clone())
                 .collect::<Vec<_>>(),
             vec!["Dashboard Chart".to_string(), "Sheet1".to_string()]
         );
         assert_eq!(
-            reopened.state.worksheets[0].kind,
+            reopened.state.worksheets()[0].kind,
             office_common::SheetKind::ChartSheet
         );
         assert_eq!(reopened.state.chart_sheets.len(), 1);
@@ -54748,7 +54748,7 @@
         assert_eq!(
             reopened
                 .state
-                .worksheets
+                .worksheets()
                 .iter()
                 .map(|worksheet| worksheet.name.clone())
                 .collect::<Vec<_>>(),
@@ -88300,7 +88300,7 @@
         let state = runtime
             .workbook_state(workbook)
             .expect("workbook state after multi-area Chart.Paste");
-        let sheet_id = state.worksheets[0].id;
+        let sheet_id = state.worksheets()[0].id;
         let chart_model = state.charts.values().next().expect("chart model");
         let values = chart_model.series[0]
             .values
@@ -106034,7 +106034,7 @@
             let state = runtime
                 .workbook_state(workbook)
                 .expect("workbook state after string source setters");
-            let sheet_id = state.worksheets[0].id;
+            let sheet_id = state.worksheets()[0].id;
             let chart = state.charts.values().next().expect("chart model");
             let values = chart.series[0].values.as_ref().expect("series values");
             let Some(ReferenceTarget::Range(range)) = values.resolved.as_ref() else {
@@ -106077,7 +106077,7 @@
             let state = runtime
                 .workbook_state(workbook)
                 .expect("workbook state after workbook-qualified source setter");
-            let sheet_id = state.worksheets[0].id;
+            let sheet_id = state.worksheets()[0].id;
             let chart = state.charts.values().next().expect("chart model");
             let values = chart.series[0].values.as_ref().expect("series values");
             let Some(ReferenceTarget::Range(range)) = values.resolved.as_ref() else {
@@ -106155,7 +106155,7 @@
             let state = runtime
                 .workbook_state(workbook)
                 .expect("workbook state after defined-name source setter");
-            let sheet_id = state.worksheets[0].id;
+            let sheet_id = state.worksheets()[0].id;
             let chart = state.charts.values().next().expect("chart model");
             let values = chart.series[0].values.as_ref().expect("series values");
             let Some(ReferenceTarget::Range(range)) = values.resolved.as_ref() else {
@@ -106209,7 +106209,7 @@
             let state = runtime
                 .workbook_state(workbook)
                 .expect("workbook state after R1C1 defined-name source setter");
-            let sheet_id = state.worksheets[0].id;
+            let sheet_id = state.worksheets()[0].id;
             let chart = state.charts.values().next().expect("chart model");
             let values = chart.series[0].values.as_ref().expect("series values");
             let Some(ReferenceTarget::Range(range)) = values.resolved.as_ref() else {
@@ -109949,7 +109949,7 @@
             .expect("runtime workbook before delete")
             .loaded
             .state
-            .worksheets
+            .worksheets()
             .len();
 
         let error = runtime
@@ -109963,7 +109963,7 @@
                 .expect("runtime workbook after rejected delete")
                 .loaded
                 .state
-                .worksheets
+                .worksheets()
                 .len(),
             worksheet_count_before
         );
@@ -110253,7 +110253,7 @@
             let state = runtime
                 .workbook_state(workbook)
                 .expect("workbook state after Range series setters");
-            let sheet_id = state.worksheets[0].id;
+            let sheet_id = state.worksheets()[0].id;
             let chart = state.charts.values().next().expect("chart model");
             let values = chart.series[0].values.as_ref().expect("series values");
             let Some(ReferenceTarget::Range(range)) = values.resolved.as_ref() else {
@@ -110298,7 +110298,7 @@
             let state = runtime
                 .workbook_state(workbook)
                 .expect("workbook state after multi-area Range series setter");
-            let sheet_id = state.worksheets[0].id;
+            let sheet_id = state.worksheets()[0].id;
             let chart = state.charts.values().next().expect("chart model");
             let values = chart.series[0].values.as_ref().expect("series values");
             assert_eq!(values.raw.text, "Sheet1!$B$1:$B$2,Sheet1!$D$1:$D$2");
@@ -113964,7 +113964,7 @@
         let reopened_state = reopened_runtime
             .workbook_state(reopened_workbook)
             .expect("reopened workbook state");
-        let reopened_sheet_id = reopened_state.worksheets[0].id;
+        let reopened_sheet_id = reopened_state.worksheets()[0].id;
         let reopened_chart = reopened_state
             .charts
             .values()
@@ -114336,7 +114336,7 @@
             let state = runtime
                 .workbook_state(workbook)
                 .expect("workbook state after qualified Series.Formula");
-            let sheet_id = state.worksheets[0].id;
+            let sheet_id = state.worksheets()[0].id;
             let chart = state.charts.values().next().expect("chart model");
             let series_model = chart.series.first().expect("series model");
             for (source, expected_text, expected_rect) in [
@@ -114445,7 +114445,7 @@
         let reopened_state = reopened_runtime
             .workbook_state(reopened_workbook)
             .expect("reopened workbook state");
-        let reopened_sheet_id = reopened_state.worksheets[0].id;
+        let reopened_sheet_id = reopened_state.worksheets()[0].id;
         let reopened_chart = reopened_state
             .charts
             .values()
@@ -114573,7 +114573,7 @@
         );
 
         let state = runtime.workbook_state(workbook).expect("workbook state");
-        let sheet_id = state.worksheets[0].id;
+        let sheet_id = state.worksheets()[0].id;
         let chart = state.charts.values().next().expect("chart model");
         let values = chart.series[0].values.as_ref().expect("series values");
         let Some(ReferenceTarget::Range(range)) = values.resolved.as_ref() else {
@@ -114612,7 +114612,7 @@
         let reopened_state = reopened_runtime
             .workbook_state(reopened_workbook)
             .expect("reopened workbook state");
-        let reopened_sheet_id = reopened_state.worksheets[0].id;
+        let reopened_sheet_id = reopened_state.worksheets()[0].id;
         let reopened_chart = reopened_state
             .charts
             .values()
@@ -114715,7 +114715,7 @@
             OmValue::Text("='Data, 2026'!$B$1:$B$3".to_string())
         );
         let state = runtime.workbook_state(workbook).expect("workbook state");
-        let sheet_id = state.worksheets[0].id;
+        let sheet_id = state.worksheets()[0].id;
         let chart = state.charts.values().next().expect("chart model");
         let values = chart.series[0].values.as_ref().expect("series values");
         let Some(ReferenceTarget::Range(range)) = values.resolved.as_ref() else {
@@ -114820,7 +114820,7 @@
             let state = runtime
                 .workbook_state(workbook)
                 .expect("workbook state after path-qualified Formula");
-            let sheet_id = state.worksheets[0].id;
+            let sheet_id = state.worksheets()[0].id;
             let chart = state.charts.values().next().expect("chart model");
             let values = chart.series[0].values.as_ref().expect("series values");
             let Some(ReferenceTarget::Range(range)) = values.resolved.as_ref() else {
@@ -115780,7 +115780,7 @@
             let state = runtime
                 .workbook_state(workbook)
                 .expect("workbook state after Chart.SetSourceData");
-            let sheet_id = state.worksheets[0].id;
+            let sheet_id = state.worksheets()[0].id;
             let chart = state.charts.values().next().expect("chart model");
             let values = chart.series[0].values.as_ref().expect("series values");
             let Some(ReferenceTarget::Range(range)) = values.resolved.as_ref() else {
@@ -116098,7 +116098,7 @@
             let state = runtime
                 .workbook_state(workbook)
                 .expect("workbook state after multi-area SetSourceData");
-            let sheet_id = state.worksheets[0].id;
+            let sheet_id = state.worksheets()[0].id;
             let chart = state.charts.values().next().expect("chart model");
             let values = chart.series[0].values.as_ref().expect("series values");
             let Some(ReferenceTarget::Range(range)) = values.resolved.as_ref() else {
@@ -117218,7 +117218,7 @@
         assert_eq!(
             reopened
                 .state
-                .worksheets
+                .worksheets()
                 .iter()
                 .map(|worksheet| worksheet.name.clone())
                 .collect::<Vec<_>>(),
@@ -117231,7 +117231,7 @@
         assert_eq!(
             reopened
                 .state
-                .worksheet_data_for_sheet(reopened.state.worksheets[1].id)
+                .worksheet_data_for_sheet(reopened.state.worksheets()[1].id)
                 .expect("reopened template sheet data")
                 .cells
                 .get(&(3, 3))
@@ -117305,7 +117305,7 @@
             .codec
             .load(&saved, LoadOptions::default())
             .expect("reopen hyperlink template workbook");
-        let added_sheet_id = reopened.state.worksheets[1].id;
+        let added_sheet_id = reopened.state.worksheets()[1].id;
         let support_parts = reopened
             .worksheet_support_parts
             .get(&added_sheet_id)
@@ -117314,7 +117314,7 @@
         assert_eq!(
             reopened
                 .state
-                .worksheets
+                .worksheets()
                 .iter()
                 .map(|worksheet| worksheet.name.clone())
                 .collect::<Vec<_>>(),
@@ -117736,7 +117736,7 @@
         assert_eq!(
             reopened
                 .state
-                .worksheets
+                .worksheets()
                 .iter()
                 .map(|worksheet| worksheet.name.as_str())
                 .collect::<Vec<_>>(),
@@ -117985,7 +117985,7 @@
         assert_eq!(
             reopened
                 .state
-                .worksheets
+                .worksheets()
                 .iter()
                 .map(|worksheet| worksheet.name.clone())
                 .collect::<Vec<_>>(),
@@ -118132,7 +118132,7 @@
         assert_eq!(
             reopened
                 .state
-                .worksheets
+                .worksheets()
                 .iter()
                 .map(|worksheet| (worksheet.name.clone(), worksheet.kind))
                 .collect::<Vec<_>>(),
@@ -118332,7 +118332,7 @@
         assert_eq!(
             reopened
                 .state
-                .worksheets
+                .worksheets()
                 .iter()
                 .map(|worksheet| worksheet.name.clone())
                 .collect::<Vec<_>>(),
@@ -118509,7 +118509,7 @@
         assert_eq!(
             reopened
                 .state
-                .worksheets
+                .worksheets()
                 .iter()
                 .map(|worksheet| worksheet.name.clone())
                 .collect::<Vec<_>>(),
@@ -118518,7 +118518,7 @@
         assert_eq!(
             reopened
                 .state
-                .cell(reopened.state.worksheets[0].id, 2, 2)
+                .cell(reopened.state.worksheets()[0].id, 2, 2)
                 .map(|cell| cell.value.clone()),
             Some(CellValue::Text("moved".to_string()))
         );
@@ -118664,13 +118664,13 @@
         assert_eq!(
             reopened
                 .state
-                .worksheets
+                .worksheets()
                 .iter()
                 .map(|worksheet| worksheet.name.clone())
                 .collect::<Vec<_>>(),
             vec!["Dialog1".to_string()]
         );
-        let dialog = &reopened.state.worksheets[0];
+        let dialog = &reopened.state.worksheets()[0];
         assert_eq!(dialog.kind, office_common::SheetKind::DialogSheet);
         assert_eq!(
             dialog.part_uri.as_deref(),
@@ -118926,7 +118926,7 @@
         assert_eq!(
             reopened
                 .state
-                .worksheets
+                .worksheets()
                 .iter()
                 .map(|worksheet| worksheet.name.clone())
                 .collect::<Vec<_>>(),
@@ -118935,7 +118935,7 @@
         assert_eq!(
             reopened
                 .state
-                .cell(reopened.state.worksheets[0].id, 3, 3)
+                .cell(reopened.state.worksheets()[0].id, 3, 3)
                 .map(|cell| cell.value.clone()),
             Some(CellValue::Text("copied".to_string()))
         );
@@ -119070,13 +119070,13 @@
         assert_eq!(
             reopened
                 .state
-                .worksheets
+                .worksheets()
                 .iter()
                 .map(|worksheet| worksheet.name.clone())
                 .collect::<Vec<_>>(),
             vec!["Macro1".to_string()]
         );
-        let macro_sheet = &reopened.state.worksheets[0];
+        let macro_sheet = &reopened.state.worksheets()[0];
         assert_eq!(macro_sheet.kind, office_common::SheetKind::MacroSheet);
         assert_eq!(
             macro_sheet.part_uri.as_deref(),
@@ -119215,7 +119215,7 @@
         assert_eq!(
             reopened
                 .state
-                .worksheets
+                .worksheets()
                 .iter()
                 .map(|worksheet| worksheet.name.clone())
                 .collect::<Vec<_>>(),
@@ -119228,7 +119228,7 @@
         assert_eq!(
             reopened
                 .state
-                .cell(reopened.state.worksheets[2].id, 3, 3)
+                .cell(reopened.state.worksheets()[2].id, 3, 3)
                 .map(|cell| cell.value.clone()),
             Some(CellValue::Text("copied".to_string()))
         );
@@ -119312,13 +119312,13 @@
             .expect("reopen target workbook after Worksheet.Copy");
         let original_sheet = reopened
             .state
-            .worksheets
+            .worksheets()
             .iter()
             .find(|worksheet| worksheet.name == "Sheet1")
             .expect("original target Sheet1");
         let copied_sheet = reopened
             .state
-            .worksheets
+            .worksheets()
             .iter()
             .find(|worksheet| worksheet.name == "Sheet1 (2)")
             .expect("copied source Sheet1");
@@ -119466,7 +119466,7 @@
         assert_eq!(
             reopened
                 .state
-                .worksheets
+                .worksheets()
                 .iter()
                 .map(|worksheet| worksheet.name.clone())
                 .collect::<Vec<_>>(),
@@ -119502,7 +119502,7 @@
         ] {
             let sheet = reopened
                 .state
-                .worksheets
+                .worksheets()
                 .iter()
                 .find(|worksheet| worksheet.name == name)
                 .expect("reopened copied native sheet");
@@ -119623,7 +119623,7 @@
         assert_eq!(
             reopened
                 .state
-                .worksheets
+                .worksheets()
                 .iter()
                 .map(|worksheet| worksheet.name.clone())
                 .collect::<Vec<_>>(),
@@ -119631,7 +119631,7 @@
         );
         let dialog = reopened
             .state
-            .worksheets
+            .worksheets()
             .iter()
             .find(|worksheet| worksheet.name == "Dialog1")
             .expect("reopened moved dialog sheet");
@@ -119685,7 +119685,7 @@
             .codec
             .load(&saved, LoadOptions::default())
             .expect("reopen copied hyperlink workbook");
-        let copied_sheet_id = reopened.state.worksheets[1].id;
+        let copied_sheet_id = reopened.state.worksheets()[1].id;
         let support_parts = reopened
             .worksheet_support_parts
             .get(&copied_sheet_id)
@@ -119694,7 +119694,7 @@
         assert_eq!(
             reopened
                 .state
-                .worksheets
+                .worksheets()
                 .iter()
                 .map(|worksheet| worksheet.name.clone())
                 .collect::<Vec<_>>(),
@@ -119764,7 +119764,7 @@
             .codec
             .load(&saved, LoadOptions::default())
             .expect("reopen copied comment workbook");
-        let copied_sheet_id = reopened.state.worksheets[1].id;
+        let copied_sheet_id = reopened.state.worksheets()[1].id;
         let support_parts = reopened
             .worksheet_support_parts
             .get(&copied_sheet_id)
@@ -119773,7 +119773,7 @@
         assert_eq!(
             reopened
                 .state
-                .worksheets
+                .worksheets()
                 .iter()
                 .map(|worksheet| worksheet.name.clone())
                 .collect::<Vec<_>>(),
@@ -119911,7 +119911,7 @@
             .expect("reopened workbook state")
             .loaded
             .state
-            .worksheets[1]
+            .worksheets()[1]
             .id;
         let copied_drawing_model = reopened_runtime
             .runtime_workbook(reopened_workbook)
@@ -120098,7 +120098,7 @@
             .codec
             .load(&saved, LoadOptions::default())
             .expect("reopen moved chart and raw shape workbook");
-        let moved_sheet_id = reopened.state.worksheets[0].id;
+        let moved_sheet_id = reopened.state.worksheets()[0].id;
         let moved_drawing = reopened
             .state
             .drawings
@@ -120127,7 +120127,7 @@
             .expect("source workbook state")
             .loaded
             .state
-            .worksheets[0]
+            .worksheets()[0]
             .id;
         assert!(runtime
             .runtime_workbook(source_workbook)
@@ -120159,7 +120159,7 @@
             .expect("target workbook state")
             .loaded
             .state
-            .worksheets[0]
+            .worksheets()[0]
             .id;
         let target_sheet = runtime.register_worksheet_handle(target_workbook, target_sheet_id);
 
@@ -120199,7 +120199,7 @@
                 .expect("target workbook state")
                 .loaded
                 .state
-                .worksheets
+                .worksheets()
                 .len(),
             2
         );
@@ -120209,7 +120209,7 @@
                 .expect("source workbook state")
                 .loaded
                 .state
-                .worksheets
+                .worksheets()
                 .len(),
             1
         );
@@ -120253,7 +120253,7 @@
             .expect("source workbook state")
             .loaded
             .state
-            .worksheets[0]
+            .worksheets()[0]
             .id;
         let source_sheet = runtime.register_worksheet_handle(source_workbook, source_sheet_id);
         let target_workbook = runtime
@@ -120269,7 +120269,7 @@
             .expect("target workbook state")
             .loaded
             .state
-            .worksheets[0]
+            .worksheets()[0]
             .id;
         let target_sheet = runtime.register_worksheet_handle(target_workbook, target_sheet_id);
 
@@ -120292,7 +120292,7 @@
                 .expect("target workbook state")
                 .loaded
                 .state
-                .worksheets
+                .worksheets()
                 .len(),
             1
         );
@@ -120302,7 +120302,7 @@
                 .expect("source workbook state")
                 .loaded
                 .state
-                .worksheets
+                .worksheets()
                 .len(),
             1
         );
@@ -120447,13 +120447,13 @@
         assert_eq!(
             reopened
                 .state
-                .worksheets
+                .worksheets()
                 .iter()
                 .filter(|sheet| sheet.kind == office_common::SheetKind::ChartSheet)
                 .count(),
             2
         );
-        let copied_sheet_id = reopened.state.worksheets[1].id;
+        let copied_sheet_id = reopened.state.worksheets()[1].id;
         let copied_drawing_model = reopened
             .state
             .drawings
@@ -120539,7 +120539,7 @@
             .filter(|drawing| {
                 reopened
                     .state
-                    .worksheets
+                    .worksheets()
                     .iter()
                     .find(|sheet| sheet.id == drawing.host_sheet_id)
                     .is_some_and(|sheet| {
@@ -120570,7 +120570,7 @@
             .expect("source workbook state")
             .loaded
             .state
-            .worksheets[0]
+            .worksheets()[0]
             .id;
         let source_chart_sheet =
             runtime.register_worksheet_handle(source_workbook, source_sheet_id);
@@ -120587,7 +120587,7 @@
             .expect("target workbook state")
             .loaded
             .state
-            .worksheets[0]
+            .worksheets()[0]
             .id;
         let target_sheet = runtime.register_worksheet_handle(target_workbook, target_sheet_id);
 
@@ -120643,7 +120643,7 @@
         assert_eq!(
             reopened
                 .state
-                .worksheets
+                .worksheets()
                 .iter()
                 .filter(|sheet| sheet.kind == office_common::SheetKind::ChartSheet)
                 .count(),
@@ -120669,7 +120669,7 @@
             .expect("source workbook state")
             .loaded
             .state
-            .worksheets[0]
+            .worksheets()[0]
             .id;
         let source_chart_sheet =
             runtime.register_worksheet_handle(source_workbook, source_sheet_id);
@@ -120686,7 +120686,7 @@
             .expect("target workbook state")
             .loaded
             .state
-            .worksheets[0]
+            .worksheets()[0]
             .id;
         let target_sheet = runtime.register_worksheet_handle(target_workbook, target_sheet_id);
 
@@ -120709,7 +120709,7 @@
                 .expect("target workbook state")
                 .loaded
                 .state
-                .worksheets
+                .worksheets()
                 .len(),
             1
         );
@@ -120889,7 +120889,7 @@
         let target_runtime = runtime
             .runtime_workbook(target_workbook)
             .expect("target workbook after rejected copy");
-        assert_eq!(target_runtime.loaded.state.worksheets.len(), 1);
+        assert_eq!(target_runtime.loaded.state.worksheets().len(), 1);
         assert!(target_runtime.loaded.pending_chart_relationship_graphs.is_empty());
         assert!(!target_runtime.prompt_dirty);
         assert!(
@@ -121449,7 +121449,7 @@
             .codec
             .load(&saved, LoadOptions::default())
             .expect("reopen moved comment workbook");
-        let moved_sheet_id = reopened.state.worksheets[0].id;
+        let moved_sheet_id = reopened.state.worksheets()[0].id;
         let support_parts = reopened
             .worksheet_support_parts
             .get(&moved_sheet_id)
@@ -121458,7 +121458,7 @@
         assert_eq!(
             reopened
                 .state
-                .worksheets
+                .worksheets()
                 .iter()
                 .map(|worksheet| worksheet.name.clone())
                 .collect::<Vec<_>>(),
@@ -121648,7 +121648,7 @@
         assert_eq!(
             reopened
                 .state
-                .worksheets
+                .worksheets()
                 .iter()
                 .map(|worksheet| worksheet.name.clone())
                 .collect::<Vec<_>>(),
@@ -121657,7 +121657,7 @@
         assert_eq!(
             reopened
                 .state
-                .cell(reopened.state.worksheets[0].id, 2, 2)
+                .cell(reopened.state.worksheets()[0].id, 2, 2)
                 .map(|cell| cell.value.clone()),
             Some(CellValue::Text("moved".to_string()))
         );
@@ -121757,13 +121757,13 @@
             .expect("reopen target workbook after shared string collision move");
         let original_sheet = reopened
             .state
-            .worksheets
+            .worksheets()
             .iter()
             .find(|worksheet| worksheet.name == "Sheet1")
             .expect("original target Sheet1");
         let moved_sheet = reopened
             .state
-            .worksheets
+            .worksheets()
             .iter()
             .find(|worksheet| worksheet.name == "Sheet1 (2)")
             .expect("moved source Sheet1");
@@ -122283,7 +122283,7 @@
             )
             .expect("reload SaveAs target");
         assert_eq!(
-            reopened_after_save_as.state.worksheets[0].name,
+            reopened_after_save_as.state.worksheets()[0].name,
             "SavedAsName"
         );
 
@@ -122307,7 +122307,7 @@
             )
             .expect("reload target after Save");
         assert_eq!(
-            reopened_after_save.state.worksheets[0].name,
+            reopened_after_save.state.worksheets()[0].name,
             "SavedAfterSaveAs"
         );
 
@@ -122384,7 +122384,7 @@
                 office_common::LoadOptions::default(),
             )
             .expect("reload SaveAs FileFormat target");
-        assert_eq!(reopened.state.worksheets[0].name, "SavedAsFormat");
+        assert_eq!(reopened.state.worksheets()[0].name, "SavedAsFormat");
 
         runtime
             .dispatch_invoke(
@@ -122411,7 +122411,7 @@
             )
             .expect("reload inferred xlsm SaveAs target");
         assert_eq!(reopened_macro.detected_format, FileFormat::Xlsm);
-        assert_eq!(reopened_macro.state.worksheets[0].name, "SavedAsFormat");
+        assert_eq!(reopened_macro.state.worksheets()[0].name, "SavedAsFormat");
 
         runtime
             .dispatch_set(
@@ -122433,7 +122433,7 @@
             .expect("reload inferred xlsm after Save");
         assert_eq!(reopened_after_save.detected_format, FileFormat::Xlsm);
         assert_eq!(
-            reopened_after_save.state.worksheets[0].name,
+            reopened_after_save.state.worksheets()[0].name,
             "SavedAfterXlsm"
         );
 
@@ -122473,7 +122473,7 @@
             )
             .expect("reload optional SaveAs target");
         assert_eq!(reopened_options.detected_format, FileFormat::Xlsx);
-        assert_eq!(reopened_options.state.worksheets[0].name, "SavedAfterXlsm");
+        assert_eq!(reopened_options.state.worksheets()[0].name, "SavedAfterXlsm");
 
         assert_eq!(
             runtime
@@ -123117,7 +123117,7 @@
                 office_common::LoadOptions::default(),
             )
             .expect("reload SaveCopyAs target");
-        assert_eq!(copied.state.worksheets[0].name, "CopiedOnly");
+        assert_eq!(copied.state.worksheets()[0].name, "CopiedOnly");
 
         fs::remove_dir_all(&base_dir).expect("cleanup SaveCopyAs fixture");
     }
@@ -123192,7 +123192,7 @@
                 LoadOptions::default(),
             )
             .expect("reopen workbook saved after Saved=true");
-        let sheet_id = reopened.state.worksheets[0].id;
+        let sheet_id = reopened.state.worksheets()[0].id;
         assert_eq!(
             reopened.state.cell(sheet_id, 1, 1).map(|cell| &cell.value),
             Some(&CellValue::Text(
@@ -123644,7 +123644,7 @@
                                         )
                                         .expect("reload saved Close source");
                                     assert_eq!(
-                                        reopened.state.worksheets[0].name,
+                                        reopened.state.worksheets()[0].name,
                                         expected_sheet_name,
                                         "{case_description}"
                                     );
@@ -123667,7 +123667,7 @@
                                     )
                                     .expect("reload Close Filename target");
                                 assert_eq!(
-                                    reopened.state.worksheets[0].name,
+                                    reopened.state.worksheets()[0].name,
                                     expected_sheet_name,
                                     "{case_description}"
                                 );
@@ -123784,7 +123784,7 @@
                 LoadOptions::default(),
             )
             .expect("reload read-only Close target");
-        assert_eq!(reopened.state.worksheets[0].name, "Sheet1");
+        assert_eq!(reopened.state.worksheets()[0].name, "Sheet1");
 
         fs::remove_dir_all(base_dir).expect("cleanup read-only Close fixture");
     }
@@ -123844,7 +123844,7 @@
                 office_common::LoadOptions::default(),
             )
             .expect("reload closed workbook");
-        assert_eq!(reopened.state.worksheets[0].name, "ClosedSaved");
+        assert_eq!(reopened.state.worksheets()[0].name, "ClosedSaved");
 
         fs::remove_file(&source_path).expect("cleanup source fixture");
     }
@@ -123914,7 +123914,7 @@
                 office_common::LoadOptions::default(),
             )
             .expect("reload source workbook");
-        assert_eq!(source_reopened.state.worksheets[0].name, "Sheet1");
+        assert_eq!(source_reopened.state.worksheets()[0].name, "Sheet1");
 
         let target_reopened = ExcelRuntime::new()
             .codec
@@ -123923,7 +123923,7 @@
                 office_common::LoadOptions::default(),
             )
             .expect("reload target workbook");
-        assert_eq!(target_reopened.state.worksheets[0].name, "ClosedAsTarget");
+        assert_eq!(target_reopened.state.worksheets()[0].name, "ClosedAsTarget");
 
         fs::remove_dir_all(&base_dir).expect("cleanup close filename dir");
     }
@@ -123983,7 +123983,7 @@
                 office_common::LoadOptions::default(),
             )
             .expect("reload closed workbook");
-        assert_eq!(reopened.state.worksheets[0].name, "Sheet1");
+        assert_eq!(reopened.state.worksheets()[0].name, "Sheet1");
 
         fs::remove_file(&source_path).expect("cleanup source fixture");
     }
@@ -124742,7 +124742,7 @@
             .expect("source runtime workbook")
             .loaded
             .state
-            .worksheets
+            .worksheets()
             .iter()
             .map(|worksheet| (worksheet.name.clone(), worksheet.kind))
             .collect::<Vec<_>>();
@@ -124862,7 +124862,7 @@
         assert_eq!(
             reopened
                 .state
-                .worksheets
+                .worksheets()
                 .iter()
                 .map(|worksheet| (worksheet.name.clone(), worksheet.kind))
                 .collect::<Vec<_>>(),
@@ -124876,7 +124876,7 @@
         ] {
             let part_uri = reopened
                 .state
-                .worksheets
+                .worksheets()
                 .iter()
                 .find(|worksheet| worksheet.kind == kind)
                 .and_then(|worksheet| worksheet.part_uri.as_deref())
@@ -124885,7 +124885,7 @@
         }
         let chart_sheet = reopened
             .state
-            .worksheets
+            .worksheets()
             .iter()
             .find(|worksheet| worksheet.kind == office_common::SheetKind::ChartSheet)
             .expect("reopened chart sheet");
@@ -124961,7 +124961,7 @@
             .expect("source runtime workbook")
             .loaded
             .state
-            .worksheets
+            .worksheets()
             .iter()
             .map(|worksheet| (worksheet.name.clone(), worksheet.kind))
             .collect::<Vec<_>>();
@@ -125039,7 +125039,7 @@
         assert_eq!(
             reopened
                 .state
-                .worksheets
+                .worksheets()
                 .iter()
                 .map(|worksheet| worksheet.kind)
                 .collect::<Vec<_>>(),
@@ -125049,7 +125049,7 @@
         );
         let copied_worksheet = reopened
             .state
-            .worksheets
+            .worksheets()
             .iter()
             .filter(|worksheet| worksheet.kind == office_common::SheetKind::Worksheet)
             .nth(1)
@@ -125075,7 +125075,7 @@
             assert!(
                 reopened
                     .state
-                    .worksheets
+                    .worksheets()
                     .iter()
                     .filter(|worksheet| worksheet.kind == kind)
                     .all(|worksheet| worksheet
@@ -125155,7 +125155,7 @@
             .expect("source runtime workbook")
             .loaded
             .state
-            .worksheets
+            .worksheets()
             .iter()
             .map(|worksheet| (worksheet.name.clone(), worksheet.kind))
             .collect::<Vec<_>>();
@@ -125240,7 +125240,7 @@
         assert_eq!(
             reopened
                 .state
-                .worksheets
+                .worksheets()
                 .iter()
                 .map(|worksheet| worksheet.kind)
                 .collect::<Vec<_>>(),
@@ -125250,7 +125250,7 @@
         );
         let moved_worksheet = reopened
             .state
-            .worksheets
+            .worksheets()
             .iter()
             .filter(|worksheet| worksheet.kind == office_common::SheetKind::Worksheet)
             .nth(1)
@@ -125276,7 +125276,7 @@
             assert!(
                 reopened
                     .state
-                    .worksheets
+                    .worksheets()
                     .iter()
                     .filter(|worksheet| worksheet.kind == kind)
                     .all(|worksheet| worksheet
@@ -125357,13 +125357,13 @@
             .expect("reopen target workbook after shared string collision copy");
         let original_sheet = reopened
             .state
-            .worksheets
+            .worksheets()
             .iter()
             .find(|worksheet| worksheet.name == "Sheet1")
             .expect("original target Sheet1");
         let copied_sheet = reopened
             .state
-            .worksheets
+            .worksheets()
             .iter()
             .find(|worksheet| worksheet.name == "Sheet1 (2)")
             .expect("copied source Sheet1");
@@ -125470,13 +125470,13 @@
             .expect("reopen target workbook after shared string collision move");
         let original_sheet = reopened
             .state
-            .worksheets
+            .worksheets()
             .iter()
             .find(|worksheet| worksheet.name == "Sheet1")
             .expect("original target Sheet1");
         let moved_sheet = reopened
             .state
-            .worksheets
+            .worksheets()
             .iter()
             .find(|worksheet| worksheet.name == "Sheet1 (2)")
             .expect("moved source Sheet1");
@@ -125561,7 +125561,7 @@
             .expect("source runtime workbook")
             .loaded
             .state
-            .worksheets
+            .worksheets()
             .iter()
             .map(|worksheet| (worksheet.name.clone(), worksheet.kind))
             .collect::<Vec<_>>();
@@ -125660,7 +125660,7 @@
         assert_eq!(
             reopened
                 .state
-                .worksheets
+                .worksheets()
                 .iter()
                 .map(|worksheet| (worksheet.name.clone(), worksheet.kind))
                 .collect::<Vec<_>>(),
@@ -125674,7 +125674,7 @@
         ] {
             let part_uri = reopened
                 .state
-                .worksheets
+                .worksheets()
                 .iter()
                 .find(|worksheet| worksheet.kind == kind)
                 .and_then(|worksheet| worksheet.part_uri.as_deref())

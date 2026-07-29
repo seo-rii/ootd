@@ -579,7 +579,7 @@ impl ExcelRuntime {
                     let Some(worksheet) = runtime
                         .loaded
                         .state
-                        .worksheets
+                        .worksheets()
                         .iter()
                         .find(|worksheet| worksheet.id == sheet_id)
                     else {
@@ -1941,7 +1941,7 @@ impl ExcelRuntime {
                     ));
                 }
                 let state = &self.runtime_workbook(workbook)?.loaded.state;
-                if let Some(worksheet) = state.worksheets.iter().find(|worksheet| {
+                if let Some(worksheet) = state.worksheets().iter().find(|worksheet| {
                     state
                         .chart_sheets
                         .get(&worksheet.id)
@@ -2127,7 +2127,7 @@ impl ExcelRuntime {
                 let (chart_sheet_index, embedded_chart_object) = {
                     let state = &self.runtime_workbook(workbook)?.loaded.state;
                     let chart_sheet_index = state
-                        .worksheets
+                        .worksheets()
                         .iter()
                         .filter(|worksheet| worksheet.kind == SheetKind::ChartSheet)
                         .position(|worksheet| {
@@ -2180,20 +2180,20 @@ impl ExcelRuntime {
                             .map(|(host_sheet_id, _, _)| host_sheet_id))
                         .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "chart not found"))?;
                     let index = state
-                        .worksheets
+                        .worksheets()
                         .iter()
                         .position(|worksheet| worksheet.id == base_sheet_id)
                         .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "unknown worksheet"))?;
                     if member == "Next" {
                         state
-                            .worksheets
+                            .worksheets()
                             .get(index + 1)
                             .map(|worksheet| worksheet.id)
                     } else if index == 0 {
                         None
                     } else {
                         state
-                            .worksheets
+                            .worksheets()
                             .get(index - 1)
                             .map(|worksheet| worksheet.id)
                     }

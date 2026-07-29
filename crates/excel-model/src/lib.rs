@@ -119,7 +119,7 @@ impl WorksheetData {
 #[derive(Debug, Clone, PartialEq)]
 pub struct WorkbookState {
     model: WorkbookModel,
-    pub worksheets: Vec<WorksheetModel>,
+    worksheets: Vec<WorksheetModel>,
     worksheet_data: BTreeMap<SheetId, WorksheetData>,
     pub defined_names: DefinedNameTable,
     pub charts: BTreeMap<ChartId, ChartModel>,
@@ -166,8 +166,35 @@ impl WorkbookState {
         Ok(state)
     }
 
+    pub fn into_parts(self) -> WorkbookStateParts {
+        let Self {
+            model,
+            worksheets,
+            worksheet_data,
+            defined_names,
+            charts,
+            drawings,
+            chart_sheets,
+            opaque_parts,
+        } = self;
+        WorkbookStateParts {
+            model,
+            worksheets,
+            worksheet_data,
+            defined_names,
+            charts,
+            drawings,
+            chart_sheets,
+            opaque_parts,
+        }
+    }
+
     pub fn model(&self) -> &WorkbookModel {
         &self.model
+    }
+
+    pub fn worksheets(&self) -> &[WorksheetModel] {
+        &self.worksheets
     }
 
     pub fn set_display_name(&mut self, display_name: impl Into<String>) -> bool {
@@ -3129,6 +3156,18 @@ mod tests {
         assert!(state.model().date1904);
         assert!(state.model().is_addin);
         assert_eq!(state.model().format, FileFormat::Xltx);
+    }
+
+    #[test]
+    fn workbook_state_parts_round_trip_preserves_private_collections() {
+        let state = sample_state();
+
+        assert_eq!(state.worksheets().len(), 1);
+        assert_eq!(state.worksheets()[0].id, SheetId(3));
+        let rebuilt = WorkbookState::try_new(state.clone().into_parts())
+            .expect("validated state parts should reconstruct the same workbook");
+
+        assert_eq!(rebuilt, state);
     }
 
     #[test]

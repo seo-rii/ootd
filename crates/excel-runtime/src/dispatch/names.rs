@@ -354,7 +354,7 @@ impl ExcelRuntime {
                     )?;
                     let workbook_id = runtime.loaded.state.model().id;
                     let workbook_display_name = runtime.loaded.state.model().display_name.clone();
-                    let worksheets = runtime.loaded.state.worksheets.clone();
+                    let worksheets = runtime.loaded.state.worksheets().to_vec();
                     let defined_names = runtime.loaded.state.defined_names.clone();
                     let mut chart_source_current_sheets = BTreeMap::new();
                     for (chart_sheet_id, binding) in &runtime.loaded.state.chart_sheets {
@@ -512,7 +512,7 @@ impl ExcelRuntime {
                 runtime.loaded.state.defined_names.remove_by_id(name_id)?;
                 let workbook_id = runtime.loaded.state.model().id;
                 let workbook_display_name = runtime.loaded.state.model().display_name.clone();
-                let worksheets = runtime.loaded.state.worksheets.clone();
+                let worksheets = runtime.loaded.state.worksheets().to_vec();
                 let defined_names = runtime.loaded.state.defined_names.clone();
                 let mut chart_source_current_sheets = BTreeMap::new();
                 for (chart_sheet_id, binding) in &runtime.loaded.state.chart_sheets {

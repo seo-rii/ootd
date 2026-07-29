@@ -47,7 +47,7 @@ pub(crate) fn has_state_only_chart_graphs(workbook: &LoadedXlsxWorkbook) -> bool
         || !workbook.pending_chart_relationship_graphs.is_empty()
         || workbook
             .state
-            .worksheets
+            .worksheets()
             .iter()
             .any(|sheet| sheet.kind == SheetKind::ChartSheet && sheet.part_uri.is_none())
         || workbook
@@ -149,7 +149,7 @@ pub(crate) fn validate_chart_graphs_for_save(
     let workbook_id = workbook.state.model().id;
     let sheets = workbook
         .state
-        .worksheets
+        .worksheets()
         .iter()
         .map(|sheet| (sheet.id, sheet))
         .collect::<BTreeMap<_, _>>();
@@ -158,7 +158,7 @@ pub(crate) fn validate_chart_graphs_for_save(
     let mut opaque_object_ids = BTreeSet::new();
     let mut materialized_part_owners = BTreeMap::new();
 
-    for sheet in &workbook.state.worksheets {
+    for sheet in workbook.state.worksheets() {
         if sheet.workbook_id != workbook_id {
             return Err(OmError::invalid_state(format!(
                 "sheet {} belongs to a different workbook",
@@ -851,7 +851,7 @@ fn materialize_chart_sheet_shells(
 ) -> OmResult<()> {
     let sheet_ids = workbook
         .state
-        .worksheets
+        .worksheets()
         .iter()
         .filter(|sheet| sheet.kind == SheetKind::ChartSheet && sheet.part_uri.is_none())
         .map(|sheet| sheet.id)
@@ -878,7 +878,7 @@ fn materialize_chart_sheet_shells(
     for sheet_id in sheet_ids {
         let insertion_index = workbook
             .state
-            .worksheets
+            .worksheets()
             .iter()
             .position(|sheet| sheet.id == sheet_id)
             .expect("state-only chart sheet id collected above");
@@ -892,7 +892,7 @@ fn materialize_chart_sheet_shells(
 
         let sheet = workbook
             .state
-            .worksheets
+            .worksheets()
             .iter()
             .find(|sheet| sheet.id == sheet_id)
             .expect("state-only chart sheet id collected above");
@@ -1106,7 +1106,7 @@ fn materialize_new_drawings(
         }
         let host_part_uri = workbook
             .state
-            .worksheets
+            .worksheets()
             .iter()
             .find(|sheet| sheet.id == host_sheet_id)
             .and_then(|sheet| sheet.part_uri.clone())
@@ -1420,7 +1420,7 @@ fn attach_drawing_to_host(
         .replace_part_bytes(host_part_uri, updated_host_xml.clone())?;
     if let Some(sheet_id) = workbook
         .state
-        .worksheets
+        .worksheets()
         .iter()
         .find(|sheet| sheet.part_uri.as_deref() == Some(host_part_uri))
         .map(|sheet| sheet.id)
@@ -4241,7 +4241,7 @@ mod tests {
         let bytes = XlsxCodec
             .save(&workbook, SaveOptions::default())
             .expect("direct codec save should materialize chart sheet graph");
-        assert!(workbook.state.worksheets[0].part_uri.is_none());
+        assert!(workbook.state.worksheets()[0].part_uri.is_none());
         assert!(
             workbook.state.chart_sheets[&sheet_id]
                 .raw_part_uri
@@ -4296,8 +4296,8 @@ mod tests {
         let reopened = XlsxCodec
             .load(&bytes, LoadOptions::default())
             .expect("reopen materialized chart sheet");
-        assert_eq!(reopened.state.worksheets.len(), 2);
-        assert_eq!(reopened.state.worksheets[0].kind, SheetKind::ChartSheet);
+        assert_eq!(reopened.state.worksheets().len(), 2);
+        assert_eq!(reopened.state.worksheets()[0].kind, SheetKind::ChartSheet);
         assert_eq!(
             reopened.state.chart_sheets[&sheet_id]
                 .raw_part_uri
@@ -4801,17 +4801,18 @@ mod tests {
     }
 
     #[test]
-    fn public_materializer_rejects_invalid_model_before_graph_materialization() {
+    fn workbook_state_construction_rejects_empty_worksheet_collection() {
         let mut workbook = base_workbook();
         let chart_id = ChartId(1);
         workbook
             .state
             .charts
             .insert(chart_id, state_only_chart(chart_id));
-        workbook.state.worksheets.clear();
+        let mut parts = workbook.state.into_parts();
+        parts.worksheets.clear();
 
-        let error = materialize_state_only_chart_graphs(workbook)
-            .expect_err("model validation must precede chart graph validation");
+        let error = WorkbookState::try_new(parts)
+            .expect_err("validated construction must reject an empty worksheet collection");
 
         assert_eq!(error.code, OmErrorCode::InvalidState);
         assert!(error.message.contains("at least one worksheet"));

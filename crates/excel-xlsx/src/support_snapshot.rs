@@ -14,7 +14,7 @@ pub(crate) enum RetainedTargetPolicy {
 pub(crate) fn validate_support_snapshot_owners(workbook: &LoadedXlsxWorkbook) -> OmResult<()> {
     let sheets = workbook
         .state
-        .worksheets
+        .worksheets()
         .iter()
         .map(|sheet| (sheet.id, sheet))
         .collect::<BTreeMap<_, _>>();

@@ -1473,7 +1473,7 @@ impl ExcelRuntime {
                 .runtime_workbook(workbook)?
                 .loaded
                 .state
-                .worksheets
+                .worksheets()
                 .first()
                 .map(|worksheet| worksheet.id)
                 .ok_or_else(|| {
@@ -1603,7 +1603,7 @@ impl ExcelRuntime {
         let workbook_handle = WorkbookHandle(ObjectHandle(handle_value));
         let default_selection = loaded
             .state
-            .worksheets
+            .worksheets()
             .iter()
             .find(|worksheet| worksheet.visibility == SheetVisibility::Visible)
             .map(|worksheet| RuntimeSelection {
@@ -1895,7 +1895,7 @@ impl ExcelRuntime {
                 if let Some(sheet_id) = sheet_id {
                     let target_sheet_part_uri = loaded
                         .state
-                        .worksheets
+                        .worksheets()
                         .iter()
                         .find(|worksheet| worksheet.id == sheet_id)
                         .and_then(|worksheet| worksheet.part_uri.clone());
@@ -2326,7 +2326,7 @@ impl ExcelRuntime {
     }
 
     pub fn worksheets(&self, workbook: WorkbookHandle) -> OmResult<&[WorksheetModel]> {
-        Ok(&self.runtime_workbook(workbook)?.loaded.state.worksheets)
+        Ok(self.runtime_workbook(workbook)?.loaded.state.worksheets())
     }
 
     pub fn opaque_parts(&self, workbook: WorkbookHandle) -> OmResult<&[OpaquePart]> {
@@ -3511,7 +3511,7 @@ impl ExcelRuntime {
                                 "Worksheet.Name contains invalid characters",
                             ));
                         }
-                        if runtime.loaded.state.worksheets.iter().any(|worksheet| {
+                        if runtime.loaded.state.worksheets().iter().any(|worksheet| {
                             worksheet.id != sheet_id
                                 && worksheet.name.eq_ignore_ascii_case(new_name.as_str())
                         }) {
@@ -3522,18 +3522,18 @@ impl ExcelRuntime {
                         let worksheet_index = runtime
                             .loaded
                             .state
-                            .worksheets
+                            .worksheets()
                             .iter()
                             .position(|worksheet| worksheet.id == sheet_id)
                             .ok_or_else(|| {
                                 OmError::new(OmErrorCode::NotFound, "unknown worksheet")
                             })?;
-                        if runtime.loaded.state.worksheets[worksheet_index].name != new_name {
+                        if runtime.loaded.state.worksheets()[worksheet_index].name != new_name {
                             Self::ensure_pivot_sheet_lifecycle_supported(
                                 runtime,
                                 "Worksheet.Name",
                             )?;
-                            let old_worksheets = runtime.loaded.state.worksheets.clone();
+                            let old_worksheets = runtime.loaded.state.worksheets().to_vec();
                             runtime
                                 .loaded
                                 .state
@@ -3544,11 +3544,11 @@ impl ExcelRuntime {
                             let sheet_names = runtime
                                 .loaded
                                 .state
-                                .worksheets
+                                .worksheets()
                                 .iter()
                                 .map(|worksheet| (worksheet.id, worksheet.name.clone()))
                                 .collect::<BTreeMap<_, _>>();
-                            let current_worksheets = runtime.loaded.state.worksheets.clone();
+                            let current_worksheets = runtime.loaded.state.worksheets().to_vec();
                             let empty_defined_names = DefinedNameTable::default();
                             let mut defined_name_updates = Vec::new();
                             for defined_name in runtime.loaded.state.defined_names.iter() {
@@ -3987,7 +3987,7 @@ impl ExcelRuntime {
                             let current_visibility = runtime
                                 .loaded
                                 .state
-                                .worksheets
+                                .worksheets()
                                 .iter()
                                 .find(|worksheet| worksheet.id == sheet_id)
                                 .map(|worksheet| worksheet.visibility)
@@ -4000,7 +4000,7 @@ impl ExcelRuntime {
                                 let visible_count = runtime
                                     .loaded
                                     .state
-                                    .worksheets
+                                    .worksheets()
                                     .iter()
                                     .filter(|worksheet| {
                                         worksheet.visibility == SheetVisibility::Visible
@@ -4016,7 +4016,7 @@ impl ExcelRuntime {
                                     replacement_selection = runtime
                                         .loaded
                                         .state
-                                        .worksheets
+                                        .worksheets()
                                         .iter()
                                         .find(|worksheet| {
                                             worksheet.id != sheet_id
@@ -4159,7 +4159,7 @@ impl ExcelRuntime {
                             })?
                             .clone();
                         let old_defined_names = runtime.loaded.state.defined_names.clone();
-                        let worksheets = runtime.loaded.state.worksheets.clone();
+                        let worksheets = runtime.loaded.state.worksheets().to_vec();
                         let workbook_display_name = runtime.loaded.state.model().display_name.clone();
                         let mut chart_source_current_sheets = BTreeMap::new();
                         for (chart_sheet_id, binding) in &runtime.loaded.state.chart_sheets {
@@ -4492,7 +4492,7 @@ impl ExcelRuntime {
                             let workbook_id = runtime.loaded.state.model().id;
                             let workbook_display_name =
                                 runtime.loaded.state.model().display_name.clone();
-                            let worksheets = runtime.loaded.state.worksheets.clone();
+                            let worksheets = runtime.loaded.state.worksheets().to_vec();
                             let defined_names = runtime.loaded.state.defined_names.clone();
                             let mut chart_source_current_sheets = BTreeMap::new();
                             for (chart_sheet_id, binding) in &runtime.loaded.state.chart_sheets {
@@ -5331,7 +5331,7 @@ impl ExcelRuntime {
                             })
                         });
                     (
-                        state.worksheets.clone(),
+                        state.worksheets().to_vec(),
                         state.defined_names.clone(),
                         current_sheet,
                     )
@@ -8156,7 +8156,7 @@ impl ExcelRuntime {
                                 });
                             let chart_object_id = state.drawings.values().find_map(|drawing| {
                                 if !state
-                                    .worksheets
+                                    .worksheets()
                                     .iter()
                                     .any(|worksheet| worksheet.id == drawing.host_sheet_id)
                                 {
@@ -10837,7 +10837,7 @@ impl ExcelRuntime {
                             if new_visibility != SheetVisibility::Visible {
                                 let mut visible_target_count = 0usize;
                                 let mut visible_outside_count = 0usize;
-                                for worksheet in &runtime.loaded.state.worksheets {
+                                for worksheet in runtime.loaded.state.worksheets() {
                                     if worksheet.visibility != SheetVisibility::Visible {
                                         continue;
                                     }
@@ -10857,7 +10857,7 @@ impl ExcelRuntime {
                             runtime
                                 .loaded
                                 .state
-                                .worksheets
+                                .worksheets()
                                 .iter()
                                 .filter(|worksheet| kind.includes(worksheet.kind))
                                 .map(|worksheet| worksheet.id)
@@ -14855,7 +14855,7 @@ impl ExcelRuntime {
                             let default_sheet_id = runtime
                                 .loaded
                                 .state
-                                .worksheets
+                                .worksheets()
                                 .first()
                                 .map(|worksheet| worksheet.id)
                                 .ok_or_else(|| {
@@ -14866,7 +14866,7 @@ impl ExcelRuntime {
                                 })?;
                             (
                                 target_workbook,
-                                runtime.loaded.state.worksheets.len(),
+                                runtime.loaded.state.worksheets().len(),
                                 Some(default_sheet_id),
                             )
                         };
@@ -14876,7 +14876,7 @@ impl ExcelRuntime {
                             .runtime_workbook(target_workbook)?
                             .loaded
                             .state
-                            .worksheets;
+                            .worksheets();
                         if insertion_index >= worksheets.len() {
                             let last_sheet_id = worksheets
                                 .last()
@@ -14972,7 +14972,7 @@ impl ExcelRuntime {
                             .runtime_workbook(target_workbook)?
                             .loaded
                             .state
-                            .worksheets;
+                            .worksheets();
                         let mut base = chart_object_name
                             .chars()
                             .map(|ch| {
@@ -17106,7 +17106,7 @@ impl ExcelRuntime {
                                 .runtime_workbook(workbook)?
                                 .loaded
                                 .state
-                                .worksheets
+                                .worksheets()
                                 .iter()
                                 .find(|worksheet| {
                                     worksheet.name.eq_ignore_ascii_case(&target_sheet_name)
@@ -20148,7 +20148,7 @@ impl ExcelRuntime {
         Ok(runtime
             .loaded
             .state
-            .worksheets
+            .worksheets()
             .iter()
             .filter(|worksheet| collection_kind.includes(worksheet.kind))
             .map(|worksheet| worksheet.id)
@@ -20171,13 +20171,13 @@ impl ExcelRuntime {
             return Ok(());
         }
         let deleting_sheet_ids = sheet_ids.iter().copied().collect::<BTreeSet<_>>();
-        if runtime.loaded.state.worksheets.len() <= deleting_sheet_ids.len() {
+        if runtime.loaded.state.worksheets().len() <= deleting_sheet_ids.len() {
             return Err(OmError::new(
                 OmErrorCode::InvalidState,
                 "cannot delete every sheet in a workbook",
             ));
         }
-        let visible_sheet_remains = runtime.loaded.state.worksheets.iter().any(|worksheet| {
+        let visible_sheet_remains = runtime.loaded.state.worksheets().iter().any(|worksheet| {
             worksheet.visibility == SheetVisibility::Visible
                 && !deleting_sheet_ids.contains(&worksheet.id)
         });
@@ -20243,7 +20243,7 @@ impl ExcelRuntime {
             .runtime_workbook(copied_workbook)?
             .loaded
             .state
-            .worksheets
+            .worksheets()
             .first()
             .map(|worksheet| worksheet.id)
             .ok_or_else(|| OmError::new(OmErrorCode::InvalidState, "workbook has no worksheets"))?;
@@ -20251,7 +20251,7 @@ impl ExcelRuntime {
             .runtime_workbook(copied_workbook)?
             .loaded
             .state
-            .worksheets
+            .worksheets()
             .len();
         let copied_sheet_ids = self.copy_sheet_block_to_workbook(
             workbook,
@@ -20304,7 +20304,7 @@ impl ExcelRuntime {
                     self.runtime_workbook(workbook)?
                         .loaded
                         .state
-                        .worksheets
+                        .worksheets()
                         .iter()
                         .position(|worksheet| worksheet.id == sheet_id)
                 }
@@ -20317,7 +20317,7 @@ impl ExcelRuntime {
                     .runtime_workbook(workbook)?
                     .loaded
                     .state
-                    .worksheets
+                    .worksheets()
                     .iter()
                     .position(|worksheet| worksheet.name.eq_ignore_ascii_case(name)),
                 _ => {
@@ -20343,7 +20343,7 @@ impl ExcelRuntime {
                     self.runtime_workbook(workbook)?
                         .loaded
                         .state
-                        .worksheets
+                        .worksheets()
                         .iter()
                         .position(|worksheet| worksheet.id == sheet_id)
                 }
@@ -20356,7 +20356,7 @@ impl ExcelRuntime {
                     .runtime_workbook(workbook)?
                     .loaded
                     .state
-                    .worksheets
+                    .worksheets()
                     .iter()
                     .position(|worksheet| worksheet.name.eq_ignore_ascii_case(name)),
                 _ => {
@@ -20397,7 +20397,7 @@ impl ExcelRuntime {
                         self.runtime_workbook(target_workbook)?
                             .loaded
                             .state
-                            .worksheets
+                            .worksheets()
                             .iter()
                             .position(|worksheet| worksheet.id == sheet_id),
                     )
@@ -20412,7 +20412,7 @@ impl ExcelRuntime {
                     self.runtime_workbook(workbook)?
                         .loaded
                         .state
-                        .worksheets
+                        .worksheets()
                         .iter()
                         .position(|worksheet| worksheet.name.eq_ignore_ascii_case(name)),
                 ),
@@ -20436,7 +20436,7 @@ impl ExcelRuntime {
                         self.runtime_workbook(target_workbook)?
                             .loaded
                             .state
-                            .worksheets
+                            .worksheets()
                             .iter()
                             .position(|worksheet| worksheet.id == sheet_id),
                     )
@@ -20451,7 +20451,7 @@ impl ExcelRuntime {
                     self.runtime_workbook(workbook)?
                         .loaded
                         .state
-                        .worksheets
+                        .worksheets()
                         .iter()
                         .position(|worksheet| worksheet.name.eq_ignore_ascii_case(name)),
                 ),
@@ -20558,7 +20558,7 @@ impl ExcelRuntime {
                             .ok()?
                             .loaded
                             .state
-                            .worksheets
+                            .worksheets()
                             .iter()
                             .position(|worksheet| worksheet.id == selection.sheet_id)
                     })
@@ -20577,7 +20577,7 @@ impl ExcelRuntime {
                     .runtime_workbook(template_workbook)?
                     .loaded
                     .state
-                    .worksheets
+                    .worksheets()
                     .first()
                     .map(|worksheet| worksheet.id)
                     .ok_or_else(|| {
@@ -20673,14 +20673,14 @@ impl ExcelRuntime {
                     .unwrap_or(CompressionMethod::Stored);
 
                 let worksheet_name = unique_worksheet_name_with_prefix(
-                    &runtime.loaded.state.worksheets,
+                    runtime.loaded.state.worksheets(),
                     sheet_template.worksheet_name_prefix(),
                 );
                 let sheet_id = SheetId(
                     runtime
                         .loaded
                         .state
-                        .worksheets
+                        .worksheets()
                         .iter()
                         .map(|worksheet| worksheet.id.0)
                         .max()
@@ -21082,7 +21082,7 @@ impl ExcelRuntime {
                 }
 
                 let worksheet_index =
-                    insertion_index.min(runtime.loaded.state.worksheets.len());
+                    insertion_index.min(runtime.loaded.state.worksheets().len());
                 runtime.loaded.state.insert_worksheet_with_data(
                     worksheet_index,
                     WorksheetModel {
@@ -21157,7 +21157,7 @@ impl ExcelRuntime {
                 runtime
                     .loaded
                     .state
-                    .worksheets
+                    .worksheets()
                     .iter()
                     .map(|worksheet| worksheet.id)
                     .collect::<Vec<_>>(),
@@ -21267,7 +21267,7 @@ impl ExcelRuntime {
                     let worksheet = runtime
                         .loaded
                         .state
-                        .worksheets
+                        .worksheets()
                         .iter()
                         .find(|worksheet| worksheet.id == sheet_id)
                         .ok_or_else(|| {
@@ -21385,7 +21385,7 @@ impl ExcelRuntime {
                             "cannot modify a read-only workbook",
                         ));
                     }
-                    let copied_name = if runtime.loaded.state.worksheets.iter().all(|worksheet| {
+                    let copied_name = if runtime.loaded.state.worksheets().iter().all(|worksheet| {
                         !worksheet.name.eq_ignore_ascii_case(source_name.as_str())
                     }) {
                         source_name.clone()
@@ -21396,7 +21396,7 @@ impl ExcelRuntime {
                             let base_len = 31usize.saturating_sub(suffix_text.chars().count());
                             let base = source_name.chars().take(base_len).collect::<String>();
                             let candidate = format!("{base}{suffix_text}");
-                            if runtime.loaded.state.worksheets.iter().all(|worksheet| {
+                            if runtime.loaded.state.worksheets().iter().all(|worksheet| {
                                 !worksheet.name.eq_ignore_ascii_case(candidate.as_str())
                             }) {
                                 break candidate;
@@ -21410,7 +21410,7 @@ impl ExcelRuntime {
                             runtime
                                 .loaded
                                 .state
-                                .worksheets
+                                .worksheets()
                                 .iter()
                                 .map(|worksheet| worksheet.id.0)
                                 .max()
@@ -21531,7 +21531,7 @@ impl ExcelRuntime {
                 {
                     let runtime = self.runtime_workbook_mut(target_workbook)?;
                     let worksheet_index =
-                        insertion_index.min(runtime.loaded.state.worksheets.len());
+                        insertion_index.min(runtime.loaded.state.worksheets().len());
                     runtime.loaded.state.insert_worksheet_with_data(
                         worksheet_index,
                         WorksheetModel {
@@ -21592,7 +21592,7 @@ impl ExcelRuntime {
                     let worksheet = runtime
                         .loaded
                         .state
-                        .worksheets
+                        .worksheets()
                         .iter()
                         .find(|worksheet| worksheet.id == sheet_id)
                         .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "unknown worksheet"))?;
@@ -21642,7 +21642,7 @@ impl ExcelRuntime {
                         .runtime_workbook(target_workbook)?
                         .loaded
                         .state
-                        .worksheets;
+                        .worksheets();
                     if insertion_index >= worksheets.len() {
                         let last_sheet_id = worksheets
                             .last()
@@ -21704,7 +21704,7 @@ impl ExcelRuntime {
                     let target_sheet_part_uri = runtime
                         .loaded
                         .state
-                        .worksheets
+                        .worksheets()
                         .iter()
                         .find(|worksheet| worksheet.id == added_sheet_id)
                         .and_then(|worksheet| worksheet.part_uri.clone());
@@ -21854,7 +21854,7 @@ impl ExcelRuntime {
                         .runtime_workbook(target_workbook)?
                         .loaded
                         .state
-                        .worksheets;
+                        .worksheets();
                     if !worksheets.iter().any(|worksheet| {
                         worksheet.id != added_sheet_id
                             && worksheet.name.eq_ignore_ascii_case(source_name.as_str())
@@ -21892,7 +21892,7 @@ impl ExcelRuntime {
                 let worksheet = runtime
                     .loaded
                     .state
-                    .worksheets
+                    .worksheets()
                     .iter()
                     .find(|worksheet| worksheet.id == sheet_id)
                     .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "unknown worksheet"))?;
@@ -21916,7 +21916,7 @@ impl ExcelRuntime {
                     .runtime_workbook(target_workbook)?
                     .loaded
                     .state
-                    .worksheets;
+                    .worksheets();
                 if insertion_index >= worksheets.len() {
                     let last_sheet_id = worksheets
                         .last()
@@ -21993,7 +21993,7 @@ impl ExcelRuntime {
                     .runtime_workbook(target_workbook)?
                     .loaded
                     .state
-                    .worksheets;
+                    .worksheets();
                 if !worksheets.iter().any(|worksheet| {
                     worksheet.id != added_sheet_id
                         && worksheet.name.eq_ignore_ascii_case(source_name.as_str())
@@ -22102,7 +22102,7 @@ impl ExcelRuntime {
                 let worksheet = runtime
                     .loaded
                     .state
-                    .worksheets
+                    .worksheets()
                     .iter()
                     .find(|worksheet| worksheet.id == sheet_id)
                     .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "unknown worksheet"))?;
@@ -22294,7 +22294,7 @@ impl ExcelRuntime {
                     .runtime_workbook(target_workbook)?
                     .loaded
                     .state
-                    .worksheets;
+                    .worksheets();
                 if insertion_index >= worksheets.len() {
                     let last_sheet_id = worksheets
                         .last()
@@ -22810,7 +22810,7 @@ impl ExcelRuntime {
                     .runtime_workbook(target_workbook)?
                     .loaded
                     .state
-                    .worksheets;
+                    .worksheets();
                 if !worksheets.iter().any(|worksheet| {
                     worksheet.id != added_sheet_id
                         && worksheet.name.eq_ignore_ascii_case(source_name.as_str())
@@ -22862,7 +22862,7 @@ impl ExcelRuntime {
         if placement_target.is_none() {
             let (read_only, source_sheet_count) = {
                 let runtime = self.runtime_workbook(workbook)?;
-                (runtime.read_only, runtime.loaded.state.worksheets.len())
+                (runtime.read_only, runtime.loaded.state.worksheets().len())
             };
             if read_only {
                 return Err(OmError::new(
@@ -22896,7 +22896,7 @@ impl ExcelRuntime {
         if target_workbook != workbook {
             let (read_only, source_sheet_count) = {
                 let runtime = self.runtime_workbook(workbook)?;
-                (runtime.read_only, runtime.loaded.state.worksheets.len())
+                (runtime.read_only, runtime.loaded.state.worksheets().len())
             };
             if read_only {
                 return Err(OmError::new(
@@ -22937,11 +22937,11 @@ impl ExcelRuntime {
         let current_index = runtime
             .loaded
             .state
-            .worksheets
+            .worksheets()
             .iter()
             .position(|worksheet| worksheet.id == sheet_id)
             .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "unknown worksheet"))?;
-        let mut target_index = insertion_index.min(runtime.loaded.state.worksheets.len());
+        let mut target_index = insertion_index.min(runtime.loaded.state.worksheets().len());
         if target_index > current_index {
             target_index -= 1;
         }
@@ -22949,7 +22949,7 @@ impl ExcelRuntime {
             return Ok(());
         }
 
-        let mut reordered_worksheets = runtime.loaded.state.worksheets.clone();
+        let mut reordered_worksheets = runtime.loaded.state.worksheets().to_vec();
         let worksheet = reordered_worksheets.remove(current_index);
         reordered_worksheets.insert(target_index, worksheet);
         let ordered_sheet_ids = reordered_worksheets
@@ -23009,7 +23009,7 @@ impl ExcelRuntime {
                     "cannot modify a read-only workbook",
                 ));
             }
-            if runtime.loaded.state.worksheets.len() <= 1 {
+            if runtime.loaded.state.worksheets().len() <= 1 {
                 return Err(OmError::new(
                     OmErrorCode::InvalidState,
                     "cannot delete the last worksheet in a workbook",
@@ -23018,16 +23018,16 @@ impl ExcelRuntime {
             let worksheet_index = runtime
                 .loaded
                 .state
-                .worksheets
+                .worksheets()
                 .iter()
                 .position(|worksheet| worksheet.id == sheet_id)
                 .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "unknown worksheet"))?;
-            if runtime.loaded.state.worksheets[worksheet_index].visibility
+            if runtime.loaded.state.worksheets()[worksheet_index].visibility
                 == SheetVisibility::Visible
                 && runtime
                     .loaded
                     .state
-                    .worksheets
+                    .worksheets()
                     .iter()
                     .filter(|worksheet| worksheet.visibility == SheetVisibility::Visible)
                     .count()
@@ -23044,7 +23044,7 @@ impl ExcelRuntime {
             runtime
                 .loaded
                 .state
-                .worksheets
+                .worksheets()
                 .iter()
                 .enumerate()
                 .find(|(index, worksheet)| {
@@ -23052,10 +23052,10 @@ impl ExcelRuntime {
                 })
                 .map(|(_, worksheet)| worksheet.id)
                 .or_else(|| {
-                    if worksheet_index < runtime.loaded.state.worksheets.len() - 1 {
-                        Some(runtime.loaded.state.worksheets[worksheet_index + 1].id)
+                    if worksheet_index < runtime.loaded.state.worksheets().len() - 1 {
+                        Some(runtime.loaded.state.worksheets()[worksheet_index + 1].id)
                     } else {
-                        Some(runtime.loaded.state.worksheets[worksheet_index - 1].id)
+                        Some(runtime.loaded.state.worksheets()[worksheet_index - 1].id)
                     }
                 })
                 .expect("replacement worksheet should exist")
@@ -23103,7 +23103,7 @@ impl ExcelRuntime {
                     .filter_map(|chart_id| state.charts.get(&chart_id).cloned())
                     .collect::<Vec<_>>();
                 let mut removed_owner_part_uris = state
-                    .worksheets
+                    .worksheets()
                     .iter()
                     .find(|worksheet| worksheet.id == sheet_id)
                     .and_then(|worksheet| worksheet.part_uri.clone())
@@ -23435,7 +23435,7 @@ impl ExcelRuntime {
                 self.runtime_workbook(workbook)?
                     .loaded
                     .state
-                    .worksheets
+                    .worksheets()
                     .iter()
                     .filter(|worksheet| collection_kind.includes(worksheet.kind))
                     .nth(index as usize - 1)
@@ -23445,7 +23445,7 @@ impl ExcelRuntime {
                 .runtime_workbook(workbook)?
                 .loaded
                 .state
-                .worksheets
+                .worksheets()
                 .iter()
                 .filter(|worksheet| collection_kind.includes(worksheet.kind))
                 .find(|worksheet| worksheet.name.eq_ignore_ascii_case(name))
@@ -23509,7 +23509,7 @@ impl ExcelRuntime {
         let chart_id = {
             let state = &self.runtime_workbook(workbook)?.loaded.state;
             let worksheet = state
-                .worksheets
+                .worksheets()
                 .iter()
                 .find(|worksheet| worksheet.id == sheet_id)
                 .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "unknown worksheet"))?;
@@ -24015,7 +24015,7 @@ impl ExcelRuntime {
     ) -> OmResult<Vec<(ChartObjectId, String)>> {
         let state = &self.runtime_workbook(workbook)?.loaded.state;
         if !state
-            .worksheets
+            .worksheets()
             .iter()
             .any(|worksheet| worksheet.id == sheet_id)
         {
@@ -24547,7 +24547,7 @@ impl ExcelRuntime {
         let state = &self.runtime_workbook(workbook)?.loaded.state;
         Ok(state.drawings.values().find_map(|drawing| {
             if !state
-                .worksheets
+                .worksheets()
                 .iter()
                 .any(|worksheet| worksheet.id == drawing.host_sheet_id)
             {
@@ -24818,7 +24818,7 @@ impl ExcelRuntime {
                         let worksheet_part_uri = runtime
                             .loaded
                             .state
-                            .worksheets
+                            .worksheets()
                             .iter()
                             .find(|worksheet| worksheet.id == chart_object.host_sheet_id)
                             .and_then(|worksheet| worksheet.part_uri.clone())
@@ -25243,7 +25243,7 @@ impl ExcelRuntime {
         if !runtime
             .loaded
             .state
-            .worksheets
+            .worksheets()
             .iter()
             .any(|worksheet| worksheet.id == host_sheet_id)
         {
@@ -27739,7 +27739,7 @@ impl ExcelRuntime {
         self.runtime_workbook(workbook)?
             .loaded
             .state
-            .worksheets
+            .worksheets()
             .iter()
             .find(|worksheet| worksheet.id == sheet_id)
             .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "unknown worksheet"))
@@ -27835,7 +27835,7 @@ impl ExcelRuntime {
             .runtime_workbook(workbook)?
             .loaded
             .state
-            .worksheets
+            .worksheets()
             .iter()
             .find(|worksheet| worksheet.visibility == SheetVisibility::Visible)
             .map(|worksheet| worksheet.id)
@@ -27955,7 +27955,7 @@ impl ExcelRuntime {
                 .runtime_workbook(target_workbook)?
                 .loaded
                 .state
-                .worksheets
+                .worksheets()
                 .iter()
                 .find(|worksheet| worksheet.name.eq_ignore_ascii_case(&sheet_name))
                 .map(|worksheet| worksheet.id)
