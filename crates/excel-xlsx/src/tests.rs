@@ -78,6 +78,18 @@
         }
     }
 
+    fn insert_test_cell(
+        state: &mut excel_model::WorkbookState,
+        sheet_id: SheetId,
+        row: u32,
+        col: u32,
+        cell: CellData,
+    ) {
+        state
+            .insert_cell(sheet_id, row, col, cell)
+            .expect("test fixture cell coordinate should be valid");
+    }
+
     #[test]
     fn codec_options_fail_closed_when_policy_is_not_implemented() {
         let codec = XlsxCodec;
@@ -159,6 +171,40 @@
     }
 
     #[test]
+    fn save_rejects_out_of_grid_public_worksheet_state() {
+        let codec = XlsxCodec;
+        let mut loaded = codec
+            .load(
+                synthetic_workbook_bytes().as_slice(),
+                CommonLoadOptions::default(),
+            )
+            .expect("load workbook");
+        let worksheet = loaded
+            .state
+            .worksheet_data
+            .get_mut(&SheetId(1))
+            .expect("worksheet data");
+        worksheet.cells.insert(
+            (1_048_577, 1),
+            CellData {
+                value: CellValue::Number(9.0),
+                formula: None,
+                style_id: None,
+            },
+        );
+        worksheet.dirty = true;
+        worksheet.dirty_cells.insert((1_048_577, 1));
+
+        let error = codec
+            .save(&loaded, CommonSaveOptions::default())
+            .expect_err("save must reject out-of-grid public worksheet state");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("worksheet 1 cell coordinate R1048577C1"));
+        assert!(error.message.contains("exceeds Excel grid XFD1048576"));
+    }
+
+    #[test]
     fn root_relationship_discovers_nonstandard_workbook_part() {
         let codec = XlsxCodec;
         let source_bytes = workbook_with_nonstandard_main_part_bytes();
@@ -217,7 +263,7 @@
         let mut edited = codec
             .load(&clean_saved, CommonLoadOptions::default())
             .expect("reload clean nonstandard workbook");
-        edited.state.insert_cell(
+        insert_test_cell(&mut edited.state,
             SheetId(1),
             2,
             2,
@@ -330,7 +376,7 @@
             );
         }
 
-        loaded.state.insert_cell(
+        insert_test_cell(&mut loaded.state,
             SheetId(1),
             2,
             2,
@@ -653,7 +699,7 @@
             );
         }
 
-        loaded.state.insert_cell(
+        insert_test_cell(&mut loaded.state,
             SheetId(1),
             1,
             1,
@@ -663,7 +709,7 @@
                 style_id: None,
             },
         );
-        loaded.state.insert_cell(
+        insert_test_cell(&mut loaded.state,
             SheetId(1),
             2,
             2,
@@ -673,7 +719,7 @@
                 style_id: None,
             },
         );
-        loaded.state.insert_cell(
+        insert_test_cell(&mut loaded.state,
             SheetId(1),
             2,
             3,
@@ -917,7 +963,7 @@
 
         for label in ["clean", "dirty"] {
             if label == "dirty" {
-                loaded.state.insert_cell(
+                insert_test_cell(&mut loaded.state,
                     SheetId(1),
                     1,
                     1,
@@ -1070,7 +1116,7 @@
         );
 
         let source_package = OpcPackage::from_bytes(&source_bytes).expect("source package");
-        loaded.state.insert_cell(
+        insert_test_cell(&mut loaded.state,
             SheetId(1),
             1,
             1,
@@ -54004,7 +54050,7 @@
             .package
             .replace_part_bytes("xl/comments1.xml", comments_xml.into_bytes())
             .expect("replace comments part");
-        loaded.state.insert_cell(
+        insert_test_cell(&mut loaded.state,
             sheet_id,
             3,
             3,
@@ -54075,7 +54121,7 @@
             .package
             .replace_part_bytes("xl/comments1.xml", comments_xml.into_bytes())
             .expect("replace comments part");
-        loaded.state.insert_cell(
+        insert_test_cell(&mut loaded.state,
             sheet_id,
             3,
             3,
@@ -55114,7 +55160,7 @@
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
         let sheet_id = loaded.state.worksheets[0].id;
-        loaded.state.insert_cell(
+        insert_test_cell(&mut loaded.state,
             sheet_id,
             3,
             3,
@@ -55180,7 +55226,7 @@
             .expect("worksheet support parts");
         worksheet_support.hyperlink_refs.clear();
         worksheet_support.comment_anchor_refs.clear();
-        loaded.state.insert_cell(
+        insert_test_cell(&mut loaded.state,
             sheet_id,
             3,
             3,
@@ -55257,7 +55303,7 @@
             .expect("worksheet support parts");
         worksheet_support.hyperlink_refs.clear();
         worksheet_support.comment_anchor_refs.clear();
-        loaded.state.insert_cell(
+        insert_test_cell(&mut loaded.state,
             sheet_id,
             3,
             3,
@@ -55358,7 +55404,7 @@
             .package
             .replace_part_bytes("xl/worksheets/sheet1.xml", sheet_xml.into_bytes())
             .expect("replace sheet xml");
-        loaded.state.insert_cell(
+        insert_test_cell(&mut loaded.state,
             sheet_id,
             3,
             3,
@@ -55427,7 +55473,7 @@
             .get_mut(&sheet_id)
             .expect("worksheet support parts");
         worksheet_support.comment_anchor_refs.clear();
-        loaded.state.insert_cell(
+        insert_test_cell(&mut loaded.state,
             sheet_id,
             3,
             3,
@@ -55509,7 +55555,7 @@
                 sheet_rels_xml.into_bytes(),
             )
             .expect("replace sheet rels");
-        loaded.state.insert_cell(
+        insert_test_cell(&mut loaded.state,
             sheet_id,
             3,
             3,
@@ -55595,7 +55641,7 @@
                 sheet_rels_xml.into_bytes(),
             )
             .expect("replace sheet rels");
-        loaded.state.insert_cell(
+        insert_test_cell(&mut loaded.state,
             sheet_id,
             3,
             3,
@@ -55695,7 +55741,7 @@
                 sheet_rels_xml.into_bytes(),
             )
             .expect("replace sheet rels");
-        loaded.state.insert_cell(
+        insert_test_cell(&mut loaded.state,
             sheet_id,
             3,
             3,
@@ -55771,7 +55817,7 @@
             .package
             .replace_part_bytes("xl/comments1.xml", comments_xml.into_bytes())
             .expect("replace comments part");
-        loaded.state.insert_cell(
+        insert_test_cell(&mut loaded.state,
             sheet_id,
             3,
             3,
@@ -55858,7 +55904,7 @@
             .package
             .replace_part_bytes("xl/comments1.xml", comments_xml.into_bytes())
             .expect("replace comments part");
-        loaded.state.insert_cell(
+        insert_test_cell(&mut loaded.state,
             sheet_id,
             3,
             3,
@@ -55932,7 +55978,7 @@
                 sheet_rels_xml.into_bytes(),
             )
             .expect("replace sheet rels");
-        loaded.state.insert_cell(
+        insert_test_cell(&mut loaded.state,
             sheet_id,
             3,
             3,
@@ -56010,7 +56056,7 @@
                 sheet_rels_xml.into_bytes(),
             )
             .expect("replace sheet rels");
-        loaded.state.insert_cell(
+        insert_test_cell(&mut loaded.state,
             sheet_id,
             3,
             3,
@@ -56093,7 +56139,7 @@
             .package
             .replace_part_bytes("xl/worksheets/sheet1.xml", sheet_xml.into_bytes())
             .expect("replace sheet xml");
-        loaded.state.insert_cell(
+        insert_test_cell(&mut loaded.state,
             sheet_id,
             3,
             3,
@@ -56168,7 +56214,7 @@
             .package
             .replace_part_bytes("xl/drawings/vmlDrawing1.vml", vml_xml.into_bytes())
             .expect("replace vml drawing");
-        loaded.state.insert_cell(
+        insert_test_cell(&mut loaded.state,
             sheet_id,
             3,
             3,
@@ -56225,7 +56271,7 @@
             .get_mut(&sheet_id)
             .expect("worksheet support parts");
         worksheet_support.comment_anchor_refs.clear();
-        loaded.state.insert_cell(
+        insert_test_cell(&mut loaded.state,
             sheet_id,
             3,
             3,
@@ -56455,7 +56501,7 @@
             .get_mut(&sheet_id)
             .expect("worksheet support parts");
         worksheet_support.hyperlink_refs.clear();
-        loaded.state.insert_cell(
+        insert_test_cell(&mut loaded.state,
             sheet_id,
             3,
             3,
@@ -56532,7 +56578,7 @@
             .package
             .replace_part_bytes("xl/worksheets/sheet1.xml", sheet_xml.into_bytes())
             .expect("replace sheet xml");
-        loaded.state.insert_cell(
+        insert_test_cell(&mut loaded.state,
             sheet_id,
             3,
             3,
@@ -56603,7 +56649,7 @@
             .package
             .replace_part_bytes("xl/worksheets/sheet1.xml", sheet_xml.into_bytes())
             .expect("replace sheet xml");
-        loaded.state.insert_cell(
+        insert_test_cell(&mut loaded.state,
             sheet_id,
             3,
             3,
@@ -56654,7 +56700,7 @@
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
         let sheet_id = loaded.state.worksheets[0].id;
-        loaded.state.insert_cell(
+        insert_test_cell(&mut loaded.state,
             sheet_id,
             3,
             3,
@@ -56710,7 +56756,7 @@
             .get_mut(&sheet_id)
             .expect("worksheet support parts");
         worksheet_support.hyperlink_refs.clear();
-        loaded.state.insert_cell(
+        insert_test_cell(&mut loaded.state,
             sheet_id,
             3,
             3,
@@ -56780,7 +56826,7 @@
             .get_mut(&sheet_id)
             .expect("worksheet support parts");
         worksheet_support.hyperlink_refs.clear();
-        loaded.state.insert_cell(
+        insert_test_cell(&mut loaded.state,
             sheet_id,
             3,
             3,
@@ -56867,7 +56913,7 @@
             .package
             .replace_part_bytes("xl/worksheets/sheet1.xml", sheet_xml.into_bytes())
             .expect("replace sheet xml");
-        loaded.state.insert_cell(
+        insert_test_cell(&mut loaded.state,
             sheet_id,
             3,
             3,
@@ -56943,7 +56989,7 @@
             .package
             .replace_part_bytes("xl/worksheets/sheet1.xml", sheet_xml.into_bytes())
             .expect("replace sheet xml");
-        loaded.state.insert_cell(
+        insert_test_cell(&mut loaded.state,
             sheet_id,
             3,
             3,
@@ -57024,7 +57070,7 @@
             .package
             .replace_part_bytes("xl/worksheets/sheet1.xml", sheet_xml.into_bytes())
             .expect("replace sheet xml");
-        loaded.state.insert_cell(
+        insert_test_cell(&mut loaded.state,
             sheet_id,
             3,
             3,
@@ -57117,7 +57163,7 @@
             .package
             .replace_part_bytes("xl/worksheets/sheet1.xml", sheet_xml.into_bytes())
             .expect("replace sheet xml");
-        loaded.state.insert_cell(
+        insert_test_cell(&mut loaded.state,
             sheet_id,
             3,
             3,
@@ -57199,7 +57245,7 @@
             .package
             .replace_part_bytes("xl/worksheets/sheet1.xml", sheet_xml.into_bytes())
             .expect("replace sheet xml");
-        loaded.state.insert_cell(
+        insert_test_cell(&mut loaded.state,
             sheet_id,
             3,
             3,
@@ -57272,7 +57318,7 @@
             .package
             .replace_part_bytes("xl/worksheets/sheet1.xml", sheet_xml.into_bytes())
             .expect("replace sheet xml");
-        loaded.state.insert_cell(
+        insert_test_cell(&mut loaded.state,
             sheet_id,
             3,
             3,
@@ -57347,7 +57393,7 @@
                 sheet_rels_xml.into_bytes(),
             )
             .expect("replace sheet rels");
-        loaded.state.insert_cell(
+        insert_test_cell(&mut loaded.state,
             sheet_id,
             3,
             3,
@@ -57430,7 +57476,7 @@
                 sheet_rels_xml.into_bytes(),
             )
             .expect("replace sheet rels");
-        loaded.state.insert_cell(
+        insert_test_cell(&mut loaded.state,
             sheet_id,
             3,
             3,
@@ -57499,7 +57545,7 @@
                 sheet_rels_xml.into_bytes(),
             )
             .expect("replace sheet rels");
-        loaded.state.insert_cell(
+        insert_test_cell(&mut loaded.state,
             sheet_id,
             3,
             3,
@@ -57567,7 +57613,7 @@
                 sheet_rels_xml.into_bytes(),
             )
             .expect("replace sheet rels");
-        loaded.state.insert_cell(
+        insert_test_cell(&mut loaded.state,
             sheet_id,
             3,
             3,
@@ -57652,7 +57698,7 @@
                 sheet_rels_xml.into_bytes(),
             )
             .expect("replace sheet rels");
-        loaded.state.insert_cell(
+        insert_test_cell(&mut loaded.state,
             sheet_id,
             3,
             3,
@@ -57737,7 +57783,7 @@
                 sheet_rels_xml.into_bytes(),
             )
             .expect("replace sheet rels");
-        loaded.state.insert_cell(
+        insert_test_cell(&mut loaded.state,
             sheet_id,
             3,
             3,
@@ -57833,7 +57879,7 @@
                 sheet_rels_xml.into_bytes(),
             )
             .expect("replace sheet rels");
-        loaded.state.insert_cell(
+        insert_test_cell(&mut loaded.state,
             sheet_id,
             3,
             3,
@@ -57922,7 +57968,7 @@
                 sheet_rels_xml.into_bytes(),
             )
             .expect("replace sheet rels");
-        loaded.state.insert_cell(
+        insert_test_cell(&mut loaded.state,
             sheet_id,
             3,
             3,
@@ -58010,7 +58056,7 @@
                 sheet_rels_xml.into_bytes(),
             )
             .expect("replace sheet rels");
-        loaded.state.insert_cell(
+        insert_test_cell(&mut loaded.state,
             sheet_id,
             3,
             3,
@@ -58099,7 +58145,7 @@
                 sheet_rels_xml.into_bytes(),
             )
             .expect("replace sheet rels");
-        loaded.state.insert_cell(
+        insert_test_cell(&mut loaded.state,
             sheet_id,
             3,
             3,
@@ -58185,7 +58231,7 @@
                 sheet_rels_xml.into_bytes(),
             )
             .expect("replace sheet rels");
-        loaded.state.insert_cell(
+        insert_test_cell(&mut loaded.state,
             sheet_id,
             3,
             3,
@@ -58273,7 +58319,7 @@
                 sheet_rels_xml.into_bytes(),
             )
             .expect("replace sheet rels");
-        loaded.state.insert_cell(
+        insert_test_cell(&mut loaded.state,
             sheet_id,
             3,
             3,
@@ -58347,7 +58393,7 @@
         worksheet_support.comment_anchor_refs.clear();
 
         for col in [2, 4] {
-            loaded.state.insert_cell(
+            insert_test_cell(&mut loaded.state,
                 sheet_id,
                 1,
                 col,
@@ -75426,7 +75472,7 @@
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
         let sheet_id = loaded.state.worksheets[0].id;
-        loaded.state.insert_cell(
+        insert_test_cell(&mut loaded.state,
             sheet_id,
             1,
             3,
@@ -75713,7 +75759,7 @@
             .load(&input, CommonLoadOptions::default())
             .expect("load workbook");
         let sheet_id = loaded.state.worksheets[0].id;
-        loaded.state.insert_cell(
+        insert_test_cell(&mut loaded.state,
             sheet_id,
             2,
             1,

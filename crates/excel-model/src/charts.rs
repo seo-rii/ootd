@@ -2,14 +2,14 @@ use std::collections::BTreeMap;
 
 use office_common::{
     CellError, CellValue, ChartId, ChartObjectId, DrawingAnchor, DrawingId, DrawingObjectId,
-    ExternalReference, FormulaSource, NameScope, ObjectPlacement, OmArray, OmValue, RangeArea,
-    RangeSet, Rect, ReferenceTarget, SheetId, SheetScope, WorkbookId, WorksheetModel,
+    ExcelLimits, ExternalReference, FormulaSource, NameScope, ObjectPlacement, OmArray, OmValue,
+    RangeArea, RangeSet, Rect, ReferenceTarget, SheetId, SheetScope, WorkbookId, WorksheetModel,
 };
 
 use crate::names::DefinedNameTable;
 
-const EXCEL_MAX_ROW_INDEX: u32 = 1_048_576;
-const EXCEL_MAX_COLUMN_INDEX: u32 = 16_384;
+const EXCEL_MAX_ROW_INDEX: u32 = ExcelLimits::MAX_ROW_INDEX;
+const EXCEL_MAX_COLUMN_INDEX: u32 = ExcelLimits::MAX_COLUMN_INDEX;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ChartModel {

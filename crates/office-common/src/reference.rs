@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    CellError, CellValue, FormulaSource, OmArray, OmError, OmResult, RangeRef, Rect, SheetScope,
-    WorkbookId,
+    CellError, CellValue, ExcelLimits, FormulaSource, OmArray, OmError, OmResult, RangeRef, Rect,
+    SheetScope, WorkbookId,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -13,18 +13,17 @@ pub struct RangeArea {
 
 impl RangeArea {
     pub fn new(scope: SheetScope, rect: Rect) -> OmResult<Self> {
-        if rect.row_first == 0 || rect.row_last == 0 || rect.col_first == 0 || rect.col_last == 0 {
-            return Err(OmError::invalid_argument(
-                "range area coordinates are 1-based and must be greater than zero",
-            ));
-        }
-        if rect.row_first > rect.row_last || rect.col_first > rect.col_last {
-            return Err(OmError::invalid_argument(
-                "range area rectangle is inverted",
-            ));
-        }
+        ExcelLimits::validate_rect(rect)?;
 
         Ok(Self { scope, rect })
+    }
+
+    pub fn checked_cell_count(&self) -> OmResult<u64> {
+        self.rect.checked_cell_count()
+    }
+
+    pub fn checked_cell_count_usize(&self) -> OmResult<usize> {
+        self.rect.checked_cell_count_usize()
     }
 }
 
@@ -163,7 +162,7 @@ pub enum ReferenceTarget {
 #[cfg(test)]
 mod tests {
     use super::{RangeArea, RangeSet};
-    use crate::{OmErrorCode, RangeRef, Rect, SheetId, SheetScope, WorkbookId};
+    use crate::{ExcelLimits, OmErrorCode, RangeRef, Rect, SheetId, SheetScope, WorkbookId};
 
     #[test]
     fn range_set_preserves_input_area_order() {
@@ -209,6 +208,65 @@ mod tests {
         .expect_err("inverted rectangles should be rejected");
 
         assert_eq!(error.code, OmErrorCode::InvalidArgument);
+    }
+
+    #[test]
+    fn range_area_rejects_coordinates_beyond_the_excel_grid() {
+        for rect in [
+            Rect::single_cell(1_048_577, 1),
+            Rect::single_cell(1, 16_385),
+            Rect {
+                row_first: 1,
+                row_last: 1_048_577,
+                col_first: 1,
+                col_last: 1,
+            },
+            Rect {
+                row_first: 1,
+                row_last: 1,
+                col_first: 1,
+                col_last: 16_385,
+            },
+        ] {
+            let error = RangeArea::new(SheetScope::Single(SheetId(2)), rect)
+                .expect_err("out-of-grid range coordinates should be rejected");
+
+            assert_eq!(error.code, OmErrorCode::InvalidArgument);
+        }
+    }
+
+    #[test]
+    fn range_area_reports_checked_excel_grid_cell_counts() {
+        let area = RangeArea::new(
+            SheetScope::Single(SheetId(2)),
+            Rect {
+                row_first: 1,
+                row_last: 1_048_576,
+                col_first: 1,
+                col_last: 16_384,
+            },
+        )
+        .expect("full Excel grid");
+
+        assert_eq!(
+            area.checked_cell_count().expect("u64 count"),
+            ExcelLimits::MAX_CELL_COUNT
+        );
+        if usize::BITS >= 64 {
+            let expected = usize::try_from(ExcelLimits::MAX_CELL_COUNT)
+                .expect("64-bit usize represents the full Excel grid");
+            assert_eq!(
+                area.checked_cell_count_usize().expect("usize count"),
+                expected
+            );
+        } else {
+            assert_eq!(
+                area.checked_cell_count_usize()
+                    .expect_err("32-bit usize cannot represent the full grid")
+                    .code,
+                OmErrorCode::ResourceLimit
+            );
+        }
     }
 
     #[test]

@@ -6,7 +6,7 @@ use super::super::{
 
 use excel_model::{CellData, WorksheetData};
 use office_common::{
-    CellError, CellValue, FormulaSource, OmError, OmErrorCode, OmResult, Rect, StyleId,
+    CellError, CellValue, ExcelLimits, FormulaSource, OmError, OmErrorCode, OmResult, Rect, StyleId,
 };
 use quick_xml::escape::partial_escape;
 use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
@@ -14,8 +14,8 @@ use quick_xml::{NsReader, Writer};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Cursor, Write};
 
-const EXCEL_MAX_ROW_INDEX: u32 = 1_048_576;
-const EXCEL_MAX_COLUMN_INDEX: u32 = 16_384;
+const EXCEL_MAX_ROW_INDEX: u32 = ExcelLimits::MAX_ROW_INDEX;
+const EXCEL_MAX_COLUMN_INDEX: u32 = ExcelLimits::MAX_COLUMN_INDEX;
 
 #[derive(Debug, Clone)]
 enum RowContentSegment {

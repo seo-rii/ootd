@@ -120,9 +120,16 @@ Active order:
    an explicit ASCII grammar, checked base-26/base-10 accumulation, optional absolute markers, and
    the `XFD1048576` grid boundary. Malformed suffixes, qualification/range syntax, repeated markers,
    and long overflow inputs fail closed, while all 16,384 last-row column references round-trip.
-   **Active:** `OOTD-019` centralized limits/area arithmetic, then the remaining common range AST
-   and `OOTD-048` consumer migration.
-29. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
+   The remaining common range AST and `OOTD-048` consumer grammar migration stay open.
+29. `OOTD-019` complete (2026-07-29, synthetic): `office_common::ExcelLimits` is the single source
+   for `XFD1048576`; validated range/model commands and XLSX load/save preflight reject out-of-grid
+   cell, dirty, and spill state. Checked `u64`/`usize` cardinality replaces range `u32` products,
+   while `CountLarge` retains the full-grid value without materialization. Raw public DTO-field
+   closure remains tracked by `OOTD-031`/`OOTD-054`; the contract is
+   `docs/interfaces/excel_grid_limits.md`.
+   **Active:** `OOTD-031`~`OOTD-033` model/package invariants, then the common reference AST and
+   `OOTD-048` consumer migration.
+30. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
    claiming practical chart/pivot/style parity.
 
 Every numbered work unit starts with a failing regression and lands as its own reviewable commit.

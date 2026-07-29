@@ -1,10 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use office_common::{
-    CellValue, ChartId, DefinedName, DefinedNameId, DrawingId, FormulaSource, NameScope,
-    NameValidationMode, OmArray, OmError, OmErrorCode, OmResult, OmValue, OpaquePart, RangeRef,
-    RangeSet, Rect, ReferenceTarget, SheetId, SheetScope, StyleId, WorkbookId, WorkbookModel,
-    WorksheetModel,
+    CellValue, ChartId, DefinedName, DefinedNameId, DrawingId, ExcelLimits, FormulaSource,
+    NameScope, NameValidationMode, OmArray, OmError, OmErrorCode, OmResult, OmValue, OpaquePart,
+    RangeRef, RangeSet, Rect, ReferenceTarget, SheetId, SheetScope, StyleId, WorkbookId,
+    WorkbookModel, WorksheetModel,
 };
 
 mod charts;
@@ -71,7 +71,7 @@ impl WorksheetData {
         Ok(())
     }
 
-    pub fn prepare_cell_for_edit(&mut self, key: (u32, u32)) {
+    fn prepare_cell_for_edit(&mut self, key: (u32, u32)) {
         self.prepare_cell_for_edit_with_change(key);
     }
 
@@ -79,13 +79,19 @@ impl WorksheetData {
         let removed_spill_owner = self.spill_owners.remove(&key).is_some();
         let removed_spill_range = self.spill_ranges.contains_key(&key);
         if removed_spill_range {
-            self.clear_owned_spill(key);
+            self.clear_owned_spill_unchecked(key);
         }
         let removed_dynamic_formula = self.dynamic_array_formulas.remove(&key);
         removed_spill_owner || removed_spill_range || removed_dynamic_formula
     }
 
-    pub fn clear_owned_spill(&mut self, anchor: (u32, u32)) {
+    pub fn clear_owned_spill(&mut self, anchor: (u32, u32)) -> OmResult<()> {
+        ExcelLimits::validate_cell(anchor.0, anchor.1)?;
+        self.clear_owned_spill_unchecked(anchor);
+        Ok(())
+    }
+
+    fn clear_owned_spill_unchecked(&mut self, anchor: (u32, u32)) {
         let owned_cells = self
             .spill_owners
             .iter()
@@ -172,11 +178,19 @@ impl WorkbookState {
         self.worksheet_data(sheet_id).source_xml = source_xml;
     }
 
-    pub fn insert_cell(&mut self, sheet_id: SheetId, row: u32, col: u32, cell: CellData) {
+    pub fn insert_cell(
+        &mut self,
+        sheet_id: SheetId,
+        row: u32,
+        col: u32,
+        cell: CellData,
+    ) -> OmResult<()> {
+        ExcelLimits::validate_cell(row, col)?;
         let worksheet = self.worksheet_data(sheet_id);
         worksheet.cells.insert((row, col), cell);
         worksheet.dirty = true;
         worksheet.dirty_cells.insert((row, col));
+        Ok(())
     }
 
     pub fn cell(&self, sheet_id: SheetId, row: u32, col: u32) -> Option<&CellData> {
@@ -268,7 +282,7 @@ impl WorkbookState {
     pub fn get_range_values(&self, range: &RangeRef) -> OmResult<OmArray> {
         let (sheet_id, rect) = self.single_sheet_rect(range)?;
         let worksheet = self.worksheet_data_for_sheet(sheet_id)?;
-        let mut values = Vec::with_capacity((rect.height() * rect.width()) as usize);
+        let mut values = Vec::with_capacity(rect.checked_cell_count_usize()?);
 
         for row in rect.row_first..=rect.row_last {
             for col in rect.col_first..=rect.col_last {
@@ -287,7 +301,7 @@ impl WorkbookState {
     pub fn get_range_formulas(&self, range: &RangeRef) -> OmResult<OmArray> {
         let (sheet_id, rect) = self.single_sheet_rect(range)?;
         let worksheet = self.worksheet_data_for_sheet(sheet_id)?;
-        let mut values = Vec::with_capacity((rect.height() * rect.width()) as usize);
+        let mut values = Vec::with_capacity(rect.checked_cell_count_usize()?);
 
         for row in rect.row_first..=rect.row_last {
             for col in rect.col_first..=rect.col_last {
@@ -348,12 +362,7 @@ impl WorkbookState {
             }
 
             let value = CellValue::try_from(values.values[0].clone())?;
-            updates.reserve(
-                rects
-                    .iter()
-                    .map(|rect| (rect.height() * rect.width()) as usize)
-                    .sum(),
-            );
+            updates.reserve(checked_rect_cell_count_sum(&rects)?);
             for rect in &rects {
                 for row in rect.row_first..=rect.row_last {
                     for col in rect.col_first..=rect.col_last {
@@ -541,12 +550,7 @@ impl WorkbookState {
                 }
                 other => (CellValue::try_from(other)?, None),
             };
-            updates.reserve(
-                rects
-                    .iter()
-                    .map(|rect| (rect.height() * rect.width()) as usize)
-                    .sum(),
-            );
+            updates.reserve(checked_rect_cell_count_sum(&rects)?);
             for rect in &rects {
                 for row in rect.row_first..=rect.row_last {
                     for col in rect.col_first..=rect.col_last {
@@ -693,20 +697,7 @@ impl WorkbookState {
         }
 
         for rect in &range.areas {
-            if rect.row_first == 0
-                || rect.row_last == 0
-                || rect.col_first == 0
-                || rect.col_last == 0
-            {
-                return Err(OmError::invalid_argument(
-                    "worksheet coordinates are 1-based and must be greater than zero",
-                ));
-            }
-            if rect.row_first > rect.row_last || rect.col_first > rect.col_last {
-                return Err(OmError::invalid_argument(
-                    "worksheet range bounds must be ordered",
-                ));
-            }
+            ExcelLimits::validate_rect(*rect)?;
         }
 
         let sheet_id = match range.scope {
@@ -731,6 +722,14 @@ impl WorkbookState {
 
         Ok((sheet_id, range.areas.clone()))
     }
+}
+
+fn checked_rect_cell_count_sum(rects: &[Rect]) -> OmResult<usize> {
+    rects.iter().try_fold(0usize, |total, rect| {
+        total
+            .checked_add(rect.checked_cell_count_usize()?)
+            .ok_or_else(|| OmError::resource_limit("worksheet range cell count exceeds usize"))
+    })
 }
 
 #[cfg(test)]
@@ -1416,16 +1415,18 @@ mod tests {
     #[test]
     fn insert_cell_marks_worksheet_dirty_and_tracks_coordinate() {
         let mut state = sample_state();
-        state.insert_cell(
-            SheetId(3),
-            3,
-            1,
-            CellData {
-                value: CellValue::Number(9.0),
-                formula: None,
-                style_id: None,
-            },
-        );
+        state
+            .insert_cell(
+                SheetId(3),
+                3,
+                1,
+                CellData {
+                    value: CellValue::Number(9.0),
+                    formula: None,
+                    style_id: None,
+                },
+            )
+            .expect("valid test cell coordinate");
 
         let worksheet = state
             .worksheet_data_for_sheet(SheetId(3))
@@ -1436,6 +1437,63 @@ mod tests {
             worksheet.cells.get(&(3, 1)).expect("A3").value,
             CellValue::Number(9.0)
         );
+    }
+
+    #[test]
+    fn range_operations_reject_coordinates_outside_the_excel_grid() {
+        let state = sample_state();
+
+        for range in [
+            RangeRef::single_cell(WorkbookId(7), SheetId(3), 1_048_577, 1),
+            RangeRef::single_cell(WorkbookId(7), SheetId(3), 1, 16_385),
+        ] {
+            let error = state
+                .get_range_values(&range)
+                .expect_err("out-of-grid range should be rejected before iteration");
+
+            assert_eq!(error.code, OmErrorCode::InvalidArgument);
+        }
+    }
+
+    #[test]
+    fn insert_cell_rejects_coordinates_outside_the_excel_grid_without_mutation() {
+        let mut state = sample_state();
+
+        let error = state
+            .insert_cell(
+                SheetId(3),
+                1_048_577,
+                1,
+                CellData {
+                    value: CellValue::Number(9.0),
+                    formula: None,
+                    style_id: None,
+                },
+            )
+            .expect_err("out-of-grid cell insertion should fail");
+
+        assert_eq!(error.code, OmErrorCode::InvalidArgument);
+        let worksheet = state
+            .worksheet_data_for_sheet(SheetId(3))
+            .expect("worksheet data");
+        assert!(!worksheet.cells.contains_key(&(1_048_577, 1)));
+        assert!(!worksheet.dirty_cells.contains(&(1_048_577, 1)));
+    }
+
+    #[test]
+    fn clear_owned_spill_rejects_an_out_of_grid_anchor_without_mutation() {
+        let mut state = sample_state();
+        let worksheet = state
+            .worksheet_data_for_sheet_mut(SheetId(3))
+            .expect("worksheet data");
+
+        let error = worksheet
+            .clear_owned_spill((1, 16_385))
+            .expect_err("out-of-grid spill anchor should fail");
+
+        assert_eq!(error.code, OmErrorCode::InvalidArgument);
+        assert!(!worksheet.dirty);
+        assert!(worksheet.dirty_cells.is_empty());
     }
 
     #[test]

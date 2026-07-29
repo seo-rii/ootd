@@ -222,32 +222,42 @@ Wave 2 exit gate:
    overwrite로 숨지 않는다. 오류는 worksheet part와 가능한 cell 주소를 포함하며 numeric
    style ID의 `cellXfs` 범위 진단도 part/cell 문맥을 사용한다. implicit repair는 없고 세부
    계약은 `docs/interfaces/worksheet_cell_records.md`에 있다.
-   **다음:** `OOTD-018`/`OOTD-019`/`OOTD-048` checked reference subsystem.
+   **다음:** `OOTD-018`/`OOTD-048` 공통 reference AST와 consumer migration.
 7. `OOTD-018` 1단계 완료 (2026-07-29, synthetic): worksheet single-cell A1 parser는 ASCII
    column+row grammar, optional absolute marker와 enclosing-row 축약을 명시적으로 해석한다.
    base-26/base-10 누적은 checked arithmetic를 사용하고 `XFD1048576`을 즉시 상한으로
    적용하며, malformed suffix/range/sheet qualification/marker와 긴 overflow 입력을 원문이
    포함된 `Parse`로 거부한다. 모든 16,384개 column의 last-row formatter/parser round trip을
    고정했다. 세부 계약은 `docs/interfaces/worksheet_a1_cell_references.md`에 있다.
-   **다음:** `OOTD-019` ExcelLimits/checked area를 중앙화한 뒤 `OOTD-018`의 공통 range AST와
+   **다음:** `OOTD-019`의 공통 grid/area 계약 위에서 `OOTD-018`의 공통 range AST와
    `OOTD-048` consumer migration을 완료한다.
-8. `OOTD-021`: bounded Strict preservation과 일반 target-format capability를 분리하고,
+8. `OOTD-019` 완료 (2026-07-29, synthetic): `office-common::ExcelLimits`가 row
+   `1..=1_048_576`, column `1..=16_384`와 full-grid cardinality를 단일 계약으로 제공한다.
+   `RangeArea`/`RangeSet`, model range read/write/clear, fallible direct cell/spill mutation,
+   worksheet/runtime/chart/name consumer의 상한이 이 계약을 사용한다. `Rect`/`RangeArea`의
+   `u64`/`usize` checked count를 allocation/indexing 경로에 연결해 `u32` 곱셈 overflow를
+   제거했고, XLSX load/save preflight는 public field 우회로 생긴 invalid cell/dirty/spill
+   state를 출력 전에 거부한다. raw public DTO field 자체를 닫는 작업은 `OOTD-031`/`OOTD-054`에
+   남아 있다. 세부 계약은 `docs/interfaces/excel_grid_limits.md`에 있다.
+   **다음:** 남은 package/model invariant `OOTD-031`~`OOTD-033`을 닫은 뒤 공통 reference AST
+   `OOTD-018`/`OOTD-048`을 완료한다.
+9. `OOTD-021`: bounded Strict preservation과 일반 target-format capability를 분리하고,
    drawing/chart 등 남은 Strict graph와 cross-dialect conversion을 단계적으로 구현한다.
-9. `OOTD-029` 완료 (2026-07-28, synthetic): `[Content_Types].xml`은 package content-types
+10. `OOTD-029` 완료 (2026-07-28, synthetic): `[Content_Types].xml`은 package content-types
    namespace의 `Types` root만 수용하고 arbitrary bound prefix를 해석한다. 같은 namespace의
    direct `Default`/`Override`만 typed declaration으로 사용하며 required unqualified attribute,
    case-insensitive extension duplicate, canonical/absolute part-name duplicate와 empty-content
    구조를 fail-closed한다. opaque extension subtree의 same-local poison은 적용하지 않는다.
    세부 계약은 `docs/interfaces/opc_content_types.md`에 있다.
-10. `OOTD-030` 완료 (2026-07-28, synthetic): 모든 typed `.rels` parse 경로가 package
+11. `OOTD-030` 완료 (2026-07-28, synthetic): 모든 typed `.rels` parse 경로가 package
    relationships namespace의 `Relationships` root와 direct `Relationship` expanded name을
    요구하고 arbitrary bound prefix를 수용한다. wrong/missing root namespace, foreign 또는
    nested same-local element, root text/CDATA를 fail-closed하며 기존 required unqualified
    attribute, duplicate ID, target mode와 internal target validation을 유지한다. 세부 계약은
    `docs/interfaces/opc_relationships.md`에 있다.
-11. `OOTD-031` + `OOTD-032` + `OOTD-033` + `OOTD-054`: mutable public state를 validated
+12. `OOTD-031` + `OOTD-032` + `OOTD-033` + `OOTD-054`: mutable public state를 validated
    command/transaction으로 닫고 workbook identity assignment를 fallible/atomic하게 만든다.
-12. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
+13. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
    structured error에 추가한다.
 
 Wave 3 exit gate:

@@ -51,7 +51,7 @@ impl ExcelRuntime {
                         .loaded
                         .state
                         .worksheet_data_for_sheet(sheet_id)?;
-                    let mut values = Vec::with_capacity((rect.height() * rect.width()) as usize);
+                    let mut values = Vec::with_capacity(rect.checked_cell_count_usize()?);
                     for row in rect.row_first..=rect.row_last {
                         for col in rect.col_first..=rect.col_last {
                             let value = match worksheet.cells.get(&(row, col)) {
@@ -310,7 +310,7 @@ impl ExcelRuntime {
                 .0,
             )),
             "Count" | "CountLarge" => Ok(OmValue::Number(match projection {
-                RangeProjection::Cells => u64::from(rect.width()) * u64::from(rect.height()),
+                RangeProjection::Cells => rect.checked_cell_count()?,
                 RangeProjection::Rows => u64::from(rect.height()),
                 RangeProjection::Columns => u64::from(rect.width()),
             } as f64)),
@@ -488,19 +488,19 @@ impl ExcelRuntime {
                     .0,
                 ))
             }
-            "Count" | "CountLarge" => Ok(OmValue::Number(
-                range
-                    .areas()
-                    .iter()
-                    .map(|area| match projection {
-                        RangeProjection::Cells => {
-                            u64::from(area.rect.width()) * u64::from(area.rect.height())
-                        }
+            "Count" | "CountLarge" => {
+                let count = range.areas().iter().try_fold(0u64, |total, area| {
+                    let area_count = match projection {
+                        RangeProjection::Cells => area.checked_cell_count()?,
                         RangeProjection::Rows => u64::from(area.rect.height()),
                         RangeProjection::Columns => u64::from(area.rect.width()),
+                    };
+                    total.checked_add(area_count).ok_or_else(|| {
+                        OmError::resource_limit("Range.Count exceeds the supported u64 cell count")
                     })
-                    .sum::<u64>() as f64,
-            )),
+                })?;
+                Ok(OmValue::Number(count as f64))
+            }
             "Rows" => {
                 let (sheet_id, rect) = Self::range_set_first_area(&range)?;
                 let handle = self.register_projected_range_handle(
@@ -775,7 +775,7 @@ impl ExcelRuntime {
                     scalar => OmArray::new(
                         rect.height() as usize,
                         rect.width() as usize,
-                        vec![scalar; rect.height() as usize * rect.width() as usize],
+                        vec![scalar; rect.checked_cell_count_usize()?],
                     )?,
                 };
                 if matches!(member, "Formula2" | "Formula2Local") {

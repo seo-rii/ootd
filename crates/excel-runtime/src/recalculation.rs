@@ -433,7 +433,7 @@ impl ExcelRuntime {
                 .state
                 .worksheet_data_for_sheet_mut(sheet_id)?;
             for (anchor @ (row, col), result) in dynamic_updates {
-                worksheet.clear_owned_spill(anchor);
+                worksheet.clear_owned_spill(anchor)?;
                 worksheet.dirty = true;
                 worksheet.dirty_cells.insert(anchor);
                 formula_cache_changed = true;

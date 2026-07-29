@@ -15,7 +15,7 @@
 
     use super::persistence::PersistenceFailurePoint;
     use office_common::{
-        ActiveContentPolicy, CellError, CellValue, ExcelProfile, ExternalDataKind,
+        ActiveContentPolicy, CellError, CellValue, ExcelLimits, ExcelProfile, ExternalDataKind,
         ExternalDataPolicy, FileFormat, GetRangeValuesSpec, LoadOptions, ObjectHandle, OmArray,
         OmErrorCode, OmValue, OpenWorkbookSpec, RangeArea, RangeRef, RangeSet, Rect,
         ReferenceTarget, SaveWorkbookSpec, SetRangeValuesSpec, SheetId, SheetScope, StyleId,
@@ -30836,6 +30836,76 @@
             ),
             "$B$2"
         );
+    }
+
+    #[test]
+    fn range_current_region_rejects_out_of_grid_public_worksheet_state() {
+        for (valid_coordinate, invalid_coordinate, seed_address) in [
+            (
+                (ExcelLimits::MAX_ROW_INDEX, 1),
+                (ExcelLimits::MAX_ROW_INDEX + 1, 1),
+                "A1048576",
+            ),
+            (
+                (1, ExcelLimits::MAX_COLUMN_INDEX),
+                (1, ExcelLimits::MAX_COLUMN_INDEX + 1),
+                "XFD1",
+            ),
+        ] {
+            let mut runtime = ExcelRuntime::new();
+            let workbook = runtime.create_workbook().expect("blank workbook");
+            let sheet_id = runtime
+                .runtime_workbook(workbook)
+                .expect("runtime workbook")
+                .loaded
+                .state
+                .worksheets[0]
+                .id;
+            let worksheet_data = runtime
+                .runtime_workbook_mut(workbook)
+                .expect("runtime workbook")
+                .loaded
+                .state
+                .worksheet_data_for_sheet_mut(sheet_id)
+                .expect("worksheet data");
+            for coordinate in [valid_coordinate, invalid_coordinate] {
+                worksheet_data.cells.insert(
+                    coordinate,
+                    excel_model::CellData {
+                        value: CellValue::Number(1.0),
+                        formula: None,
+                        style_id: None,
+                    },
+                );
+            }
+
+            let worksheets = expect_object_handle(
+                runtime
+                    .dispatch_get(workbook.0, "Worksheets", &[])
+                    .expect("Worksheets"),
+            );
+            let worksheet = expect_object_handle(
+                runtime
+                    .dispatch_invoke(worksheets, "Item", &[OmValue::Number(1.0)])
+                    .expect("Worksheet"),
+            );
+            let seed = expect_object_handle(
+                runtime
+                    .dispatch_invoke(
+                        worksheet,
+                        "Range",
+                        &[OmValue::Text(seed_address.to_string())],
+                    )
+                    .expect("boundary Range"),
+            );
+
+            let error = runtime
+                .dispatch_get(seed, "CurrentRegion", &[])
+                .expect_err("CurrentRegion must reject out-of-grid worksheet state");
+
+            assert_eq!(error.code, OmErrorCode::InvalidState);
+            assert!(error.message.contains("exceeds Excel grid XFD1048576"));
+        }
     }
 
     #[test]

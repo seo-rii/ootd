@@ -23,10 +23,11 @@ pub use office_common::{
 };
 use office_common::{
     AbsoluteAnchor, CellError, CellMarker, CellValue, ChartId, ChartObjectId, DefinedName,
-    DefinedNameId, DrawingAnchor, DrawingId, DrawingObjectId, Emu, ExcelProfile, FileFormat,
-    FormulaSource, LoadOptions, NameScope, NameValidationMode, ObjectPlacement, OmArray, OmError,
-    OmErrorCode, OmResult, OmValue, OpaquePart, PointEmu, ReferenceTarget, SaveOptions, SheetId,
-    SheetKind, SheetVisibility, SizeEmu, TwoCellAnchor, WorkbookId, WorkbookModel, WorksheetModel,
+    DefinedNameId, DrawingAnchor, DrawingId, DrawingObjectId, Emu, ExcelLimits, ExcelProfile,
+    FileFormat, FormulaSource, LoadOptions, NameScope, NameValidationMode, ObjectPlacement, OmArray,
+    OmError, OmErrorCode, OmResult, OmValue, OpaquePart, PointEmu, ReferenceTarget, SaveOptions,
+    SheetId, SheetKind, SheetVisibility, SizeEmu, TwoCellAnchor, WorkbookId, WorkbookModel,
+    WorksheetModel,
 };
 use office_opc::{CompressionMethod, OpcPackage};
 use quick_xml::escape::partial_escape;
@@ -1749,6 +1750,7 @@ impl XlsxCodec {
             chart_sheets,
             opaque_parts,
         };
+        ensure_workbook_grid_coordinates_are_valid(&state)?;
         ensure_workbook_style_ids_are_valid(&state, &support_parts)?;
 
         Ok(LoadedXlsxWorkbook {
@@ -1846,6 +1848,7 @@ impl XlsxCodec {
             &workbook.package,
             &workbook.support_parts.pivot_inventory,
         )?;
+        ensure_workbook_grid_coordinates_are_valid(&workbook.state)?;
         ensure_workbook_style_ids_are_valid(&workbook.state, &workbook.support_parts)?;
         if workbook.support_parts.ooxml_dialect == OoxmlDialect::Strict
             && (chart_graph::has_state_only_chart_graphs(workbook)
@@ -6902,6 +6905,50 @@ fn ensure_workbook_style_ids_are_valid(
                     ),
                 ));
             }
+        }
+    }
+
+    Ok(())
+}
+
+fn ensure_workbook_grid_coordinates_are_valid(state: &WorkbookState) -> OmResult<()> {
+    for (&sheet_id, worksheet) in &state.worksheet_data {
+        let validate_coordinate = |kind: &str, (row, col): (u32, u32)| {
+            ExcelLimits::validate_cell(row, col).map_err(|error| {
+                OmError::new(
+                    OmErrorCode::InvalidState,
+                    format!(
+                        "worksheet {} {kind} coordinate R{row}C{col} is invalid: {}",
+                        sheet_id.0, error.message
+                    ),
+                )
+            })
+        };
+
+        for &coordinate in worksheet.cells.keys() {
+            validate_coordinate("cell", coordinate)?;
+        }
+        for &coordinate in &worksheet.dirty_cells {
+            validate_coordinate("dirty cell", coordinate)?;
+        }
+        for &coordinate in &worksheet.dynamic_array_formulas {
+            validate_coordinate("dynamic-array anchor", coordinate)?;
+        }
+        for (&anchor, &spill_range) in &worksheet.spill_ranges {
+            validate_coordinate("spill anchor", anchor)?;
+            ExcelLimits::validate_rect(spill_range).map_err(|error| {
+                OmError::new(
+                    OmErrorCode::InvalidState,
+                    format!(
+                        "worksheet {} spill range at R{}C{} is invalid: {}",
+                        sheet_id.0, anchor.0, anchor.1, error.message
+                    ),
+                )
+            })?;
+        }
+        for (&child, &anchor) in &worksheet.spill_owners {
+            validate_coordinate("spill child", child)?;
+            validate_coordinate("spill owner", anchor)?;
         }
     }
 

@@ -37,9 +37,9 @@ columns at row 1,048,576.
 ## Remaining Reference Work
 
 OOTD-018 remains open for the common A1 endpoint/range AST, including standalone whole-row and
-whole-column ranges and sheet quoting. OOTD-019 will centralize Excel limits and enforce them across
-public range/model constructors and checked area arithmetic. OOTD-048 will migrate runtime,
-defined-name, chart, formula, and codec consumers to that shared subsystem.
+whole-column ranges and sheet quoting. OOTD-019 now provides the shared `ExcelLimits` and checked
+range-cardinality contract described in `excel_grid_limits.md`. OOTD-048 will migrate runtime,
+defined-name, chart, formula, and codec grammar consumers to one shared reference AST.
 
 The current evidence is synthetic. Desktop Excel differential observations remain required before
 this behavior is marked Oracle-verified.

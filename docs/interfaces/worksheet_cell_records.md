@@ -38,9 +38,10 @@ rewritten declaration. It must not weaken the default strict path.
 
 The worksheet single-cell grammar, checked arithmetic, absolute markers, and grid bounds now have
 the bounded first-stage contract in `worksheet_a1_cell_references.md`. Common range endpoints,
-whole-row/column references, sheet qualification, centralized model limits, and consumer migration
-remain OOTD-018/OOTD-019/OOTD-048. Full worksheet parent/content-model ordering and Markup
-Compatibility remain OOTD-049/OOTD-061.
+whole-row/column references, sheet qualification, and consumer grammar migration remain
+OOTD-018/OOTD-048. Central model limits and range cardinality are defined in
+`excel_grid_limits.md`. Full worksheet parent/content-model ordering and Markup Compatibility
+remain OOTD-049/OOTD-061.
 
 The current evidence is synthetic. Desktop Excel open/save/reopen observations remain required
 before this behavior is marked Oracle-verified.

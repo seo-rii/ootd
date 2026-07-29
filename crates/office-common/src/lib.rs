@@ -302,11 +302,61 @@ impl Rect {
     }
 
     pub fn width(&self) -> u32 {
-        self.col_last.saturating_sub(self.col_first) + 1
+        self.col_last
+            .saturating_sub(self.col_first)
+            .saturating_add(1)
     }
 
     pub fn height(&self) -> u32 {
-        self.row_last.saturating_sub(self.row_first) + 1
+        self.row_last
+            .saturating_sub(self.row_first)
+            .saturating_add(1)
+    }
+
+    pub fn checked_cell_count(&self) -> OmResult<u64> {
+        ExcelLimits::validate_rect(*self)?;
+        u64::from(self.height())
+            .checked_mul(u64::from(self.width()))
+            .ok_or_else(|| OmError::resource_limit("worksheet range cell count overflowed u64"))
+    }
+
+    pub fn checked_cell_count_usize(&self) -> OmResult<usize> {
+        usize::try_from(self.checked_cell_count()?).map_err(|_| {
+            OmError::resource_limit("worksheet range cell count does not fit this platform's usize")
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ExcelLimits;
+
+impl ExcelLimits {
+    pub const MAX_ROW_INDEX: u32 = 1_048_576;
+    pub const MAX_COLUMN_INDEX: u32 = 16_384;
+    pub const MAX_CELL_COUNT: u64 = Self::MAX_ROW_INDEX as u64 * Self::MAX_COLUMN_INDEX as u64;
+
+    pub fn validate_cell(row: u32, col: u32) -> OmResult<()> {
+        if row == 0 || col == 0 {
+            return Err(OmError::invalid_argument(
+                "worksheet coordinates are 1-based and must be greater than zero",
+            ));
+        }
+        if row > Self::MAX_ROW_INDEX || col > Self::MAX_COLUMN_INDEX {
+            return Err(OmError::invalid_argument(format!(
+                "worksheet coordinate R{row}C{col} exceeds Excel grid XFD1048576"
+            )));
+        }
+        Ok(())
+    }
+
+    pub fn validate_rect(rect: Rect) -> OmResult<()> {
+        if rect.row_first > rect.row_last || rect.col_first > rect.col_last {
+            return Err(OmError::invalid_argument(
+                "worksheet range rectangle is inverted",
+            ));
+        }
+        Self::validate_cell(rect.row_first, rect.col_first)?;
+        Self::validate_cell(rect.row_last, rect.col_last)
     }
 }
 

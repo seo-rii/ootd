@@ -9446,7 +9446,9 @@ impl<'a> FormulaEvaluator<'a> {
         sheet_id: SheetId,
         rect: Rect,
     ) -> Result<u64, FormulaEvalError> {
-        let total = u64::from(rect.width()) * u64::from(rect.height());
+        let total = rect
+            .checked_cell_count()
+            .map_err(|_| FormulaEvalError::Ref)?;
         Ok(total - self.counta_values_in_rect(sheet_id, rect)?)
     }
 
@@ -9966,7 +9968,11 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         let (source_sheet_id, source_rect) = self.parse_reference_argument()?;
         let source_rows = source_rect.height() as usize;
         let source_cols = source_rect.width() as usize;
-        let mut source_values = Vec::with_capacity(source_rows * source_cols);
+        let mut source_values = Vec::with_capacity(
+            source_rect
+                .checked_cell_count_usize()
+                .map_err(|_| FormulaEvalError::Num)?,
+        );
         for row in source_rect.row_first..=source_rect.row_last {
             for col in source_rect.col_first..=source_rect.col_last {
                 source_values.push(self.evaluator.cell_value_or_blank(
@@ -10130,7 +10136,10 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                 let (sheet_id, rect) = self.parse_reference_argument()?;
                 let rows = rect.height() as usize;
                 let cols = rect.width() as usize;
-                let mut values = Vec::with_capacity(rows * cols);
+                let mut values = Vec::with_capacity(
+                    rect.checked_cell_count_usize()
+                        .map_err(|_| FormulaEvalError::Num)?,
+                );
                 for row in rect.row_first..=rect.row_last {
                     for col in rect.col_first..=rect.col_last {
                         values.push(self.evaluator.cell_value_or_blank(sheet_id, row, col)?);
@@ -10151,7 +10160,10 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                 let cols = matrices.iter().try_fold(0_usize, |total, (_, cols, _)| {
                     total.checked_add(*cols).ok_or(FormulaEvalError::Num)
                 })?;
-                let mut values = vec![CellValue::Error(CellError::NA); rows * cols];
+                let mut values = vec![
+                    CellValue::Error(CellError::NA);
+                    rows.checked_mul(cols).ok_or(FormulaEvalError::Num)?
+                ];
                 let mut col_start = 0_usize;
                 for (matrix_rows, matrix_cols, matrix_values) in matrices {
                     for row in 0..matrix_rows {
@@ -10172,7 +10184,10 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                 .map(|(_, cols, _)| *cols)
                 .max()
                 .ok_or(FormulaEvalError::Calc)?;
-            let mut values = vec![CellValue::Error(CellError::NA); rows * cols];
+            let mut values = vec![
+                CellValue::Error(CellError::NA);
+                rows.checked_mul(cols).ok_or(FormulaEvalError::Num)?
+            ];
             let mut row_start = 0_usize;
             for (matrix_rows, matrix_cols, matrix_values) in matrices {
                 for row in 0..matrix_rows {
@@ -10580,7 +10595,12 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             if selected.is_empty() {
                 return Err(FormulaEvalError::Calc);
             }
-            let mut values = Vec::with_capacity(selected.len() * record_len);
+            let mut values = Vec::with_capacity(
+                selected
+                    .len()
+                    .checked_mul(record_len)
+                    .ok_or(FormulaEvalError::Num)?,
+            );
             if by_column {
                 for row in 0..source_rows {
                     for &col in &selected {
@@ -10661,7 +10681,8 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                     source_cols - dropped_cols,
                 )
             };
-            let mut values = Vec::with_capacity(rows * cols);
+            let mut values =
+                Vec::with_capacity(rows.checked_mul(cols).ok_or(FormulaEvalError::Num)?);
             for row in row_start..row_start + rows {
                 values.extend_from_slice(
                     &source_values
@@ -10706,7 +10727,11 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             }
             let mut values = Vec::new();
             if selecting_columns {
-                values.reserve(source_rows * selected.len());
+                values.reserve(
+                    source_rows
+                        .checked_mul(selected.len())
+                        .ok_or(FormulaEvalError::Num)?,
+                );
                 for row in 0..source_rows {
                     for &col in &selected {
                         values.push(source_values[row * source_cols + col].clone());
@@ -10718,7 +10743,12 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                     values,
                 });
             }
-            values.reserve(selected.len() * source_cols);
+            values.reserve(
+                selected
+                    .len()
+                    .checked_mul(source_cols)
+                    .ok_or(FormulaEvalError::Num)?,
+            );
             for &row in &selected {
                 values
                     .extend_from_slice(&source_values[row * source_cols..(row + 1) * source_cols]);
@@ -12478,8 +12508,10 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                     self.index = next_index;
                     self.skip_whitespace();
                     if self.peek_char().is_none_or(|ch| matches!(ch, ',' | ')')) {
-                        let mut values =
-                            Vec::with_capacity((rect.width() * rect.height()) as usize);
+                        let capacity = rect
+                            .checked_cell_count_usize()
+                            .map_err(|_| FormulaEvalError::Num)?;
+                        let mut values = Vec::with_capacity(capacity);
                         for row in rect.row_first..=rect.row_last {
                             for col in rect.col_first..=rect.col_last {
                                 match self.evaluator.cell_value_or_blank(
@@ -19311,11 +19343,13 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             return Err(FormulaEvalError::NA);
         }
         let degrees = if observed_rect.height() == 1 {
-            observed_rect.width().saturating_sub(1)
+            u64::from(observed_rect.width().saturating_sub(1))
         } else if observed_rect.width() == 1 {
-            observed_rect.height().saturating_sub(1)
+            u64::from(observed_rect.height().saturating_sub(1))
         } else {
-            (observed_rect.height() - 1) * (observed_rect.width() - 1)
+            u64::from(observed_rect.height() - 1)
+                .checked_mul(u64::from(observed_rect.width() - 1))
+                .ok_or(FormulaEvalError::Num)?
         };
         if degrees == 0 {
             return Err(FormulaEvalError::Div0);

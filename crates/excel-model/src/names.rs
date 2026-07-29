@@ -1,8 +1,9 @@
 use std::collections::BTreeMap;
 
 use office_common::{
-    DefinedName, DefinedNameId, DefinedNameMetadata, FormulaSource, NameKey, NameScope,
-    NameValidationMode, OmError, OmErrorCode, OmResult, SheetId, canonicalize_excel_name,
+    DefinedName, DefinedNameId, DefinedNameMetadata, ExcelLimits, FormulaSource, NameKey,
+    NameScope, NameValidationMode, OmError, OmErrorCode, OmResult, SheetId,
+    canonicalize_excel_name,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -331,9 +332,9 @@ fn validate_defined_name(name: &str, mode: NameValidationMode) -> OmResult<()> {
                     .saturating_mul(26)
                     .saturating_add(u32::from(byte - b'A' + 1));
             }
-            if column_index <= 16_384
+            if column_index <= ExcelLimits::MAX_COLUMN_INDEX
                 && let Ok(row_index) = row_part.parse::<u32>()
-                && (1..=1_048_576).contains(&row_index)
+                && (1..=ExcelLimits::MAX_ROW_INDEX).contains(&row_index)
             {
                 return Err(OmError::invalid_argument(format!(
                     "defined name '{}' must not look like an A1 reference",

@@ -38,7 +38,7 @@ use excel_xlsx::{
 use office_codegen::{OmFocusSurfaceRegistry, build_focus_surface_registry_from_json};
 use office_common::{
     AbsoluteAnchor, ActiveContentPolicy, CellError, CellValue, ChartId, ChartObjectId,
-    DefinedNameId, DrawingAnchor, DrawingId, DrawingObjectId, ExcelProfile,
+    DefinedNameId, DrawingAnchor, DrawingId, DrawingObjectId, ExcelLimits, ExcelProfile,
     ExternalDataAccessReport, ExternalDataPolicy, FileFormat, FormulaSource, GetRangeValuesSpec,
     LoadOptions, NameScope, NameValidationMode, ObjectHandle, ObjectPlacement, OmArray, OmError,
     OmErrorCode, OmResult, OmValue, OpaquePart,
@@ -64,8 +64,8 @@ const FIRST_DYNAMIC_OBJECT_HANDLE_VALUE: u64 = 1_000_000;
 const APPLICATION_NAME: &str = "Microsoft Excel";
 const APPLICATION_VERSION: &str = "16.0";
 const XL_CREATOR_CODE: i32 = 1_480_803_660;
-const EXCEL_MAX_ROW_INDEX: u32 = 1_048_576;
-const EXCEL_MAX_COLUMN_INDEX: u32 = 16_384;
+const EXCEL_MAX_ROW_INDEX: u32 = ExcelLimits::MAX_ROW_INDEX;
+const EXCEL_MAX_COLUMN_INDEX: u32 = ExcelLimits::MAX_COLUMN_INDEX;
 const XL_CALCULATION_AUTOMATIC: i32 = -4105;
 const XL_CALCULATION_MANUAL: i32 = -4135;
 const XL_CALCULATION_SEMIAUTOMATIC: i32 = 2;
@@ -11141,8 +11141,7 @@ impl ExcelRuntime {
                                                 "3D range handles are not supported by this operation yet",
                                             ));
                                         };
-                                        let area_cell_count = u64::from(area.rect.width())
-                                            * u64::from(area.rect.height());
+                                        let area_cell_count = area.checked_cell_count()?;
                                         if zero_based < area_cell_count {
                                             let row_offset =
                                                 (zero_based / u64::from(area.rect.width())) as u32;
@@ -11608,8 +11607,7 @@ impl ExcelRuntime {
                                         }
                                     }
                                     RangeProjection::Cells => {
-                                        let cell_count =
-                                            u64::from(rect.width()) * u64::from(rect.height());
+                                        let cell_count = rect.checked_cell_count()?;
                                         if u64::from(index) > cell_count {
                                             return Err(OmError::invalid_argument(
                                                 "Range.Item index is out of bounds",
@@ -13035,8 +13033,7 @@ impl ExcelRuntime {
                         let source_cells = {
                             let state = &self.runtime_workbook(workbook)?.loaded.state;
                             let source_worksheet = state.worksheet_data_for_sheet(sheet_id)?;
-                            let mut cells =
-                                Vec::with_capacity((rect.height() * rect.width()) as usize);
+                            let mut cells = Vec::with_capacity(rect.checked_cell_count_usize()?);
                             for row in rect.row_first..=rect.row_last {
                                 for col in rect.col_first..=rect.col_last {
                                     cells.push(source_worksheet.cells.get(&(row, col)).cloned());
@@ -13222,8 +13219,7 @@ impl ExcelRuntime {
                         let source_cells = {
                             let state = &self.runtime_workbook(workbook)?.loaded.state;
                             let source_worksheet = state.worksheet_data_for_sheet(sheet_id)?;
-                            let mut cells =
-                                Vec::with_capacity((rect.height() * rect.width()) as usize);
+                            let mut cells = Vec::with_capacity(rect.checked_cell_count_usize()?);
                             for row in rect.row_first..=rect.row_last {
                                 for col in rect.col_first..=rect.col_last {
                                     cells.push(source_worksheet.cells.get(&(row, col)).cloned());
@@ -13717,7 +13713,7 @@ impl ExcelRuntime {
                             let source_worksheet =
                                 state.worksheet_data_for_sheet(clipboard_sheet_id)?;
                             let mut cells = Vec::with_capacity(
-                                (clipboard_rect.height() * clipboard_rect.width()) as usize,
+                                clipboard_rect.checked_cell_count_usize()?,
                             );
                             for row in clipboard_rect.row_first..=clipboard_rect.row_last {
                                 for col in clipboard_rect.col_first..=clipboard_rect.col_last {
@@ -28154,11 +28150,11 @@ impl ExcelRuntime {
     ) -> OmResult<Option<(u32, u32)>> {
         let (sheet_id, rects) = Self::range_set_single_sheet_rects(range)?;
         let position_count = rects.iter().try_fold(0usize, |acc, rect| {
-            let area_count = u64::from(rect.height()) * u64::from(rect.width());
-            let area_count = usize::try_from(area_count)
-                .map_err(|_| OmError::invalid_argument("Range.Find searched range is too large"))?;
+            let area_count = rect.checked_cell_count_usize().map_err(|_| {
+                OmError::resource_limit("Range.Find searched range is too large")
+            })?;
             acc.checked_add(area_count)
-                .ok_or_else(|| OmError::invalid_argument("Range.Find searched range is too large"))
+                .ok_or_else(|| OmError::resource_limit("Range.Find searched range is too large"))
         })?;
         let mut positions = Vec::with_capacity(position_count);
         match criteria.search_order {
@@ -28327,6 +28323,17 @@ impl ExcelRuntime {
             .loaded
             .state
             .worksheet_data_for_sheet(sheet_id)?;
+        for &(row, col) in worksheet_data.cells.keys() {
+            ExcelLimits::validate_cell(row, col).map_err(|error| {
+                OmError::new(
+                    OmErrorCode::InvalidState,
+                    format!(
+                        "worksheet {} cell coordinate R{row}C{col} is invalid: {}",
+                        sheet_id.0, error.message
+                    ),
+                )
+            })?;
+        }
         let cell_is_occupied = |row: u32, col: u32| {
             worksheet_data.cells.get(&(row, col)).is_some_and(|cell| {
                 cell.formula.is_some() || !matches!(cell.value, office_common::CellValue::Blank)
@@ -28388,7 +28395,7 @@ impl ExcelRuntime {
                 region.row_first -= 1;
                 changed = true;
             }
-            while region.row_last < u32::MAX
+            while region.row_last < EXCEL_MAX_ROW_INDEX
                 && row_has_occupied(region.row_last + 1, region.col_first, region.col_last)
             {
                 region.row_last += 1;
@@ -28400,7 +28407,7 @@ impl ExcelRuntime {
                 region.col_first -= 1;
                 changed = true;
             }
-            while region.col_last < u32::MAX
+            while region.col_last < EXCEL_MAX_COLUMN_INDEX
                 && col_has_occupied(region.col_last + 1, region.row_first, region.row_last)
             {
                 region.col_last += 1;
@@ -32434,8 +32441,9 @@ fn chart_reference_target_point_count(target: Option<&ReferenceTarget>) -> usize
         Some(ReferenceTarget::Range(range)) => range
             .areas()
             .iter()
-            .map(|area| area.rect.width() as usize * area.rect.height() as usize)
-            .sum(),
+            .fold(0usize, |total, area| {
+                total.saturating_add(chart_range_area_point_count(area))
+            }),
         Some(ReferenceTarget::Array(array)) => array.rows.saturating_mul(array.cols),
         Some(ReferenceTarget::Value(_)) => 1,
         Some(_) | None => 1,
@@ -32476,7 +32484,7 @@ fn chart_reference_target_value_text_for_index(
     match target {
         Some(ReferenceTarget::Range(range)) => {
             for area in range.areas() {
-                let cell_count = area.rect.width() as usize * area.rect.height() as usize;
+                let cell_count = chart_range_area_point_count(area);
                 if index >= cell_count {
                     index -= cell_count;
                     continue;
@@ -32522,7 +32530,7 @@ fn chart_reference_target_cell_for_index(
         return None;
     };
     for area in range.areas() {
-        let cell_count = area.rect.width() as usize * area.rect.height() as usize;
+        let cell_count = chart_range_area_point_count(area);
         if index >= cell_count {
             index -= cell_count;
             continue;
@@ -32539,6 +32547,10 @@ fn chart_reference_target_cell_for_index(
         ));
     }
     None
+}
+
+fn chart_range_area_point_count(area: &RangeArea) -> usize {
+    area.checked_cell_count_usize().unwrap_or(usize::MAX)
 }
 
 fn chart_reference_target_contains_cell(
