@@ -374,7 +374,14 @@ Wave 2 exit gate:
    오류가 첫 번째 복사와 package/dirty/handle state를 남기지 않는 RED 회귀를 고정했으며
    `excel-runtime` 722개 회귀가 통과한다. correctness-first target clone 비용은
    `OOTD-034`/`OOTD-056` COW 후속에 남긴다.
-   **다음:** chart-sheet add/delete와 target-less collection copy의 workbook-registration
+   7단계 완료 (2026-07-29, synthetic): Copy 전용 snapshot/rollback을 공통
+   `RuntimeWorkbookMutationSnapshot` 경계로 승격하고 `Worksheets.Add` 전체를 같은 prepared
+   target에 묶었다. Count와 chart/dialog/macro sheet graph 생성, template 임시 workbook,
+   workbook/content-type/relationship rewrite, model/support insert, calc-chain invalidation,
+   handle/selection 갱신 중 어느 단계가 실패해도 원본 runtime과 session state를 복원한다.
+   malformed workbook XML 때문에 chart/drawing part 생성 뒤 실패하는 `Charts.Add` RED가
+   orphan graph part와 handle을 남기지 않으며 `excel-runtime` 723개 회귀가 통과한다.
+   **다음:** chart-sheet delete와 target-less collection copy의 workbook-registration
    transaction을 닫고, `WorksheetData`의 cell/spill/dirty payload 7개를 하나의 validated
    command 단계로 이관한 뒤 `OOTD-018`/`OOTD-048` common reference subsystem을 진행한다.
 16. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를

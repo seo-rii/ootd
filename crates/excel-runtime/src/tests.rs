@@ -15,10 +15,10 @@
 
     use super::persistence::PersistenceFailurePoint;
     use office_common::{
-        ActiveContentPolicy, CellError, CellValue, ExcelLimits, ExcelProfile, ExternalDataKind,
-        ExternalDataPolicy, FileFormat, GetRangeValuesSpec, LoadOptions, ObjectHandle, OmArray,
-        OmErrorCode, OmValue, OpenWorkbookSpec, RangeArea, RangeRef, RangeSet, Rect,
-        ReferenceTarget, SaveWorkbookSpec, SetRangeValuesSpec, SheetId, SheetScope, StyleId,
+        ActiveContentPolicy, CellError, CellValue, ChartId, ExcelLimits, ExcelProfile,
+        ExternalDataKind, ExternalDataPolicy, FileFormat, GetRangeValuesSpec, LoadOptions,
+        ObjectHandle, OmArray, OmErrorCode, OmValue, OpenWorkbookSpec, RangeArea, RangeRef, RangeSet,
+        Rect, ReferenceTarget, SaveWorkbookSpec, SetRangeValuesSpec, SheetId, SheetScope, StyleId,
         WorkbookHandle, WorkbookId,
     };
     use office_opc::{CompressionMethod, OpcPackage, OpcPart};
@@ -47240,6 +47240,53 @@
     }
 
     #[test]
+    fn charts_add_workbook_xml_failure_does_not_leave_orphan_graph_parts() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let charts = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Charts", &[])
+                .expect("Workbook.Charts"),
+        );
+        runtime
+            .runtime_workbook_mut(workbook)
+            .expect("runtime workbook")
+            .loaded
+            .package
+            .replace_part_bytes(super::WORKBOOK_PART_NAME, b"<workbook".to_vec())
+            .expect("corrupt workbook XML");
+        let before = runtime_workbook_persistence_snapshot(&runtime, workbook);
+        let dirty_before = runtime
+            .workbook_dirty_domains(workbook)
+            .expect("workbook dirty domains");
+        let session_before = runtime_session_mutation_snapshot(&runtime);
+
+        let error = runtime
+            .dispatch_invoke(charts, "Add", &[])
+            .expect_err("Charts.Add must fail for malformed workbook XML");
+
+        assert_eq!(error.code, OmErrorCode::Parse);
+        assert_eq!(
+            runtime_workbook_persistence_snapshot(&runtime, workbook),
+            before
+        );
+        assert_eq!(
+            runtime
+                .workbook_dirty_domains(workbook)
+                .expect("workbook dirty domains after failure"),
+            dirty_before
+        );
+        assert_eq!(runtime_session_mutation_snapshot(&runtime), session_before);
+    }
+
+    #[test]
     fn charts_delete_removes_chart_sheet_collection() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
@@ -49050,17 +49097,7 @@
         let dirty_before = runtime
             .workbook_dirty_domains(target_workbook)
             .expect("target dirty domains");
-        let workbook_handles_before = runtime.workbooks.keys().copied().collect::<Vec<_>>();
-        let object_handles_before = runtime.objects.keys().copied().collect::<Vec<_>>();
-        let stale_objects_before = runtime.stale_objects.clone();
-        let next_handle_before = runtime.next_handle;
-        let next_object_handle_before = runtime.next_object_handle;
-        let next_created_workbook_index_before = runtime.next_created_workbook_index;
-        let active_workbook_before = runtime.active_workbook;
-        let active_chart_before = runtime.active_chart;
-        let selection_before = runtime
-            .selection
-            .map(|selection| (selection.workbook, selection.sheet_id, selection.rect));
+        let session_before = runtime_session_mutation_snapshot(&runtime);
 
         let error = runtime
             .dispatch_invoke(
@@ -49082,29 +49119,7 @@
                 .expect("target dirty domains after failure"),
             dirty_before
         );
-        assert_eq!(
-            runtime.workbooks.keys().copied().collect::<Vec<_>>(),
-            workbook_handles_before
-        );
-        assert_eq!(
-            runtime.objects.keys().copied().collect::<Vec<_>>(),
-            object_handles_before
-        );
-        assert_eq!(runtime.stale_objects, stale_objects_before);
-        assert_eq!(runtime.next_handle, next_handle_before);
-        assert_eq!(runtime.next_object_handle, next_object_handle_before);
-        assert_eq!(
-            runtime.next_created_workbook_index,
-            next_created_workbook_index_before
-        );
-        assert_eq!(runtime.active_workbook, active_workbook_before);
-        assert_eq!(runtime.active_chart, active_chart_before);
-        assert_eq!(
-            runtime
-                .selection
-                .map(|selection| (selection.workbook, selection.sheet_id, selection.rect)),
-            selection_before
-        );
+        assert_eq!(runtime_session_mutation_snapshot(&runtime), session_before);
     }
 
     #[test]
@@ -126258,6 +126273,77 @@
             runtime_workbook.loaded.package.clone(),
             runtime_workbook.prompt_dirty,
         )
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    struct RuntimeSessionMutationSnapshot {
+        workbook_handles: Vec<u64>,
+        object_handles: Vec<u64>,
+        stale_object_handles: Vec<u64>,
+        next_handle: u64,
+        next_object_handle: u64,
+        next_created_workbook_index: u64,
+        active_workbook: Option<WorkbookHandle>,
+        active_chart: Option<(WorkbookHandle, ChartId, Option<ChartObjectsParent>)>,
+        selection: Option<(WorkbookHandle, SheetId, Rect)>,
+        selection_range: Option<RangeSet>,
+        last_goto_selection: Option<(WorkbookHandle, SheetId, Rect)>,
+        last_goto_range: Option<(WorkbookHandle, RangeSet)>,
+        find_state: Option<(
+            WorkbookHandle,
+            RangeSet,
+            String,
+            i32,
+            i32,
+            i32,
+            bool,
+            Option<(u32, u32)>,
+        )>,
+        cut_copy_mode: Option<i32>,
+        clipboard: Option<(i32, WorkbookHandle, RangeSet)>,
+    }
+
+    fn runtime_session_mutation_snapshot(
+        runtime: &ExcelRuntime,
+    ) -> RuntimeSessionMutationSnapshot {
+        RuntimeSessionMutationSnapshot {
+            workbook_handles: runtime.workbooks.keys().copied().collect(),
+            object_handles: runtime.objects.keys().copied().collect(),
+            stale_object_handles: runtime.stale_objects.iter().copied().collect(),
+            next_handle: runtime.next_handle,
+            next_object_handle: runtime.next_object_handle,
+            next_created_workbook_index: runtime.next_created_workbook_index,
+            active_workbook: runtime.active_workbook,
+            active_chart: runtime.active_chart,
+            selection: runtime
+                .selection
+                .map(|selection| (selection.workbook, selection.sheet_id, selection.rect)),
+            selection_range: runtime.selection_range.clone(),
+            last_goto_selection: runtime
+                .last_goto_selection
+                .map(|selection| (selection.workbook, selection.sheet_id, selection.rect)),
+            last_goto_range: runtime.last_goto_range.clone(),
+            find_state: runtime.find_state.as_ref().map(|state| {
+                (
+                    state.workbook,
+                    state.range.clone(),
+                    state.what.clone(),
+                    state.look_in,
+                    state.look_at,
+                    state.search_order,
+                    state.match_case,
+                    state.last_match,
+                )
+            }),
+            cut_copy_mode: runtime.cut_copy_mode,
+            clipboard: runtime.clipboard.as_ref().map(|clipboard| {
+                (
+                    clipboard.mode,
+                    clipboard.workbook,
+                    clipboard.range.clone(),
+                )
+            }),
+        }
     }
 
     fn synthetic_workbook_with_pivot_graph_bytes() -> Vec<u8> {

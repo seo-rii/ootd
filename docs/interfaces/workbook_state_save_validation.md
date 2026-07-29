@@ -89,9 +89,20 @@ during preparation. The regression corrupts only the second of two source chart-
 requires the first copy to leave no target or runtime residue.
 
 This is deliberately a correctness-first clone boundary. `OOTD-034`/`OOTD-056` retain the COW and
-memory-reduction follow-up. Chart-sheet add/delete and the initial registration of a target-less
-collection-copy workbook still coordinate worksheet, binding, drawing, chart, support-snapshot, and
-package state above this transaction and remain later `OOTD-054` stages.
+memory-reduction follow-up.
+
+Worksheet Add uses the same `RuntimeWorkbookMutationSnapshot` boundary. Argument and placement
+validation happen before the snapshot; Count iterations, template workbook registration and close,
+native worksheet/chart-sheet/dialog-sheet/macro-sheet package graph creation, model and support
+insertion, calc-chain invalidation, handle allocation, and selection changes happen against the
+prepared target. A late failure restores the original target and session snapshot. The regression
+uses malformed workbook XML so `Charts.Add` fails only after attempting to add chartsheet, drawing,
+chart, relationship, and content-type artifacts, then requires exact workbook/package/dirty and
+runtime-session equality.
+
+Chart-sheet delete and the initial registration of a target-less collection-copy workbook still
+coordinate worksheet, binding, drawing, chart, support-snapshot, and package state above this
+transaction and remain later `OOTD-054` stages.
 
 ## Worksheet Data Mutation
 

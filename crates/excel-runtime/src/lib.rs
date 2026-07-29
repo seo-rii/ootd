@@ -677,6 +677,27 @@ struct RuntimeWorkbook {
     calculation_snapshot: Option<RuntimeCalculationSnapshot>,
 }
 
+#[derive(Debug)]
+struct RuntimeWorkbookMutationSnapshot {
+    target_handle_value: u64,
+    original_target: RuntimeWorkbook,
+    workbook_handles: BTreeSet<u64>,
+    objects: BTreeMap<u64, RuntimeObjectKind>,
+    stale_objects: BTreeSet<u64>,
+    next_handle: u64,
+    next_object_handle: u64,
+    next_created_workbook_index: u64,
+    active_workbook: Option<WorkbookHandle>,
+    active_chart: Option<(WorkbookHandle, ChartId, Option<ChartObjectsParent>)>,
+    selection: Option<RuntimeSelection>,
+    selection_range: Option<RangeSet>,
+    last_goto_selection: Option<RuntimeSelection>,
+    last_goto_range: Option<(WorkbookHandle, RangeSet)>,
+    find_state: Option<RuntimeFindState>,
+    cut_copy_mode: Option<i32>,
+    clipboard: Option<RuntimeClipboard>,
+}
+
 impl RuntimeWorkbook {
     fn saved_for_prompt(&self) -> bool {
         !self.prompt_dirty
@@ -19097,6 +19118,61 @@ impl ExcelRuntime {
             .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "unknown workbook handle"))
     }
 
+    fn begin_runtime_workbook_mutation(
+        &mut self,
+        target_workbook: WorkbookHandle,
+    ) -> OmResult<RuntimeWorkbookMutationSnapshot> {
+        let WorkbookHandle(ObjectHandle(target_handle_value)) = target_workbook;
+        let prepared_target = self.runtime_workbook(target_workbook)?.clone();
+        let snapshot = RuntimeWorkbookMutationSnapshot {
+            target_handle_value,
+            original_target: self
+                .workbooks
+                .insert(target_handle_value, prepared_target)
+                .expect("validated target workbook must remain registered"),
+            workbook_handles: self.workbooks.keys().copied().collect(),
+            objects: self.objects.clone(),
+            stale_objects: self.stale_objects.clone(),
+            next_handle: self.next_handle,
+            next_object_handle: self.next_object_handle,
+            next_created_workbook_index: self.next_created_workbook_index,
+            active_workbook: self.active_workbook,
+            active_chart: self.active_chart,
+            selection: self.selection,
+            selection_range: self.selection_range.clone(),
+            last_goto_selection: self.last_goto_selection,
+            last_goto_range: self.last_goto_range.clone(),
+            find_state: self.find_state.clone(),
+            cut_copy_mode: self.cut_copy_mode,
+            clipboard: self.clipboard.clone(),
+        };
+        Ok(snapshot)
+    }
+
+    fn rollback_runtime_workbook_mutation(
+        &mut self,
+        snapshot: RuntimeWorkbookMutationSnapshot,
+    ) {
+        self.workbooks
+            .retain(|handle_value, _| snapshot.workbook_handles.contains(handle_value));
+        self.workbooks
+            .insert(snapshot.target_handle_value, snapshot.original_target);
+        self.objects = snapshot.objects;
+        self.stale_objects = snapshot.stale_objects;
+        self.next_handle = snapshot.next_handle;
+        self.next_object_handle = snapshot.next_object_handle;
+        self.next_created_workbook_index = snapshot.next_created_workbook_index;
+        self.active_workbook = snapshot.active_workbook;
+        self.active_chart = snapshot.active_chart;
+        self.selection = snapshot.selection;
+        self.selection_range = snapshot.selection_range;
+        self.last_goto_selection = snapshot.last_goto_selection;
+        self.last_goto_range = snapshot.last_goto_range;
+        self.find_state = snapshot.find_state;
+        self.cut_copy_mode = snapshot.cut_copy_mode;
+        self.clipboard = snapshot.clipboard;
+    }
+
     fn runtime_object(&self, handle: ObjectHandle) -> OmResult<RuntimeObjectKind> {
         if let Some(object) = self.objects.get(&handle.0).cloned() {
             return Ok(object);
@@ -20196,28 +20272,7 @@ impl ExcelRuntime {
         base_insertion_index: usize,
         operation: &str,
     ) -> OmResult<Vec<SheetId>> {
-        let WorkbookHandle(ObjectHandle(target_handle_value)) = target_workbook;
-        let prepared_target = self.runtime_workbook(target_workbook)?.clone();
-        let original_target = self
-            .workbooks
-            .insert(target_handle_value, prepared_target)
-            .expect("validated target workbook must remain registered");
-        let workbook_handles_before = self.workbooks.keys().copied().collect::<BTreeSet<_>>();
-        let objects_before = self.objects.clone();
-        let stale_objects_before = self.stale_objects.clone();
-        let next_handle_before = self.next_handle;
-        let next_object_handle_before = self.next_object_handle;
-        let next_created_workbook_index_before = self.next_created_workbook_index;
-        let active_workbook_before = self.active_workbook;
-        let active_chart_before = self.active_chart;
-        let selection_before = self.selection;
-        let selection_range_before = self.selection_range.clone();
-        let last_goto_selection_before = self.last_goto_selection;
-        let last_goto_range_before = self.last_goto_range.clone();
-        let find_state_before = self.find_state.clone();
-        let cut_copy_mode_before = self.cut_copy_mode;
-        let clipboard_before = self.clipboard.clone();
-
+        let snapshot = self.begin_runtime_workbook_mutation(target_workbook)?;
         let result = (|| {
             let mut copied_sheet_ids = Vec::with_capacity(sheet_ids.len());
             for (offset, sheet_id) in sheet_ids.iter().copied().enumerate() {
@@ -20247,24 +20302,7 @@ impl ExcelRuntime {
         })();
 
         if result.is_err() {
-            self.workbooks
-                .retain(|handle_value, _| workbook_handles_before.contains(handle_value));
-            self.workbooks
-                .insert(target_handle_value, original_target);
-            self.objects = objects_before;
-            self.stale_objects = stale_objects_before;
-            self.next_handle = next_handle_before;
-            self.next_object_handle = next_object_handle_before;
-            self.next_created_workbook_index = next_created_workbook_index_before;
-            self.active_workbook = active_workbook_before;
-            self.active_chart = active_chart_before;
-            self.selection = selection_before;
-            self.selection_range = selection_range_before;
-            self.last_goto_selection = last_goto_selection_before;
-            self.last_goto_range = last_goto_range_before;
-            self.find_state = find_state_before;
-            self.cut_copy_mode = cut_copy_mode_before;
-            self.clipboard = clipboard_before;
+            self.rollback_runtime_workbook_mutation(snapshot);
         }
 
         result
@@ -20611,6 +20649,8 @@ impl ExcelRuntime {
                     .unwrap_or(0)
             });
 
+        let snapshot = self.begin_runtime_workbook_mutation(workbook)?;
+        let result = (|| {
         if let Some(template_path) = template_path {
             let template_display_name = Path::new(template_path)
                 .file_name()
@@ -21188,6 +21228,13 @@ impl ExcelRuntime {
         self.clipboard = None;
         self.set_selection(workbook, sheet_id, Rect::single_cell(1, 1));
         Ok(self.register_worksheet_handle(workbook, sheet_id))
+        })();
+
+        if result.is_err() {
+            self.rollback_runtime_workbook_mutation(snapshot);
+        }
+
+        result
     }
 
     fn spawn_single_sheet_workbook_from_source(
