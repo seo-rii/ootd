@@ -31,6 +31,12 @@ pub struct CellData {
     pub style_id: Option<StyleId>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CellBatchMutationKind {
+    Replace,
+    Rearrange,
+}
+
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct WorksheetData {
     pub cells: BTreeMap<(u32, u32), CellData>,
@@ -68,6 +74,30 @@ impl WorksheetData {
                         "cannot edit spill child R{}C{}; spill anchor is R{}C{}",
                         key.0, key.1, anchor.0, anchor.1,
                     ),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn ensure_spill_topology_is_not_rearranged(
+        &self,
+        keys: impl IntoIterator<Item = (u32, u32)>,
+    ) -> OmResult<()> {
+        for key in keys {
+            if let Some(anchor) = self.spill_owner_for_key(key) {
+                return Err(OmError::new(
+                    OmErrorCode::InvalidState,
+                    format!(
+                        "cannot rearrange spill child R{}C{}; spill anchor is R{}C{}",
+                        key.0, key.1, anchor.0, anchor.1,
+                    ),
+                ));
+            }
+            if self.spill_ranges.contains_key(&key) || self.dynamic_array_formulas.contains(&key) {
+                return Err(OmError::new(
+                    OmErrorCode::InvalidState,
+                    format!("cannot rearrange spill anchor R{}C{}", key.0, key.1),
                 ));
             }
         }
@@ -1334,6 +1364,23 @@ impl WorkbookState {
         sheet_id: SheetId,
         replacements: BTreeMap<(u32, u32), Option<CellData>>,
     ) -> OmResult<bool> {
+        self.apply_cell_batch_with_change(sheet_id, replacements, CellBatchMutationKind::Replace)
+    }
+
+    pub fn rearrange_cells_with_change(
+        &mut self,
+        sheet_id: SheetId,
+        replacements: BTreeMap<(u32, u32), Option<CellData>>,
+    ) -> OmResult<bool> {
+        self.apply_cell_batch_with_change(sheet_id, replacements, CellBatchMutationKind::Rearrange)
+    }
+
+    fn apply_cell_batch_with_change(
+        &mut self,
+        sheet_id: SheetId,
+        replacements: BTreeMap<(u32, u32), Option<CellData>>,
+        mutation_kind: CellBatchMutationKind,
+    ) -> OmResult<bool> {
         let worksheet = self.worksheet_data_for_sheet(sheet_id)?;
         let mut updates = Vec::with_capacity(replacements.len());
         for (key, replacement) in replacements {
@@ -1342,11 +1389,21 @@ impl WorkbookState {
                 updates.push((key, replacement));
             }
         }
-        worksheet.ensure_spill_children_are_not_edited(updates.iter().map(|(key, _)| *key))?;
+        match mutation_kind {
+            CellBatchMutationKind::Replace => {
+                worksheet
+                    .ensure_spill_children_are_not_edited(updates.iter().map(|(key, _)| *key))?;
+            }
+            CellBatchMutationKind::Rearrange => {
+                worksheet
+                    .ensure_spill_topology_is_not_rearranged(updates.iter().map(|(key, _)| *key))?;
+            }
+        }
 
         let worksheet = self.worksheet_data_for_sheet_mut(sheet_id)?;
         for (key, replacement) in &updates {
-            let preserve_dynamic_formula = worksheet.dynamic_array_formulas.contains(key)
+            let preserve_dynamic_formula = mutation_kind == CellBatchMutationKind::Replace
+                && worksheet.dynamic_array_formulas.contains(key)
                 && replacement
                     .as_ref()
                     .is_some_and(|cell| cell.formula.is_some());
@@ -3596,6 +3653,81 @@ mod tests {
             assert!(worksheet.dirty_cells.contains(&key), "{key:?}");
         }
         state.validate_for_save().expect("valid replacement state");
+    }
+
+    #[test]
+    fn rearrange_cells_rejects_spill_topology_updates_atomically() {
+        for protected_key in [(3, 3), (4, 4)] {
+            let mut state = sample_state();
+            seed_two_by_two_spill(&mut state);
+            let before = state
+                .worksheet_data_for_sheet(SheetId(3))
+                .expect("worksheet data")
+                .clone();
+
+            let error = state
+                .rearrange_cells_with_change(
+                    SheetId(3),
+                    BTreeMap::from([
+                        (
+                            (1, 1),
+                            Some(CellData {
+                                value: CellValue::Text("changed".to_string()),
+                                formula: None,
+                                style_id: None,
+                            }),
+                        ),
+                        (protected_key, None),
+                    ]),
+                )
+                .expect_err("spill topology rearrangement should fail");
+
+            assert_eq!(error.code, OmErrorCode::InvalidState, "{protected_key:?}");
+            assert!(
+                error
+                    .message
+                    .contains(&format!("R{}C{}", protected_key.0, protected_key.1)),
+                "{protected_key:?}: {error:?}",
+            );
+            assert_eq!(
+                state
+                    .worksheet_data_for_sheet(SheetId(3))
+                    .expect("worksheet data"),
+                &before,
+                "{protected_key:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn rearrange_cells_applies_plain_batch_and_tracks_dirty_cells() {
+        let mut state = sample_state();
+        let moved = state
+            .worksheet_data_for_sheet(SheetId(3))
+            .expect("worksheet data")
+            .cells
+            .get(&(1, 1))
+            .expect("source cell")
+            .clone();
+
+        assert!(
+            state
+                .rearrange_cells_with_change(
+                    SheetId(3),
+                    BTreeMap::from([((1, 1), None), ((1, 2), Some(moved.clone()))]),
+                )
+                .expect("rearrange plain cells")
+        );
+
+        let worksheet = state
+            .worksheet_data_for_sheet(SheetId(3))
+            .expect("worksheet data after rearrangement");
+        assert!(!worksheet.cells.contains_key(&(1, 1)));
+        assert_eq!(worksheet.cells.get(&(1, 2)), Some(&moved));
+        assert!(worksheet.dirty);
+        assert!(worksheet.dirty_cells.contains(&(1, 1)));
+        assert!(worksheet.dirty_cells.contains(&(1, 2)));
+        state.validate_for_save().expect("valid rearranged state");
     }
 
     #[test]

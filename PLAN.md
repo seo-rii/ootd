@@ -421,7 +421,15 @@ Wave 2 exit gate:
    extent를 지우면서 formula kind를 유지해 다음 calculation이 새 spill을 만들게 한다.
    `K10`과 `A20,K10` RED가 앞선 normal replacement를 포함한 workbook/dirty/session 불변을
    고정하며 `excel-model` 99개와 `excel-runtime` 730개 회귀가 통과한다.
-   **다음:** 나머지 structural/copy/paste/sort/fill mutation을 spill-aware batch command로
+   14단계 완료 (2026-07-29, synthetic): row/column `Range.Sort`의 직접 cell/dirty mutation을
+   immutable source snapshot에서 준비한 destination map과
+   `WorkbookState::rearrange_cells_with_change` command로 교체했다. command는 changed
+   destination 전체의 spill anchor/child를 commit 전에 거부하고, 허용된 plain-cell batch와
+   semantic dirty를 같은 mutable runtime borrow에서 commit한다. row sort의 `I10`과 column
+   sort의 `J9` normal destination이 `J10` spill anchor보다 먼저 오는 RED가 두 orientation의
+   workbook/dirty/session 불변을 고정하며 `excel-model` 101개와 `excel-runtime` 731개
+   회귀가 통과한다.
+   **다음:** 나머지 structural/copy/paste/fill mutation을 spill-aware batch command로
    이관하고 `WorksheetData`의 7개 payload field를 private으로 닫은 뒤
    `OOTD-018`/`OOTD-048` common reference subsystem을 진행한다.
 16. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를

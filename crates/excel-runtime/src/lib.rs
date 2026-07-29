@@ -12424,8 +12424,7 @@ impl ExcelRuntime {
                             header_has_text && body_has_non_text_data
                         };
 
-                        let mut changed = false;
-                        if orientation == XL_SORT_ROWS {
+                        let replacements = if orientation == XL_SORT_ROWS {
                             let row_first =
                                 if header == XL_YES || (header == XL_GUESS && guess_row_header()) {
                                     rect.row_first.saturating_add(1)
@@ -12475,28 +12474,18 @@ impl ExcelRuntime {
                                 }
                                 left.cmp(right)
                             });
-                            let runtime = self.runtime_workbook_mut(workbook)?;
-                            let worksheet = runtime
-                                .loaded
-                                .state
-                                .worksheet_data_for_sheet_mut(sheet_id)?;
+                            let mut replacements = BTreeMap::new();
                             for (offset, source_row) in sorted_rows.iter().enumerate() {
                                 let destination_row = row_first + offset as u32;
                                 for col in rect.col_first..=rect.col_last {
                                     let destination_key = (destination_row, col);
                                     let next_cell = source_cells.get(&(*source_row, col)).cloned();
-                                    if worksheet.cells.get(&destination_key) != next_cell.as_ref() {
-                                        if let Some(cell) = next_cell {
-                                            worksheet.cells.insert(destination_key, cell);
-                                        } else {
-                                            worksheet.cells.remove(&destination_key);
-                                        }
-                                        worksheet.dirty = true;
-                                        worksheet.dirty_cells.insert(destination_key);
-                                        changed = true;
+                                    if source_cells.get(&destination_key) != next_cell.as_ref() {
+                                        replacements.insert(destination_key, next_cell);
                                     }
                                 }
                             }
+                            replacements
                         } else {
                             let col_first = if header == XL_YES
                                 || (header == XL_GUESS && guess_column_header())
@@ -12548,31 +12537,31 @@ impl ExcelRuntime {
                                 }
                                 left.cmp(right)
                             });
-                            let runtime = self.runtime_workbook_mut(workbook)?;
-                            let worksheet = runtime
-                                .loaded
-                                .state
-                                .worksheet_data_for_sheet_mut(sheet_id)?;
+                            let mut replacements = BTreeMap::new();
                             for (offset, source_col) in sorted_cols.iter().enumerate() {
                                 let destination_col = col_first + offset as u32;
                                 for row in rect.row_first..=rect.row_last {
                                     let destination_key = (row, destination_col);
                                     let next_cell = source_cells.get(&(row, *source_col)).cloned();
-                                    if worksheet.cells.get(&destination_key) != next_cell.as_ref() {
-                                        if let Some(cell) = next_cell {
-                                            worksheet.cells.insert(destination_key, cell);
-                                        } else {
-                                            worksheet.cells.remove(&destination_key);
-                                        }
-                                        worksheet.dirty = true;
-                                        worksheet.dirty_cells.insert(destination_key);
-                                        changed = true;
+                                    if source_cells.get(&destination_key) != next_cell.as_ref() {
+                                        replacements.insert(destination_key, next_cell);
                                     }
                                 }
                             }
-                        }
+                            replacements
+                        };
+                        let changed = {
+                            let runtime = self.runtime_workbook_mut(workbook)?;
+                            let changed = runtime
+                                .loaded
+                                .state
+                                .rearrange_cells_with_change(sheet_id, replacements)?;
+                            if changed {
+                                runtime.mark_semantic_dirty();
+                            }
+                            changed
+                        };
                         if changed {
-                            self.runtime_workbook_mut(workbook)?.mark_semantic_dirty();
                             self.find_state = None;
                         }
                         Ok(OmValue::Empty)

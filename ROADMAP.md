@@ -187,7 +187,7 @@ Active order:
    `InvalidState` without partial mutation; runtime registration consumes a handle only after
    success, and reload/save callers propagate failure. The contract is
    `docs/interfaces/workbook_state_save_validation.md`.
-32. `OOTD-054` stages 1-13 are complete (2026-07-29, synthetic): the worksheet-data ownership map
+32. `OOTD-054` stages 1-14 are complete (2026-07-29, synthetic): the worksheet-data ownership map
    and live workbook-model metadata are private, decoded construction is validated, and runtime
    add/copy/delete use paired owner/data commands. Read-only access cannot insert or rekey orphan
    data; model metadata changes use explicit commands while workbook-ID changes remain atomic; and
@@ -220,9 +220,12 @@ Active order:
    multi-area `Range.Replace` now prepare one immutable-snapshot replacement batch and commit it
    through a model command only after every changed coordinate passes spill-child validation.
    Replacing a dynamic anchor formula clears its old materialized extent while retaining the
-   dynamic formula kind for the next calculation cycle. The contract is
+   dynamic formula kind for the next calculation cycle. Row- and column-oriented `Range.Sort`
+   likewise prepare one destination map from the immutable source and commit it through a
+   rearrangement command that refuses every changed spill anchor or child before applying any
+   plain-cell move. The contract is
    `docs/interfaces/workbook_state_save_validation.md`.
-   **Active:** continue `OOTD-054` by moving the remaining structural/copy/paste/sort/fill mutations
+   **Active:** continue `OOTD-054` by moving the remaining structural/copy/paste/fill mutations
    behind spill-aware batch commands, then make the complete `WorksheetData` cell/spill/dirty
    payload private before building the common reference AST and completing `OOTD-048` consumer
    migration.

@@ -34153,6 +34153,82 @@
     }
 
     #[test]
+    fn range_sort_spill_rearrangement_failure_preserves_workbook_state_and_dirty_domains() {
+        let mut column_args = vec![OmValue::Missing; 10];
+        column_args.push(OmValue::Number(f64::from(super::XL_SORT_COLUMNS)));
+        for (label, driver_address, rows, cols, target_address, args) in [
+            ("rows", "I10:I11", 2, 1, "I10:K11", Vec::new()),
+            ("columns", "J9:K9", 1, 2, "J9:K11", column_args),
+        ] {
+            let (mut runtime, workbook, active_sheet, _) = runtime_with_sequence_spill();
+            let driver = expect_object_handle(
+                runtime
+                    .dispatch_invoke(
+                        active_sheet,
+                        "Range",
+                        &[OmValue::Text(driver_address.to_string())],
+                    )
+                    .unwrap_or_else(|error| panic!("{label}: driver range: {error:?}")),
+            );
+            runtime
+                .dispatch_set(
+                    driver,
+                    "Value2",
+                    OmValue::Array(
+                        OmArray::new(
+                            rows,
+                            cols,
+                            vec![OmValue::Number(2.0), OmValue::Number(1.0)],
+                        )
+                        .unwrap_or_else(|error| panic!("{label}: driver values: {error:?}")),
+                    ),
+                    &[],
+                )
+                .unwrap_or_else(|error| panic!("{label}: set driver values: {error:?}"));
+            let target = expect_object_handle(
+                runtime
+                    .dispatch_invoke(
+                        active_sheet,
+                        "Range",
+                        &[OmValue::Text(target_address.to_string())],
+                    )
+                    .unwrap_or_else(|error| panic!("{label}: sort range: {error:?}")),
+            );
+            let before = runtime_workbook_persistence_snapshot(&runtime, workbook);
+            let dirty_before = runtime
+                .workbook_dirty_domains(workbook)
+                .unwrap_or_else(|error| panic!("{label}: workbook dirty domains: {error:?}"));
+            let session_before = runtime_session_mutation_snapshot(&runtime);
+
+            let error = runtime
+                .dispatch_invoke(target, "Sort", &args)
+                .expect_err("Range.Sort must reject spill rearrangement");
+
+            assert_eq!(error.code, OmErrorCode::InvalidState, "{label}");
+            assert!(error.message.contains("R10C10"), "{label}: {error:?}");
+            assert_eq!(
+                runtime_workbook_persistence_snapshot(&runtime, workbook),
+                before,
+                "{label}",
+            );
+            assert_eq!(
+                runtime
+                    .workbook_dirty_domains(workbook)
+                    .unwrap_or_else(|error| {
+                        panic!("{label}: dirty domains after failed Sort: {error:?}")
+                    }),
+                dirty_before,
+                "{label}",
+            );
+            assert_eq!(
+                runtime_session_mutation_snapshot(&runtime),
+                session_before,
+                "{label}",
+            );
+        }
+    }
+
+    #[test]
     fn range_address_dispatch_accepts_optional_absolute_flags() {
         let mut runtime = ExcelRuntime::new();
         let _workbook = runtime
