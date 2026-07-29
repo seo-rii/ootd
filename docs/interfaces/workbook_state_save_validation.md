@@ -100,9 +100,20 @@ uses malformed workbook XML so `Charts.Add` fails only after attempting to add c
 chart, relationship, and content-type artifacts, then requires exact workbook/package/dirty and
 runtime-session equality.
 
-Chart-sheet delete and the initial registration of a target-less collection-copy workbook still
-coordinate worksheet, binding, drawing, chart, support-snapshot, and package state above this
-transaction and remain later `OOTD-054` stages.
+Individual worksheet and chart-sheet Delete starts the same snapshot after read-only, last-sheet,
+visibility, alert, and exclusively-owned package-graph preflight, immediately before the first live
+owner removal. Worksheet/data, chart-sheet binding, drawing/chart and support/pending graphs,
+workbook relationships, content types and package parts, calc-chain invalidation, stale handles,
+selection, clipboard, and find state then form one transaction. The regression makes
+`[Content_Types].xml` malformed so `Chart.Delete` fails only after removing model, support, and
+package graph state, and requires exact restoration. The shared persistence snapshot compares
+model/package, support and pending graphs, runtime chart support sources, calculation state, source
+identity, and every dirty domain.
+
+Each call from a collection Delete is now individually atomic. The collection loop itself and the
+initial registration of a target-less collection-copy workbook still need outer block transactions:
+if a later sheet fails, an earlier successful collection deletion can remain. Those are later
+`OOTD-054` stages.
 
 ## Worksheet Data Mutation
 

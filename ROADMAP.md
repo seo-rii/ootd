@@ -187,7 +187,7 @@ Active order:
    `InvalidState` without partial mutation; runtime registration consumes a handle only after
    success, and reload/save callers propagate failure. The contract is
    `docs/interfaces/workbook_state_save_validation.md`.
-32. `OOTD-054` stages 1-7 are complete (2026-07-29, synthetic): the worksheet-data ownership map
+32. `OOTD-054` stages 1-8 are complete (2026-07-29, synthetic): the worksheet-data ownership map
    and live workbook-model metadata are private, decoded construction is validated, and runtime
    add/copy/delete use paired owner/data commands. Read-only access cannot insert or rekey orphan
    data; model metadata changes use explicit commands while workbook-ID changes remain atomic; and
@@ -205,11 +205,15 @@ Active order:
    after any later-sheet failure. Worksheet Add now uses the same runtime mutation snapshot across
    Count, template workbook, native chart/dialog/macro package graph creation, calc-chain
    invalidation, and handle/selection updates, so a late XML failure leaves no owner or orphan
-   package residue. The contract is
+   package residue. Individual worksheet/chart-sheet Delete uses that snapshot from first live
+   owner removal through relationship/content-type/package rewrites, calc-chain invalidation, and
+   stale-handle/selection cleanup; malformed content-types failure therefore restores model,
+   package, support/pending graphs, dirty domains, and runtime session state. The contract is
    `docs/interfaces/workbook_state_save_validation.md`.
-   **Active:** continue `OOTD-054` by closing chart-sheet delete and target-less copy registration
-   transactions, then move the complete `WorksheetData` cell/spill/dirty payload behind validated
-   commands before building the common reference AST and completing `OOTD-048` consumer migration.
+   **Active:** continue `OOTD-054` by closing collection-wide multi-sheet Delete and target-less
+   Copy registration transactions, then move the complete `WorksheetData` cell/spill/dirty payload
+   behind validated commands before building the common reference AST and completing `OOTD-048`
+   consumer migration.
 33. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
    claiming practical chart/pivot/style parity.
 

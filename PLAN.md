@@ -381,9 +381,17 @@ Wave 2 exit gate:
    handle/selection 갱신 중 어느 단계가 실패해도 원본 runtime과 session state를 복원한다.
    malformed workbook XML 때문에 chart/drawing part 생성 뒤 실패하는 `Charts.Add` RED가
    orphan graph part와 handle을 남기지 않으며 `excel-runtime` 723개 회귀가 통과한다.
-   **다음:** chart-sheet delete와 target-less collection copy의 workbook-registration
-   transaction을 닫고, `WorksheetData`의 cell/spill/dirty payload 7개를 하나의 validated
-   command 단계로 이관한 뒤 `OOTD-018`/`OOTD-048` common reference subsystem을 진행한다.
+   8단계 완료 (2026-07-29, synthetic): 개별 worksheet/chart-sheet Delete를 첫 live owner
+   제거부터 workbook/relationship/content-type/package graph rewrite, calc-chain invalidation,
+   stale handle과 selection/session 정리까지 같은 `RuntimeWorkbookMutationSnapshot`에 묶었다.
+   malformed `[Content_Types].xml` 때문에 chart/drawing/model/support 제거 뒤 실패하는
+   `Chart.Delete` RED가 전체 target runtime과 handle state를 복원한다. persistence snapshot
+   회귀도 model/package뿐 아니라 support/pending graph, chart support source, calculation과
+   dirty state를 비교하도록 확장했으며 `excel-runtime` 724개 회귀가 통과한다.
+   **다음:** 다중 sheet collection Delete와 target-less collection Copy의 전체 block 및
+   workbook-registration transaction을 닫고, `WorksheetData`의 cell/spill/dirty payload
+   7개를 하나의 validated command 단계로 이관한 뒤 `OOTD-018`/`OOTD-048` common reference
+   subsystem을 진행한다.
 16. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
    structured error에 추가한다.
 

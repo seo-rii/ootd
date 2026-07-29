@@ -713,7 +713,7 @@ impl RuntimeWorkbook {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct RuntimeChartSupportPartSource {
     relationship_id: String,
     relationship_type: String,
@@ -722,7 +722,7 @@ struct RuntimeChartSupportPartSource {
     part: Option<RuntimeChartSupportPart>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct RuntimeChartSupportPart {
     bytes: Vec<u8>,
     content_type: Option<String>,
@@ -23247,6 +23247,8 @@ impl ExcelRuntime {
             )?
         };
 
+        let snapshot = self.begin_runtime_workbook_mutation(workbook)?;
+        let result = (|| {
         let (removed_chart_object_ids, removed_chart_ids) = {
             let runtime = self.runtime_workbook_mut(workbook)?;
             let (_, removed_worksheet, _) = runtime
@@ -23467,6 +23469,13 @@ impl ExcelRuntime {
         }
 
         Ok(true)
+        })();
+
+        if result.is_err() {
+            self.rollback_runtime_workbook_mutation(snapshot);
+        }
+
+        result
     }
 
     fn resolve_workbook_item(&self, args: &[OmValue]) -> OmResult<OmValue> {

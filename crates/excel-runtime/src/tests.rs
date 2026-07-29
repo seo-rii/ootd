@@ -4,22 +4,29 @@
         XL_24_HOUR_CLOCK, XL_A1, XL_CALCULATION_AUTOMATIC, XL_CALCULATION_MANUAL,
         XL_CALCULATION_SEMIAUTOMATIC, XL_COLUMN_SEPARATOR, XL_COUNTRY_CODE, XL_CURRENCY_CODE,
         XL_CURRENCY_DIGITS, XL_DATE_SEPARATOR, XL_DECIMAL_SEPARATOR, XL_LIST_SEPARATOR, XL_R1C1,
-        XL_ROW_SEPARATOR, XL_THOUSANDS_SEPARATOR, XL_TIME_SEPARATOR, XL_UPPER_CASE_COLUMN_LETTER,
-        XL_UPPER_CASE_ROW_LETTER, WorkbookCalculationMode, WorkbookCalculationState,
+        XL_ROW_SEPARATOR, XL_THOUSANDS_SEPARATOR, XL_TIME_SEPARATOR,
+        XL_UPPER_CASE_COLUMN_LETTER, XL_UPPER_CASE_ROW_LETTER, RuntimeCalculationSnapshot,
+        RuntimeChartSupportPartSource, WorkbookCalculationMode, WorkbookCalculationState,
         WorkbookDirtyDomains, blank_workbook_bytes, formula_complex_from_text, supports_format,
         worksheet_relationships_part_uri_for,
     };
     use excel_model::{ChartDataLabelPosition, ChartSheetBinding, ChartType, DrawingObjectModel};
+    use excel_xlsx::{
+        PendingChartRelationshipGraph, PendingDrawingRelationshipGraph,
+        SheetDrawingSupportParts, WorksheetSupportParts,
+    };
+    use std::collections::BTreeMap;
     use std::fs;
+    use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::persistence::PersistenceFailurePoint;
     use office_common::{
-        ActiveContentPolicy, CellError, CellValue, ChartId, ExcelLimits, ExcelProfile,
+        ActiveContentPolicy, CellError, CellValue, ChartId, DrawingId, ExcelLimits, ExcelProfile,
         ExternalDataKind, ExternalDataPolicy, FileFormat, GetRangeValuesSpec, LoadOptions,
-        ObjectHandle, OmArray, OmErrorCode, OmValue, OpenWorkbookSpec, RangeArea, RangeRef, RangeSet,
-        Rect, ReferenceTarget, SaveWorkbookSpec, SetRangeValuesSpec, SheetId, SheetScope, StyleId,
-        WorkbookHandle, WorkbookId,
+        ObjectHandle, OmArray, OmErrorCode, OmValue, OpenWorkbookSpec, RangeArea, RangeRef,
+        RangeSet, Rect, ReferenceTarget, SaveWorkbookSpec, SetRangeValuesSpec, SheetId, SheetScope,
+        StyleId, WorkbookHandle, WorkbookId,
     };
     use office_opc::{CompressionMethod, OpcPackage, OpcPart};
 
@@ -47271,6 +47278,62 @@
         let error = runtime
             .dispatch_invoke(charts, "Add", &[])
             .expect_err("Charts.Add must fail for malformed workbook XML");
+
+        assert_eq!(error.code, OmErrorCode::Parse);
+        assert_eq!(
+            runtime_workbook_persistence_snapshot(&runtime, workbook),
+            before
+        );
+        assert_eq!(
+            runtime
+                .workbook_dirty_domains(workbook)
+                .expect("workbook dirty domains after failure"),
+            dirty_before
+        );
+        assert_eq!(runtime_session_mutation_snapshot(&runtime), session_before);
+    }
+
+    #[test]
+    fn chart_sheet_delete_content_types_failure_is_atomic() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let application = runtime.root_application();
+        let charts = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Charts", &[])
+                .expect("Workbook.Charts"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_invoke(charts, "Add", &[])
+                .expect("Charts.Add"),
+        );
+        runtime
+            .dispatch_set(application, "DisplayAlerts", OmValue::Bool(false), &[])
+            .expect("disable DisplayAlerts");
+        runtime
+            .runtime_workbook_mut(workbook)
+            .expect("runtime workbook")
+            .loaded
+            .package
+            .replace_part_bytes(super::CONTENT_TYPES_PART_NAME, b"<Types".to_vec())
+            .expect("corrupt content types XML");
+        let before = runtime_workbook_persistence_snapshot(&runtime, workbook);
+        let dirty_before = runtime
+            .workbook_dirty_domains(workbook)
+            .expect("workbook dirty domains");
+        let session_before = runtime_session_mutation_snapshot(&runtime);
+
+        let error = runtime
+            .dispatch_invoke(chart, "Delete", &[])
+            .expect_err("Chart.Delete must fail for malformed content types XML");
 
         assert_eq!(error.code, OmErrorCode::Parse);
         assert_eq!(
@@ -126261,18 +126324,68 @@
             .expect("open synthetic pivot workbook")
     }
 
+    #[derive(Debug, PartialEq)]
+    struct RuntimeWorkbookPersistenceSnapshot {
+        state: excel_model::WorkbookState,
+        package: OpcPackage,
+        detected_format: FileFormat,
+        calculation_properties: excel_xlsx::WorkbookCalculationProperties,
+        support_parts: excel_xlsx::WorkbookSupportParts,
+        worksheet_support_parts: BTreeMap<SheetId, WorksheetSupportParts>,
+        sheet_drawing_support_parts: BTreeMap<SheetId, SheetDrawingSupportParts>,
+        pending_drawing_relationship_graphs:
+            BTreeMap<DrawingId, PendingDrawingRelationshipGraph>,
+        pending_chart_relationship_graphs: BTreeMap<ChartId, PendingChartRelationshipGraph>,
+        chart_support_part_sources:
+            BTreeMap<ChartId, Vec<RuntimeChartSupportPartSource>>,
+        external_data_policy: ExternalDataPolicy,
+        read_only: bool,
+        source_path: Option<PathBuf>,
+        prompt_dirty: bool,
+        semantic_dirty: bool,
+        formula_cache_dirty: bool,
+        package_graph_dirty: bool,
+        external_refresh_dirty: bool,
+        calculation_snapshot: Option<RuntimeCalculationSnapshot>,
+    }
+
     fn runtime_workbook_persistence_snapshot(
         runtime: &ExcelRuntime,
         workbook: WorkbookHandle,
-    ) -> (excel_model::WorkbookState, OpcPackage, bool) {
+    ) -> RuntimeWorkbookPersistenceSnapshot {
         let runtime_workbook = runtime
             .runtime_workbook(workbook)
             .expect("runtime workbook persistence snapshot");
-        (
-            runtime_workbook.loaded.state.clone(),
-            runtime_workbook.loaded.package.clone(),
-            runtime_workbook.prompt_dirty,
-        )
+        RuntimeWorkbookPersistenceSnapshot {
+            state: runtime_workbook.loaded.state.clone(),
+            package: runtime_workbook.loaded.package.clone(),
+            detected_format: runtime_workbook.loaded.detected_format,
+            calculation_properties: runtime_workbook.loaded.calculation_properties.clone(),
+            support_parts: runtime_workbook.loaded.support_parts.clone(),
+            worksheet_support_parts: runtime_workbook.loaded.worksheet_support_parts.clone(),
+            sheet_drawing_support_parts: runtime_workbook
+                .loaded
+                .sheet_drawing_support_parts
+                .clone(),
+            pending_drawing_relationship_graphs: runtime_workbook
+                .loaded
+                .pending_drawing_relationship_graphs
+                .clone(),
+            pending_chart_relationship_graphs: runtime_workbook
+                .loaded
+                .pending_chart_relationship_graphs
+                .clone(),
+            chart_support_part_sources: runtime_workbook.chart_support_part_sources.clone(),
+            external_data_policy: runtime_workbook.external_data_policy,
+            read_only: runtime_workbook.read_only,
+            source_path: runtime_workbook.source_path.clone(),
+            prompt_dirty: runtime_workbook.prompt_dirty,
+            semantic_dirty: runtime_workbook.semantic_dirty,
+            formula_cache_dirty: runtime_workbook.formula_cache_dirty,
+            package_graph_dirty: runtime_workbook.package_graph_dirty,
+            external_refresh_dirty: runtime_workbook.external_refresh_dirty,
+            calculation_snapshot: runtime_workbook.calculation_snapshot,
+        }
     }
 
     #[derive(Debug, PartialEq, Eq)]
