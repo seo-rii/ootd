@@ -662,7 +662,7 @@ struct RuntimeCalculationSnapshot {
     state: WorkbookCalculationState,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct RuntimeWorkbook {
     loaded: LoadedXlsxWorkbook,
     external_data_policy: ExternalDataPolicy,
@@ -20196,30 +20196,78 @@ impl ExcelRuntime {
         base_insertion_index: usize,
         operation: &str,
     ) -> OmResult<Vec<SheetId>> {
-        let mut copied_sheet_ids = Vec::with_capacity(sheet_ids.len());
-        for (offset, sheet_id) in sheet_ids.iter().copied().enumerate() {
-            let insertion_index = base_insertion_index.checked_add(offset).ok_or_else(|| {
-                OmError::invalid_argument(format!("{operation} target index is too large"))
-            })?;
-            let copied_sheet = self.copy_basic_worksheet_to_workbook(
-                workbook,
-                sheet_id,
-                target_workbook,
-                insertion_index,
-            )?;
-            let RuntimeObjectKind::Worksheet {
-                sheet_id: copied_sheet_id,
-                ..
-            } = self.runtime_object(copied_sheet.0)?
-            else {
-                return Err(OmError::new(
-                    OmErrorCode::InvalidState,
-                    format!("{operation} did not create a sheet"),
-                ));
-            };
-            copied_sheet_ids.push(copied_sheet_id);
+        let WorkbookHandle(ObjectHandle(target_handle_value)) = target_workbook;
+        let prepared_target = self.runtime_workbook(target_workbook)?.clone();
+        let original_target = self
+            .workbooks
+            .insert(target_handle_value, prepared_target)
+            .expect("validated target workbook must remain registered");
+        let workbook_handles_before = self.workbooks.keys().copied().collect::<BTreeSet<_>>();
+        let objects_before = self.objects.clone();
+        let stale_objects_before = self.stale_objects.clone();
+        let next_handle_before = self.next_handle;
+        let next_object_handle_before = self.next_object_handle;
+        let next_created_workbook_index_before = self.next_created_workbook_index;
+        let active_workbook_before = self.active_workbook;
+        let active_chart_before = self.active_chart;
+        let selection_before = self.selection;
+        let selection_range_before = self.selection_range.clone();
+        let last_goto_selection_before = self.last_goto_selection;
+        let last_goto_range_before = self.last_goto_range.clone();
+        let find_state_before = self.find_state.clone();
+        let cut_copy_mode_before = self.cut_copy_mode;
+        let clipboard_before = self.clipboard.clone();
+
+        let result = (|| {
+            let mut copied_sheet_ids = Vec::with_capacity(sheet_ids.len());
+            for (offset, sheet_id) in sheet_ids.iter().copied().enumerate() {
+                let insertion_index =
+                    base_insertion_index.checked_add(offset).ok_or_else(|| {
+                        OmError::invalid_argument(format!("{operation} target index is too large"))
+                    })?;
+                let copied_sheet = self.copy_basic_worksheet_to_workbook(
+                    workbook,
+                    sheet_id,
+                    target_workbook,
+                    insertion_index,
+                )?;
+                let RuntimeObjectKind::Worksheet {
+                    sheet_id: copied_sheet_id,
+                    ..
+                } = self.runtime_object(copied_sheet.0)?
+                else {
+                    return Err(OmError::new(
+                        OmErrorCode::InvalidState,
+                        format!("{operation} did not create a sheet"),
+                    ));
+                };
+                copied_sheet_ids.push(copied_sheet_id);
+            }
+            Ok(copied_sheet_ids)
+        })();
+
+        if result.is_err() {
+            self.workbooks
+                .retain(|handle_value, _| workbook_handles_before.contains(handle_value));
+            self.workbooks
+                .insert(target_handle_value, original_target);
+            self.objects = objects_before;
+            self.stale_objects = stale_objects_before;
+            self.next_handle = next_handle_before;
+            self.next_object_handle = next_object_handle_before;
+            self.next_created_workbook_index = next_created_workbook_index_before;
+            self.active_workbook = active_workbook_before;
+            self.active_chart = active_chart_before;
+            self.selection = selection_before;
+            self.selection_range = selection_range_before;
+            self.last_goto_selection = last_goto_selection_before;
+            self.last_goto_range = last_goto_range_before;
+            self.find_state = find_state_before;
+            self.cut_copy_mode = cut_copy_mode_before;
+            self.clipboard = clipboard_before;
         }
-        Ok(copied_sheet_ids)
+
+        result
     }
 
     fn create_workbook_from_sheet_block(

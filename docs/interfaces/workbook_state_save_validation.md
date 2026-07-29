@@ -80,8 +80,18 @@ therefore preserves the complete `WorkbookState` and every dirty domain, includi
 chart source has already been rewritten in the prepared map before an invalid full-reference source
 fails. The package is not touched until the later save transaction.
 
-Chart-sheet add/copy/delete still coordinate worksheet, binding, drawing, chart, support-snapshot,
-and package state above the model. That compound lifecycle remains a later `OOTD-054` stage.
+Placement-target sheet-block Copy now stages the complete target `RuntimeWorkbook` in a clone. Every
+sheet in the requested block is copied into that prepared target; only an entirely successful block
+remains live. A failure on any later sheet restores the original workbook/package/support state and
+dirty domains, runtime object and stale registries, workbook/object handle allocators, active
+workbook/chart and selection state, clipboard/find state, and removes temporary workbooks created
+during preparation. The regression corrupts only the second of two source chart-sheet bindings and
+requires the first copy to leave no target or runtime residue.
+
+This is deliberately a correctness-first clone boundary. `OOTD-034`/`OOTD-056` retain the COW and
+memory-reduction follow-up. Chart-sheet add/delete and the initial registration of a target-less
+collection-copy workbook still coordinate worksheet, binding, drawing, chart, support-snapshot, and
+package state above this transaction and remain later `OOTD-054` stages.
 
 ## Worksheet Data Mutation
 

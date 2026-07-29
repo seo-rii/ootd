@@ -366,9 +366,17 @@ Wave 2 exit gate:
    unknown-sheet full reference가 앞선 chart raw rewrite 뒤 실패하는 회귀에서도 전체
    `WorkbookState`와 dirty domain이 보존된다. workbook/package 전체 clone은 추가하지 않았다.
    `excel-runtime` 721개 회귀가 통과한다.
-   **다음:** chart-sheet add/copy/delete lifecycle transaction과 `WorksheetData` payload field를
-   별도 `OOTD-054` 단계로 닫은 뒤 `OOTD-018`/`OOTD-048` common reference subsystem을
-   진행한다.
+   6단계 완료 (2026-07-29, synthetic): placement target이 있는 sheet-collection Copy는 대상
+   `RuntimeWorkbook` clone에서 전체 sheet block을 준비하고, 모든 복사가 성공한 뒤에만 그
+   clone을 live target으로 유지한다. 중간 오류면 원본 target과 object/stale registry,
+   workbook/object handle allocator, active workbook/chart, selection, clipboard/find state를
+   복원하고 준비 중 만들어진 임시 workbook도 제거한다. 두 chart sheet 중 두 번째 binding
+   오류가 첫 번째 복사와 package/dirty/handle state를 남기지 않는 RED 회귀를 고정했으며
+   `excel-runtime` 722개 회귀가 통과한다. correctness-first target clone 비용은
+   `OOTD-034`/`OOTD-056` COW 후속에 남긴다.
+   **다음:** chart-sheet add/delete와 target-less collection copy의 workbook-registration
+   transaction을 닫고, `WorksheetData`의 cell/spill/dirty payload 7개를 하나의 validated
+   command 단계로 이관한 뒤 `OOTD-018`/`OOTD-048` common reference subsystem을 진행한다.
 16. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
    structured error에 추가한다.
 
