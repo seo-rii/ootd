@@ -414,7 +414,14 @@ Wave 2 exit gate:
    cell shell을 삭제하지 않으며 owner/range/dynamic metadata를 바꾸지 않는다. blank
    materialized spill child를 대상으로 한 `K10`과 `A1,K10` RED가 cell identity와 valid save
    topology를 고정하며 `excel-model` 97개와 `excel-runtime` 728개 회귀가 통과한다.
-   **다음:** 나머지 structural/copy/paste/sort mutation을 spill-aware batch command로
+   13단계 완료 (2026-07-29, synthetic): single-area와 multi-area `Range.Replace`가 모든
+   대상의 replacement plan을 immutable worksheet snapshot에서 만든 뒤
+   `WorkbookState::replace_cells_with_change`로 한 번에 commit한다. command는 변경될 모든
+   좌표의 spill child를 선검사하고, dynamic anchor formula replacement에서는 기존 owned
+   extent를 지우면서 formula kind를 유지해 다음 calculation이 새 spill을 만들게 한다.
+   `K10`과 `A20,K10` RED가 앞선 normal replacement를 포함한 workbook/dirty/session 불변을
+   고정하며 `excel-model` 99개와 `excel-runtime` 730개 회귀가 통과한다.
+   **다음:** 나머지 structural/copy/paste/sort/fill mutation을 spill-aware batch command로
    이관하고 `WorksheetData`의 7개 payload field를 private으로 닫은 뒤
    `OOTD-018`/`OOTD-048` common reference subsystem을 진행한다.
 16. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를

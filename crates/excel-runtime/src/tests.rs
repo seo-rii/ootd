@@ -36984,6 +36984,148 @@
     }
 
     #[test]
+    fn range_replace_spill_child_failure_preserves_workbook_state_and_dirty_domains() {
+        for target_address in ["K10", "A20,K10"] {
+            let (mut runtime, workbook, active_sheet, _) = runtime_with_sequence_spill();
+            let normal_cell = expect_object_handle(
+                runtime
+                    .dispatch_invoke(
+                        active_sheet,
+                        "Range",
+                        &[OmValue::Text("A20".to_string())],
+                    )
+                    .expect("Range(A20)"),
+            );
+            runtime
+                .dispatch_set(
+                    normal_cell,
+                    "Value2",
+                    OmValue::Text("2 normal".to_string()),
+                    &[],
+                )
+                .expect("set normal cell before Replace");
+            let target = expect_object_handle(
+                runtime
+                    .dispatch_invoke(
+                        active_sheet,
+                        "Range",
+                        &[OmValue::Text(target_address.to_string())],
+                    )
+                    .expect("spill-child Replace target"),
+            );
+            let before = runtime_workbook_persistence_snapshot(&runtime, workbook);
+            let dirty_before = runtime
+                .workbook_dirty_domains(workbook)
+                .expect("workbook dirty domains");
+            let session_before = runtime_session_mutation_snapshot(&runtime);
+
+            let error = runtime
+                .dispatch_invoke(
+                    target,
+                    "Replace",
+                    &[
+                        OmValue::Text("2".to_string()),
+                        OmValue::Text("x".to_string()),
+                    ],
+                )
+                .expect_err("Range.Replace must reject a spill child");
+
+            assert_eq!(error.code, OmErrorCode::InvalidState, "{target_address}");
+            assert!(
+                error.message.contains("R10C11"),
+                "{target_address}: {error:?}"
+            );
+            assert!(
+                error.message.contains("R10C10"),
+                "{target_address}: {error:?}"
+            );
+            assert_eq!(
+                runtime_workbook_persistence_snapshot(&runtime, workbook),
+                before,
+                "{target_address}",
+            );
+            assert_eq!(
+                runtime
+                    .workbook_dirty_domains(workbook)
+                    .expect("workbook dirty domains after failed Replace"),
+                dirty_before,
+                "{target_address}",
+            );
+            assert_eq!(
+                runtime_session_mutation_snapshot(&runtime),
+                session_before,
+                "{target_address}",
+            );
+        }
+    }
+
+    #[test]
+    fn range_replace_dynamic_anchor_rebuilds_spill_from_replacement_formula() {
+        let (mut runtime, workbook, active_sheet, sheet_id) = runtime_with_sequence_spill();
+        let anchor = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    active_sheet,
+                    "Range",
+                    &[OmValue::Text("J10".to_string())],
+                )
+                .expect("Range(J10)"),
+        );
+
+        assert!(expect_bool(
+            runtime
+                .dispatch_invoke(
+                    anchor,
+                    "Replace",
+                    &[
+                        OmValue::Text("2,2".to_string()),
+                        OmValue::Text("1,3".to_string()),
+                    ],
+                )
+                .expect("replace dynamic spill anchor formula"),
+        ));
+
+        let worksheet = runtime
+            .workbook_state(workbook)
+            .expect("workbook state after Replace")
+            .worksheet_data_for_sheet(sheet_id)
+            .expect("worksheet data after Replace");
+        let anchor_cell = worksheet.cells.get(&(10, 10)).expect("spill anchor");
+        assert_eq!(
+            anchor_cell.formula.as_ref().expect("anchor formula").text,
+            "SEQUENCE(1,3)"
+        );
+        assert!(worksheet.dynamic_array_formulas.contains(&(10, 10)));
+        assert!(!worksheet.spill_ranges.contains_key(&(10, 10)));
+        assert!(worksheet.spill_owners.is_empty());
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("calculate replacement spill");
+        let worksheet = runtime
+            .workbook_state(workbook)
+            .expect("workbook state after recalculation")
+            .worksheet_data_for_sheet(sheet_id)
+            .expect("worksheet data after recalculation");
+        assert_eq!(
+            worksheet.spill_ranges.get(&(10, 10)),
+            Some(&Rect {
+                row_first: 10,
+                row_last: 10,
+                col_first: 10,
+                col_last: 12,
+            })
+        );
+        assert_eq!(worksheet.spill_owners.get(&(10, 11)), Some(&(10, 10)));
+        assert_eq!(worksheet.spill_owners.get(&(10, 12)), Some(&(10, 10)));
+        runtime
+            .workbook_state(workbook)
+            .expect("workbook state")
+            .validate_for_save()
+            .expect("valid replacement spill topology");
+    }
+
+    #[test]
     fn range_clear_formats_preserves_blank_spill_child_cell_identity() {
         for target_address in ["K10", "A1,K10"] {
             let (mut runtime, workbook, active_sheet, sheet_id) = runtime_with_sequence_spill();

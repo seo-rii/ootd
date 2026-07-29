@@ -11091,6 +11091,210 @@ impl ExcelRuntime {
                     }
                 }
 
+                if member == "Replace" {
+                    self.focus_member_supported("Range", member, false)?;
+                    if args.len() < 2 || args.len() > 8 {
+                        return Err(OmError::invalid_argument(
+                            "Range.Replace expects What, Replacement, and optional LookAt, SearchOrder, MatchCase, MatchByte, SearchFormat, and ReplaceFormat arguments",
+                        ));
+                    }
+                    let what = Self::coerce_range_scalar_text(&args[0], "Range.Replace What")?;
+                    let replacement =
+                        Self::coerce_range_scalar_text(&args[1], "Range.Replace Replacement")?;
+                    let look_at = Self::coerce_range_find_enum(
+                        args.get(2),
+                        XL_LOOK_AT_PART,
+                        "Range.Replace LookAt",
+                        &[XL_LOOK_AT_WHOLE, XL_LOOK_AT_PART],
+                    )?;
+                    let _search_order = Self::coerce_range_find_enum(
+                        args.get(3),
+                        XL_SEARCH_BY_ROWS,
+                        "Range.Replace SearchOrder",
+                        &[XL_SEARCH_BY_ROWS, XL_SEARCH_BY_COLUMNS],
+                    )?;
+                    let match_case = args
+                        .get(4)
+                        .map(|value| {
+                            coerce_optional_bool_arg(value, false, "Range.Replace MatchCase")
+                        })
+                        .transpose()?
+                        .unwrap_or(false);
+                    let _match_byte = args
+                        .get(5)
+                        .map(|value| {
+                            coerce_optional_bool_arg(value, false, "Range.Replace MatchByte")
+                        })
+                        .transpose()?
+                        .unwrap_or(false);
+                    let search_format = args
+                        .get(6)
+                        .map(|value| {
+                            coerce_optional_bool_arg(value, false, "Range.Replace SearchFormat")
+                        })
+                        .transpose()?
+                        .unwrap_or(false);
+                    let replace_format = args
+                        .get(7)
+                        .map(|value| {
+                            coerce_optional_bool_arg(
+                                value,
+                                false,
+                                "Range.Replace ReplaceFormat",
+                            )
+                        })
+                        .transpose()?
+                        .unwrap_or(false);
+                    if search_format || replace_format {
+                        return Err(OmError::unsupported(
+                            "Range.Replace SearchFormat and ReplaceFormat are not implemented",
+                        ));
+                    }
+
+                    let part_regex = if look_at == XL_LOOK_AT_PART && !what.is_empty() {
+                        Some(
+                            RegexBuilder::new(&regex::escape(&what))
+                                .case_insensitive(!match_case)
+                                .build()
+                                .map_err(|error| {
+                                    OmError::invalid_argument(format!(
+                                        "Range.Replace pattern is invalid: {error}"
+                                    ))
+                                })?,
+                        )
+                    } else {
+                        None
+                    };
+                    let replace_candidate = |candidate: &str| -> Option<String> {
+                        if what.is_empty() {
+                            return candidate.is_empty().then(|| replacement.clone());
+                        }
+                        if look_at == XL_LOOK_AT_WHOLE {
+                            let matched = if match_case {
+                                candidate == what
+                            } else {
+                                candidate.to_lowercase() == what.to_lowercase()
+                            };
+                            return matched.then(|| replacement.clone());
+                        }
+                        let regex = part_regex
+                            .as_ref()
+                            .expect("part regex should exist for non-empty partial replace");
+                        if !regex.is_match(candidate) {
+                            return None;
+                        }
+                        Some(
+                            regex
+                                .replace_all(candidate, |_: &regex::Captures<'_>| {
+                                    replacement.as_str()
+                                })
+                                .into_owned(),
+                        )
+                    };
+
+                    let (sheet_id, rects) = Self::range_set_single_sheet_rects(&range)?;
+                    let replacements = {
+                        let runtime = self.runtime_workbook(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let worksheet = runtime
+                            .loaded
+                            .state
+                            .worksheet_data_for_sheet(sheet_id)?;
+                        let mut replacements = BTreeMap::new();
+                        for rect in rects {
+                            for row in rect.row_first..=rect.row_last {
+                                for col in rect.col_first..=rect.col_last {
+                                    let key = (row, col);
+                                    let next_cell = match worksheet.cells.get(&key) {
+                                        Some(cell) => {
+                                            let candidate =
+                                                if let Some(formula) = cell.formula.as_ref() {
+                                                    format!("={}", formula.text)
+                                                } else {
+                                                    find_cell_value_text(&cell.value)
+                                                };
+                                            let Some(next_text) =
+                                                replace_candidate(&candidate)
+                                            else {
+                                                continue;
+                                            };
+                                            let mut next_cell = cell.clone();
+                                            if let Some(next_formula) =
+                                                next_text.strip_prefix('=')
+                                            {
+                                                if cell.formula.as_ref().is_some_and(|formula| {
+                                                    formula.text == next_formula
+                                                }) {
+                                                    continue;
+                                                }
+                                                let is_r1c1 = cell
+                                                    .formula
+                                                    .as_ref()
+                                                    .is_some_and(|formula| formula.is_r1c1);
+                                                next_cell.value = CellValue::Blank;
+                                                next_cell.formula = Some(FormulaSource {
+                                                    text: next_formula.to_string(),
+                                                    is_r1c1,
+                                                });
+                                            } else {
+                                                next_cell.value = if next_text.is_empty() {
+                                                    CellValue::Blank
+                                                } else {
+                                                    CellValue::Text(next_text)
+                                                };
+                                                next_cell.formula = None;
+                                            }
+                                            (!(matches!(next_cell.value, CellValue::Blank)
+                                                && next_cell.formula.is_none()
+                                                && next_cell.style_id.is_none()))
+                                            .then_some(next_cell)
+                                        }
+                                        None => {
+                                            let Some(next_text) = replace_candidate("") else {
+                                                continue;
+                                            };
+                                            if next_text.is_empty() {
+                                                continue;
+                                            }
+                                            Some(excel_model::CellData {
+                                                value: CellValue::Text(next_text),
+                                                formula: None,
+                                                style_id: None,
+                                            })
+                                        }
+                                    };
+                                    if worksheet.cells.get(&key) != next_cell.as_ref() {
+                                        replacements.insert(key, next_cell);
+                                    }
+                                }
+                            }
+                        }
+                        replacements
+                    };
+                    let replaced_any = {
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        let replaced_any = runtime
+                            .loaded
+                            .state
+                            .replace_cells_with_change(sheet_id, replacements)?;
+                        if replaced_any {
+                            runtime.mark_semantic_dirty();
+                        }
+                        replaced_any
+                    };
+                    if replaced_any {
+                        self.find_state = None;
+                        self.cut_copy_mode = None;
+                        self.clipboard = None;
+                    }
+                    return Ok(OmValue::Bool(replaced_any));
+                }
+
                 if range.areas().len() != 1 {
                     self.focus_member_supported("Range", member, false)?;
                     match member {
@@ -11413,22 +11617,6 @@ impl ExcelRuntime {
                                 self.dispatch_invoke(handle.0, member, &[])?;
                             }
                             return Ok(OmValue::Empty);
-                        }
-                        "Replace" => {
-                            let (sheet_id, rects) = Self::range_set_single_sheet_rects(&range)?;
-                            let mut replaced_any = false;
-                            for rect in rects {
-                                let handle = self.register_range_handle(workbook, sheet_id, rect);
-                                match self.dispatch_invoke(handle.0, member, args)? {
-                                    OmValue::Bool(replaced) => replaced_any |= replaced,
-                                    _ => {
-                                        return Err(OmError::invalid_state(
-                                            "Range.Replace returned a non-boolean result",
-                                        ));
-                                    }
-                                }
-                            }
-                            return Ok(OmValue::Bool(replaced_any));
                         }
                         "ClearContents" => {
                             if !args.is_empty() {
@@ -11877,201 +12065,6 @@ impl ExcelRuntime {
                             )
                             .0,
                         ))
-                    }
-                    "Replace" => {
-                        if args.len() < 2 || args.len() > 8 {
-                            return Err(OmError::invalid_argument(
-                                "Range.Replace expects What, Replacement, and optional LookAt, SearchOrder, MatchCase, MatchByte, SearchFormat, and ReplaceFormat arguments",
-                            ));
-                        }
-                        let what = Self::coerce_range_scalar_text(&args[0], "Range.Replace What")?;
-                        let replacement =
-                            Self::coerce_range_scalar_text(&args[1], "Range.Replace Replacement")?;
-                        let look_at = Self::coerce_range_find_enum(
-                            args.get(2),
-                            XL_LOOK_AT_PART,
-                            "Range.Replace LookAt",
-                            &[XL_LOOK_AT_WHOLE, XL_LOOK_AT_PART],
-                        )?;
-                        let _search_order = Self::coerce_range_find_enum(
-                            args.get(3),
-                            XL_SEARCH_BY_ROWS,
-                            "Range.Replace SearchOrder",
-                            &[XL_SEARCH_BY_ROWS, XL_SEARCH_BY_COLUMNS],
-                        )?;
-                        let match_case = args
-                            .get(4)
-                            .map(|value| {
-                                coerce_optional_bool_arg(value, false, "Range.Replace MatchCase")
-                            })
-                            .transpose()?
-                            .unwrap_or(false);
-                        let _match_byte = args
-                            .get(5)
-                            .map(|value| {
-                                coerce_optional_bool_arg(value, false, "Range.Replace MatchByte")
-                            })
-                            .transpose()?
-                            .unwrap_or(false);
-                        let search_format = args
-                            .get(6)
-                            .map(|value| {
-                                coerce_optional_bool_arg(value, false, "Range.Replace SearchFormat")
-                            })
-                            .transpose()?
-                            .unwrap_or(false);
-                        let replace_format = args
-                            .get(7)
-                            .map(|value| {
-                                coerce_optional_bool_arg(
-                                    value,
-                                    false,
-                                    "Range.Replace ReplaceFormat",
-                                )
-                            })
-                            .transpose()?
-                            .unwrap_or(false);
-                        if search_format || replace_format {
-                            return Err(OmError::unsupported(
-                                "Range.Replace SearchFormat and ReplaceFormat are not implemented",
-                            ));
-                        }
-
-                        let part_regex = if look_at == XL_LOOK_AT_PART && !what.is_empty() {
-                            Some(
-                                RegexBuilder::new(&regex::escape(&what))
-                                    .case_insensitive(!match_case)
-                                    .build()
-                                    .map_err(|error| {
-                                        OmError::invalid_argument(format!(
-                                            "Range.Replace pattern is invalid: {error}"
-                                        ))
-                                    })?,
-                            )
-                        } else {
-                            None
-                        };
-                        let replace_candidate = |candidate: &str| -> Option<String> {
-                            if what.is_empty() {
-                                return candidate.is_empty().then(|| replacement.clone());
-                            }
-                            if look_at == XL_LOOK_AT_WHOLE {
-                                let matched = if match_case {
-                                    candidate == what
-                                } else {
-                                    candidate.to_lowercase() == what.to_lowercase()
-                                };
-                                return matched.then(|| replacement.clone());
-                            }
-                            let regex = part_regex
-                                .as_ref()
-                                .expect("part regex should exist for non-empty partial replace");
-                            if !regex.is_match(candidate) {
-                                return None;
-                            }
-                            Some(
-                                regex
-                                    .replace_all(candidate, |_: &regex::Captures<'_>| {
-                                        replacement.as_str()
-                                    })
-                                    .into_owned(),
-                            )
-                        };
-
-                        let runtime = self.runtime_workbook_mut(workbook)?;
-                        if runtime.read_only {
-                            return Err(OmError::new(
-                                OmErrorCode::InvalidState,
-                                "cannot modify a read-only workbook",
-                            ));
-                        }
-                        let worksheet = runtime
-                            .loaded
-                            .state
-                            .worksheet_data_for_sheet_mut(sheet_id)?;
-                        let mut replaced_any = false;
-                        for row in rect.row_first..=rect.row_last {
-                            for col in rect.col_first..=rect.col_last {
-                                let key = (row, col);
-                                let mut remove_cell = false;
-                                match worksheet.cells.get_mut(&key) {
-                                    Some(cell) => {
-                                        let candidate = if let Some(formula) = cell.formula.as_ref()
-                                        {
-                                            format!("={}", formula.text)
-                                        } else {
-                                            find_cell_value_text(&cell.value)
-                                        };
-                                        let Some(next_text) = replace_candidate(&candidate) else {
-                                            continue;
-                                        };
-                                        if let Some(next_formula) = next_text.strip_prefix('=') {
-                                            if cell
-                                                .formula
-                                                .as_ref()
-                                                .is_some_and(|formula| formula.text == next_formula)
-                                            {
-                                                continue;
-                                            }
-                                            let is_r1c1 = cell
-                                                .formula
-                                                .as_ref()
-                                                .is_some_and(|formula| formula.is_r1c1);
-                                            cell.value = CellValue::Blank;
-                                            cell.formula = Some(FormulaSource {
-                                                text: next_formula.to_string(),
-                                                is_r1c1,
-                                            });
-                                        } else {
-                                            let next_value = if next_text.is_empty() {
-                                                CellValue::Blank
-                                            } else {
-                                                CellValue::Text(next_text)
-                                            };
-                                            if cell.value == next_value && cell.formula.is_none() {
-                                                continue;
-                                            }
-                                            cell.value = next_value;
-                                            cell.formula = None;
-                                            remove_cell = matches!(cell.value, CellValue::Blank)
-                                                && cell.style_id.is_none();
-                                        }
-                                        worksheet.dirty = true;
-                                        worksheet.dirty_cells.insert(key);
-                                        replaced_any = true;
-                                    }
-                                    None => {
-                                        let Some(next_text) = replace_candidate("") else {
-                                            continue;
-                                        };
-                                        if next_text.is_empty() {
-                                            continue;
-                                        }
-                                        worksheet.cells.insert(
-                                            key,
-                                            excel_model::CellData {
-                                                value: CellValue::Text(next_text),
-                                                formula: None,
-                                                style_id: None,
-                                            },
-                                        );
-                                        worksheet.dirty = true;
-                                        worksheet.dirty_cells.insert(key);
-                                        replaced_any = true;
-                                    }
-                                }
-                                if remove_cell {
-                                    worksheet.cells.remove(&key);
-                                }
-                            }
-                        }
-                        if replaced_any {
-                            runtime.mark_semantic_dirty();
-                            self.find_state = None;
-                            self.cut_copy_mode = None;
-                            self.clipboard = None;
-                        }
-                        Ok(OmValue::Bool(replaced_any))
                     }
                     "Sort" => {
                         if args.len() > 15 {

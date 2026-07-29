@@ -187,7 +187,7 @@ Active order:
    `InvalidState` without partial mutation; runtime registration consumes a handle only after
    success, and reload/save callers propagate failure. The contract is
    `docs/interfaces/workbook_state_save_validation.md`.
-32. `OOTD-054` stages 1-12 are complete (2026-07-29, synthetic): the worksheet-data ownership map
+32. `OOTD-054` stages 1-13 are complete (2026-07-29, synthetic): the worksheet-data ownership map
    and live workbook-model metadata are private, decoded construction is validated, and runtime
    add/copy/delete use paired owner/data commands. Read-only access cannot insert or rekey orphan
    data; model metadata changes use explicit commands while workbook-ID changes remain atomic; and
@@ -216,9 +216,13 @@ Active order:
    selection. Single-area and multi-area `Range.Clear` now share a model command that preflights
    every spill child before atomically clearing cell/style, owned spill metadata, and dirty
    tracking. `Range.ClearFormats` uses a separate style-only command that permits spill children
-   while preserving blank materialized child cells and all spill topology. The contract is
+   while preserving blank materialized child cells and all spill topology. Single-area and
+   multi-area `Range.Replace` now prepare one immutable-snapshot replacement batch and commit it
+   through a model command only after every changed coordinate passes spill-child validation.
+   Replacing a dynamic anchor formula clears its old materialized extent while retaining the
+   dynamic formula kind for the next calculation cycle. The contract is
    `docs/interfaces/workbook_state_save_validation.md`.
-   **Active:** continue `OOTD-054` by moving the remaining structural/copy/paste/sort mutations
+   **Active:** continue `OOTD-054` by moving the remaining structural/copy/paste/sort/fill mutations
    behind spill-aware batch commands, then make the complete `WorksheetData` cell/spill/dirty
    payload private before building the common reference AST and completing `OOTD-048` consumer
    migration.

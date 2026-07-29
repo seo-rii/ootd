@@ -1329,6 +1329,46 @@ impl WorkbookState {
         Ok(changed)
     }
 
+    pub fn replace_cells_with_change(
+        &mut self,
+        sheet_id: SheetId,
+        replacements: BTreeMap<(u32, u32), Option<CellData>>,
+    ) -> OmResult<bool> {
+        let worksheet = self.worksheet_data_for_sheet(sheet_id)?;
+        let mut updates = Vec::with_capacity(replacements.len());
+        for (key, replacement) in replacements {
+            ExcelLimits::validate_cell(key.0, key.1)?;
+            if worksheet.cells.get(&key) != replacement.as_ref() {
+                updates.push((key, replacement));
+            }
+        }
+        worksheet.ensure_spill_children_are_not_edited(updates.iter().map(|(key, _)| *key))?;
+
+        let worksheet = self.worksheet_data_for_sheet_mut(sheet_id)?;
+        for (key, replacement) in &updates {
+            let preserve_dynamic_formula = worksheet.dynamic_array_formulas.contains(key)
+                && replacement
+                    .as_ref()
+                    .is_some_and(|cell| cell.formula.is_some());
+            worksheet.prepare_cell_for_edit_with_change(*key);
+            match replacement {
+                Some(cell) => {
+                    worksheet.cells.insert(*key, cell.clone());
+                }
+                None => {
+                    worksheet.cells.remove(key);
+                }
+            }
+            if preserve_dynamic_formula {
+                worksheet.dynamic_array_formulas.insert(*key);
+            }
+            worksheet.dirty = true;
+            worksheet.dirty_cells.insert(*key);
+        }
+
+        Ok(!updates.is_empty())
+    }
+
     pub fn clear_range_contents(&mut self, range: &RangeRef) -> OmResult<()> {
         self.clear_range_contents_with_change(range).map(|_| ())
     }
@@ -3475,6 +3515,87 @@ mod tests {
                 .expect("worksheet data"),
             &before
         );
+    }
+
+    #[test]
+    fn replace_cells_rejects_spill_child_updates_atomically() {
+        let mut state = sample_state();
+        seed_two_by_two_spill(&mut state);
+        let before = state
+            .worksheet_data_for_sheet(SheetId(3))
+            .expect("worksheet data")
+            .clone();
+
+        let error = state
+            .replace_cells_with_change(
+                SheetId(3),
+                BTreeMap::from([
+                    (
+                        (1, 1),
+                        Some(CellData {
+                            value: CellValue::Text("changed".to_string()),
+                            formula: None,
+                            style_id: None,
+                        }),
+                    ),
+                    ((4, 4), None),
+                ]),
+            )
+            .expect_err("spill child replacement should fail");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("R4C4"));
+        assert!(error.message.contains("R3C3"));
+        assert_eq!(
+            state
+                .worksheet_data_for_sheet(SheetId(3))
+                .expect("worksheet data"),
+            &before
+        );
+    }
+
+    #[test]
+    fn replace_cells_clears_owned_spill_and_preserves_dynamic_formula_kind() {
+        let mut state = sample_state();
+        seed_two_by_two_spill(&mut state);
+        let replacement = CellData {
+            value: CellValue::Blank,
+            formula: Some(FormulaSource {
+                text: "SEQUENCE(1,3)".to_string(),
+                is_r1c1: false,
+            }),
+            style_id: None,
+        };
+
+        assert!(
+            state
+                .replace_cells_with_change(
+                    SheetId(3),
+                    BTreeMap::from([((3, 3), Some(replacement.clone()))]),
+                )
+                .expect("replace dynamic spill anchor")
+        );
+
+        let worksheet = state
+            .worksheet_data_for_sheet(SheetId(3))
+            .expect("worksheet data after replacement");
+        assert_eq!(worksheet.cells.get(&(3, 3)), Some(&replacement));
+        assert!(worksheet.dynamic_array_formulas.contains(&(3, 3)));
+        assert!(!worksheet.spill_ranges.contains_key(&(3, 3)));
+        assert!(worksheet.spill_owners.is_empty());
+        assert!(!worksheet.cells.contains_key(&(3, 4)));
+        assert!(!worksheet.cells.contains_key(&(4, 3)));
+        let styled_child = worksheet
+            .cells
+            .get(&(4, 4))
+            .expect("styled child should remain as a blank shell");
+        assert_eq!(styled_child.value, CellValue::Blank);
+        assert!(styled_child.formula.is_none());
+        assert_eq!(styled_child.style_id, Some(StyleId(17)));
+        for key in [(3, 3), (3, 4), (4, 3), (4, 4)] {
+            assert!(worksheet.dirty_cells.contains(&key), "{key:?}");
+        }
+        state.validate_for_save().expect("valid replacement state");
     }
 
     #[test]
