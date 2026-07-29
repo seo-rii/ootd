@@ -10,7 +10,7 @@ use excel_model::{
     ChartObjectModel, ChartPointModel, ChartProtectionModel, ChartSheetBinding, ChartSizeRepresents,
     ChartSourceExpr, ChartSourceReference, ChartSplitType, ChartText, ChartTickLabelPosition,
     ChartTickMark, ChartType, ChartView3DModel, DefinedNameTable, DrawingModel, DrawingObjectModel,
-    LegendModel, SeriesModel, WorkbookState, WorksheetData,
+    LegendModel, SeriesModel, WorkbookState, WorkbookStateParts, WorksheetData,
     resolve_chart_source_reference_with_names,
 };
 #[cfg(test)]
@@ -1735,7 +1735,7 @@ impl XlsxCodec {
             &defined_names,
             &sheet_drawing_support_parts,
         )?;
-        let state = WorkbookState {
+        let state = WorkbookState::try_new(WorkbookStateParts {
             model: WorkbookModel {
                 id: WorkbookId(0),
                 display_name: workbook_display_name.to_string(),
@@ -1750,8 +1750,7 @@ impl XlsxCodec {
             drawings,
             chart_sheets,
             opaque_parts,
-        };
-        state.validate_for_save()?;
+        })?;
         ensure_workbook_grid_coordinates_are_valid(&state)?;
         ensure_workbook_style_ids_are_valid(&state, &support_parts)?;
 
@@ -2056,7 +2055,7 @@ impl XlsxCodec {
         support_snapshot::validate_support_snapshot_owners(workbook)?;
         let has_dirty_worksheets = workbook
             .state
-            .worksheet_data
+            .worksheet_data()
             .values()
             .any(|worksheet| worksheet.dirty);
         let worksheet_structure_changed =
@@ -3795,23 +3794,19 @@ impl XlsxCodec {
                 .clone_from(&materialized.state.model.display_name);
         } else {
             let mut next_state = materialized.state;
-            for (sheet_id, worksheet_data) in &mut next_state.worksheet_data {
+            let sheet_ids = next_state
+                .worksheets
+                .iter()
+                .map(|worksheet| worksheet.id)
+                .collect::<Vec<_>>();
+            for sheet_id in sheet_ids {
                 let saved_worksheet_data = next_loaded
                     .state
-                    .worksheet_data
-                    .get(sheet_id)
-                    .ok_or_else(|| {
-                        OmError::new(
-                            OmErrorCode::InvalidState,
-                            format!(
-                                "saved workbook is missing worksheet data for sheet {}",
-                                sheet_id.0
-                            ),
-                        )
-                    })?;
-                worksheet_data
-                    .source_xml
-                    .clone_from(&saved_worksheet_data.source_xml);
+                    .worksheet_data_for_sheet(sheet_id)?;
+                next_state.set_worksheet_source_xml(
+                    sheet_id,
+                    saved_worksheet_data.source_xml.clone(),
+                )?;
             }
             next_state.opaque_parts = std::mem::take(&mut next_loaded.state.opaque_parts);
             next_loaded.state = next_state;
@@ -7046,7 +7041,7 @@ fn ensure_workbook_style_ids_are_valid(
     };
 
     for worksheet in &state.worksheets {
-        let Some(worksheet_data) = state.worksheet_data.get(&worksheet.id) else {
+        let Some(worksheet_data) = state.worksheet_data().get(&worksheet.id) else {
             continue;
         };
         for (&(row, col), cell) in &worksheet_data.cells {
@@ -7076,7 +7071,7 @@ fn ensure_workbook_style_ids_are_valid(
 }
 
 fn ensure_workbook_grid_coordinates_are_valid(state: &WorkbookState) -> OmResult<()> {
-    for (&sheet_id, worksheet) in &state.worksheet_data {
+    for (&sheet_id, worksheet) in state.worksheet_data() {
         let validate_coordinate = |kind: &str, (row, col): (u32, u32)| {
             ExcelLimits::validate_cell(row, col).map_err(|error| {
                 OmError::new(

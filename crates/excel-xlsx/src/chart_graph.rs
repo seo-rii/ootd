@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Cursor, Write};
 
-use excel_model::{DrawingObjectModel, WorksheetData};
+use excel_model::DrawingObjectModel;
 use office_common::{ChartId, OmError, OmErrorCode, OmResult, SheetId, SheetKind, SheetVisibility};
 use office_opc::{CompressionMethod, OpcPackage, OpcPart};
 use quick_xml::escape::escape;
@@ -934,10 +934,7 @@ fn materialize_chart_sheet_shells(
             .raw_part_uri = Some(part_uri.clone());
         workbook
             .state
-            .worksheet_data
-            .entry(sheet_id)
-            .or_insert_with(WorksheetData::default)
-            .source_xml = sheet_xml;
+            .set_worksheet_source_xml(sheet_id, sheet_xml)?;
     }
 
     workbook
@@ -1432,9 +1429,10 @@ fn attach_drawing_to_host(
         .iter()
         .find(|sheet| sheet.part_uri.as_deref() == Some(host_part_uri))
         .map(|sheet| sheet.id)
-        && let Some(sheet_data) = workbook.state.worksheet_data.get_mut(&sheet_id)
     {
-        sheet_data.source_xml = updated_host_xml;
+        workbook
+            .state
+            .set_worksheet_source_xml(sheet_id, updated_host_xml)?;
     }
     Ok(())
 }
@@ -3213,7 +3211,7 @@ mod tests {
 
     use excel_model::{
         ChartModel, ChartObjectModel, ChartSheetBinding, ChartType, DefinedNameTable, DrawingModel,
-        DrawingObjectModel, WorkbookState, WorksheetData,
+        DrawingObjectModel, WorkbookState, WorkbookStateParts, WorksheetData,
     };
     use office_common::{
         AbsoluteAnchor, ChartId, ChartObjectId, DrawingAnchor, DrawingId, DrawingObjectId,
@@ -3238,7 +3236,7 @@ mod tests {
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData/></worksheet>"#
             .to_vec();
         LoadedXlsxWorkbook {
-            state: WorkbookState {
+            state: WorkbookState::try_new(WorkbookStateParts {
                 model: WorkbookModel {
                     id: WorkbookId(7),
                     display_name: "Book1".to_string(),
@@ -3267,7 +3265,8 @@ mod tests {
                 drawings: BTreeMap::new(),
                 chart_sheets: BTreeMap::new(),
                 opaque_parts: Vec::new(),
-            },
+            })
+            .expect("base workbook state"),
             package: OpcPackage::try_new(vec![
                 OpcPart {
                     name: "[Content_Types].xml".to_string(),
@@ -4070,10 +4069,8 @@ mod tests {
             .expect("replace worksheet XML");
         workbook
             .state
-            .worksheet_data
-            .get_mut(&SheetId(1))
-            .expect("worksheet data")
-            .source_xml = worksheet_xml;
+            .set_worksheet_source_xml(SheetId(1), worksheet_xml)
+            .expect("replace worksheet source XML");
         workbook
             .package
             .add_part(OpcPart {
@@ -4149,10 +4146,8 @@ mod tests {
             .expect("replace worksheet XML");
         workbook
             .state
-            .worksheet_data
-            .get_mut(&SheetId(1))
-            .expect("worksheet data")
-            .source_xml = worksheet_xml;
+            .set_worksheet_source_xml(SheetId(1), worksheet_xml)
+            .expect("replace worksheet source XML");
         workbook
             .package
             .add_part(OpcPart {
@@ -4203,22 +4198,22 @@ mod tests {
         let sheet_id = SheetId(2);
         let chart_id = ChartId(1);
         let drawing_id = DrawingId(1);
-        workbook.state.worksheets.insert(
-            0,
-            WorksheetModel {
-                id: sheet_id,
-                workbook_id: WorkbookId(7),
-                name: "Chart1".to_string(),
-                kind: SheetKind::ChartSheet,
-                visibility: SheetVisibility::Visible,
-                relationship_id: None,
-                part_uri: None,
-            },
-        );
         workbook
             .state
-            .worksheet_data
-            .insert(sheet_id, WorksheetData::default());
+            .insert_worksheet_with_data(
+                0,
+                WorksheetModel {
+                    id: sheet_id,
+                    workbook_id: WorkbookId(7),
+                    name: "Chart1".to_string(),
+                    kind: SheetKind::ChartSheet,
+                    visibility: SheetVisibility::Visible,
+                    relationship_id: None,
+                    part_uri: None,
+                },
+                WorksheetData::default(),
+            )
+            .expect("insert state-only chart sheet and data");
         workbook
             .state
             .charts
@@ -4798,15 +4793,16 @@ mod tests {
     }
 
     #[test]
-    fn public_materializer_rejects_invalid_model_without_state_only_graphs() {
-        let mut workbook = base_workbook();
-        workbook.state.worksheet_data.clear();
+    fn public_materializer_preserves_valid_model_without_state_only_graphs() {
+        let workbook = base_workbook();
+        let expected_state = workbook.state.clone();
+        let expected_package = workbook.package.clone();
 
-        let error = materialize_state_only_chart_graphs(workbook)
-            .expect_err("model validation must run before the no-graph fast path");
+        let materialized = materialize_state_only_chart_graphs(workbook)
+            .expect("valid model should pass the no-graph fast path");
 
-        assert_eq!(error.code, OmErrorCode::InvalidState);
-        assert!(error.message.contains("has no worksheet data"));
+        assert_eq!(materialized.state, expected_state);
+        assert_eq!(materialized.package, expected_package);
     }
 
     #[test]

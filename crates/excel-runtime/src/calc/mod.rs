@@ -9143,7 +9143,7 @@ impl<'a> FormulaEvaluator<'a> {
     ) -> Result<FormulaArrayResult, FormulaEvalError> {
         let formula = self
             .state
-            .worksheet_data
+            .worksheet_data()
             .get(&sheet_id)
             .and_then(|worksheet| worksheet.cells.get(&(row, col)))
             .and_then(|cell| cell.formula.as_ref())
@@ -9193,7 +9193,7 @@ impl<'a> FormulaEvaluator<'a> {
     ) -> Result<CellValue, FormulaEvalError> {
         let Some(cell) = self
             .state
-            .worksheet_data
+            .worksheet_data()
             .get(&sheet_id)
             .and_then(|worksheet| worksheet.cells.get(&(row, col)))
         else {
@@ -9259,7 +9259,7 @@ impl<'a> FormulaEvaluator<'a> {
             Ok(CellValue::Error(error)) => Err(formula_eval_error_from_cell_error(error)),
             Err(FormulaEvalError::Unsupported) => self
                 .state
-                .worksheet_data
+                .worksheet_data()
                 .get(&sheet_id)
                 .and_then(|worksheet| worksheet.cells.get(&(row, col)))
                 .map(|cell| match &cell.value {
@@ -9279,7 +9279,7 @@ impl<'a> FormulaEvaluator<'a> {
         sheet_id: SheetId,
         rect: Rect,
     ) -> Result<Vec<f64>, FormulaEvalError> {
-        let Some(worksheet) = self.state.worksheet_data.get(&sheet_id) else {
+        let Some(worksheet) = self.state.worksheet_data().get(&sheet_id) else {
             return Err(FormulaEvalError::Ref);
         };
         let keys = worksheet
@@ -9302,7 +9302,7 @@ impl<'a> FormulaEvaluator<'a> {
                 Err(FormulaEvalError::Unsupported) => {
                     if let Some(cell) = self
                         .state
-                        .worksheet_data
+                        .worksheet_data()
                         .get(&sheet_id)
                         .and_then(|worksheet| worksheet.cells.get(&(row, col)))
                     {
@@ -9337,7 +9337,7 @@ impl<'a> FormulaEvaluator<'a> {
         sheet_id: SheetId,
         rect: Rect,
     ) -> Result<u64, FormulaEvalError> {
-        let Some(worksheet) = self.state.worksheet_data.get(&sheet_id) else {
+        let Some(worksheet) = self.state.worksheet_data().get(&sheet_id) else {
             return Err(FormulaEvalError::Ref);
         };
         Ok(worksheet
@@ -9367,7 +9367,7 @@ impl<'a> FormulaEvaluator<'a> {
         sheet_id: SheetId,
         rect: Rect,
     ) -> Result<Vec<f64>, FormulaEvalError> {
-        let Some(worksheet) = self.state.worksheet_data.get(&sheet_id) else {
+        let Some(worksheet) = self.state.worksheet_data().get(&sheet_id) else {
             return Err(FormulaEvalError::Ref);
         };
         let keys = worksheet
@@ -9383,7 +9383,7 @@ impl<'a> FormulaEvaluator<'a> {
         for (row, col) in keys {
             if self
                 .state
-                .worksheet_data
+                .worksheet_data()
                 .get(&sheet_id)
                 .and_then(|worksheet| worksheet.cells.get(&(row, col)))
                 .and_then(|cell| cell.formula.as_ref())
@@ -9400,7 +9400,7 @@ impl<'a> FormulaEvaluator<'a> {
                 Err(FormulaEvalError::Unsupported) => {
                     if let Some(cell) = self
                         .state
-                        .worksheet_data
+                        .worksheet_data()
                         .get(&sheet_id)
                         .and_then(|worksheet| worksheet.cells.get(&(row, col)))
                     {
@@ -9424,7 +9424,7 @@ impl<'a> FormulaEvaluator<'a> {
         sheet_id: SheetId,
         rect: Rect,
     ) -> Result<u64, FormulaEvalError> {
-        let Some(worksheet) = self.state.worksheet_data.get(&sheet_id) else {
+        let Some(worksheet) = self.state.worksheet_data().get(&sheet_id) else {
             return Err(FormulaEvalError::Ref);
         };
         Ok(worksheet
@@ -9469,14 +9469,14 @@ impl<'a> FormulaEvaluator<'a> {
         row: u32,
         col: u32,
     ) -> Result<CellValue, FormulaEvalError> {
-        if !self.state.worksheet_data.contains_key(&sheet_id) {
+        if !self.state.worksheet_data().contains_key(&sheet_id) {
             return Err(FormulaEvalError::Ref);
         }
         match self.evaluate_cell(sheet_id, row, col) {
             Ok(value) => Ok(value),
             Err(FormulaEvalError::Unsupported) => Ok(self
                 .state
-                .worksheet_data
+                .worksheet_data()
                 .get(&sheet_id)
                 .and_then(|worksheet| worksheet.cells.get(&(row, col)))
                 .map(|cell| cell.value.clone())
@@ -9491,7 +9491,7 @@ impl<'a> FormulaEvaluator<'a> {
         rect: Rect,
         orientation: FormulaLookupOrientation,
     ) -> Result<Vec<FormulaValueProbe>, FormulaEvalError> {
-        if !self.state.worksheet_data.contains_key(&sheet_id) {
+        if !self.state.worksheet_data().contains_key(&sheet_id) {
             return Err(FormulaEvalError::Ref);
         }
         let mut values = Vec::new();
@@ -9529,12 +9529,12 @@ impl<'a> FormulaEvaluator<'a> {
         row: u32,
         col: u32,
     ) -> Result<Option<FormulaSource>, FormulaEvalError> {
-        if !self.state.worksheet_data.contains_key(&sheet_id) {
+        if !self.state.worksheet_data().contains_key(&sheet_id) {
             return Err(FormulaEvalError::Ref);
         }
         Ok(self
             .state
-            .worksheet_data
+            .worksheet_data()
             .get(&sheet_id)
             .and_then(|worksheet| worksheet.cells.get(&(row, col)))
             .and_then(|cell| cell.formula.clone()))
@@ -19941,7 +19941,7 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             ($sheet_id:expr, $row:expr, $col:expr) => {{
                 self.evaluator
                     .state
-                    .worksheet_data
+                    .worksheet_data()
                     .get(&$sheet_id)
                     .and_then(|worksheet| worksheet.cells.get(&($row, $col)))
                     .and_then(|cell| cell.formula.as_ref())
@@ -21134,7 +21134,7 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             rect = self
                 .evaluator
                 .state
-                .worksheet_data
+                .worksheet_data()
                 .get(&sheet_id)
                 .and_then(|worksheet| {
                     worksheet

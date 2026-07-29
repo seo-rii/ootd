@@ -45232,7 +45232,7 @@
         let sheet_id = reopened.state.worksheets[0].id;
         let cells = &reopened
             .state
-            .worksheet_data
+            .worksheet_data()
             .get(&sheet_id)
             .expect("host stream output worksheet data")
             .cells;
@@ -122994,7 +122994,7 @@
         assert_eq!(
             reloaded
                 .state
-                .worksheet_data
+                .worksheet_data()
                 .get(&sheet_id)
                 .and_then(|worksheet| worksheet.cells.get(&(1, 1)))
                 .map(|cell| &cell.value),

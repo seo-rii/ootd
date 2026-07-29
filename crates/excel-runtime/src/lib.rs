@@ -2267,7 +2267,7 @@ impl ExcelRuntime {
         let has_dirty_worksheets = runtime
             .loaded
             .state
-            .worksheet_data
+            .worksheet_data()
             .values()
             .any(|worksheet| worksheet.dirty);
         let has_dirty_charts = runtime.loaded.state.charts.values().any(|chart| {
@@ -21089,8 +21089,10 @@ impl ExcelRuntime {
                     );
                 }
 
-                runtime.loaded.state.worksheets.insert(
-                    insertion_index.min(runtime.loaded.state.worksheets.len()),
+                let worksheet_index =
+                    insertion_index.min(runtime.loaded.state.worksheets.len());
+                runtime.loaded.state.insert_worksheet_with_data(
+                    worksheet_index,
                     WorksheetModel {
                         id: sheet_id,
                         workbook_id: runtime.loaded.state.model.id,
@@ -21100,14 +21102,11 @@ impl ExcelRuntime {
                         relationship_id: Some(relationship_id),
                         part_uri: Some(part_uri.clone()),
                     },
-                );
-                runtime.loaded.state.worksheet_data.insert(
-                    sheet_id,
                     WorksheetData {
                         source_xml: sheet_xml,
                         ..WorksheetData::default()
                     },
-                );
+                )?;
                 if sheet_kind == SheetKind::Worksheet {
                     runtime.loaded.worksheet_support_parts.insert(
                         sheet_id,
@@ -21539,8 +21538,10 @@ impl ExcelRuntime {
 
                 {
                     let runtime = self.runtime_workbook_mut(target_workbook)?;
-                    runtime.loaded.state.worksheets.insert(
-                        insertion_index.min(runtime.loaded.state.worksheets.len()),
+                    let worksheet_index =
+                        insertion_index.min(runtime.loaded.state.worksheets.len());
+                    runtime.loaded.state.insert_worksheet_with_data(
+                        worksheet_index,
                         WorksheetModel {
                             id: copied_sheet_id,
                             workbook_id: target_workbook_id,
@@ -21550,12 +21551,8 @@ impl ExcelRuntime {
                             relationship_id: None,
                             part_uri: None,
                         },
-                    );
-                    runtime
-                        .loaded
-                        .state
-                        .worksheet_data
-                        .insert(copied_sheet_id, WorksheetData::default());
+                        WorksheetData::default(),
+                    )?;
                     runtime.loaded.state.charts.extend(copied_charts);
                     runtime
                         .loaded
@@ -21984,7 +21981,7 @@ impl ExcelRuntime {
                     target_part_uri.as_str(),
                     source_sheet_data.source_xml.clone(),
                 )?;
-                runtime.loaded.state.worksheet_data.insert(
+                runtime.loaded.state.replace_worksheet_data_for_sheet(
                     added_sheet_id,
                     WorksheetData {
                         cells: BTreeMap::new(),
@@ -21993,7 +21990,7 @@ impl ExcelRuntime {
                         dirty_cells: BTreeSet::new(),
                         ..WorksheetData::default()
                     },
-                );
+                )?;
                 if let Some(worksheet) = runtime
                     .loaded
                     .state
@@ -22546,8 +22543,7 @@ impl ExcelRuntime {
                 runtime
                     .loaded
                     .state
-                    .worksheet_data
-                    .insert(added_sheet_id, copied_sheet_data);
+                    .replace_worksheet_data_for_sheet(added_sheet_id, copied_sheet_data)?;
                 if let Some(worksheet) = runtime
                     .loaded
                     .state
@@ -23174,15 +23170,10 @@ impl ExcelRuntime {
 
         let (removed_chart_object_ids, removed_chart_ids) = {
             let runtime = self.runtime_workbook_mut(workbook)?;
-            let worksheet_index = runtime
+            let (_, removed_worksheet, _) = runtime
                 .loaded
                 .state
-                .worksheets
-                .iter()
-                .position(|worksheet| worksheet.id == sheet_id)
-                .ok_or_else(|| OmError::new(OmErrorCode::NotFound, "unknown worksheet"))?;
-            let removed_worksheet = runtime.loaded.state.worksheets.remove(worksheet_index);
-            runtime.loaded.state.worksheet_data.remove(&sheet_id);
+                .remove_worksheet_with_data(sheet_id)?;
             let removed_support_parts = runtime.loaded.worksheet_support_parts.remove(&sheet_id);
             let removed_sheet_drawing_support_parts =
                 runtime.loaded.sheet_drawing_support_parts.remove(&sheet_id);
@@ -28441,10 +28432,7 @@ impl ExcelRuntime {
         runtime.package_graph_dirty = false;
         runtime.external_refresh_dirty = false;
         runtime.calculation_snapshot = None;
-        for worksheet in runtime.loaded.state.worksheet_data.values_mut() {
-            worksheet.dirty = false;
-            worksheet.dirty_cells.clear();
-        }
+        runtime.loaded.state.mark_worksheet_data_clean();
         runtime.loaded.state.defined_names.mark_clean();
         for chart in runtime.loaded.state.charts.values_mut() {
             chart.content_dirty = false;

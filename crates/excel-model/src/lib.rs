@@ -120,6 +120,18 @@ impl WorksheetData {
 pub struct WorkbookState {
     pub model: WorkbookModel,
     pub worksheets: Vec<WorksheetModel>,
+    worksheet_data: BTreeMap<SheetId, WorksheetData>,
+    pub defined_names: DefinedNameTable,
+    pub charts: BTreeMap<ChartId, ChartModel>,
+    pub drawings: BTreeMap<DrawingId, DrawingModel>,
+    pub chart_sheets: BTreeMap<SheetId, ChartSheetBinding>,
+    pub opaque_parts: Vec<OpaquePart>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct WorkbookStateParts {
+    pub model: WorkbookModel,
+    pub worksheets: Vec<WorksheetModel>,
     pub worksheet_data: BTreeMap<SheetId, WorksheetData>,
     pub defined_names: DefinedNameTable,
     pub charts: BTreeMap<ChartId, ChartModel>,
@@ -129,6 +141,31 @@ pub struct WorkbookState {
 }
 
 impl WorkbookState {
+    pub fn try_new(parts: WorkbookStateParts) -> OmResult<Self> {
+        let WorkbookStateParts {
+            model,
+            worksheets,
+            worksheet_data,
+            defined_names,
+            charts,
+            drawings,
+            chart_sheets,
+            opaque_parts,
+        } = parts;
+        let state = Self {
+            model,
+            worksheets,
+            worksheet_data,
+            defined_names,
+            charts,
+            drawings,
+            chart_sheets,
+            opaque_parts,
+        };
+        state.validate_for_save()?;
+        Ok(state)
+    }
+
     pub fn validate_for_save(&self) -> OmResult<()> {
         if self.worksheets.is_empty() {
             return Err(OmError::new(
@@ -143,47 +180,11 @@ impl WorkbookState {
         let mut worksheet_part_uris = BTreeSet::new();
 
         for worksheet in &self.worksheets {
-            if worksheet.id.0 == 0 || worksheet.id.0 > u64::from(u32::MAX) {
-                return Err(OmError::new(
-                    OmErrorCode::InvalidState,
-                    format!(
-                        "worksheet {} has id {} outside the supported unsigned 32-bit range",
-                        worksheet.name, worksheet.id.0
-                    ),
-                ));
-            }
+            self.validate_worksheet_metadata(worksheet)?;
             if !worksheet_ids.insert(worksheet.id) {
                 return Err(OmError::new(
                     OmErrorCode::InvalidState,
                     format!("duplicate worksheet id {}", worksheet.id.0),
-                ));
-            }
-            if worksheet.name.trim().is_empty() {
-                return Err(OmError::new(
-                    OmErrorCode::InvalidState,
-                    format!("worksheet {} has an empty name", worksheet.id.0),
-                ));
-            }
-            if worksheet.name.chars().count() > 31 {
-                return Err(OmError::new(
-                    OmErrorCode::InvalidState,
-                    format!(
-                        "worksheet {} name exceeds Excel's 31-character limit",
-                        worksheet.name
-                    ),
-                ));
-            }
-            if worksheet
-                .name
-                .chars()
-                .any(|ch| matches!(ch, ':' | '\\' | '/' | '?' | '*' | '[' | ']') || ch.is_control())
-            {
-                return Err(OmError::new(
-                    OmErrorCode::InvalidState,
-                    format!(
-                        "worksheet {} name contains invalid characters",
-                        worksheet.name
-                    ),
                 ));
             }
             if !worksheet_names.insert(worksheet.name.to_ascii_lowercase()) {
@@ -192,49 +193,19 @@ impl WorkbookState {
                     format!("duplicate worksheet name: {}", worksheet.name),
                 ));
             }
-            if worksheet.workbook_id != self.model.id {
-                return Err(OmError::new(
-                    OmErrorCode::InvalidState,
-                    format!(
-                        "worksheet {} ({}) has workbook id {}, expected {}",
-                        worksheet.name, worksheet.id.0, worksheet.workbook_id.0, self.model.id.0
-                    ),
-                ));
-            }
-            match (&worksheet.relationship_id, &worksheet.part_uri) {
-                (None, None) if worksheet.kind == office_common::SheetKind::ChartSheet => {}
-                (None, None) => {
+            if let (Some(relationship_id), Some(part_uri)) =
+                (&worksheet.relationship_id, &worksheet.part_uri)
+            {
+                if !worksheet_relationship_ids.insert(relationship_id) {
                     return Err(OmError::new(
                         OmErrorCode::InvalidState,
-                        format!(
-                            "worksheet {} ({}) has no package binding; only an unbound chart-sheet record awaiting graph preflight may omit both relationship id and part URI",
-                            worksheet.name, worksheet.id.0
-                        ),
+                        format!("duplicate worksheet relationship id {relationship_id}"),
                     ));
                 }
-                (Some(relationship_id), Some(part_uri))
-                    if !relationship_id.is_empty() && !part_uri.is_empty() =>
-                {
-                    if !worksheet_relationship_ids.insert(relationship_id) {
-                        return Err(OmError::new(
-                            OmErrorCode::InvalidState,
-                            format!("duplicate worksheet relationship id {relationship_id}"),
-                        ));
-                    }
-                    if !worksheet_part_uris.insert(part_uri.to_ascii_lowercase()) {
-                        return Err(OmError::new(
-                            OmErrorCode::InvalidState,
-                            format!("duplicate worksheet part URI {part_uri}"),
-                        ));
-                    }
-                }
-                _ => {
+                if !worksheet_part_uris.insert(part_uri.to_ascii_lowercase()) {
                     return Err(OmError::new(
                         OmErrorCode::InvalidState,
-                        format!(
-                            "worksheet {} ({}) must have both a non-empty relationship id and part URI, or neither",
-                            worksheet.name, worksheet.id.0
-                        ),
+                        format!("duplicate worksheet part URI {part_uri}"),
                     ));
                 }
             }
@@ -373,6 +344,77 @@ impl WorkbookState {
         }
 
         Ok(())
+    }
+
+    fn validate_worksheet_metadata(&self, worksheet: &WorksheetModel) -> OmResult<()> {
+        if worksheet.id.0 == 0 || worksheet.id.0 > u64::from(u32::MAX) {
+            return Err(OmError::new(
+                OmErrorCode::InvalidState,
+                format!(
+                    "worksheet {} has id {} outside the supported unsigned 32-bit range",
+                    worksheet.name, worksheet.id.0
+                ),
+            ));
+        }
+        if worksheet.name.trim().is_empty() {
+            return Err(OmError::new(
+                OmErrorCode::InvalidState,
+                format!("worksheet {} has an empty name", worksheet.id.0),
+            ));
+        }
+        if worksheet.name.chars().count() > 31 {
+            return Err(OmError::new(
+                OmErrorCode::InvalidState,
+                format!(
+                    "worksheet {} name exceeds Excel's 31-character limit",
+                    worksheet.name
+                ),
+            ));
+        }
+        if worksheet
+            .name
+            .chars()
+            .any(|ch| matches!(ch, ':' | '\\' | '/' | '?' | '*' | '[' | ']') || ch.is_control())
+        {
+            return Err(OmError::new(
+                OmErrorCode::InvalidState,
+                format!(
+                    "worksheet {} name contains invalid characters",
+                    worksheet.name
+                ),
+            ));
+        }
+        if worksheet.workbook_id != self.model.id {
+            return Err(OmError::new(
+                OmErrorCode::InvalidState,
+                format!(
+                    "worksheet {} ({}) has workbook id {}, expected {}",
+                    worksheet.name, worksheet.id.0, worksheet.workbook_id.0, self.model.id.0
+                ),
+            ));
+        }
+        match (&worksheet.relationship_id, &worksheet.part_uri) {
+            (None, None) if worksheet.kind == office_common::SheetKind::ChartSheet => Ok(()),
+            (None, None) => Err(OmError::new(
+                OmErrorCode::InvalidState,
+                format!(
+                    "worksheet {} ({}) has no package binding; only an unbound chart-sheet record awaiting graph preflight may omit both relationship id and part URI",
+                    worksheet.name, worksheet.id.0
+                ),
+            )),
+            (Some(relationship_id), Some(part_uri))
+                if !relationship_id.is_empty() && !part_uri.is_empty() =>
+            {
+                Ok(())
+            }
+            _ => Err(OmError::new(
+                OmErrorCode::InvalidState,
+                format!(
+                    "worksheet {} ({}) must have both a non-empty relationship id and part URI, or neither",
+                    worksheet.name, worksheet.id.0
+                ),
+            )),
+        }
     }
 
     pub fn assign_workbook_id(&mut self, workbook_id: WorkbookId) -> OmResult<()> {
@@ -555,6 +597,126 @@ impl WorkbookState {
                 format!("unknown worksheet data for sheet {}", sheet_id.0),
             )
         })
+    }
+
+    pub fn worksheet_data(&self) -> &BTreeMap<SheetId, WorksheetData> {
+        &self.worksheet_data
+    }
+
+    pub fn replace_worksheet_data_for_sheet(
+        &mut self,
+        sheet_id: SheetId,
+        worksheet_data: WorksheetData,
+    ) -> OmResult<WorksheetData> {
+        let current = self.worksheet_data_for_sheet_mut(sheet_id)?;
+        Ok(std::mem::replace(current, worksheet_data))
+    }
+
+    pub fn insert_worksheet_with_data(
+        &mut self,
+        index: usize,
+        worksheet: WorksheetModel,
+        worksheet_data: WorksheetData,
+    ) -> OmResult<()> {
+        if index > self.worksheets.len() {
+            return Err(OmError::invalid_argument(format!(
+                "worksheet insertion index {index} exceeds worksheet count {}",
+                self.worksheets.len()
+            )));
+        }
+        self.validate_worksheet_metadata(&worksheet)?;
+        if self
+            .worksheets
+            .iter()
+            .any(|existing| existing.id == worksheet.id)
+            || self.worksheet_data.contains_key(&worksheet.id)
+        {
+            return Err(OmError::new(
+                OmErrorCode::InvalidState,
+                format!("duplicate worksheet id {}", worksheet.id.0),
+            ));
+        }
+        if self
+            .worksheets
+            .iter()
+            .any(|existing| existing.name.eq_ignore_ascii_case(&worksheet.name))
+        {
+            return Err(OmError::new(
+                OmErrorCode::InvalidState,
+                format!("duplicate worksheet name: {}", worksheet.name),
+            ));
+        }
+        if let Some(relationship_id) = worksheet.relationship_id.as_deref()
+            && self
+                .worksheets
+                .iter()
+                .any(|existing| existing.relationship_id.as_deref() == Some(relationship_id))
+        {
+            return Err(OmError::new(
+                OmErrorCode::InvalidState,
+                format!("duplicate worksheet relationship id {relationship_id}"),
+            ));
+        }
+        if let Some(part_uri) = worksheet.part_uri.as_deref()
+            && self.worksheets.iter().any(|existing| {
+                existing
+                    .part_uri
+                    .as_deref()
+                    .is_some_and(|existing| existing.eq_ignore_ascii_case(part_uri))
+            })
+        {
+            return Err(OmError::new(
+                OmErrorCode::InvalidState,
+                format!("duplicate worksheet part URI {part_uri}"),
+            ));
+        }
+
+        let sheet_id = worksheet.id;
+        self.worksheets.insert(index, worksheet);
+        self.worksheet_data.insert(sheet_id, worksheet_data);
+        Ok(())
+    }
+
+    pub fn remove_worksheet_with_data(
+        &mut self,
+        sheet_id: SheetId,
+    ) -> OmResult<(usize, WorksheetModel, WorksheetData)> {
+        if self.worksheets.len() == 1 {
+            return Err(OmError::new(
+                OmErrorCode::InvalidState,
+                "workbook must contain at least one worksheet",
+            ));
+        }
+        let worksheet_index = self
+            .worksheets
+            .iter()
+            .position(|worksheet| worksheet.id == sheet_id)
+            .ok_or_else(|| {
+                OmError::new(
+                    OmErrorCode::NotFound,
+                    format!("unknown worksheet {}", sheet_id.0),
+                )
+            })?;
+        if !self.worksheet_data.contains_key(&sheet_id) {
+            return Err(OmError::new(
+                OmErrorCode::NotFound,
+                format!("unknown worksheet data for sheet {}", sheet_id.0),
+            ));
+        }
+
+        let worksheet = self.worksheets.remove(worksheet_index);
+        let worksheet_data = self
+            .worksheet_data
+            .remove(&sheet_id)
+            .expect("worksheet data presence was checked before mutation");
+        Ok((worksheet_index, worksheet, worksheet_data))
+    }
+
+    pub fn mark_worksheet_data_clean(&mut self) {
+        for worksheet in self.worksheet_data.values_mut() {
+            worksheet.dirty = false;
+            worksheet.dirty_cells.clear();
+        }
     }
 
     fn ensure_worksheet_exists(&self, sheet_id: SheetId) -> OmResult<()> {
@@ -1016,7 +1178,7 @@ mod tests {
     use super::{
         CellData, ChartModel, ChartObjectModel, ChartSheetBinding, ChartSourceExpr, ChartType,
         DefinedNameTable, DrawingModel, DrawingObjectModel, SeriesModel, WorkbookState,
-        WorksheetData,
+        WorkbookStateParts, WorksheetData,
     };
     use std::collections::{BTreeMap, BTreeSet};
 
@@ -2449,6 +2611,108 @@ mod tests {
 
         assert_eq!(error.code, OmErrorCode::NotFound);
         assert!(error.message.contains("unknown worksheet 404"));
+    }
+
+    #[test]
+    fn worksheet_data_replacement_rejects_unknown_owner_atomically() {
+        let mut state = sample_state();
+        let original = state.clone();
+
+        let error = state
+            .replace_worksheet_data_for_sheet(SheetId(404), WorksheetData::default())
+            .expect_err("unknown worksheet data owner should be rejected");
+
+        assert_eq!(error.code, OmErrorCode::NotFound);
+        assert!(error.message.contains("unknown worksheet 404"));
+        assert_eq!(state, original);
+    }
+
+    #[test]
+    fn worksheet_and_data_insert_remove_commands_keep_owner_keys_together() {
+        let mut state = sample_state();
+        let original = state.clone();
+        let worksheet = WorksheetModel {
+            id: SheetId(4),
+            workbook_id: state.model.id,
+            name: "Sheet2".to_string(),
+            kind: office_common::SheetKind::Worksheet,
+            visibility: office_common::SheetVisibility::Visible,
+            relationship_id: Some("rId2".to_string()),
+            part_uri: Some("xl/worksheets/sheet2.xml".to_string()),
+        };
+        let worksheet_data = WorksheetData {
+            source_xml: b"<worksheet/>".to_vec(),
+            ..WorksheetData::default()
+        };
+
+        state
+            .insert_worksheet_with_data(1, worksheet.clone(), worksheet_data.clone())
+            .expect("valid worksheet and data should be inserted together");
+        assert_eq!(state.worksheets[1], worksheet);
+        assert_eq!(
+            state
+                .worksheet_data_for_sheet(SheetId(4))
+                .expect("inserted worksheet data"),
+            &worksheet_data
+        );
+
+        let (index, removed_worksheet, removed_data) = state
+            .remove_worksheet_with_data(SheetId(4))
+            .expect("worksheet and data should be removed together");
+        assert_eq!(index, 1);
+        assert_eq!(removed_worksheet, worksheet);
+        assert_eq!(removed_data, worksheet_data);
+        assert_eq!(state, original);
+    }
+
+    #[test]
+    fn worksheet_and_data_insert_rolls_back_invalid_owner_metadata() {
+        let mut state = sample_state();
+        let original = state.clone();
+        let worksheet = WorksheetModel {
+            id: SheetId(4),
+            workbook_id: state.model.id,
+            name: state.worksheets[0].name.clone(),
+            kind: office_common::SheetKind::Worksheet,
+            visibility: office_common::SheetVisibility::Visible,
+            relationship_id: Some("rId2".to_string()),
+            part_uri: Some("xl/worksheets/sheet2.xml".to_string()),
+        };
+
+        let error = state
+            .insert_worksheet_with_data(1, worksheet, WorksheetData::default())
+            .expect_err("duplicate worksheet name should reject the paired insertion");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("duplicate worksheet name"));
+        assert_eq!(state, original);
+    }
+
+    #[test]
+    fn workbook_state_constructor_rejects_orphan_worksheet_data() {
+        let mut state = sample_state();
+        state
+            .worksheet_data
+            .insert(SheetId(404), WorksheetData::default());
+
+        let error = WorkbookState::try_new(WorkbookStateParts {
+            model: state.model,
+            worksheets: state.worksheets,
+            worksheet_data: state.worksheet_data,
+            defined_names: state.defined_names,
+            charts: state.charts,
+            drawings: state.drawings,
+            chart_sheets: state.chart_sheets,
+            opaque_parts: state.opaque_parts,
+        })
+        .expect_err("validated construction should reject orphan worksheet data");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(
+            error
+                .message
+                .contains("worksheet data references unknown worksheet 404")
+        );
     }
 
     #[test]

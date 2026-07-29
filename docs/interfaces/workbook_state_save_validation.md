@@ -1,8 +1,8 @@
 # Workbook State Save Validation Contract
 
-`WorkbookState::validate_for_save` is the model-level fail-closed boundary for topology that can be
-invalidated through the currently public state fields. `XlsxCodec::load` validates the decoded
-state before exposing it, and every lossless XLSX save validates the live state before package
+`WorkbookState::validate_for_save` is the model-level fail-closed boundary for topology that can
+still be invalidated through public state fields. `XlsxCodec::load` validates the decoded state
+before exposing it, and every lossless XLSX save validates the live state before package
 serialization or graph materialization.
 
 ## Worksheet Collection
@@ -34,9 +34,33 @@ changing state when a `SheetId` is unknown; they never create a default data ent
 make the ID mutable through `worksheet_data_for_sheet_mut`.
 
 Worksheet creation, decode, and copy operations remain responsible for installing the worksheet
-record and its data as one higher-level operation. Raw public fields can still bypass that command
-boundary until `OOTD-054`, but `validate_for_save` rejects the resulting orphan with
-`OmErrorCode::InvalidState` before serialization or graph materialization.
+record and its data as one higher-level operation.
+
+### Worksheet-data ownership map
+
+The `WorkbookState` worksheet-data map is private. External callers can inspect it through
+`worksheet_data`, access a live owner through `worksheet_data_for_sheet` or
+`worksheet_data_for_sheet_mut`, and change topology only through paired commands:
+
+- `insert_worksheet_with_data` preflights the insertion index, worksheet metadata, workbook owner,
+  ID, case-insensitive name, relationship ID, and part URI before adding the worksheet and data
+  together;
+- `replace_worksheet_data_for_sheet` requires both a live worksheet owner and an existing data
+  entry;
+- `remove_worksheet_with_data` checks the worksheet and data pair before removing either, and
+  refuses to remove the workbook's only sheet; and
+- `mark_worksheet_data_clean` changes dirty payload state without exposing map keys for mutation.
+
+Codec construction uses `WorkbookState::try_new(WorkbookStateParts)`, so the public construction
+DTO cannot become a live state until full model validation succeeds. Runtime add, copy, and delete
+paths use the paired commands. Chart-sheet materialization no longer calls
+`entry(...).or_default()`; a missing data owner now fails through `set_worksheet_source_xml`
+instead of being invented.
+
+This boundary closes external orphan-key insertion and rekeying. The worksheet collection and the
+fields inside each `WorksheetData` remain public in this stage, so worksheet-ID drift and
+cell/spill/dirty-state invariant bypasses remain explicit `OOTD-054` follow-ups and continue to be
+rejected by save preflight.
 
 ## Workbook Identity Reassignment
 
@@ -94,9 +118,10 @@ supported workbook-XML rewrites and may lag the model until save. Discovery uses
 
 ## Deliberate Follow-up Boundaries
 
-This stage does not make public model fields private (`OOTD-054`). Until field encapsulation lands,
-callers can construct malformed state directly, but the model save and identity-reassignment
-boundaries reject it deterministically.
+The worksheet-data ownership map is the first `OOTD-054` private-field stage. The worksheet
+collection, workbook model, defined-name, chart, drawing, chart-sheet, opaque-part, and
+`WorksheetData` payload fields remain public. Callers can still create malformed state through
+those surfaces, but model save and identity-reassignment boundaries reject it deterministically.
 
 Manifest/content-type coherence and typed chart/drawing model-to-package ownership are enforced by
 later `OOTD-031` stages. The chart/drawing boundary is documented in

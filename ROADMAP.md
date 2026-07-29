@@ -187,9 +187,15 @@ Active order:
    `InvalidState` without partial mutation; runtime registration consumes a handle only after
    success, and reload/save callers propagate failure. The contract is
    `docs/interfaces/workbook_state_save_validation.md`.
-   **Active:** stage `OOTD-054` public-field encapsulation into reviewable command boundaries, then
-   build the common reference AST and complete `OOTD-048` consumer migration.
-32. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
+32. `OOTD-054` stage 1 is complete (2026-07-29, synthetic): the worksheet-data ownership map is
+   private, decoded construction is validated, and runtime add/copy/delete use paired owner/data
+   commands. Read-only access cannot insert or rekey orphan data, and chart materialization fails
+   rather than inventing a missing entry. The contract is
+   `docs/interfaces/workbook_state_save_validation.md`.
+   **Active:** continue `OOTD-054` with worksheet-collection identity and `WorksheetData` payload
+   command boundaries, then build the common reference AST and complete `OOTD-048` consumer
+   migration.
+33. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
    claiming practical chart/pivot/style parity.
 
 Every numbered work unit starts with a failing regression and lands as its own reviewable commit.

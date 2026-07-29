@@ -219,8 +219,7 @@
             .expect("load workbook");
         let worksheet = loaded
             .state
-            .worksheet_data
-            .get_mut(&SheetId(1))
+            .worksheet_data_for_sheet_mut(SheetId(1))
             .expect("worksheet data");
         worksheet.cells.insert(
             (1_048_577, 1),
@@ -548,11 +547,14 @@
         second.name = "Sheet2".to_string();
         second.relationship_id = Some("rId99".to_string());
         second.part_uri = Some("xl/worksheets/sheet99.xml".to_string());
-        loaded.state.worksheets.push(second);
         loaded
             .state
-            .worksheet_data
-            .insert(SheetId(2), WorksheetData::default());
+            .insert_worksheet_with_data(
+                loaded.state.worksheets.len(),
+                second,
+                WorksheetData::default(),
+            )
+            .expect("insert model-only worksheet and data");
 
         let error = codec
             .save(&loaded, CommonSaveOptions::default())
@@ -572,13 +574,27 @@
                 CommonLoadOptions::default(),
             )
             .expect("load workbook");
-        loaded.state.worksheets[0].id = SheetId(2);
         let worksheet_data = loaded
             .state
-            .worksheet_data
-            .remove(&SheetId(1))
-            .expect("worksheet data");
-        loaded.state.worksheet_data.insert(SheetId(2), worksheet_data);
+            .worksheet_data_for_sheet(SheetId(1))
+            .expect("worksheet data")
+            .clone();
+        let mut replacement = loaded.state.worksheets[0].clone();
+        replacement.id = SheetId(2);
+        replacement.name = "Temporary".to_string();
+        replacement.relationship_id = Some("rId99".to_string());
+        replacement.part_uri = Some("xl/worksheets/sheet99.xml".to_string());
+        loaded
+            .state
+            .insert_worksheet_with_data(1, replacement, worksheet_data)
+            .expect("insert replacement worksheet and data");
+        loaded
+            .state
+            .remove_worksheet_with_data(SheetId(1))
+            .expect("remove original worksheet and data");
+        loaded.state.worksheets[0].name = "Sheet1".to_string();
+        loaded.state.worksheets[0].relationship_id = Some("rId1".to_string());
+        loaded.state.worksheets[0].part_uri = Some("xl/worksheets/sheet1.xml".to_string());
 
         let error = codec
             .save(&loaded, CommonSaveOptions::default())
@@ -3851,7 +3867,7 @@
         assert!(
             loaded
                 .state
-                .worksheet_data
+                .worksheet_data()
                 .get(&loaded.state.worksheets[0].id)
                 .expect("chartsheet data placeholder")
                 .cells
@@ -3860,7 +3876,7 @@
         assert!(
             !loaded
                 .state
-                .worksheet_data
+                .worksheet_data()
                 .get(&loaded.state.worksheets[0].id)
                 .expect("chartsheet data placeholder")
                 .source_xml
@@ -3969,7 +3985,7 @@
         assert!(
             loaded
                 .state
-                .worksheet_data
+                .worksheet_data()
                 .get(&loaded.state.worksheets[0].id)
                 .expect("dialogsheet data placeholder")
                 .cells
@@ -3978,7 +3994,7 @@
         assert!(
             !loaded
                 .state
-                .worksheet_data
+                .worksheet_data()
                 .get(&loaded.state.worksheets[0].id)
                 .expect("dialogsheet data placeholder")
                 .source_xml
@@ -4027,7 +4043,7 @@
         assert!(
             loaded
                 .state
-                .worksheet_data
+                .worksheet_data()
                 .get(&loaded.state.worksheets[0].id)
                 .expect("macrosheet data placeholder")
                 .cells
@@ -4036,7 +4052,7 @@
         assert!(
             !loaded
                 .state
-                .worksheet_data
+                .worksheet_data()
                 .get(&loaded.state.worksheets[0].id)
                 .expect("macrosheet data placeholder")
                 .source_xml

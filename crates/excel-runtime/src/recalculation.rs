@@ -73,11 +73,11 @@ pub(super) fn calculation_input_digest(state: &WorkbookState) -> [u8; 32] {
         }]);
     }
     digest.update(
-        u64::try_from(state.worksheet_data.len())
+        u64::try_from(state.worksheet_data().len())
             .unwrap_or(u64::MAX)
             .to_le_bytes(),
     );
-    for (sheet_id, worksheet) in &state.worksheet_data {
+    for (sheet_id, worksheet) in state.worksheet_data() {
         digest.update(sheet_id.0.to_le_bytes());
         digest.update(
             u64::try_from(worksheet.cells.len())
