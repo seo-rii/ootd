@@ -138,9 +138,13 @@ Active order:
    materialization, while unbound chart-sheet records proceed to separate XLSX graph preflight.
    The contract is
    `docs/interfaces/workbook_state_save_validation.md`.
-   **Active:** `OOTD-031` manifest/content-type, generic relationship closure, exact package/model
-   sheet identity, and chart/drawing/support-snapshot graph invariants, then `OOTD-032`/`OOTD-033`,
-   the common reference AST, and `OOTD-048` consumer migration.
+   `OOTD-031` stage 3 is complete (2026-07-29, synthetic): post-materialization save preflight
+   compares the current discovered workbook package graph with model worksheet count/order/ID,
+   relationship ID, normalized target and dialect-derived kind. Every target must exist and resolve
+   to a uniquely owned canonical package part; name and visibility remain supported rewrites.
+   **Active:** `OOTD-031` manifest/content-type, generic relationship closure, and
+   chart/drawing/support-snapshot graph invariants, then `OOTD-032`/`OOTD-033`, the common reference
+   AST, and `OOTD-048` consumer migration.
 30. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
    claiming practical chart/pivot/style parity.
 

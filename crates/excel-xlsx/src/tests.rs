@@ -229,6 +229,210 @@
     }
 
     #[test]
+    fn save_rejects_public_worksheet_count_drift_from_package() {
+        let codec = XlsxCodec;
+        let mut loaded = codec
+            .load(
+                synthetic_workbook_bytes().as_slice(),
+                CommonLoadOptions::default(),
+            )
+            .expect("load workbook");
+        let mut second = loaded.state.worksheets[0].clone();
+        second.id = SheetId(2);
+        second.name = "Sheet2".to_string();
+        second.relationship_id = Some("rId99".to_string());
+        second.part_uri = Some("xl/worksheets/sheet99.xml".to_string());
+        loaded.state.worksheets.push(second);
+        loaded
+            .state
+            .worksheet_data
+            .insert(SheetId(2), WorksheetData::default());
+
+        let error = codec
+            .save(&loaded, CommonSaveOptions::default())
+            .expect_err("save must reject worksheet count drift from workbook.xml");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("model worksheet count 2"));
+        assert!(error.message.contains("package worksheet count 1"));
+    }
+
+    #[test]
+    fn save_rejects_public_worksheet_sheet_id_drift_from_package() {
+        let codec = XlsxCodec;
+        let mut loaded = codec
+            .load(
+                synthetic_workbook_bytes().as_slice(),
+                CommonLoadOptions::default(),
+            )
+            .expect("load workbook");
+        loaded.state.worksheets[0].id = SheetId(2);
+        let worksheet_data = loaded
+            .state
+            .worksheet_data
+            .remove(&SheetId(1))
+            .expect("worksheet data");
+        loaded.state.worksheet_data.insert(SheetId(2), worksheet_data);
+
+        let error = codec
+            .save(&loaded, CommonSaveOptions::default())
+            .expect_err("save must reject sheet-id drift from workbook.xml");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("model sheet id 2"));
+        assert!(error.message.contains("package sheet id 1"));
+    }
+
+    #[test]
+    fn save_rejects_public_worksheet_relationship_id_drift_from_package() {
+        let codec = XlsxCodec;
+        let mut loaded = codec
+            .load(
+                synthetic_workbook_bytes().as_slice(),
+                CommonLoadOptions::default(),
+            )
+            .expect("load workbook");
+        loaded.state.worksheets[0].relationship_id = Some("rId99".to_string());
+
+        let error = codec
+            .save(&loaded, CommonSaveOptions::default())
+            .expect_err("save must reject relationship-id drift from workbook.xml");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("relationship id rId99"));
+        assert!(error.message.contains("package relationship id rId1"));
+    }
+
+    #[test]
+    fn save_rejects_public_worksheet_part_uri_drift_from_package() {
+        let codec = XlsxCodec;
+        let mut loaded = codec
+            .load(
+                synthetic_workbook_bytes().as_slice(),
+                CommonLoadOptions::default(),
+            )
+            .expect("load workbook");
+        loaded.state.worksheets[0].part_uri = Some("xl/worksheets/sheet99.xml".to_string());
+
+        let error = codec
+            .save(&loaded, CommonSaveOptions::default())
+            .expect_err("save must reject part-URI drift from workbook relationships");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("part URI xl/worksheets/sheet99.xml"));
+        assert!(error.message.contains("package target xl/worksheets/sheet1.xml"));
+    }
+
+    #[test]
+    fn save_rejects_public_worksheet_kind_drift_from_package_relationship() {
+        let codec = XlsxCodec;
+        let mut loaded = codec
+            .load(
+                synthetic_workbook_bytes().as_slice(),
+                CommonLoadOptions::default(),
+            )
+            .expect("load workbook");
+        loaded.state.worksheets[0].kind = SheetKind::ChartSheet;
+
+        let error = codec
+            .save(&loaded, CommonSaveOptions::default())
+            .expect_err("save must reject sheet-kind drift from the package relationship");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("worksheet Sheet1 (1)"));
+        assert!(error.message.contains("model kind ChartSheet"));
+        assert!(error.message.contains("package kind Worksheet"));
+    }
+
+    #[test]
+    fn save_rejects_worksheet_bindings_that_alias_one_package_part() {
+        let codec = XlsxCodec;
+        let mut package = OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("package");
+        let workbook_xml = String::from_utf8(
+            package
+                .part("xl/workbook.xml")
+                .expect("workbook part")
+                .bytes
+                .clone(),
+        )
+        .expect("workbook XML")
+        .replace(
+            "  </sheets>",
+            "    <sheet name=\"Alias\" sheetId=\"2\" r:id=\"rId3\"/>\n  </sheets>",
+        );
+        package
+            .replace_part_bytes("xl/workbook.xml", workbook_xml.into_bytes())
+            .expect("replace workbook XML");
+        let relationships_xml = String::from_utf8(
+            package
+                .part("xl/_rels/workbook.xml.rels")
+                .expect("workbook relationships")
+                .bytes
+                .clone(),
+        )
+        .expect("workbook relationships XML")
+        .replace(
+            "</Relationships>",
+            "  <Relationship Id=\"rId3\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/%73heet1.xml\"/>\n</Relationships>",
+        );
+        package
+            .replace_part_bytes(
+                "xl/_rels/workbook.xml.rels",
+                relationships_xml.into_bytes(),
+            )
+            .expect("replace workbook relationships");
+        let loaded = codec
+            .load(
+                &package.to_bytes().expect("aliased workbook bytes"),
+                CommonLoadOptions::default(),
+            )
+            .expect("load aliased worksheet bindings");
+
+        let error = codec
+            .save(&loaded, CommonSaveOptions::default())
+            .expect_err("two worksheet bindings must not resolve to one package part");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("worksheet Alias (2)"));
+        assert!(error.message.contains("xl/worksheets/sheet1.xml"));
+        assert!(error.message.contains("already owned by another worksheet binding"));
+    }
+
+    #[test]
+    fn save_allows_worksheet_name_and_visibility_rewrite_with_stable_binding() {
+        let codec = XlsxCodec;
+        let mut loaded = codec
+            .load(
+                synthetic_workbook_bytes().as_slice(),
+                CommonLoadOptions::default(),
+            )
+            .expect("load workbook");
+        loaded.state.worksheets[0].name = "Renamed".to_string();
+        loaded.state.worksheets[0].visibility = SheetVisibility::Hidden;
+
+        let saved = codec
+            .save(&loaded, CommonSaveOptions::default())
+            .expect("name and visibility remain supported workbook rewrites");
+        let reopened = codec
+            .load(&saved, CommonLoadOptions::default())
+            .expect("reopen rewritten workbook");
+
+        assert_eq!(reopened.state.worksheets[0].name, "Renamed");
+        assert_eq!(
+            reopened.state.worksheets[0].visibility,
+            SheetVisibility::Hidden
+        );
+        assert_eq!(
+            reopened.state.worksheets[0].relationship_id.as_deref(),
+            Some("rId1")
+        );
+        assert_eq!(
+            reopened.state.worksheets[0].part_uri.as_deref(),
+            Some("xl/worksheets/sheet1.xml")
+        );
+    }
+
+    #[test]
     fn root_relationship_discovers_nonstandard_workbook_part() {
         let codec = XlsxCodec;
         let source_bytes = workbook_with_nonstandard_main_part_bytes();

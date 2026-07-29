@@ -1933,6 +1933,114 @@ impl XlsxCodec {
             main_document.dialect,
             WorkbookParseMode::PendingSaveRewrite,
         )?;
+        if saved_workbook.worksheets.len() != workbook.state.worksheets.len() {
+            return Err(OmError::new(
+                OmErrorCode::InvalidState,
+                format!(
+                    "model worksheet count {} does not match package worksheet count {} in {}",
+                    workbook.state.worksheets.len(),
+                    saved_workbook.worksheets.len(),
+                    main_document.part_uri
+                ),
+            ));
+        }
+        let mut resolved_worksheet_part_names = BTreeSet::new();
+        for (index, (package_worksheet, model_worksheet)) in saved_workbook
+            .worksheets
+            .iter()
+            .zip(&workbook.state.worksheets)
+            .enumerate()
+        {
+            let position = index + 1;
+            if model_worksheet.id != package_worksheet.id {
+                return Err(OmError::new(
+                    OmErrorCode::InvalidState,
+                    format!(
+                        "worksheet at position {position} has model sheet id {} but package sheet id {} in {}",
+                        model_worksheet.id.0, package_worksheet.id.0, main_document.part_uri
+                    ),
+                ));
+            }
+            if model_worksheet.kind != package_worksheet.kind {
+                return Err(OmError::new(
+                    OmErrorCode::InvalidState,
+                    format!(
+                        "worksheet {} ({}) has model kind {:?} but package kind {:?}",
+                        model_worksheet.name,
+                        model_worksheet.id.0,
+                        model_worksheet.kind,
+                        package_worksheet.kind
+                    ),
+                ));
+            }
+            let model_relationship_id = model_worksheet
+                .relationship_id
+                .as_deref()
+                .ok_or_else(|| {
+                    OmError::invalid_state(format!(
+                        "worksheet {} ({}) has no model relationship id after graph materialization",
+                        model_worksheet.name, model_worksheet.id.0
+                    ))
+                })?;
+            let package_relationship_id = package_worksheet
+                .relationship_id
+                .as_deref()
+                .ok_or_else(|| {
+                    OmError::invalid_state(format!(
+                        "worksheet {} ({}) has no package relationship id in {}",
+                        package_worksheet.name, package_worksheet.id.0, main_document.part_uri
+                    ))
+                })?;
+            if model_relationship_id != package_relationship_id {
+                return Err(OmError::new(
+                    OmErrorCode::InvalidState,
+                    format!(
+                        "worksheet {} ({}) has model relationship id {} but package relationship id {}",
+                        model_worksheet.name,
+                        model_worksheet.id.0,
+                        model_relationship_id,
+                        package_relationship_id
+                    ),
+                ));
+            }
+            let model_part_uri = model_worksheet.part_uri.as_deref().ok_or_else(|| {
+                OmError::invalid_state(format!(
+                    "worksheet {} ({}) has no model part URI after graph materialization",
+                    model_worksheet.name, model_worksheet.id.0
+                ))
+            })?;
+            let package_part_uri = package_worksheet.part_uri.as_deref().ok_or_else(|| {
+                OmError::invalid_state(format!(
+                    "worksheet {} ({}) has no package target in {}",
+                    package_worksheet.name,
+                    package_worksheet.id.0,
+                    main_document.relationships_part_uri
+                ))
+            })?;
+            if model_part_uri != package_part_uri {
+                return Err(OmError::new(
+                    OmErrorCode::InvalidState,
+                    format!(
+                        "worksheet {} ({}) has model part URI {} but package target {}",
+                        model_worksheet.name,
+                        model_worksheet.id.0,
+                        model_part_uri,
+                        package_part_uri
+                    ),
+                ));
+            }
+            if let Some(resolved_part) = package.part(model_part_uri) {
+                if !resolved_worksheet_part_names.insert(resolved_part.name.to_ascii_lowercase()) {
+                    return Err(OmError::new(
+                        OmErrorCode::InvalidState,
+                        format!(
+                            "worksheet {} ({}) resolves to package part {} already owned by another worksheet binding",
+                            model_worksheet.name, model_worksheet.id.0, resolved_part.name
+                        ),
+                    ));
+                }
+            }
+        }
         let has_dirty_worksheets = workbook
             .state
             .worksheet_data
@@ -3613,6 +3721,23 @@ impl XlsxCodec {
             &package,
             &workbook.support_parts.pivot_inventory,
         )?;
+        for worksheet in &workbook.state.worksheets {
+            let part_uri = worksheet.part_uri.as_deref().ok_or_else(|| {
+                OmError::invalid_state(format!(
+                    "worksheet {} ({}) has no part URI after graph materialization",
+                    worksheet.name, worksheet.id.0
+                ))
+            })?;
+            if !package.contains(part_uri) {
+                return Err(OmError::new(
+                    OmErrorCode::InvalidState,
+                    format!(
+                        "worksheet {} ({}) package target part is missing: {}",
+                        worksheet.name, worksheet.id.0, part_uri
+                    ),
+                ));
+            }
+        }
 
         package.to_bytes()
     }

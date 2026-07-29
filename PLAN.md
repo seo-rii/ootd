@@ -268,9 +268,13 @@ Wave 2 exit gate:
    dangling live-model local name은 fail-closed하며, unbound chart-sheet record의 완전한
    `(None, None)` 쌍만 별도 graph preflight 전 상태로 허용한다. 세부 계약은
    `docs/interfaces/workbook_state_save_validation.md`에 있다.
+   3단계 완료 (2026-07-29, synthetic): state-only chart graph materialization 뒤 현재
+   package의 discovered workbook part와 owner-relative relationships를 다시 읽어 model의 sheet
+   count/order/ID, relationship ID, normalized target와 dialect-derived kind를 대조한다. target
+   part 존재와 canonical OPC identity 기준 1:1 sheet ownership도 강제하며, name/visibility
+   rewrite는 계속 허용한다.
    **다음:** `OOTD-031` manifest/content-type cache, generic relationship closure와
-   package/model sheet identity 및 chart/drawing/support snapshot graph validation을 독립 work
-   unit으로 닫은 뒤
+   chart/drawing/support snapshot graph validation을 독립 work unit으로 닫은 뒤
    `OOTD-032`/`OOTD-033`과 `OOTD-054` private command 전환을 진행한다.
 13. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
    structured error에 추가한다.

@@ -42,6 +42,22 @@ For each worksheet data entry:
 A dynamic-array formula may have no materialized range. This represents an uncalculated or blocked
 spill and remains valid.
 
+## Package-To-Model Worksheet Binding
+
+After state-only chart graphs have been materialized, save discovers the current workbook main
+part and reparses its owner-relative relationships. The live model and package must then agree on:
+
+- worksheet count and ordinal `sheetId` identity;
+- relationship ID, normalized target part URI, and dialect-derived `SheetKind` at each ordinal;
+- existence of every target part; and
+- one-to-one ownership of the resolved package part, including targets that use different percent
+  spellings for the same canonical OPC identity.
+
+Worksheet name and visibility are deliberately excluded from this equality check because they are
+supported workbook-XML rewrites and may lag the model until save. Discovery uses the actual root
+`officeDocument` relationship and active Strict/Transitional dialect rather than assuming
+`xl/workbook.xml` or Transitional relationship types.
+
 ## Deliberate Follow-up Boundaries
 
 This stage does not reject extra `worksheet_data` keys that have no worksheet owner; `OOTD-032`
@@ -49,12 +65,10 @@ owns removing the auto-creating mutation path and orphan state. It also does not
 fields private (`OOTD-054`) or make workbook-ID reassignment atomic (`OOTD-033`).
 
 Manifest/content-type coherence, generic package relationship closure, chart/drawing ownership,
-support-snapshot graph validation, and exact package-versus-model sheet identity comparison remain
-later `OOTD-031` stages. A caller can therefore still replace a complete model binding with another
-internally consistent binding until that comparison lands. Excel grid coordinates and style
-indices retain their existing codec preflight contracts. Spill-overlap validation currently has
-quadratic worst-case behavior, shared with the existing worksheet parser; resource/performance
-hardening remains a later gate.
+and support-snapshot graph validation remain later `OOTD-031` stages. Excel grid coordinates and
+style indices retain their existing codec preflight contracts. Spill-overlap validation currently
+has quadratic worst-case behavior, shared with the existing worksheet parser;
+resource/performance hardening remains a later gate.
 
 The current evidence is synthetic. No desktop Excel Oracle compatibility claim is attached to this
 model validation boundary.
