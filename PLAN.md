@@ -273,8 +273,14 @@ Wave 2 exit gate:
    count/order/ID, relationship ID, normalized target와 dialect-derived kind를 대조한다. target
    part 존재와 canonical OPC identity 기준 1:1 sheet ownership도 강제하며, name/visibility
    rewrite는 계속 허용한다.
-   **다음:** `OOTD-031` manifest/content-type cache, generic relationship closure와
-   chart/drawing/support snapshot graph validation을 독립 work unit으로 닫은 뒤
+   4단계 완료 (2026-07-29, synthetic): Preserve/Refuse 최종 serialization과 active-content
+   Strip 완료 경계에서 package의 root 및 owner `.rels`를 전부 parse해 normalized internal
+   target이 실제 canonical part로 resolve되는지 검증한다. External target은 package part를
+   요구하지 않으며, relationship-part 판별도 OPC lookup과 같은 case/percent canonical
+   identity를 사용한다. Strip은 orphan active marker를 먼저 정리한 뒤 남은 closure를
+   검사한다. 세부 계약은 `docs/interfaces/opc_relationships.md`에 있다.
+   **다음:** `OOTD-031` manifest/content-type cache와 chart/drawing/support snapshot graph
+   validation을 독립 work unit으로 닫은 뒤
    `OOTD-032`/`OOTD-033`과 `OOTD-054` private command 전환을 진행한다.
 13. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
    structured error에 추가한다.

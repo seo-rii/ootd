@@ -3,6 +3,7 @@ use super::{
     xml_error,
 };
 use office_common::{OmError, OmResult};
+use office_opc::OpcPackage;
 use quick_xml::NsReader;
 use quick_xml::events::Event;
 use std::collections::BTreeSet;
@@ -269,6 +270,57 @@ pub(super) fn parse_relationship_entries_with_options(
     }
 
     Ok(relationships)
+}
+
+pub(super) fn ensure_package_relationship_closure(package: &OpcPackage) -> OmResult<()> {
+    for relationship_part in package.parts() {
+        let identity = OpcPackage::canonical_part_identity(&relationship_part.name)?;
+        let identity_segments = identity.split('/').collect::<Vec<_>>();
+        let raw_segments = relationship_part.name.split('/').collect::<Vec<_>>();
+        if identity_segments.len() != raw_segments.len() {
+            return Err(OmError::invalid_state(format!(
+                "OPC canonical identity changed the segment count for {}",
+                relationship_part.name
+            )));
+        }
+        let base_segments = if identity == "_rels/.rels" {
+            &raw_segments[..0]
+        } else {
+            if identity_segments.len() < 2 {
+                continue;
+            }
+            let relationship_file_name = identity_segments[identity_segments.len() - 1];
+            let relationships_directory = identity_segments[identity_segments.len() - 2];
+            if relationships_directory != "_rels"
+                || relationship_file_name.len() <= ".rels".len()
+                || !relationship_file_name.ends_with(".rels")
+            {
+                continue;
+            }
+            &raw_segments[..raw_segments.len() - 2]
+        };
+        let entries = parse_relationship_entries_with_options(
+            relationship_part.bytes.as_slice(),
+            base_segments,
+            true,
+        )?;
+        for entry in entries {
+            if entry
+                .target_mode
+                .as_deref()
+                .is_some_and(|mode| mode.eq_ignore_ascii_case("External"))
+            {
+                continue;
+            }
+            if !package.contains(&entry.target) {
+                return Err(OmError::invalid_state(format!(
+                    "package relationship {} in {} targets missing internal part {}",
+                    entry.id, relationship_part.name, entry.target
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 pub(super) fn worksheet_relationships_part_uri(worksheet_part_uri: &str) -> Option<String> {

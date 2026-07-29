@@ -27,13 +27,29 @@ paths and rejects root escape, empty segments, forbidden URI characters, malform
 encoding, encoded separators, control bytes, and dot-ending segments. External targets remain
 lexically unchanged.
 
+## Package Closure At Save
+
+The final Preserve and Refuse serialization boundary enumerates the package root relationship part
+and every recognized owner relationship part, including root-level owners. Each document is parsed
+with the contract above. Every normalized internal target must resolve to an existing canonical OPC
+part; otherwise save returns `InvalidState` identifying the relationship part, relationship ID, and
+resolved missing target. Relationship-part classification uses the same case/percent-normalized OPC
+identity as package lookup, so alternate unreserved percent spellings cannot bypass the gate. An
+external target never requires a ZIP part.
+
+Active-content Strip intentionally applies this gate after cleanup. This lets Strip remove an
+active relationship marker whose target was already absent, while ensuring that neither a missed
+relationship nor removal of an active target leaves a dangling internal edge in the returned
+package.
+
 ## Verification
 
 Synthetic regressions cover default and prefixed roots/entries, wrong and missing namespaces,
 wrong roots, foreign same-local entries, nested same-local entries, required attributes, duplicate
-IDs, target modes, internal normalization, and external inclusion/filtering. The complete XLSX
-suite exercises package-root, workbook, worksheet, drawing, chart, pivot, and opaque relationship
-graphs.
+IDs, target modes, internal normalization, external inclusion/filtering, opaque dangling targets,
+parent-relative closure, external target exemption, and post-Strip closure. The complete XLSX suite
+exercises package-root, workbook, worksheet, drawing, chart, pivot, and opaque relationship graphs.
 
 This contract is synthetic, not Oracle-verified. Markup Compatibility policy and broader shared
-QName/raw-fragment infrastructure remain OOTD-061/OOTD-049 work.
+QName/raw-fragment infrastructure remain OOTD-061/OOTD-049 work. Relationship-part owner
+existence and `[Content_Types].xml` coherence remain separate OOTD-031 validation stages.

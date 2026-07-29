@@ -61,10 +61,10 @@ use active_content::{collect_active_content_inventory, strip_active_content_from
 pub use digital_signature::DigitalSignatureInventory;
 use digital_signature::collect_digital_signature_inventory;
 use relationships::{
-    RelationshipEntry, normalize_relationship_target, parse_relationship_entries,
-    parse_relationship_entries_for_part, parse_relationship_entries_with_options,
-    relationship_base_segments_for_part, relationships_part_uri_for_part,
-    worksheet_relationships_part_uri,
+    RelationshipEntry, ensure_package_relationship_closure, normalize_relationship_target,
+    parse_relationship_entries, parse_relationship_entries_for_part,
+    parse_relationship_entries_with_options, relationship_base_segments_for_part,
+    relationships_part_uri_for_part, worksheet_relationships_part_uri,
 };
 #[cfg(test)]
 use relationships::parse_workbook_relationship_entries;
@@ -1816,6 +1816,7 @@ impl XlsxCodec {
                 let package = OpcPackage::from_bytes(&preserved_bytes)?;
                 let (package, mut audit) = strip_active_content_from_package(package)?;
                 audit.detected_kinds = detected_kinds;
+                ensure_package_relationship_closure(&package)?;
                 Ok(ActiveContentSaveOutput {
                     bytes: package.to_bytes()?,
                     audit,
@@ -3739,6 +3740,9 @@ impl XlsxCodec {
             }
         }
 
+        if options.active_content_policy != ActiveContentPolicy::Strip {
+            ensure_package_relationship_closure(&package)?;
+        }
         package.to_bytes()
     }
 

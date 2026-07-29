@@ -55,6 +55,11 @@ pub struct OpcPackage {
 }
 
 impl OpcPackage {
+    /// Returns the canonical, case-folded identity used by package lookup and duplicate checks.
+    pub fn canonical_part_identity(name: &str) -> OmResult<String> {
+        Ok(canonical_part_name(name, OmErrorCode::InvalidArgument)?.identity)
+    }
+
     /// Validates and normalizes every part name, then constructs a package with unique identities.
     pub fn try_new(mut parts: Vec<OpcPart>) -> OmResult<Self> {
         let canonical_names = canonical_part_names(&parts, OmErrorCode::InvalidArgument)?;
@@ -1927,6 +1932,19 @@ mod tests {
                 bytes: b"<other/>".to_vec(),
             })
             .expect_err("case-equivalent duplicate should fail");
+        assert_eq!(error.code, OmErrorCode::InvalidArgument);
+    }
+
+    #[test]
+    fn canonical_part_identity_normalizes_case_and_percent_aliases() {
+        assert_eq!(
+            OpcPackage::canonical_part_identity("/customXml/%5Frels/item.xml.%72els")
+                .expect("valid percent-aliased part name"),
+            "customxml/_rels/item.xml.rels"
+        );
+
+        let error = OpcPackage::canonical_part_identity("xl/../evil.xml")
+            .expect_err("invalid part names have no canonical identity");
         assert_eq!(error.code, OmErrorCode::InvalidArgument);
     }
 

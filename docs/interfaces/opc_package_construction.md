@@ -11,6 +11,8 @@ is returned.
   malformed or forbidden percent encodings return `OmErrorCode::InvalidArgument`.
 - Identity comparison is ASCII case-insensitive and normalizes percent-encoded unreserved
   characters. Case-equivalent and percent-equivalent duplicates are rejected.
+- `OpcPackage::canonical_part_identity` exposes that exact fallible identity transform for package
+  graph validators, so part classification cannot drift from lookup and duplicate detection.
 - Successful construction preserves part order, content type, compression method, and bytes while
   storing the normalized package-relative name.
 
@@ -26,9 +28,10 @@ compile-time fixture whose failure is a programming error.
 
 This stage closes only part-name and identity construction invariants. `OpcPart` payload fields,
 `OpcPackage::default`, and raw add/replace/remove mutations do not yet prove that a package has a
-valid `[Content_Types].xml` manifest, coherent cached content types, or a closed relationship graph.
-Those checks belong to the next OOTD-031 save-validation stages. Workbook/model topology and public
-field encapsulation remain separately tracked by OOTD-031 and OOTD-054.
+valid `[Content_Types].xml` manifest, coherent cached content types, or a relationship part with an
+existing owner. Internal relationship-target closure is enforced separately at XLSX save. The
+remaining checks belong to later OOTD-031 save-validation stages. Workbook/model topology and
+public field encapsulation remain separately tracked by OOTD-031 and OOTD-054.
 
 The current evidence is synthetic; no desktop Excel Oracle claim is attached to this constructor
 contract.

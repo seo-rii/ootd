@@ -37,7 +37,7 @@ contract-based until Milestone M1 pins the first behavioral Excel corpus.
 
 - Rust MSRV: 1.88; development toolchain: 1.94.0.
 - Linux workspace tests: enabled in CI.
-- Current root test inventory: 720 `excel-runtime` tests and 2,881 `excel-xlsx` tests.
+- Current root test inventory: 720 `excel-runtime` tests and 2,886 `excel-xlsx` tests.
 - M2 boundary progress: the `excel-xlsx` and `excel-runtime` unit tests now live outside their
   library roots with test identities unchanged; calculation and recalculation/writeback are
   isolated; shared strings, relationships, and worksheet cell codec logic are isolated; Application,
@@ -59,7 +59,12 @@ contract-based until Milestone M1 pins the first behavioral Excel corpus.
   arbitrary bound prefixes are accepted. Wrong/missing root namespaces, foreign or nested
   same-local entries, and root text/CDATA fail closed. Required unqualified attributes, duplicate
   IDs across filtered external entries, target modes, and normalized internal targets retain their
-  strict contract. Details are in `docs/interfaces/opc_relationships.md`.
+  strict contract. Preserve/Refuse serialization checks every recognized root/owner relationship
+  part and rejects an internal target without a canonical package part; external targets are
+  exempt. Relationship-part recognition shares package lookup's case/percent-normalized identity.
+  Active-content Strip applies the same closure gate after its cleanup so removable orphan active
+  markers remain repairable but no dangling edge reaches output. Details are in
+  `docs/interfaces/opc_relationships.md`.
 - Workbook sheet-record boundary: each typed sheet requires a nonblank valid name, a unique
   nonzero unsigned 32-bit ID, and a unique relationship ID resolving to a supported internal sheet
   relationship. Names are unique under the runtime's ASCII-insensitive comparison. Missing,
@@ -93,8 +98,8 @@ contract-based until Milestone M1 pins the first behavioral Excel corpus.
   with `InvalidState` before serialization or chart-graph materialization. Unbound chart-sheet
   records alone may reach the separate XLSX graph preflight. Post-materialization save then matches
   worksheet count/order/ID, relationship, target and kind against the discovered package graph and
-  rejects canonical target aliases. Orphan data, chart/drawing/support graph ownership, generic
-  relationship closure, manifest coherence, and field encapsulation remain open. Details are in
+  rejects canonical target aliases. Orphan data, chart/drawing/support graph ownership, manifest
+  coherence, and field encapsulation remain open. Details are in
   `docs/interfaces/workbook_state_save_validation.md`.
 - CI portability: Ubuntu Rust 1.94, Ubuntu MSRV Rust 1.88, and Windows Rust 1.94 run as independent
   test lanes. A bounded rustfmt gate covers 52 tracked files with four guarded monolith exceptions;

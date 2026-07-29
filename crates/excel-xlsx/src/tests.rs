@@ -433,6 +433,188 @@
     }
 
     #[test]
+    fn save_rejects_dangling_internal_relationship_in_opaque_part() {
+        let codec = XlsxCodec;
+        let mut package = OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("package");
+        package
+            .add_part(OpcPart {
+                name: "customXml/_rels/item1.xml.rels".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdMissing" Type="urn:ootd:opaque" Target="item2.xml"/></Relationships>"#.to_vec(),
+            })
+            .expect("add opaque relationships part");
+        package
+            .add_part(OpcPart {
+                name: "customXml/item2.xml".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<target/>"#.to_vec(),
+            })
+            .expect("add relationship target");
+        let mut loaded = codec
+            .load(
+                &package.to_bytes().expect("closed package bytes"),
+                CommonLoadOptions::default(),
+            )
+            .expect("load package before public mutation");
+        assert!(loaded.package.remove_part("customXml/item2.xml"));
+
+        let error = codec
+            .save(&loaded, CommonSaveOptions::default())
+            .expect_err("save must reject a dangling opaque internal relationship");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("customXml/_rels/item1.xml.rels"));
+        assert!(error.message.contains("rIdMissing"));
+        assert!(error.message.contains("customXml/item2.xml"));
+    }
+
+    #[test]
+    fn save_rejects_dangling_internal_relationship_in_percent_aliased_rels_part() {
+        let codec = XlsxCodec;
+        let mut package = OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("package");
+        package
+            .add_part(OpcPart {
+                name: "customXml/%5Frels/item1.xml.%72els".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdAliased" Type="urn:ootd:opaque" Target="item2.xml"/></Relationships>"#.to_vec(),
+            })
+            .expect("add percent-aliased relationships part");
+        let loaded = codec
+            .load(
+                &package.to_bytes().expect("aliased package bytes"),
+                CommonLoadOptions::default(),
+            )
+            .expect("load percent-aliased relationship package");
+
+        let error = codec
+            .save(&loaded, CommonSaveOptions::default())
+            .expect_err("canonical relationship-part aliases must not bypass closure");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(
+            error
+                .message
+                .contains("customXml/%5Frels/item1.xml.%72els")
+        );
+        assert!(error.message.contains("rIdAliased"));
+        assert!(error.message.contains("customXml/item2.xml"));
+    }
+
+    #[test]
+    fn save_allows_external_relationship_without_package_target() {
+        let codec = XlsxCodec;
+        let mut package = OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("package");
+        package
+            .add_part(OpcPart {
+                name: "customXml/_rels/item1.xml.rels".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdExternal" Type="urn:ootd:external" Target="https://example.com/resource" TargetMode="External"/></Relationships>"#.to_vec(),
+            })
+            .expect("add external relationship");
+        let loaded = codec
+            .load(
+                &package.to_bytes().expect("external package bytes"),
+                CommonLoadOptions::default(),
+            )
+            .expect("load external relationship package");
+
+        codec
+            .save(&loaded, CommonSaveOptions::default())
+            .expect("external targets do not require package parts");
+    }
+
+    #[test]
+    fn save_resolves_parent_relative_internal_relationship_for_closure() {
+        let codec = XlsxCodec;
+        let mut package = OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("package");
+        for part in [
+            OpcPart {
+                name: "customXml/nested/item1.xml".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<owner/>"#.to_vec(),
+            },
+            OpcPart {
+                name: "customXml/nested/_rels/item1.xml.rels".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdParent" Type="urn:ootd:opaque" Target="../item2.xml"/></Relationships>"#.to_vec(),
+            },
+            OpcPart {
+                name: "customXml/item2.xml".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<target/>"#.to_vec(),
+            },
+        ] {
+            package.add_part(part).expect("add relative graph part");
+        }
+        let loaded = codec
+            .load(
+                &package.to_bytes().expect("relative package bytes"),
+                CommonLoadOptions::default(),
+            )
+            .expect("load relative relationship package");
+
+        codec
+            .save(&loaded, CommonSaveOptions::default())
+            .expect("parent-relative target resolves to an existing package part");
+    }
+
+    #[test]
+    fn strip_policy_rejects_relationship_dangling_after_active_part_removal() {
+        let codec = XlsxCodec;
+        let mut package = OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("package");
+        for part in [
+            OpcPart {
+                name: "custom.xml".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<owner/>"#.to_vec(),
+            },
+            OpcPart {
+                name: "_rels/custom.xml.rels".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdOpaque" Type="urn:ootd:opaque" Target="xl/activeX/orphan.bin"/></Relationships>"#.to_vec(),
+            },
+            OpcPart {
+                name: "xl/activeX/orphan.bin".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: vec![1, 2, 3],
+            },
+        ] {
+            package.add_part(part).expect("add strip closure part");
+        }
+        let loaded = codec
+            .load(
+                &package.to_bytes().expect("active package bytes"),
+                CommonLoadOptions::default(),
+            )
+            .expect("load active package");
+
+        let error = codec
+            .save_with_active_content_audit(
+                &loaded,
+                CommonSaveOptions {
+                    active_content_policy: ActiveContentPolicy::Strip,
+                    ..CommonSaveOptions::default()
+                },
+            )
+            .expect_err("strip must not serialize a dangling internal relationship");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("_rels/custom.xml.rels"));
+        assert!(error.message.contains("rIdOpaque"));
+        assert!(error.message.contains("xl/activeX/orphan.bin"));
+    }
+
+    #[test]
     fn root_relationship_discovers_nonstandard_workbook_part() {
         let codec = XlsxCodec;
         let source_bytes = workbook_with_nonstandard_main_part_bytes();
@@ -118249,7 +118431,6 @@
                 bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
-  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/calcChain" Target="calcChain.xml"/>
 </Relationships>"#
                     .to_vec(),
             },
@@ -118371,7 +118552,6 @@
                 bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
-  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/calcChain" Target="calcChain.xml"/>
 </Relationships>"#
                     .to_vec(),
             },
@@ -118492,7 +118672,6 @@
                 bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
-  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/calcChain" Target="calcChain.xml"/>
 </Relationships>"#
                     .to_vec(),
             },

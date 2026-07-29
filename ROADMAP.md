@@ -142,9 +142,13 @@ Active order:
    compares the current discovered workbook package graph with model worksheet count/order/ID,
    relationship ID, normalized target and dialect-derived kind. Every target must exist and resolve
    to a uniquely owned canonical package part; name and visibility remain supported rewrites.
-   **Active:** `OOTD-031` manifest/content-type, generic relationship closure, and
-   chart/drawing/support-snapshot graph invariants, then `OOTD-032`/`OOTD-033`, the common reference
-   AST, and `OOTD-048` consumer migration.
+   `OOTD-031` stage 4 is complete (2026-07-29, synthetic): every recognized package-root or
+   owner `.rels` part is parsed at the final Preserve/Refuse serialization boundary and again after
+   active-content Strip. Normalized internal targets must resolve to canonical package parts;
+   relationship-part recognition shares package lookup's case/percent canonical identity, external
+   targets remain exempt, and Strip may clean orphan active markers before the final gate.
+   **Active:** `OOTD-031` manifest/content-type and chart/drawing/support-snapshot graph invariants,
+   then `OOTD-032`/`OOTD-033`, the common reference AST, and `OOTD-048` consumer migration.
 30. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
    claiming practical chart/pivot/style parity.
 
