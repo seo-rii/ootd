@@ -79,6 +79,10 @@
         }
     }
 
+    fn test_package(parts: Vec<OpcPart>) -> OpcPackage {
+        OpcPackage::try_new(parts).expect("test OPC package should have valid part identities")
+    }
+
     #[test]
     fn pinned_runtime_registry_exposes_recent_chart_members() {
         let runtime = ExcelRuntime::new();
@@ -2429,7 +2433,7 @@
                 _ => {}
             }
         }
-        let source_bytes = OpcPackage::new(parts)
+        let source_bytes = test_package(parts)
             .to_bytes()
             .expect("nonstandard-main workbook bytes");
         let mut runtime = ExcelRuntime::new();
@@ -125880,13 +125884,13 @@
                 part.bytes = xml.into_bytes();
             }
         }
-        OpcPackage::new(parts)
+        test_package(parts)
             .to_bytes()
             .expect("Strict synthetic workbook bytes")
     }
 
     fn synthetic_workbook_bytes() -> Vec<u8> {
-        let package = OpcPackage::new(vec![
+        let package = test_package(vec![
             OpcPart {
                 name: "[Content_Types].xml".to_string(),
                 content_type: None,
@@ -127101,7 +127105,7 @@
     }
 
     fn synthetic_comment_workbook_bytes() -> Vec<u8> {
-        let package = OpcPackage::new(vec![
+        let package = test_package(vec![
             OpcPart {
                 name: "[Content_Types].xml".to_string(),
                 content_type: None,

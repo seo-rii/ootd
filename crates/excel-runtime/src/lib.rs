@@ -29564,7 +29564,7 @@ fn retag_loaded_workbook_format(
         retagged.package,
         workbook_part_name,
         content_type,
-    );
+    )?;
     retagged.support_parts.content_types_source_bytes = None;
     retagged.support_parts.content_types_summary = None;
     retagged.detected_format = format;
@@ -29576,7 +29576,7 @@ fn retag_package_part_content_type(
     package: OpcPackage,
     part_name: &str,
     content_type: &str,
-) -> OpcPackage {
+) -> OmResult<OpcPackage> {
     let normalized_part_name = part_name.trim_start_matches('/');
     let mut parts = package.parts().to_vec();
     for part in &mut parts {
@@ -29584,7 +29584,7 @@ fn retag_package_part_content_type(
             part.content_type = Some(content_type.to_string());
         }
     }
-    OpcPackage::new(parts)
+    OpcPackage::try_new(parts)
 }
 
 fn runtime_xml_error(error: impl std::fmt::Display) -> OmError {
@@ -31065,7 +31065,7 @@ pub fn supports_format(format: FileFormat) -> bool {
 }
 
 fn blank_workbook_bytes() -> Vec<u8> {
-    let package = OpcPackage::new(vec![
+    let package = OpcPackage::try_new(vec![
         OpcPart {
             name: CONTENT_TYPES_PART_NAME.to_string(),
             content_type: None,
@@ -31118,7 +31118,8 @@ fn blank_workbook_bytes() -> Vec<u8> {
             compression: CompressionMethod::Stored,
             bytes: blank_worksheet_xml_bytes(),
         },
-    ]);
+    ])
+    .expect("blank workbook OPC package should have valid part identities");
 
     package.to_bytes().expect("blank workbook package bytes")
 }

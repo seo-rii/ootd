@@ -55,8 +55,13 @@ pub struct OpcPackage {
 }
 
 impl OpcPackage {
-    pub fn new(parts: Vec<OpcPart>) -> Self {
-        Self { parts }
+    /// Validates and normalizes every part name, then constructs a package with unique identities.
+    pub fn try_new(mut parts: Vec<OpcPart>) -> OmResult<Self> {
+        let canonical_names = canonical_part_names(&parts, OmErrorCode::InvalidArgument)?;
+        for (part, canonical_name) in parts.iter_mut().zip(canonical_names) {
+            part.name = canonical_name.spelling;
+        }
+        Ok(Self { parts })
     }
 
     pub fn from_bytes(bytes: &[u8]) -> OmResult<Self> {
@@ -200,22 +205,15 @@ impl OpcPackage {
             }
         }
 
-        Ok(Self { parts })
+        Self::try_new(parts).map_err(|error| OmError::new(OmErrorCode::Parse, error.message))
     }
 
     pub fn to_bytes(&self) -> OmResult<Vec<u8>> {
         let cursor = Cursor::new(Vec::new());
         let mut writer = ZipWriter::new(cursor);
-        let mut identities = BTreeSet::new();
+        let canonical_names = canonical_part_names(&self.parts, OmErrorCode::InvalidArgument)?;
 
-        for part in &self.parts {
-            let canonical_name = canonical_part_name(&part.name, OmErrorCode::InvalidArgument)?;
-            if !identities.insert(canonical_name.identity) {
-                return Err(OmError::invalid_argument(format!(
-                    "duplicate OPC part identity: {}",
-                    canonical_name.spelling
-                )));
-            }
+        for (part, canonical_name) in self.parts.iter().zip(canonical_names) {
             let options = SimpleFileOptions::default().compression_method(part.compression);
             writer
                 .start_file(&canonical_name.spelling, options)
@@ -267,8 +265,7 @@ impl OpcPackage {
 
     pub fn add_part(&mut self, mut part: OpcPart) -> OmResult<()> {
         let canonical_name = canonical_part_name(&part.name, OmErrorCode::InvalidArgument)?;
-        for existing in &self.parts {
-            let existing_name = canonical_part_name(&existing.name, OmErrorCode::InvalidArgument)?;
+        for existing_name in canonical_part_names(&self.parts, OmErrorCode::InvalidArgument)? {
             if existing_name.identity == canonical_name.identity {
                 return Err(OmError::new(
                     OmErrorCode::InvalidArgument,
@@ -648,6 +645,25 @@ struct CanonicalPartName {
     identity: String,
 }
 
+fn canonical_part_names(
+    parts: &[OpcPart],
+    error_code: OmErrorCode,
+) -> OmResult<Vec<CanonicalPartName>> {
+    let mut identities = BTreeSet::new();
+    let mut canonical_names = Vec::with_capacity(parts.len());
+    for part in parts {
+        let canonical_name = canonical_part_name(&part.name, error_code)?;
+        if !identities.insert(canonical_name.identity.clone()) {
+            return Err(OmError::new(
+                error_code,
+                format!("duplicate OPC part identity: {}", canonical_name.spelling),
+            ));
+        }
+        canonical_names.push(canonical_name);
+    }
+    Ok(canonical_names)
+}
+
 fn normalize_part_name(name: &str) -> OmResult<String> {
     Ok(canonical_part_name(name, OmErrorCode::Parse)?.spelling)
 }
@@ -957,9 +973,13 @@ mod tests {
     use zip::ZipWriter;
     use zip::write::SimpleFileOptions;
 
+    fn test_package(parts: Vec<OpcPart>) -> OpcPackage {
+        OpcPackage::try_new(parts).expect("test OPC package should have valid part identities")
+    }
+
     #[test]
     fn resolves_content_types_from_manifest() {
-        let package = OpcPackage::new(vec![
+        let package = test_package(vec![
             OpcPart {
                 name: "[Content_Types].xml".to_string(),
                 content_type: None,
@@ -1124,7 +1144,7 @@ mod tests {
 
     #[test]
     fn replaces_part_bytes_without_touching_other_parts() {
-        let mut package = OpcPackage::new(vec![
+        let mut package = test_package(vec![
             OpcPart {
                 name: "[Content_Types].xml".to_string(),
                 content_type: Some(
@@ -1174,7 +1194,7 @@ mod tests {
 
     #[test]
     fn replaces_part_bytes_with_leading_slash_lookup() {
-        let mut package = OpcPackage::new(vec![OpcPart {
+        let mut package = test_package(vec![OpcPart {
             name: "xl/worksheets/sheet1.xml".to_string(),
             content_type: Some(
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"
@@ -1200,7 +1220,7 @@ mod tests {
 
     #[test]
     fn adds_new_part_with_normalized_name() {
-        let mut package = OpcPackage::new(vec![OpcPart {
+        let mut package = test_package(vec![OpcPart {
             name: "xl/workbook.xml".to_string(),
             content_type: Some(
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"
@@ -1235,7 +1255,7 @@ mod tests {
 
     #[test]
     fn add_part_rejects_duplicate_part_names() {
-        let mut package = OpcPackage::new(vec![OpcPart {
+        let mut package = test_package(vec![OpcPart {
             name: "xl/workbook.xml".to_string(),
             content_type: Some(
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"
@@ -1263,7 +1283,7 @@ mod tests {
 
     #[test]
     fn removes_part_bytes_with_normalized_lookup() {
-        let mut package = OpcPackage::new(vec![
+        let mut package = test_package(vec![
             OpcPart {
                 name: "xl/workbook.xml".to_string(),
                 content_type: Some(
@@ -1325,7 +1345,7 @@ mod tests {
 
     #[test]
     fn removes_part_with_leading_slash_lookup() {
-        let mut package = OpcPackage::new(vec![
+        let mut package = test_package(vec![
             OpcPart {
                 name: "xl/workbook.xml".to_string(),
                 content_type: Some(
@@ -1354,7 +1374,7 @@ mod tests {
 
     #[test]
     fn override_content_type_takes_precedence_over_default_extension_mapping() {
-        let package = OpcPackage::new(vec![
+        let package = test_package(vec![
             OpcPart {
                 name: "[Content_Types].xml".to_string(),
                 content_type: None,
@@ -1390,7 +1410,7 @@ mod tests {
 
     #[test]
     fn resolves_default_content_type_case_insensitively_for_extensions() {
-        let package = OpcPackage::new(vec![
+        let package = test_package(vec![
             OpcPart {
                 name: "[Content_Types].xml".to_string(),
                 content_type: None,
@@ -1422,7 +1442,7 @@ mod tests {
 
     #[test]
     fn preserves_part_order_and_compression_across_round_trip() {
-        let package = OpcPackage::new(vec![
+        let package = test_package(vec![
             OpcPart {
                 name: "docProps/core.xml".to_string(),
                 content_type: Some(
@@ -1459,7 +1479,7 @@ mod tests {
 
     #[test]
     fn replace_part_bytes_returns_not_found_for_missing_part() {
-        let mut package = OpcPackage::new(vec![OpcPart {
+        let mut package = test_package(vec![OpcPart {
             name: "xl/workbook.xml".to_string(),
             content_type: Some(
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"
@@ -1839,8 +1859,57 @@ mod tests {
     }
 
     #[test]
+    fn fallible_package_construction_rejects_invalid_and_duplicate_part_identities() {
+        let invalid_name = OpcPackage::try_new(vec![OpcPart {
+            name: "xl/../evil.xml".to_string(),
+            content_type: None,
+            compression: CompressionMethod::Stored,
+            bytes: b"opaque".to_vec(),
+        }])
+        .expect_err("invalid in-memory part name should fail construction");
+        assert_eq!(invalid_name.code, OmErrorCode::InvalidArgument);
+        assert!(invalid_name.message.contains("OPC part name"));
+
+        let duplicate_identity = OpcPackage::try_new(vec![
+            OpcPart {
+                name: "xl/workbook.xml".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: b"first".to_vec(),
+            },
+            OpcPart {
+                name: "XL/%77ORKBOOK.XML".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: b"second".to_vec(),
+            },
+        ])
+        .expect_err("equivalent in-memory part identities should fail construction");
+        assert_eq!(duplicate_identity.code, OmErrorCode::InvalidArgument);
+        assert!(
+            duplicate_identity
+                .message
+                .contains("duplicate OPC part identity")
+        );
+    }
+
+    #[test]
+    fn fallible_package_construction_normalizes_root_relative_part_names() {
+        let package = OpcPackage::try_new(vec![OpcPart {
+            name: "/xl/workbook.xml".to_string(),
+            content_type: Some("application/xml".to_string()),
+            compression: CompressionMethod::Stored,
+            bytes: b"<workbook/>".to_vec(),
+        }])
+        .expect("root-relative OPC part name");
+
+        assert_eq!(package.parts()[0].name, "xl/workbook.xml");
+        assert!(package.part("/XL/WORKBOOK.XML").is_some());
+    }
+
+    #[test]
     fn part_lookup_and_add_are_case_insensitive() {
-        let mut package = OpcPackage::new(vec![OpcPart {
+        let mut package = test_package(vec![OpcPart {
             name: "xl/workbook.xml".to_string(),
             content_type: Some("application/xml".to_string()),
             compression: CompressionMethod::Stored,
@@ -1863,7 +1932,7 @@ mod tests {
 
     #[test]
     fn content_type_override_lookup_uses_canonical_part_identity() {
-        let package = OpcPackage::new(vec![
+        let package = test_package(vec![
             OpcPart {
                 name: "[Content_Types].xml".to_string(),
                 content_type: None,
@@ -1890,13 +1959,15 @@ mod tests {
     }
 
     #[test]
-    fn serialization_revalidates_infallibly_constructed_packages() {
-        let package = OpcPackage::new(vec![OpcPart {
-            name: "xl/../evil.xml".to_string(),
-            content_type: None,
-            compression: CompressionMethod::Stored,
-            bytes: b"opaque".to_vec(),
-        }]);
+    fn serialization_revalidates_internally_corrupted_packages() {
+        let package = OpcPackage {
+            parts: vec![OpcPart {
+                name: "xl/../evil.xml".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: b"opaque".to_vec(),
+            }],
+        };
 
         let error = package
             .to_bytes()

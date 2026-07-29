@@ -3193,7 +3193,7 @@ mod tests {
                 chart_sheets: BTreeMap::new(),
                 opaque_parts: Vec::new(),
             },
-            package: OpcPackage::new(vec![
+            package: OpcPackage::try_new(vec![
                 OpcPart {
                     name: "[Content_Types].xml".to_string(),
                     content_type: None,
@@ -3243,7 +3243,8 @@ mod tests {
                     compression: CompressionMethod::Stored,
                     bytes: sheet_xml,
                 },
-            ]),
+            ])
+            .expect("chart-graph test package should have valid part identities"),
             detected_format: FileFormat::Xlsx,
             calculation_properties: Default::default(),
             support_parts: Default::default(),

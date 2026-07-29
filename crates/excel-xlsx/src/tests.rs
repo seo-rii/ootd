@@ -90,6 +90,10 @@
             .expect("test fixture cell coordinate should be valid");
     }
 
+    fn test_package(parts: Vec<OpcPart>) -> OpcPackage {
+        OpcPackage::try_new(parts).expect("test OPC package should have valid part identities")
+    }
+
     #[test]
     fn codec_options_fail_closed_when_policy_is_not_implemented() {
         let codec = XlsxCodec;
@@ -16488,7 +16492,7 @@
                 _ => CompressionMethod::Stored,
             };
         }
-        let input_package = OpcPackage::new(parts);
+        let input_package = test_package(parts);
         let input = input_package.to_bytes().expect("input package bytes");
         let original_package = OpcPackage::from_bytes(&input).expect("original package");
 
@@ -16633,7 +16637,7 @@
                 _ => CompressionMethod::Stored,
             };
         }
-        let input_package = OpcPackage::new(parts);
+        let input_package = test_package(parts);
         let input = input_package.to_bytes().expect("input package bytes");
         let original_package = OpcPackage::from_bytes(&input).expect("original package");
 
@@ -53253,7 +53257,7 @@
 
     #[test]
     fn resolves_normalized_relationship_targets_during_load() {
-        let package = OpcPackage::new(vec![
+        let package = test_package(vec![
             OpcPart {
                 name: "[Content_Types].xml".to_string(),
                 content_type: None,
@@ -112823,7 +112827,7 @@
     }
 
     fn workbook_with_styles_and_theme_bytes() -> Vec<u8> {
-        let package = OpcPackage::new(vec![
+        let package = test_package(vec![
             OpcPart {
                 name: "[Content_Types].xml".to_string(),
                 content_type: None,
@@ -117282,7 +117286,7 @@
     }
 
     fn workbook_with_hyperlink_comment_and_calc_chain_bytes() -> Vec<u8> {
-        let package = OpcPackage::new(vec![
+        let package = test_package(vec![
             OpcPart {
                 name: "[Content_Types].xml".to_string(),
                 content_type: None,
@@ -117792,7 +117796,7 @@
     }
 
     fn strict_workbook_with_nonstandard_main_part_bytes() -> Vec<u8> {
-        let package = OpcPackage::new(vec![
+        let package = test_package(vec![
             OpcPart {
                 name: "[Content_Types].xml".to_string(),
                 content_type: None,
@@ -117947,7 +117951,7 @@
     }
 
     fn synthetic_workbook_bytes() -> Vec<u8> {
-        let package = OpcPackage::new(vec![
+        let package = test_package(vec![
             OpcPart {
                 name: "[Content_Types].xml".to_string(),
                 content_type: None,
@@ -118057,7 +118061,7 @@
     }
 
     fn workbook_with_self_closing_sheet_data_bytes() -> Vec<u8> {
-        let package = OpcPackage::new(vec![
+        let package = test_package(vec![
             OpcPart {
                 name: "[Content_Types].xml".to_string(),
                 content_type: None,
@@ -118113,7 +118117,7 @@
     }
 
     fn workbook_without_dimension_or_sheet_data_bytes() -> Vec<u8> {
-        let package = OpcPackage::new(vec![
+        let package = test_package(vec![
             OpcPart {
                 name: "[Content_Types].xml".to_string(),
                 content_type: None,
@@ -118169,7 +118173,7 @@
     }
 
     fn workbook_with_preserved_sheet_metadata_bytes() -> Vec<u8> {
-        let package = OpcPackage::new(vec![
+        let package = test_package(vec![
             OpcPart {
                 name: "[Content_Types].xml".to_string(),
                 content_type: None,
@@ -118404,7 +118408,7 @@
     }
 
     fn workbook_with_absolute_ref_hyperlink_anchor_bytes() -> Vec<u8> {
-        let package = OpcPackage::new(vec![
+        let package = test_package(vec![
             OpcPart {
                 name: "[Content_Types].xml".to_string(),
                 content_type: None,
@@ -118600,7 +118604,7 @@
     }
 
     fn workbook_with_blank_internal_hyperlink_anchor_bytes() -> Vec<u8> {
-        let package = OpcPackage::new(vec![
+        let package = test_package(vec![
             OpcPart {
                 name: "[Content_Types].xml".to_string(),
                 content_type: None,

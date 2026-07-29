@@ -361,7 +361,7 @@ mod tests {
 
     #[test]
     fn inventory_keeps_orphan_content_type_and_external_relationship_markers_visible() {
-        let package = OpcPackage::new(vec![
+        let package = OpcPackage::try_new(vec![
             OpcPart {
                 name: "[Content_Types].xml".to_string(),
                 content_type: None,
@@ -376,7 +376,8 @@ mod tests {
                 compression: CompressionMethod::Stored,
                 bytes: br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdExternal" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/externalLink" Target="https://example.invalid/external.xlsx" TargetMode="External"/></Relationships>"#.to_vec(),
             },
-        ]);
+        ])
+        .expect("external-data test package should have valid part identities");
 
         let inventory = collect_external_data_inventory(&package).expect("external-data inventory");
         assert_eq!(

@@ -127,8 +127,12 @@ Active order:
    while `CountLarge` retains the full-grid value without materialization. Raw public DTO-field
    closure remains tracked by `OOTD-031`/`OOTD-054`; the contract is
    `docs/interfaces/excel_grid_limits.md`.
-   **Active:** `OOTD-031`~`OOTD-033` model/package invariants, then the common reference AST and
-   `OOTD-048` consumer migration.
+   `OOTD-031` stage 1 is complete (2026-07-29, synthetic): public package construction is fallible,
+   canonicalizes root-relative names, and atomically rejects malformed or case/percent-equivalent
+   duplicate identities. ZIP load, add, and serialization share the identity validator; the
+   contract is `docs/interfaces/opc_package_construction.md`.
+   **Active:** `OOTD-031` package graph/model save invariants, then `OOTD-032`/`OOTD-033`, the
+   common reference AST, and `OOTD-048` consumer migration.
 30. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
    claiming practical chart/pivot/style parity.
 

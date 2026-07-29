@@ -255,8 +255,15 @@ Wave 2 exit gate:
    nested same-local element, root text/CDATA를 fail-closed하며 기존 required unqualified
    attribute, duplicate ID, target mode와 internal target validation을 유지한다. 세부 계약은
    `docs/interfaces/opc_relationships.md`에 있다.
-12. `OOTD-031` + `OOTD-032` + `OOTD-033` + `OOTD-054`: mutable public state를 validated
-   command/transaction으로 닫고 workbook identity assignment를 fallible/atomic하게 만든다.
+12. `OOTD-031` 1단계 완료 (2026-07-29, synthetic): public infallible `OpcPackage::new`를
+   제거하고 `try_new`가 모든 part name을 package-relative spelling으로 정규화한 뒤 malformed
+   name과 case/percent-equivalent identity duplicate를 package 생성 전에 원자적으로 거부한다.
+   ZIP load, `add_part`, `to_bytes`도 같은 canonical identity validator를 사용하며 production
+   재구성 경로는 오류를 전파하고 pinned fixture만 명시적으로 실패한다. 세부 계약은
+   `docs/interfaces/opc_package_construction.md`에 있다.
+   **다음:** `OOTD-031` manifest/content-type cache 및 relationship closure save validation,
+   `WorkbookState::validate_for_save()`를 완료한 뒤 `OOTD-032`/`OOTD-033`과 `OOTD-054` private
+   command 전환을 진행한다.
 13. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
    structured error에 추가한다.
 

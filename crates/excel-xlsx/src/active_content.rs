@@ -1113,7 +1113,7 @@ mod tests {
 
     #[test]
     fn strip_helpers_cover_raw_manifest_relationship_and_owner_xml_boundaries() {
-        let package = OpcPackage::new(vec![
+        let package = OpcPackage::try_new(vec![
             OpcPart {
                 name: CONTENT_TYPES_PART_NAME.to_string(),
                 content_type: None,
@@ -1160,7 +1160,8 @@ mod tests {
                 compression: CompressionMethod::Stored,
                 bytes: vec![1, 2, 3],
             },
-        ]);
+        ])
+        .expect("active-content test package should have valid part identities");
 
         assert_eq!(
             active_content_part_uris_from_manifest(&package).expect("manifest roots"),
