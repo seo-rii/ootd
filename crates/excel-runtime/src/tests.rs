@@ -49186,6 +49186,72 @@
     }
 
     #[test]
+    fn charts_copy_without_targets_second_sheet_failure_rolls_back_workbook_registration() {
+        let mut runtime = ExcelRuntime::new();
+        let source_workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open source workbook");
+        let charts = expect_object_handle(
+            runtime
+                .dispatch_get(source_workbook.0, "Charts", &[])
+                .expect("source Workbook.Charts"),
+        );
+        runtime
+            .dispatch_invoke(charts, "Add", &[])
+            .expect("add first source chart sheet");
+        runtime
+            .dispatch_invoke(charts, "Add", &[])
+            .expect("add second source chart sheet");
+        let chart_sheet_ids = runtime
+            .runtime_workbook(source_workbook)
+            .expect("source runtime workbook")
+            .loaded
+            .state
+            .worksheets()
+            .iter()
+            .filter(|worksheet| worksheet.kind == office_common::SheetKind::ChartSheet)
+            .map(|worksheet| worksheet.id)
+            .collect::<Vec<_>>();
+        assert_eq!(chart_sheet_ids.len(), 2);
+        runtime
+            .runtime_workbook_mut(source_workbook)
+            .expect("source runtime workbook")
+            .loaded
+            .state
+            .chart_sheets
+            .remove(&chart_sheet_ids[1])
+            .expect("remove second source chart binding");
+        let source_before = runtime_workbook_persistence_snapshot(&runtime, source_workbook);
+        let source_dirty_before = runtime
+            .workbook_dirty_domains(source_workbook)
+            .expect("source dirty domains");
+        let session_before = runtime_session_mutation_snapshot(&runtime);
+
+        let error = runtime
+            .dispatch_invoke(charts, "Copy", &[])
+            .expect_err("second invalid chart sheet copy must fail");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("missing a chart binding"));
+        assert_eq!(
+            runtime_workbook_persistence_snapshot(&runtime, source_workbook),
+            source_before
+        );
+        assert_eq!(
+            runtime
+                .workbook_dirty_domains(source_workbook)
+                .expect("source dirty domains after failure"),
+            source_dirty_before
+        );
+        assert_eq!(runtime_session_mutation_snapshot(&runtime), session_before);
+    }
+
+    #[test]
     fn charts_move_without_targets_creates_chart_sheet_workbook_and_removes_source() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime

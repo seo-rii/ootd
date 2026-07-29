@@ -588,12 +588,18 @@ impl ExcelRuntime {
                     return Ok(OmValue::Empty);
                 }
 
-                self.create_workbook_from_sheet_block(
-                    workbook,
-                    sheet_ids.as_slice(),
-                    operation.as_str(),
-                )?;
-                Ok(OmValue::Empty)
+                let snapshot = self.begin_runtime_workbook_mutation(workbook)?;
+                let result = self
+                    .create_workbook_from_sheet_block(
+                        workbook,
+                        sheet_ids.as_slice(),
+                        operation.as_str(),
+                    )
+                    .map(|_| OmValue::Empty);
+                if result.is_err() {
+                    self.rollback_runtime_workbook_mutation(snapshot);
+                }
+                result
             }
             "Move" => {
                 if args.len() > 2 {

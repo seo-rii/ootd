@@ -117,8 +117,14 @@ session. The regression deletes a clean worksheet first and then rejects a works
 drawing relationship target is missing; neither deletion, stale handle, package rewrite, nor
 selection change remains.
 
-The initial registration of a target-less collection-copy workbook still needs its own prepare and
-publish transaction and remains a later `OOTD-054` stage.
+Target-less `Sheets`/`Worksheets`/`Charts.Copy` starts an outer source-anchored runtime snapshot after
+argument, collection, placement, and pivot preflight and before destination workbook creation. The
+destination workbook, default-sheet cleanup, nested block copy, copied-sheet renames, object
+handles, allocator counters, active workbook/chart, and selection remain prepared state until the
+whole operation succeeds. If a later source sheet fails, the outer rollback removes the newly
+registered workbook and restores the pre-call source and session state. The regression removes the
+second of two source chart-sheet bindings, then requires the first copied chart, destination
+workbook registration, handles, counters, and active state to leave no residue.
 
 ## Worksheet Data Mutation
 

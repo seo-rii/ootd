@@ -187,7 +187,7 @@ Active order:
    `InvalidState` without partial mutation; runtime registration consumes a handle only after
    success, and reload/save callers propagate failure. The contract is
    `docs/interfaces/workbook_state_save_validation.md`.
-32. `OOTD-054` stages 1-9 are complete (2026-07-29, synthetic): the worksheet-data ownership map
+32. `OOTD-054` stages 1-10 are complete (2026-07-29, synthetic): the worksheet-data ownership map
    and live workbook-model metadata are private, decoded construction is validated, and runtime
    add/copy/delete use paired owner/data commands. Read-only access cannot insert or rekey orphan
    data; model metadata changes use explicit commands while workbook-ID changes remain atomic; and
@@ -210,11 +210,14 @@ Active order:
    stale-handle/selection cleanup; malformed content-types failure therefore restores model,
    package, support/pending graphs, dirty domains, and runtime session state. Collection Delete now
    adds an outer snapshot around the complete validated sheet block, so a later sheet failure also
-   restores earlier successful deletions. The contract is
+   restores earlier successful deletions. Target-less sheet-collection Copy likewise starts an
+   outer source-anchored snapshot before creating the destination workbook; a later copy failure
+   removes that unpublished workbook and restores registries, allocators, active state, and
+   selection. The contract is
    `docs/interfaces/workbook_state_save_validation.md`.
-   **Active:** continue `OOTD-054` by closing target-less Copy workbook-registration transactions,
-   then move the complete `WorksheetData` cell/spill/dirty payload behind validated commands before
-   building the common reference AST and completing `OOTD-048` consumer migration.
+   **Active:** continue `OOTD-054` by moving the complete `WorksheetData` cell/spill/dirty payload
+   behind validated commands before building the common reference AST and completing `OOTD-048`
+   consumer migration.
 33. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
    claiming practical chart/pivot/style parity.
 

@@ -394,9 +394,15 @@ Wave 2 exit gate:
    호출 전 model/package/support/dirty 및 handle/session 상태로 복원한다. clean worksheet
    삭제 뒤 dangling opaque relationship을 가진 worksheet가 실패하는 RED가 첫 삭제 잔존을
    막으며 `excel-runtime` 725개 회귀가 통과한다.
-   **다음:** target-less collection Copy의 새 workbook 준비·등록 transaction을 닫고,
-   `WorksheetData`의 cell/spill/dirty payload 7개를 하나의 validated command 단계로 이관한
-   뒤 `OOTD-018`/`OOTD-048` common reference subsystem을 진행한다.
+   10단계 완료 (2026-07-29, synthetic): target-less
+   `Sheets`/`Worksheets`/`Charts.Copy`를 source workbook에 고정한 외부
+   `RuntimeWorkbookMutationSnapshot`에 묶었다. 새 workbook 등록과 기본 sheet 제거, 전체
+   sheet block 복사·rename, handle/active-selection 갱신 중 실패하면 준비 중 workbook을
+   제거하고 registry/allocator/active state를 호출 전으로 복원한다. 두 chart sheet 중 두
+   번째 binding이 없는 RED가 첫 chart를 담은 새 workbook 등록 잔존을 막으며
+   `excel-runtime` 726개 회귀가 통과한다.
+   **다음:** `WorksheetData`의 cell/spill/dirty payload 7개를 하나의 validated command
+   단계로 이관한 뒤 `OOTD-018`/`OOTD-048` common reference subsystem을 진행한다.
 16. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
    structured error에 추가한다.
 
