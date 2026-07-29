@@ -1857,8 +1857,9 @@ impl XlsxCodec {
         )?;
         ensure_workbook_grid_coordinates_are_valid(&workbook.state)?;
         ensure_workbook_style_ids_are_valid(&workbook.state, &workbook.support_parts)?;
+        let has_state_only_chart_graphs = chart_graph::has_state_only_chart_graphs(workbook);
         if workbook.support_parts.ooxml_dialect == OoxmlDialect::Strict
-            && (chart_graph::has_state_only_chart_graphs(workbook)
+            && (has_state_only_chart_graphs
                 || !workbook.pending_drawing_relationship_graphs.is_empty()
                 || !workbook.pending_chart_relationship_graphs.is_empty()
                 || workbook.state.charts.values().any(|chart| chart.dirty)
@@ -1868,7 +1869,7 @@ impl XlsxCodec {
                 "Strict OOXML chart and drawing graph mutation is not implemented",
             ));
         }
-        let mut materialized_workbook = if chart_graph::has_state_only_chart_graphs(workbook) {
+        let mut materialized_workbook = if has_state_only_chart_graphs {
             let mut materialized = workbook.clone();
             chart_graph::materialize_state_only_chart_graphs_in_place(&mut materialized)?;
             Some(materialized)
@@ -3062,6 +3063,7 @@ impl XlsxCodec {
                 )?;
             }
         }
+        chart_graph::validate_chart_graphs_for_save(workbook, &package)?;
         for worksheet in &workbook.state.worksheets {
             if !dirty_worksheet_ids.contains(&worksheet.id) {
                 continue;

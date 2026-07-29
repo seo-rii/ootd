@@ -3,7 +3,7 @@ use std::io::{Cursor, Write};
 
 use excel_model::{DrawingObjectModel, WorksheetData};
 use office_common::{ChartId, OmError, OmErrorCode, OmResult, SheetId, SheetKind, SheetVisibility};
-use office_opc::{CompressionMethod, OpcPart};
+use office_opc::{CompressionMethod, OpcPackage, OpcPart};
 use quick_xml::escape::escape;
 use quick_xml::events::{BytesEnd, BytesStart, Event};
 use quick_xml::{Reader, Writer};
@@ -88,11 +88,11 @@ pub(crate) fn materialize_state_only_chart_graphs_in_place(
     workbook: &mut LoadedXlsxWorkbook,
 ) -> OmResult<()> {
     workbook.state.validate_for_save()?;
+    validate_chart_graphs_for_save(workbook, &workbook.package)?;
     if !has_state_only_chart_graphs(workbook) {
         return Ok(());
     }
 
-    validate_state_only_chart_graphs(workbook)?;
     normalize_state_only_non_visual_ids(workbook)?;
     let mut content_types_xml = workbook
         .package
@@ -130,10 +130,14 @@ pub(crate) fn materialize_state_only_chart_graphs_in_place(
         .package
         .replace_part_bytes(CONTENT_TYPES_PART_NAME, content_types_xml)?;
     invalidate_changed_preservation_snapshots(workbook);
-    ensure_all_state_only_charts_materialized(workbook)
+    ensure_all_state_only_charts_materialized(workbook)?;
+    validate_chart_graphs_for_save(workbook, &workbook.package)
 }
 
-fn validate_state_only_chart_graphs(workbook: &LoadedXlsxWorkbook) -> OmResult<()> {
+pub(crate) fn validate_chart_graphs_for_save(
+    workbook: &LoadedXlsxWorkbook,
+    package: &OpcPackage,
+) -> OmResult<()> {
     let workbook_id = workbook.state.model.id;
     let sheets = workbook
         .state
@@ -144,6 +148,7 @@ fn validate_state_only_chart_graphs(workbook: &LoadedXlsxWorkbook) -> OmResult<(
     let mut chart_hosts = BTreeMap::new();
     let mut chart_object_ids = BTreeSet::new();
     let mut opaque_object_ids = BTreeSet::new();
+    let mut materialized_part_owners = BTreeMap::new();
 
     for sheet in &workbook.state.worksheets {
         if sheet.workbook_id != workbook_id {
@@ -153,12 +158,15 @@ fn validate_state_only_chart_graphs(workbook: &LoadedXlsxWorkbook) -> OmResult<(
             )));
         }
         if sheet.kind == SheetKind::ChartSheet {
-            let binding = workbook.state.chart_sheets.get(&sheet.id).ok_or_else(|| {
-                OmError::invalid_state(format!(
+            let Some(binding) = workbook.state.chart_sheets.get(&sheet.id) else {
+                if sheet.part_uri.is_some() && sheet.relationship_id.is_some() {
+                    continue;
+                }
+                return Err(OmError::invalid_state(format!(
                     "chart sheet {} is missing its chart binding",
                     sheet.name
-                ))
-            })?;
+                )));
+            };
             if binding.sheet_id != sheet.id {
                 return Err(OmError::invalid_state(format!(
                     "chart sheet binding {} does not match host sheet {}",
@@ -244,13 +252,53 @@ fn validate_state_only_chart_graphs(workbook: &LoadedXlsxWorkbook) -> OmResult<(
             .or_insert_with(Vec::new)
             .push((*drawing_id, drawing.raw_part_uri.is_some()));
 
-        if let Some(part_uri) = drawing.raw_part_uri.as_deref()
-            && !workbook.package.contains(part_uri)
-        {
-            return Err(OmError::invalid_state(format!(
-                "drawing {} package part is missing: {part_uri}",
-                drawing_id.0
-            )));
+        if let Some(part_uri) = drawing.raw_part_uri.as_deref() {
+            let drawing_part = package.part(part_uri).ok_or_else(|| {
+                OmError::invalid_state(format!(
+                    "drawing {} package part is missing: {part_uri}",
+                    drawing_id.0
+                ))
+            })?;
+            let canonical_part_identity = OpcPackage::canonical_part_identity(&drawing_part.name)?;
+            let owner = format!("drawing {}", drawing_id.0);
+            if let Some(existing_owner) =
+                materialized_part_owners.insert(canonical_part_identity, owner.clone())
+            {
+                return Err(OmError::invalid_state(format!(
+                    "package part {} is owned by both {existing_owner} and {owner}",
+                    drawing_part.name
+                )));
+            }
+
+            let host_part_uri = host.part_uri.as_deref().ok_or_else(|| {
+                OmError::invalid_state(format!(
+                    "materialized drawing {} has an unbound host sheet {}",
+                    drawing_id.0, host.name
+                ))
+            })?;
+            let host_relationships_part_uri = relationships_part_uri_for(host_part_uri);
+            let host_relationship_count = package
+                .part(&host_relationships_part_uri)
+                .map(|part| {
+                    super::parse_relationship_entries_for_part(part.bytes.as_slice(), host_part_uri)
+                })
+                .transpose()?
+                .unwrap_or_default()
+                .iter()
+                .filter(|relationship| {
+                    relationship.relationship_type == DRAWING_RELATIONSHIP_TYPE
+                        && relationship.target_mode.is_none()
+                        && package
+                            .part(&relationship.target)
+                            .is_some_and(|target_part| target_part.name == drawing_part.name)
+                })
+                .count();
+            if host_relationship_count != 1 {
+                return Err(OmError::invalid_state(format!(
+                    "drawing {} is not owned by host sheet {} relationships: expected one relationship to {}, found {host_relationship_count}",
+                    drawing_id.0, host.name, drawing_part.name
+                )));
+            }
         }
         let pending_relationship_graph =
             workbook.pending_drawing_relationship_graphs.get(drawing_id);
@@ -375,7 +423,7 @@ fn validate_state_only_chart_graphs(workbook: &LoadedXlsxWorkbook) -> OmResult<(
                 chart_object.raw_binding.as_deref(),
             ) {
                 validate_materialized_chart_binding(
-                    workbook,
+                    package,
                     chart_object.id,
                     drawing_part_uri,
                     chart_part_uri,
@@ -474,18 +522,36 @@ fn validate_state_only_chart_graphs(workbook: &LoadedXlsxWorkbook) -> OmResult<(
                 chart_id.0
             )));
         }
+        if let Some(part_uri) = chart.raw_part_uri.as_deref() {
+            let chart_part = package.part(part_uri).ok_or_else(|| {
+                OmError::invalid_state(format!(
+                    "chart {} package part is missing: {part_uri}",
+                    chart_id.0
+                ))
+            })?;
+            let canonical_part_identity = OpcPackage::canonical_part_identity(&chart_part.name)?;
+            let owner = format!("chart {}", chart_id.0);
+            if let Some(existing_owner) =
+                materialized_part_owners.insert(canonical_part_identity, owner.clone())
+            {
+                return Err(OmError::invalid_state(format!(
+                    "package part {} is owned by both {existing_owner} and {owner}",
+                    chart_part.name
+                )));
+            }
+        }
         let pending_relationship_graph = workbook.pending_chart_relationship_graphs.get(chart_id);
         if let Some(pending_relationship_graph) = pending_relationship_graph {
             validate_pending_chart_relationship_graph(*chart_id, pending_relationship_graph)?;
         }
         let host_count = chart_hosts.get(chart_id).map_or(0, Vec::len);
-        if chart.raw_part_uri.is_none() && host_count == 0 {
+        if host_count == 0 {
             return Err(OmError::invalid_state(format!(
-                "state-only chart {} has no drawing or chart sheet host",
+                "chart {} has no drawing or chart sheet host",
                 chart_id.0
             )));
         }
-        if host_count > 1 {
+        if chart.raw_part_uri.is_none() && host_count > 1 {
             return Err(OmError::unsupported(format!(
                 "chart {} is bound to multiple hosts",
                 chart_id.0
@@ -711,7 +777,7 @@ fn normalize_state_only_non_visual_ids(workbook: &mut LoadedXlsxWorkbook) -> OmR
 }
 
 fn validate_materialized_chart_binding(
-    workbook: &LoadedXlsxWorkbook,
+    package: &OpcPackage,
     chart_object_id: office_common::ChartObjectId,
     drawing_part_uri: &str,
     chart_part_uri: &str,
@@ -731,8 +797,7 @@ fn validate_materialized_chart_binding(
         )));
     }
     let relationships_part_uri = relationships_part_uri_for(drawing_part_uri);
-    let relationships_xml = workbook
-        .package
+    let relationships_xml = package
         .part(&relationships_part_uri)
         .ok_or_else(|| {
             OmError::invalid_state(format!(
@@ -3154,8 +3219,8 @@ mod tests {
         PendingPackagePart, PendingPackageRelationship, XlsxCodec,
     };
     use super::{
-        CHART_PART_CONTENT_TYPE, CONTENT_TYPES_PART_NAME, DRAWING_RELATIONSHIP_TYPE,
-        RELATIONSHIPS_PART_CONTENT_TYPE, append_chart_anchors,
+        CHART_PART_CONTENT_TYPE, CONTENT_TYPES_PART_NAME, DRAWING_PART_CONTENT_TYPE,
+        DRAWING_RELATIONSHIP_TYPE, RELATIONSHIPS_PART_CONTENT_TYPE, append_chart_anchors,
         append_content_type_override_if_missing, append_relationship, attach_drawing_element,
         insert_sheet_into_workbook_xml, materialize_state_only_chart_graphs,
     };
@@ -3360,6 +3425,32 @@ mod tests {
             raw_binding: None,
             dirty: true,
         }
+    }
+
+    fn materialized_embedded_chart_workbook() -> LoadedXlsxWorkbook {
+        let mut workbook = base_workbook();
+        let chart_id = ChartId(1);
+        let drawing_id = DrawingId(1);
+        workbook
+            .state
+            .charts
+            .insert(chart_id, state_only_chart(chart_id));
+        workbook.state.drawings.insert(
+            drawing_id,
+            DrawingModel {
+                id: drawing_id,
+                workbook_id: WorkbookId(7),
+                host_sheet_id: SheetId(1),
+                objects: vec![DrawingObjectModel::ChartFrame(state_only_chart_object(
+                    ChartObjectId(1),
+                    chart_id,
+                    SheetId(1),
+                ))],
+                raw_part_uri: None,
+                dirty: true,
+            },
+        );
+        materialize_state_only_chart_graphs(workbook).expect("materialize chart graph")
     }
 
     #[test]
@@ -4725,6 +4816,307 @@ mod tests {
 
         assert_eq!(error.code, OmErrorCode::InvalidState);
         assert!(error.message.contains("at least one worksheet"));
+    }
+
+    #[test]
+    fn public_materializer_rejects_materialized_drawing_map_key_drift() {
+        let mut workbook = materialized_embedded_chart_workbook();
+        workbook
+            .state
+            .drawings
+            .get_mut(&DrawingId(1))
+            .expect("drawing")
+            .id = DrawingId(2);
+
+        let error = materialize_state_only_chart_graphs(workbook)
+            .expect_err("materialized drawing identity drift must be rejected");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(
+            error
+                .message
+                .contains("drawing map key 1 does not match model id 2")
+        );
+    }
+
+    #[test]
+    fn direct_save_rejects_materialized_chart_map_key_drift() {
+        let mut workbook = materialized_embedded_chart_workbook();
+        workbook
+            .state
+            .charts
+            .get_mut(&ChartId(1))
+            .expect("chart")
+            .id = ChartId(2);
+
+        let error = XlsxCodec
+            .save(&workbook, SaveOptions::default())
+            .expect_err("materialized chart identity drift must be rejected");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(
+            error
+                .message
+                .contains("chart map key 1 does not match model id 2")
+        );
+    }
+
+    #[test]
+    fn direct_save_rejects_materialized_chart_object_ownership_drift() {
+        let mut workbook = materialized_embedded_chart_workbook();
+        let DrawingObjectModel::ChartFrame(chart_object) = &mut workbook
+            .state
+            .drawings
+            .get_mut(&DrawingId(1))
+            .expect("drawing")
+            .objects[0]
+        else {
+            panic!("chart frame");
+        };
+        chart_object.workbook_id = WorkbookId(8);
+
+        let error = XlsxCodec
+            .save(&workbook, SaveOptions::default())
+            .expect_err("materialized chart object ownership drift must be rejected");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(
+            error
+                .message
+                .contains("chart object 1 does not match drawing 1 ownership")
+        );
+    }
+
+    #[test]
+    fn public_materializer_rejects_duplicate_materialized_drawing_part_ownership() {
+        let mut workbook = materialized_embedded_chart_workbook();
+        let mut duplicate = workbook.state.drawings[&DrawingId(1)].clone();
+        duplicate.id = DrawingId(2);
+        duplicate.objects.clear();
+        workbook.state.drawings.insert(duplicate.id, duplicate);
+
+        let error = materialize_state_only_chart_graphs(workbook)
+            .expect_err("one package part must not have two drawing model owners");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(
+            error
+                .message
+                .contains("xl/drawings/drawing1.xml is owned by both drawing 1 and drawing 2")
+        );
+    }
+
+    #[test]
+    fn public_materializer_rejects_duplicate_materialized_chart_part_ownership() {
+        let mut workbook = materialized_embedded_chart_workbook();
+        let mut duplicate_chart = workbook.state.charts[&ChartId(1)].clone();
+        duplicate_chart.id = ChartId(2);
+        workbook
+            .state
+            .charts
+            .insert(duplicate_chart.id, duplicate_chart);
+        let DrawingObjectModel::ChartFrame(first_chart_object) = workbook
+            .state
+            .drawings
+            .get(&DrawingId(1))
+            .expect("drawing")
+            .objects[0]
+            .clone()
+        else {
+            panic!("chart frame");
+        };
+        let mut duplicate_chart_object = first_chart_object;
+        duplicate_chart_object.id = ChartObjectId(2);
+        duplicate_chart_object.non_visual_id = Some(2);
+        duplicate_chart_object.chart_id = ChartId(2);
+        workbook
+            .state
+            .drawings
+            .get_mut(&DrawingId(1))
+            .expect("drawing")
+            .objects
+            .push(DrawingObjectModel::ChartFrame(duplicate_chart_object));
+
+        let error = materialize_state_only_chart_graphs(workbook)
+            .expect_err("one package part must not have two chart model owners");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(
+            error
+                .message
+                .contains("xl/charts/chart1.xml is owned by both chart 1 and chart 2")
+        );
+    }
+
+    #[test]
+    fn public_materializer_rejects_materialized_drawing_host_relationship_drift() {
+        let mut workbook = materialized_embedded_chart_workbook();
+        let worksheet_relationships_part_uri = "xl/worksheets/_rels/sheet1.xml.rels";
+        let relationships_xml = String::from_utf8(
+            workbook
+                .package
+                .part(worksheet_relationships_part_uri)
+                .expect("worksheet relationships")
+                .bytes
+                .clone(),
+        )
+        .expect("worksheet relationships utf8")
+        .replace("../drawings/drawing1.xml", "../drawings/drawing2.xml");
+        workbook
+            .package
+            .replace_part_bytes(
+                worksheet_relationships_part_uri,
+                relationships_xml.into_bytes(),
+            )
+            .expect("replace worksheet relationships");
+
+        let error = materialize_state_only_chart_graphs(workbook)
+            .expect_err("drawing host relationship drift must be rejected");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(
+            error
+                .message
+                .contains("drawing 1 is not owned by host sheet Sheet1 relationships")
+        );
+    }
+
+    #[test]
+    fn unrelated_state_only_materialization_preserves_shared_materialized_chart() {
+        let mut workbook = materialized_embedded_chart_workbook();
+        let first_drawing_part_uri = "xl/drawings/drawing1.xml";
+        let second_drawing_part_uri = "xl/drawings/drawing2.xml";
+        let second_drawing_xml = workbook
+            .package
+            .part(first_drawing_part_uri)
+            .expect("first drawing part")
+            .bytes
+            .clone();
+        workbook
+            .package
+            .add_part(OpcPart {
+                name: second_drawing_part_uri.to_string(),
+                content_type: Some(DRAWING_PART_CONTENT_TYPE.to_string()),
+                compression: CompressionMethod::Stored,
+                bytes: second_drawing_xml.clone(),
+            })
+            .expect("add second drawing part");
+        workbook
+            .package
+            .add_part(OpcPart {
+                name: "xl/drawings/_rels/drawing2.xml.rels".to_string(),
+                content_type: Some(RELATIONSHIPS_PART_CONTENT_TYPE.to_string()),
+                compression: CompressionMethod::Stored,
+                bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart1.xml"/>
+</Relationships>"#
+                    .to_vec(),
+            })
+            .expect("add second drawing relationships");
+        let content_types_xml = workbook
+            .package
+            .part(CONTENT_TYPES_PART_NAME)
+            .expect("content types")
+            .bytes
+            .clone();
+        workbook
+            .package
+            .replace_part_bytes(
+                CONTENT_TYPES_PART_NAME,
+                append_content_type_override_if_missing(
+                    &content_types_xml,
+                    second_drawing_part_uri,
+                    DRAWING_PART_CONTENT_TYPE,
+                )
+                .expect("add drawing content type"),
+            )
+            .expect("replace content types");
+        let worksheet_relationships_part_uri = "xl/worksheets/_rels/sheet1.xml.rels";
+        let worksheet_relationships_xml = workbook
+            .package
+            .part(worksheet_relationships_part_uri)
+            .expect("worksheet relationships")
+            .bytes
+            .clone();
+        workbook
+            .package
+            .replace_part_bytes(
+                worksheet_relationships_part_uri,
+                append_relationship(
+                    &worksheet_relationships_xml,
+                    "rId2",
+                    DRAWING_RELATIONSHIP_TYPE,
+                    "../drawings/drawing2.xml",
+                )
+                .expect("append second drawing relationship"),
+            )
+            .expect("replace worksheet relationships");
+
+        let DrawingObjectModel::ChartFrame(first_chart_object) = workbook
+            .state
+            .drawings
+            .get(&DrawingId(1))
+            .expect("first drawing")
+            .objects[0]
+            .clone()
+        else {
+            panic!("chart frame");
+        };
+        let mut shared_chart_object = first_chart_object;
+        shared_chart_object.id = ChartObjectId(2);
+        shared_chart_object.raw_binding = Some("xl/drawings/drawing2.xml#rId1".to_string());
+        workbook.state.drawings.insert(
+            DrawingId(2),
+            DrawingModel {
+                id: DrawingId(2),
+                workbook_id: WorkbookId(7),
+                host_sheet_id: SheetId(1),
+                objects: vec![DrawingObjectModel::ChartFrame(shared_chart_object)],
+                raw_part_uri: Some(second_drawing_part_uri.to_string()),
+                dirty: false,
+            },
+        );
+
+        let state_only_chart_id = ChartId(2);
+        workbook
+            .state
+            .charts
+            .insert(state_only_chart_id, state_only_chart(state_only_chart_id));
+        let mut state_only_object =
+            state_only_chart_object(ChartObjectId(3), state_only_chart_id, SheetId(1));
+        state_only_object.z_order = Some(1);
+        workbook
+            .state
+            .drawings
+            .get_mut(&DrawingId(1))
+            .expect("first drawing")
+            .objects
+            .push(DrawingObjectModel::ChartFrame(state_only_object));
+
+        let materialized = materialize_state_only_chart_graphs(workbook)
+            .expect("unrelated chart materialization must preserve a shared loaded chart");
+
+        assert_eq!(
+            materialized.state.charts[&ChartId(1)]
+                .raw_part_uri
+                .as_deref(),
+            Some("xl/charts/chart1.xml")
+        );
+        assert_eq!(
+            materialized.state.charts[&state_only_chart_id]
+                .raw_part_uri
+                .as_deref(),
+            Some("xl/charts/chart2.xml")
+        );
+        assert_eq!(
+            materialized
+                .package
+                .part(second_drawing_part_uri)
+                .expect("preserved second drawing")
+                .bytes,
+            second_drawing_xml
+        );
     }
 
     #[test]

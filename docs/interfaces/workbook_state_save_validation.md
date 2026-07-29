@@ -64,12 +64,13 @@ This stage does not reject extra `worksheet_data` keys that have no worksheet ow
 owns removing the auto-creating mutation path and orphan state. It also does not make public model
 fields private (`OOTD-054`) or make workbook-ID reassignment atomic (`OOTD-033`).
 
-Manifest/content-type coherence, chart/drawing ownership, and support-snapshot graph validation
-remain later `OOTD-031` stages. Generic internal relationship-target closure is now enforced at the
-final package save boundary and documented in `opc_relationships.md`. Excel grid coordinates and
-style indices retain their existing codec preflight contracts. Spill-overlap validation currently
-has quadratic worst-case behavior, shared with the existing worksheet parser;
-resource/performance hardening remains a later gate.
+Manifest/content-type coherence and typed chart/drawing model-to-package ownership are enforced by
+later `OOTD-031` stages. The chart/drawing boundary is documented in
+`chart_drawing_graph_validation.md`; support-snapshot key/owner coherence remains open. Generic
+internal relationship-target closure is enforced at the final package save boundary and documented
+in `opc_relationships.md`. Excel grid coordinates and style indices retain their existing codec
+preflight contracts. Spill-overlap validation currently has quadratic worst-case behavior, shared
+with the existing worksheet parser; resource/performance hardening remains a later gate.
 
 The current evidence is synthetic. No desktop Excel Oracle compatibility claim is attached to this
 model validation boundary.

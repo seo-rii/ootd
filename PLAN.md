@@ -298,8 +298,15 @@ Wave 2 exit gate:
    `TEST-003` 완료 (2026-07-29, synthetic): `OpcPackage::to_bytes()`가 모든 ZIP entry에
    canonical DOS epoch `1980-01-01 00:00:00`을 명시해 wall clock을 직렬화에 주입하지 않는다.
    동일 package의 반복 output bytes와 entry metadata를 `office-opc` 회귀로 고정한다.
-   **다음:** `OOTD-031` chart/drawing/support ownership graph validation을 독립 work unit으로
-   닫은 뒤 `OOTD-032`/`OOTD-033`과 `OOTD-054` private command 전환을 진행한다.
+   7단계 완료 (2026-07-29, synthetic): public chart graph materializer의 no-op fast path와
+   direct codec save가 모두 완전 materialized chart/drawing state를 실제 serialization package에
+   대해 검증한다. map key/model ID와 workbook/host ownership, chart-frame binding, canonical raw
+   part 단일 소유권, host sheet `.rels`의 drawing edge, drawing `.rels`의 chart rId/target을
+   fail-closed한다. package-bound drawingless chart sheet와 materialized shared chart는 preserve-only
+   예외로 유지하되 새 state-only shared graph 생성은 계속 거부한다. 세부 계약은
+   `docs/interfaces/chart_drawing_graph_validation.md`에 있다.
+   **다음:** `OOTD-031` support-snapshot key/owner graph validation을 독립 work unit으로 닫은 뒤
+   `OOTD-032`/`OOTD-033`과 `OOTD-054` private command 전환을 진행한다.
 13. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
    structured error에 추가한다.
 

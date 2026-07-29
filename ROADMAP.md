@@ -163,8 +163,15 @@ Active order:
    `TEST-003` is complete (2026-07-29, synthetic): generic OPC serialization assigns every ZIP
    entry the canonical DOS epoch instead of the wall clock, making repeated package bytes and
    pinned artifact hashes stable across two-second timestamp boundaries.
-   **Active:** `OOTD-031` chart/drawing/support-snapshot ownership graph invariants, then
-   `OOTD-032`/`OOTD-033`, the common reference AST, and `OOTD-048` consumer migration.
+   `OOTD-031` stage 7 is complete (2026-07-29, synthetic): public graph materialization and direct
+   XLSX save validate fully materialized chart/drawing identity and workbook/host ownership against
+   the actual serialization package. Canonical raw parts have one typed owner, host-sheet drawing
+   relationships and drawing-to-chart bindings must resolve, drawingless package-bound chart sheets
+   remain preserve-only, and loaded shared materialized charts remain valid while new shared graph
+   allocation stays unsupported. The contract is
+   `docs/interfaces/chart_drawing_graph_validation.md`.
+   **Active:** `OOTD-031` support-snapshot key/owner graph invariants, then `OOTD-032`/`OOTD-033`,
+   the common reference AST, and `OOTD-048` consumer migration.
 30. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
    claiming practical chart/pivot/style parity.
 
