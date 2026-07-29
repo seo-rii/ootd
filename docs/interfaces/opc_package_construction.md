@@ -34,8 +34,11 @@ post-Strip serialization calls `validate_content_types_for_save` to require mani
 coherence, reject manifest-self Overrides, and resolve Default extensions from only the canonical
 final path segment. Strip protects the root-relationship-discovered workbook main part rather than
 assuming `xl/workbook.xml`. Internal relationship-target closure is enforced at the same final XLSX
-boundaries. Relationship-owner existence, chart/drawing/support ownership graphs, workbook/model
-topology, and public field encapsulation remain separately tracked by OOTD-031 and OOTD-054.
+boundaries, where every non-root relationship part also requires a canonical existing
+non-relationship owner, while single-segment `.rels` and nested reserved `_rels` directories fail
+closed. Generic OPC construction remains staged; the stricter owner and target graph is an XLSX
+final-save contract. Chart/drawing/support ownership graphs, workbook/model topology, and public
+field encapsulation remain separately tracked by OOTD-031 and OOTD-054.
 
 The current evidence is synthetic; no desktop Excel Oracle claim is attached to this constructor
 contract.

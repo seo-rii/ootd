@@ -289,9 +289,14 @@ Wave 2 exit gate:
    Transitional/Strict main part를 기준으로 한다. public snapshot `Option`을 지워 검사를
    우회할 수 없으며 세부 계약은
    `docs/interfaces/opc_content_types.md`에 있다.
-   **다음:** `OOTD-031` relationship-owner 존재와 chart/drawing/support ownership graph
-   validation을 독립 work unit으로 닫은 뒤 `OOTD-032`/`OOTD-033`과 `OOTD-054` private command
-   전환을 진행한다.
+   6단계 완료 (2026-07-29, synthetic): final Preserve/Refuse 및 post-Strip relationship
+   closure가 canonical case/percent identity로 모든 non-root `.rels`의 owner part 존재를
+   강제한다. package-root alias만 owner 면제이고 empty owner, manifest owner, rel-of-rel,
+   single-segment `.rels`, 중첩된 reserved `_rels` directory, relationships MIME의 잘못된 URI
+   배치를 거부한다. active-content traversal도 같은 owner derivation을 사용해 root-level 및
+   percent-aliased owner 관계를 정리하며, Strip 뒤 살아남은 ownerless part는 출력되지 않는다.
+   **다음:** `OOTD-031` chart/drawing/support ownership graph validation을 독립 work unit으로
+   닫은 뒤 `OOTD-032`/`OOTD-033`과 `OOTD-054` private command 전환을 진행한다.
 13. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
    structured error에 추가한다.
 

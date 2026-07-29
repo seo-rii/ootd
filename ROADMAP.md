@@ -154,9 +154,14 @@ Active order:
    only the canonical final path segment, Strip cleanup shares the package's case/percent canonical
    identity, relocated Transitional/Strict main parts remain protected during Strip, and clearing
    public preservation snapshots cannot bypass the gate.
-   **Active:** `OOTD-031` relationship-owner and chart/drawing/support-snapshot ownership graph
-   invariants, then `OOTD-032`/`OOTD-033`, the common reference AST, and `OOTD-048` consumer
-   migration.
+   `OOTD-031` stage 6 is complete (2026-07-29, synthetic): one canonical relationship-part owner
+   derivation now serves final closure and active-content traversal. Every non-root relationship
+   part requires an existing non-relationship owner, while canonical root aliases stay exempt;
+   empty/manifest/relationship owners, single-segment `.rels`, nested reserved `_rels` directories,
+   malformed placement, and misplaced relationships MIME fail closed. Strip can remove root-level
+   or percent-aliased active edges before the same final gate.
+   **Active:** `OOTD-031` chart/drawing/support-snapshot ownership graph invariants, then
+   `OOTD-032`/`OOTD-033`, the common reference AST, and `OOTD-048` consumer migration.
 30. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
    claiming practical chart/pivot/style parity.
 

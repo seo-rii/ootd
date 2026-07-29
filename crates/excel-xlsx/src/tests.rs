@@ -830,6 +830,326 @@
     }
 
     #[test]
+    fn save_rejects_relationship_parts_without_canonical_owner_part() {
+        let codec = XlsxCodec;
+        for (relationship_part_uri, expected_owner_uri) in [
+            (
+                "customXml/_rels/missing.xml.rels",
+                "customxml/missing.xml",
+            ),
+            ("_rels/custom.xml.rels", "custom.xml"),
+            (
+                "customXml/%5Frels/missing%2Exml.%72els",
+                "customxml/missing.xml",
+            ),
+        ] {
+            let mut package =
+                OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("package");
+            package
+                .add_part(OpcPart {
+                    name: relationship_part_uri.to_string(),
+                    content_type: None,
+                    compression: CompressionMethod::Stored,
+                    bytes: br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>"#.to_vec(),
+                })
+                .expect("add ownerless relationships part");
+            let loaded = codec
+                .load(
+                    &package.to_bytes().expect("ownerless package bytes"),
+                    CommonLoadOptions::default(),
+                )
+                .expect("load ownerless relationship package");
+
+            let error = codec
+                .save(&loaded, CommonSaveOptions::default())
+                .expect_err("recognized non-root relationships part requires its owner part");
+
+            assert_eq!(error.code, OmErrorCode::InvalidState);
+            assert!(error.message.contains(relationship_part_uri));
+            assert!(error.message.contains(expected_owner_uri));
+        }
+    }
+
+    #[test]
+    fn save_accepts_percent_aliased_relationship_part_with_canonical_owner() {
+        let codec = XlsxCodec;
+        let mut package = OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("package");
+        package
+            .add_part(OpcPart {
+                name: "CUSTOMXML/ALIAS.XML".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<owner/>"#.to_vec(),
+            })
+            .expect("add canonical owner");
+        package
+            .add_part(OpcPart {
+                name: "customXml/%5Frels/alias%2Exml.%72els".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>"#.to_vec(),
+            })
+            .expect("add aliased relationships part");
+        let loaded = codec
+            .load(
+                &package.to_bytes().expect("aliased package bytes"),
+                CommonLoadOptions::default(),
+            )
+            .expect("load aliased relationship package");
+
+        codec
+            .save(&loaded, CommonSaveOptions::default())
+            .expect("canonical owner lookup accepts case and percent aliases");
+    }
+
+    #[test]
+    fn package_root_relationship_alias_is_owner_exempt() {
+        let codec = XlsxCodec;
+        let package = OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("package");
+        let mut parts = package.parts().to_vec();
+        parts
+            .iter_mut()
+            .find(|part| part.name == "_rels/.rels")
+            .expect("root relationships part")
+            .name = "%5Frels/.%72els".to_string();
+        let aliased = OpcPackage::try_new(parts).expect("aliased root package");
+        let loaded = codec
+            .load(
+                &aliased.to_bytes().expect("aliased root bytes"),
+                CommonLoadOptions::default(),
+            )
+            .expect("load root relationship alias");
+
+        codec
+            .save(&loaded, CommonSaveOptions::default())
+            .expect("canonical package-root relationship has no owner part");
+    }
+
+    #[test]
+    fn save_rejects_invalid_relationship_owner_shapes() {
+        let codec = XlsxCodec;
+        for (relationship_part_uri, expected_message) in [
+            ("foo.rels", "invalid OPC placement"),
+            ("custom/_rels/.rels", "empty owner"),
+            (
+                "_rels/[Content_Types].xml.rels",
+                "[Content_Types].xml",
+            ),
+        ] {
+            let mut package =
+                OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("package");
+            package
+                .add_part(OpcPart {
+                    name: relationship_part_uri.to_string(),
+                    content_type: None,
+                    compression: CompressionMethod::Stored,
+                    bytes: br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>"#.to_vec(),
+                })
+                .expect("add invalid relationships part");
+            let loaded = codec
+                .load(
+                    &package.to_bytes().expect("invalid owner package bytes"),
+                    CommonLoadOptions::default(),
+                )
+                .expect("load invalid owner package");
+
+            let error = codec
+                .save(&loaded, CommonSaveOptions::default())
+                .expect_err("invalid relationship owner shape must fail closed");
+
+            assert_eq!(error.code, OmErrorCode::InvalidState);
+            assert!(error.message.contains(relationship_part_uri));
+            assert!(error.message.contains(expected_message));
+        }
+    }
+
+    #[test]
+    fn save_rejects_nested_reserved_relationship_directory() {
+        let codec = XlsxCodec;
+        let mut package = OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("package");
+        for part in [
+            OpcPart {
+                name: "custom/_rels/sub/_rels/item.xml.rels".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>"#.to_vec(),
+            },
+            OpcPart {
+                name: "custom/_rels/sub/item.xml".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<owner/>"#.to_vec(),
+            },
+        ] {
+            package.add_part(part).expect("add nested relationship path");
+        }
+        let loaded = codec
+            .load(
+                &package.to_bytes().expect("nested relationship package bytes"),
+                CommonLoadOptions::default(),
+            )
+            .expect("load nested relationship package");
+
+        let error = codec
+            .save(&loaded, CommonSaveOptions::default())
+            .expect_err("reserved _rels directories cannot be nested in an owner path");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(
+            error
+                .message
+                .contains("custom/_rels/sub/_rels/item.xml.rels")
+        );
+        assert!(error.message.contains("invalid OPC placement"));
+    }
+
+    #[test]
+    fn save_rejects_relationship_part_owned_by_relationship_payload() {
+        let codec = XlsxCodec;
+        let mut package = OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("package");
+        for part in [
+            OpcPart {
+                name: "custom/item.xml".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<owner/>"#.to_vec(),
+            },
+            OpcPart {
+                name: "custom/_rels/item.xml.rels".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>"#.to_vec(),
+            },
+            OpcPart {
+                name: "custom/_rels/_rels/item.xml.rels.rels".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>"#.to_vec(),
+            },
+        ] {
+            package.add_part(part).expect("add relationship owner graph");
+        }
+        let loaded = codec
+            .load(
+                &package.to_bytes().expect("relationship owner graph bytes"),
+                CommonLoadOptions::default(),
+            )
+            .expect("load relationship owner graph");
+
+        let error = codec
+            .save(&loaded, CommonSaveOptions::default())
+            .expect_err("a relationship payload cannot own another relationships part");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(
+            error
+                .message
+                .contains("custom/_rels/_rels/item.xml.rels.rels")
+        );
+        assert!(error.message.contains("another relationship part"));
+    }
+
+    #[test]
+    fn save_rejects_relationship_content_type_at_non_relationship_uri() {
+        let codec = XlsxCodec;
+        let mut package = OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("package");
+        let content_types = String::from_utf8(
+            package
+                .part("[Content_Types].xml")
+                .expect("content types manifest")
+                .bytes
+                .clone(),
+        )
+        .expect("content types XML")
+        .replace(
+            "</Types>",
+            "  <Override PartName=\"/custom/relationships.bin\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>\n</Types>",
+        );
+        package
+            .replace_part_bytes("[Content_Types].xml", content_types.into_bytes())
+            .expect("declare misplaced relationship payload");
+        package
+            .add_part(OpcPart {
+                name: "custom/relationships.bin".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>"#.to_vec(),
+            })
+            .expect("add misplaced relationship payload");
+        let loaded = codec
+            .load(
+                &package.to_bytes().expect("misplaced relationship bytes"),
+                CommonLoadOptions::default(),
+            )
+            .expect("load misplaced relationship payload");
+
+        let error = codec
+            .save(&loaded, CommonSaveOptions::default())
+            .expect_err("relationships content type requires OPC relationship-part placement");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("custom/relationships.bin"));
+        assert!(error.message.contains("invalid OPC part placement"));
+    }
+
+    #[test]
+    fn strip_rejects_surviving_ownerless_relationship_part_after_cleanup() {
+        let codec = XlsxCodec;
+        let mut package = OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("package");
+        let content_types = String::from_utf8(
+            package
+                .part("[Content_Types].xml")
+                .expect("content types manifest")
+                .bytes
+                .clone(),
+        )
+        .expect("content types XML")
+        .replace(
+            "</Types>",
+            "  <Override PartName=\"/xl/activeX/orphan.bin\" ContentType=\"application/octet-stream\"/>\n</Types>",
+        );
+        package
+            .replace_part_bytes("[Content_Types].xml", content_types.into_bytes())
+            .expect("declare active part");
+        for part in [
+            OpcPart {
+                name: "xl/activeX/orphan.bin".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: vec![1, 2, 3],
+            },
+            OpcPart {
+                name: "custom/_rels/missing.xml.rels".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>"#.to_vec(),
+            },
+        ] {
+            package.add_part(part).expect("add strip fixture part");
+        }
+        let loaded = codec
+            .load(
+                &package.to_bytes().expect("strip fixture bytes"),
+                CommonLoadOptions::default(),
+            )
+            .expect("load strip fixture");
+
+        let error = codec
+            .save_with_active_content_audit(
+                &loaded,
+                CommonSaveOptions {
+                    active_content_policy: ActiveContentPolicy::Strip,
+                    ..CommonSaveOptions::default()
+                },
+            )
+            .expect_err("post-Strip closure must reject a surviving ownerless relationships part");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("custom/_rels/missing.xml.rels"));
+        assert!(error.message.contains("custom/missing.xml"));
+    }
+
+    #[test]
     fn save_allows_external_relationship_without_package_target() {
         let codec = XlsxCodec;
         let mut package = OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("package");
@@ -892,7 +1212,7 @@
     }
 
     #[test]
-    fn strip_policy_rejects_relationship_dangling_after_active_part_removal() {
+    fn strip_policy_removes_root_level_owner_relationship_to_active_part() {
         let codec = XlsxCodec;
         let mut package = OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("package");
         for part in [
@@ -924,7 +1244,7 @@
             )
             .expect("load active package");
 
-        let error = codec
+        let stripped = codec
             .save_with_active_content_audit(
                 &loaded,
                 CommonSaveOptions {
@@ -932,12 +1252,24 @@
                     ..CommonSaveOptions::default()
                 },
             )
-            .expect_err("strip must not serialize a dangling internal relationship");
+            .expect("strip removes the root-level owner's edge to the active part");
 
-        assert_eq!(error.code, OmErrorCode::InvalidState);
-        assert!(error.message.contains("_rels/custom.xml.rels"));
-        assert!(error.message.contains("rIdOpaque"));
-        assert!(error.message.contains("xl/activeX/orphan.bin"));
+        let stripped_package = OpcPackage::from_bytes(&stripped.bytes).expect("stripped package");
+        assert!(!stripped_package.contains("xl/activeX/orphan.bin"));
+        assert!(stripped_package.contains("custom.xml"));
+        let relationship_xml = std::str::from_utf8(
+            &stripped_package
+                .part("_rels/custom.xml.rels")
+                .expect("retained owner relationship part")
+                .bytes,
+        )
+        .expect("relationship XML");
+        assert!(!relationship_xml.contains("rIdOpaque"));
+        assert_eq!(stripped.audit.removed_relationships.len(), 1);
+        assert_eq!(
+            stripped.audit.removed_relationships[0].owner_part_uri.as_deref(),
+            Some("custom.xml")
+        );
     }
 
     #[test]

@@ -1,5 +1,7 @@
 use super::relationships::{
-    RelationshipEntry, parse_relationship_entries_with_options, relationships_part_uri_for_part,
+    RelationshipEntry, RelationshipPartOwner, content_type_is_package_relationships,
+    parse_relationship_entries_with_options, relationship_part_owner,
+    relationships_part_uri_for_part,
 };
 use super::{xml_error, xml_local_name};
 use office_common::{
@@ -14,7 +16,6 @@ use quick_xml::{NsReader, Reader, Writer};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io::Cursor;
 
-const RELATIONSHIPS_CONTENT_TYPE: &str = "application/vnd.openxmlformats-package.relationships+xml";
 const CONTENT_TYPES_PART_NAME: &str = "[Content_Types].xml";
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -384,18 +385,28 @@ fn collect_package_relationship_entries(
         .iter()
         .filter(|part| is_relationships_part(part))
     {
-        let marker_kinds = active_content_kinds_from_relationships(part.bytes.as_slice())?;
-        let Some((owner_part_uri, base_segments)) = relationship_owner_and_base(&part.name) else {
-            if marker_kinds.is_empty() {
-                continue;
-            }
-            return Err(OmError::new(
+        let owner = relationship_part_owner(&part.name)?.ok_or_else(|| {
+            OmError::new(
                 OmErrorCode::InvalidState,
                 format!(
-                    "active-content strip cannot resolve relationship owner for {}",
+                    "active-content strip found relationships content at an invalid part URI: {}",
                     part.name
                 ),
-            ));
+            )
+        })?;
+        let (owner_part_uri, base_segments) = match owner {
+            RelationshipPartOwner::PackageRoot => (None, Vec::new()),
+            RelationshipPartOwner::Part {
+                canonical_owner_part_uri,
+                base_segments,
+            } => (
+                Some(
+                    package
+                        .part(&canonical_owner_part_uri)
+                        .map_or(canonical_owner_part_uri, |part| part.name.clone()),
+                ),
+                base_segments,
+            ),
         };
         let base_segments = base_segments.iter().map(String::as_str).collect::<Vec<_>>();
         for entry in
@@ -461,20 +472,6 @@ fn active_content_part_uris_from_manifest(package: &OpcPackage) -> OmResult<BTre
         buffer.clear();
     }
     Ok(part_uris)
-}
-
-fn relationship_owner_and_base(part_uri: &str) -> Option<(Option<String>, Vec<String>)> {
-    if part_uri.eq_ignore_ascii_case("_rels/.rels") {
-        return Some((None, Vec::new()));
-    }
-    let (parent, relationship_file_name) = part_uri.rsplit_once("/_rels/")?;
-    let owner_file_name = relationship_file_name.strip_suffix(".rels")?;
-    if parent.is_empty() || owner_file_name.is_empty() || owner_file_name.contains('/') {
-        return None;
-    }
-    let owner_part_uri = format!("{parent}/{owner_file_name}");
-    let base_segments = parent.split('/').map(str::to_owned).collect();
-    Some((Some(owner_part_uri), base_segments))
 }
 
 fn relationship_is_external(relationship: &RelationshipEntry) -> bool {
@@ -1019,16 +1016,12 @@ fn active_content_kind_from_content_type(content_type: &str) -> Option<ActiveCon
 }
 
 fn is_relationships_part(part: &OpcPart) -> bool {
-    part.name
-        .rsplit_once('.')
-        .is_some_and(|(_, extension)| extension.eq_ignore_ascii_case("rels"))
-        || part.content_type.as_deref().is_some_and(|content_type| {
-            content_type
-                .split_once(';')
-                .map_or(content_type, |(media_type, _)| media_type)
-                .trim()
-                .eq_ignore_ascii_case(RELATIONSHIPS_CONTENT_TYPE)
-        })
+    relationship_part_owner(&part.name).is_ok_and(|owner| owner.is_some())
+        || part
+            .name
+            .rsplit_once('.')
+            .is_some_and(|(_, extension)| extension.eq_ignore_ascii_case("rels"))
+        || content_type_is_package_relationships(part.content_type.as_deref())
 }
 
 fn active_content_kinds_from_relationships(xml: &[u8]) -> OmResult<BTreeSet<ActiveContentKind>> {
@@ -1115,10 +1108,10 @@ mod tests {
     use super::{
         ActiveContentContentTypeEntryKind, ActiveContentKind, ActiveContentRemovedContentTypeEntry,
         BTreeSet, CONTENT_TYPES_PART_NAME, Cursor, Event, NsReader, OpcPackage, OpcPart, Reader,
-        RelationshipEntry, active_content_kind_from_content_type,
+        RelationshipEntry, RelationshipPartOwner, active_content_kind_from_content_type,
         active_content_kind_from_relationship_type, active_content_part_uris_from_manifest,
         collect_package_relationship_entries, element_has_removed_relationship_anchor, part_is_xml,
-        relationship_element_id, relationship_is_external, relationship_owner_and_base,
+        relationship_element_id, relationship_is_external, relationship_part_owner,
         should_strip_content_type_entry, strip_active_content_from_package,
         strip_active_content_type_entries, strip_empty_active_content_containers,
         strip_relationship_anchors_from_owner_xml, strip_relationship_entries_by_id,
@@ -1186,11 +1179,12 @@ mod tests {
             collect_package_relationship_entries(&package).expect("package relationships");
         assert_eq!(relationships.len(), 2);
         assert_eq!(
-            relationship_owner_and_base("xl/activeX/_rels/activeX1.xml.rels"),
-            Some((
-                Some("xl/activeX/activeX1.xml".to_string()),
-                vec!["xl".to_string(), "activeX".to_string()]
-            ))
+            relationship_part_owner("xl/activeX/_rels/activeX1.xml.rels")
+                .expect("relationship owner"),
+            Some(RelationshipPartOwner::Part {
+                canonical_owner_part_uri: "xl/activex/activex1.xml".to_string(),
+                base_segments: vec!["xl".to_string(), "activeX".to_string()],
+            })
         );
 
         let external = RelationshipEntry {

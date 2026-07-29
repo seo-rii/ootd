@@ -17,6 +17,115 @@ pub(super) struct RelationshipEntry {
     pub(super) target_mode: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum RelationshipPartOwner {
+    PackageRoot,
+    Part {
+        canonical_owner_part_uri: String,
+        base_segments: Vec<String>,
+    },
+}
+
+pub(super) fn content_type_is_package_relationships(content_type: Option<&str>) -> bool {
+    const PACKAGE_RELATIONSHIPS_CONTENT_TYPE: &str =
+        "application/vnd.openxmlformats-package.relationships+xml";
+
+    content_type.is_some_and(|content_type| {
+        content_type
+            .split_once(';')
+            .map_or(content_type, |(media_type, _)| media_type)
+            .trim()
+            .eq_ignore_ascii_case(PACKAGE_RELATIONSHIPS_CONTENT_TYPE)
+    })
+}
+
+pub(super) fn relationship_part_owner(part_uri: &str) -> OmResult<Option<RelationshipPartOwner>> {
+    let identity = OpcPackage::canonical_part_identity(part_uri)?;
+    if identity == "_rels/.rels" {
+        return Ok(Some(RelationshipPartOwner::PackageRoot));
+    }
+
+    let identity_segments = identity.split('/').collect::<Vec<_>>();
+    let raw_part_uri = part_uri.strip_prefix('/').unwrap_or(part_uri);
+    let raw_segments = raw_part_uri.split('/').collect::<Vec<_>>();
+    if identity_segments.len() != raw_segments.len() {
+        return Err(OmError::invalid_state(format!(
+            "OPC canonical identity changed the segment count for {part_uri}"
+        )));
+    }
+    let relationship_file_name = identity_segments
+        .last()
+        .copied()
+        .expect("a canonical OPC part identity has a final path segment");
+    let has_relationship_suffix = relationship_file_name.ends_with(".rels");
+    let expected_relationship_directory_index = identity_segments.len().checked_sub(2);
+    let relationship_directory_indexes = identity_segments
+        .iter()
+        .enumerate()
+        .filter_map(|(index, segment)| (*segment == "_rels").then_some(index))
+        .collect::<Vec<_>>();
+    if !has_relationship_suffix && relationship_directory_indexes.is_empty() {
+        return Ok(None);
+    }
+    if !has_relationship_suffix
+        || expected_relationship_directory_index.is_none()
+        || relationship_directory_indexes.as_slice()
+            != expected_relationship_directory_index.as_slice()
+    {
+        let nested_owner_detail = (has_relationship_suffix
+            && expected_relationship_directory_index.is_some_and(|expected_index| {
+                relationship_directory_indexes.contains(&expected_index)
+                    && relationship_directory_indexes.len() > 1
+            }))
+        .then_some(" and cannot be owned by another relationship part")
+        .unwrap_or_default();
+        return Err(OmError::invalid_state(format!(
+            "package relationship part has invalid OPC placement{nested_owner_detail}: {part_uri}"
+        )));
+    }
+
+    let owner_file_name = relationship_file_name
+        .strip_suffix(".rels")
+        .expect("relationship suffix was checked");
+    if owner_file_name.is_empty() {
+        return Err(OmError::invalid_state(format!(
+            "non-root package relationship part has an empty owner name: {part_uri}"
+        )));
+    }
+    let canonical_owner_part_uri = if identity_segments.len() == 2 {
+        owner_file_name.to_string()
+    } else {
+        format!(
+            "{}/{}",
+            identity_segments[..identity_segments.len() - 2].join("/"),
+            owner_file_name
+        )
+    };
+    if canonical_owner_part_uri == "[content_types].xml" {
+        return Err(OmError::invalid_state(format!(
+            "package relationship part cannot use [Content_Types].xml as an owner: {part_uri}"
+        )));
+    }
+    let owner_segments = canonical_owner_part_uri.split('/').collect::<Vec<_>>();
+    let owner_is_relationship_payload = owner_segments
+        .last()
+        .is_some_and(|file_name| file_name.ends_with(".rels"))
+        || (owner_segments.len() >= 2 && owner_segments[owner_segments.len() - 2] == "_rels");
+    if owner_is_relationship_payload {
+        return Err(OmError::invalid_state(format!(
+            "package relationship part cannot be owned by another relationship part: {part_uri}"
+        )));
+    }
+
+    Ok(Some(RelationshipPartOwner::Part {
+        canonical_owner_part_uri,
+        base_segments: raw_segments[..raw_segments.len() - 2]
+            .iter()
+            .map(|segment| (*segment).to_string())
+            .collect(),
+    }))
+}
+
 pub(super) fn normalize_relationship_target(value: &str, base_segments: &[&str]) -> Option<String> {
     if value.is_empty()
         || value
@@ -274,34 +383,40 @@ pub(super) fn parse_relationship_entries_with_options(
 
 pub(super) fn ensure_package_relationship_closure(package: &OpcPackage) -> OmResult<()> {
     for relationship_part in package.parts() {
-        let identity = OpcPackage::canonical_part_identity(&relationship_part.name)?;
-        let identity_segments = identity.split('/').collect::<Vec<_>>();
-        let raw_segments = relationship_part.name.split('/').collect::<Vec<_>>();
-        if identity_segments.len() != raw_segments.len() {
-            return Err(OmError::invalid_state(format!(
-                "OPC canonical identity changed the segment count for {}",
-                relationship_part.name
-            )));
-        }
-        let base_segments = if identity == "_rels/.rels" {
-            &raw_segments[..0]
-        } else {
-            if identity_segments.len() < 2 {
-                continue;
+        let Some(owner) = relationship_part_owner(&relationship_part.name)? else {
+            if content_type_is_package_relationships(relationship_part.content_type.as_deref()) {
+                return Err(OmError::invalid_state(format!(
+                    "package relationships content type has invalid OPC part placement: {}",
+                    relationship_part.name
+                )));
             }
-            let relationship_file_name = identity_segments[identity_segments.len() - 1];
-            let relationships_directory = identity_segments[identity_segments.len() - 2];
-            if relationships_directory != "_rels"
-                || relationship_file_name.len() <= ".rels".len()
-                || !relationship_file_name.ends_with(".rels")
-            {
-                continue;
-            }
-            &raw_segments[..raw_segments.len() - 2]
+            continue;
         };
+        let base_segments = match owner {
+            RelationshipPartOwner::PackageRoot => Vec::new(),
+            RelationshipPartOwner::Part {
+                canonical_owner_part_uri,
+                base_segments,
+            } => {
+                let owner_part = package.part(&canonical_owner_part_uri).ok_or_else(|| {
+                    OmError::invalid_state(format!(
+                        "package relationship part {} has no canonical owner part {}",
+                        relationship_part.name, canonical_owner_part_uri
+                    ))
+                })?;
+                if content_type_is_package_relationships(owner_part.content_type.as_deref()) {
+                    return Err(OmError::invalid_state(format!(
+                        "package relationship part {} cannot be owned by relationship payload {}",
+                        relationship_part.name, owner_part.name
+                    )));
+                }
+                base_segments
+            }
+        };
+        let base_segments = base_segments.iter().map(String::as_str).collect::<Vec<_>>();
         let entries = parse_relationship_entries_with_options(
             relationship_part.bytes.as_slice(),
-            base_segments,
+            &base_segments,
             true,
         )?;
         for entry in entries {
