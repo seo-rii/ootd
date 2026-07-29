@@ -45524,6 +45524,144 @@
     }
 
     #[test]
+    fn worksheet_rename_failure_preserves_model_defined_names_and_charts_atomically() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let names = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Names", &[])
+                .expect("Workbook.Names"),
+        );
+        runtime
+            .dispatch_invoke(
+                names,
+                "Add",
+                &[
+                    OmValue::Text("SeriesValues".to_string()),
+                    OmValue::Text("=Sheet1!$A$1".to_string()),
+                ],
+            )
+            .expect("Workbook.Names.Add");
+        let chart_objects = expect_object_handle(
+            runtime
+                .dispatch_get(active_sheet, "ChartObjects", &[])
+                .expect("Worksheet.ChartObjects"),
+        );
+        let chart_object = expect_object_handle(
+            runtime
+                .dispatch_invoke(
+                    chart_objects,
+                    "Add",
+                    &[
+                        OmValue::Number(12.0),
+                        OmValue::Number(18.0),
+                        OmValue::Number(240.0),
+                        OmValue::Number(160.0),
+                    ],
+                )
+                .expect("ChartObjects.Add"),
+        );
+        let chart = expect_object_handle(
+            runtime
+                .dispatch_get(chart_object, "Chart", &[])
+                .expect("ChartObject.Chart"),
+        );
+        let series_collection = expect_object_handle(
+            runtime
+                .dispatch_get(chart, "SeriesCollection", &[])
+                .expect("Chart.SeriesCollection"),
+        );
+        let series = expect_object_handle(
+            runtime
+                .dispatch_invoke(series_collection, "NewSeries", &[])
+                .expect("SeriesCollection.NewSeries"),
+        );
+        runtime
+            .dispatch_set(
+                series,
+                "Values",
+                OmValue::Text("=Sheet1!$B$1:$B$2".to_string()),
+                &[],
+            )
+            .expect("set Series.Values");
+        runtime
+            .clear_workbook_dirty_state(workbook)
+            .expect("clear fixture dirty state before rejected rename");
+
+        let chart_id = match runtime.runtime_object(chart).expect("chart runtime object") {
+            RuntimeObjectKind::Chart { chart_id, .. } => chart_id,
+            other => panic!("expected chart object, got {other:?}"),
+        };
+        let workbook_id = runtime
+            .workbook_state(workbook)
+            .expect("workbook state")
+            .model()
+            .id;
+        let values = runtime
+            .runtime_workbook_mut(workbook)
+            .expect("runtime workbook")
+            .loaded
+            .state
+            .charts
+            .get_mut(&chart_id)
+            .expect("chart model")
+            .series[0]
+            .values
+            .as_mut()
+            .expect("series values");
+        values.full_reference = Some(excel_model::ChartSourceReference {
+            raw: values.raw.clone(),
+            resolved: Some(ReferenceTarget::Range(
+                RangeSet::single_rect(workbook_id, SheetId(999), Rect::single_cell(1, 1))
+                    .expect("out-of-model sheet range"),
+            )),
+        });
+        let state_before = runtime
+            .workbook_state(workbook)
+            .expect("workbook state before rejected rename")
+            .clone();
+        let dirty_before = runtime
+            .workbook_dirty_domains(workbook)
+            .expect("dirty domains before rejected rename");
+        assert_eq!(dirty_before, WorkbookDirtyDomains::default());
+
+        let error = runtime
+            .dispatch_set(
+                active_sheet,
+                "Name",
+                OmValue::Text("Renamed".to_string()),
+                &[],
+            )
+            .expect_err("invalid chart source should reject worksheet rename");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert_eq!(
+            runtime
+                .workbook_state(workbook)
+                .expect("workbook state after rejected rename"),
+            &state_before
+        );
+        assert_eq!(
+            runtime
+                .workbook_dirty_domains(workbook)
+                .expect("dirty domains after rejected rename"),
+            dirty_before
+        );
+    }
+
+    #[test]
     fn worksheet_visible_setter_resets_range_find_and_copy_state() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime

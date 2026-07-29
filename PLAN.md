@@ -360,8 +360,14 @@ Wave 2 exit gate:
    `try_new` 전체 invariant 검증 없이는 live state로 복원할 수 없다. package mismatch 회귀는
    unchecked 우회 대신 이 validated reconstruction을 사용한다. `excel-model` 95개 회귀가
    통과한다.
-   **다음:** compound rename/chart-sheet lifecycle transaction과 `WorksheetData` payload
-   field를 별도 `OOTD-054` 단계로 닫은 뒤 `OOTD-018`/`OOTD-048` common reference subsystem을
+   5단계 완료 (2026-07-29, synthetic): runtime worksheet rename은 old/new worksheet view와
+   cloned defined-name/chart state에서 모든 fallible reference resolution과 retarget을 먼저
+   수행한다. 성공 뒤에만 live worksheet rename과 준비된 name/chart state를 commit하며,
+   unknown-sheet full reference가 앞선 chart raw rewrite 뒤 실패하는 회귀에서도 전체
+   `WorkbookState`와 dirty domain이 보존된다. workbook/package 전체 clone은 추가하지 않았다.
+   `excel-runtime` 721개 회귀가 통과한다.
+   **다음:** chart-sheet add/copy/delete lifecycle transaction과 `WorksheetData` payload field를
+   별도 `OOTD-054` 단계로 닫은 뒤 `OOTD-018`/`OOTD-048` common reference subsystem을
    진행한다.
 16. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
    structured error에 추가한다.

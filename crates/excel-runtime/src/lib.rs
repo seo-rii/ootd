@@ -3534,24 +3534,20 @@ impl ExcelRuntime {
                                 "Worksheet.Name",
                             )?;
                             let old_worksheets = runtime.loaded.state.worksheets().to_vec();
-                            runtime
-                                .loaded
-                                .state
-                                .rename_worksheet(sheet_id, new_name.clone())?;
+                            let mut current_worksheets = old_worksheets.clone();
+                            current_worksheets[worksheet_index].name = new_name.clone();
                             let workbook_id = runtime.loaded.state.model().id;
                             let workbook_display_name =
                                 runtime.loaded.state.model().display_name.clone();
-                            let sheet_names = runtime
-                                .loaded
-                                .state
-                                .worksheets()
+                            let sheet_names = current_worksheets
                                 .iter()
                                 .map(|worksheet| (worksheet.id, worksheet.name.clone()))
                                 .collect::<BTreeMap<_, _>>();
-                            let current_worksheets = runtime.loaded.state.worksheets().to_vec();
                             let empty_defined_names = DefinedNameTable::default();
+                            let mut next_defined_names =
+                                runtime.loaded.state.defined_names.clone();
                             let mut defined_name_updates = Vec::new();
-                            for defined_name in runtime.loaded.state.defined_names.iter() {
+                            for defined_name in next_defined_names.iter() {
                                 let current_sheet = match defined_name.scope {
                                     NameScope::Workbook => None,
                                     NameScope::Worksheet(sheet_id) => Some(sheet_id),
@@ -3625,14 +3621,9 @@ impl ExcelRuntime {
                                 }
                             }
                             for (name_id, refers_to) in defined_name_updates {
-                                runtime
-                                    .loaded
-                                    .state
-                                    .defined_names
-                                    .set_refers_to_by_id(name_id, refers_to)?;
+                                next_defined_names.set_refers_to_by_id(name_id, refers_to)?;
                             }
-                            let defined_names_for_chart_sources =
-                                runtime.loaded.state.defined_names.clone();
+                            let defined_names_for_chart_sources = next_defined_names.clone();
                             let mut chart_source_current_sheets = BTreeMap::new();
                             for (chart_sheet_id, binding) in &runtime.loaded.state.chart_sheets {
                                 chart_source_current_sheets
@@ -3935,7 +3926,8 @@ impl ExcelRuntime {
                                     }
                                     Ok(changed)
                                 };
-                            for chart in runtime.loaded.state.charts.values_mut() {
+                            let mut next_charts = runtime.loaded.state.charts.clone();
+                            for chart in next_charts.values_mut() {
                                 let mut chart_changed = false;
                                 let chart_current_sheet =
                                     chart_source_current_sheets.get(&chart.id).copied();
@@ -3960,6 +3952,12 @@ impl ExcelRuntime {
                                     chart.dirty = true;
                                 }
                             }
+                            runtime
+                                .loaded
+                                .state
+                                .rename_worksheet(sheet_id, new_name.clone())?;
+                            runtime.loaded.state.defined_names = next_defined_names;
+                            runtime.loaded.state.charts = next_charts;
                             runtime.mark_semantic_dirty();
                             changed = true;
                         }

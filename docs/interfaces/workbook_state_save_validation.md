@@ -71,11 +71,17 @@ Production mutation of worksheet metadata and order uses validated `WorkbookStat
   rewrite before committing the model order; collection move no longer drains the live vector
   before fallible XML work.
 
-These commands own model invariants, not every workbook-level side effect. Worksheet rename still
-has a larger runtime transaction that retargets defined names and chart sources after the model
-rename, and chart-sheet add/copy/delete still coordinate worksheet, binding, drawing, chart,
-support-snapshot, and package state above the model. Those compound transactions remain later
-`OOTD-054` stages.
+These commands own model invariants, while runtime owns the larger worksheet-rename transaction.
+Rename constructs immutable old/new worksheet views, clones only the defined-name table and chart
+map, and performs every fallible name resolution and chart-source rewrite against those prepared
+copies. Only after preparation succeeds does it commit the live worksheet rename and replace the
+name/chart substate; the replacements after the validated rename are infallible. A rejected rename
+therefore preserves the complete `WorkbookState` and every dirty domain, including when a direct
+chart source has already been rewritten in the prepared map before an invalid full-reference source
+fails. The package is not touched until the later save transaction.
+
+Chart-sheet add/copy/delete still coordinate worksheet, binding, drawing, chart, support-snapshot,
+and package state above the model. That compound lifecycle remains a later `OOTD-054` stage.
 
 ## Worksheet Data Mutation
 
@@ -175,9 +181,10 @@ supported workbook-XML rewrites and may lag the model until save. Discovery uses
 The worksheet-data ownership map and live workbook model metadata are the first two `OOTD-054`
 private-field stages; the third routes production worksheet metadata, package binding, and order
 changes through validated commands; and the fourth makes the live worksheet collection immutable
-outside the model. Defined-name, chart, drawing, chart-sheet, opaque-part, and `WorksheetData`
-payload fields remain public. Callers can still create malformed state through those surfaces, but
-model save and identity-reassignment boundaries reject it deterministically.
+outside the model. The fifth makes runtime worksheet rename an atomic prepared substate commit.
+Defined-name, chart, drawing, chart-sheet, opaque-part, and `WorksheetData` payload fields remain
+public. Callers can still create malformed state through those surfaces, but model save and
+identity-reassignment boundaries reject it deterministically.
 
 Manifest/content-type coherence and typed chart/drawing model-to-package ownership are enforced by
 later `OOTD-031` stages. The chart/drawing boundary is documented in
