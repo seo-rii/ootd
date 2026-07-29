@@ -526,10 +526,17 @@ impl ExcelRuntime {
                 if self.display_alerts {
                     return Ok(OmValue::Bool(false));
                 }
-                for sheet_id in sheet_ids {
-                    self.delete_worksheet(workbook, sheet_id, false)?;
+                let snapshot = self.begin_runtime_workbook_mutation(workbook)?;
+                let result = (|| {
+                    for sheet_id in sheet_ids {
+                        self.delete_worksheet(workbook, sheet_id, false)?;
+                    }
+                    Ok(OmValue::Bool(true))
+                })();
+                if result.is_err() {
+                    self.rollback_runtime_workbook_mutation(snapshot);
                 }
-                Ok(OmValue::Bool(true))
+                result
             }
             "Copy" => {
                 if args.len() > 2 {

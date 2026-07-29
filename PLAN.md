@@ -388,10 +388,15 @@ Wave 2 exit gate:
    `Chart.Delete` RED가 전체 target runtime과 handle state를 복원한다. persistence snapshot
    회귀도 model/package뿐 아니라 support/pending graph, chart support source, calculation과
    dirty state를 비교하도록 확장했으며 `excel-runtime` 724개 회귀가 통과한다.
-   **다음:** 다중 sheet collection Delete와 target-less collection Copy의 전체 block 및
-   workbook-registration transaction을 닫고, `WorksheetData`의 cell/spill/dirty payload
-   7개를 하나의 validated command 단계로 이관한 뒤 `OOTD-018`/`OOTD-048` common reference
-   subsystem을 진행한다.
+   9단계 완료 (2026-07-29, synthetic): `Sheets`/`Worksheets`/`Charts.Delete`의 검증 완료
+   sheet block 전체를 외부 `RuntimeWorkbookMutationSnapshot`에 묶었다. 각 sheet의 중첩
+   transaction이 성공해도 뒤쪽 sheet의 graph preflight나 mutation이 실패하면 collection
+   호출 전 model/package/support/dirty 및 handle/session 상태로 복원한다. clean worksheet
+   삭제 뒤 dangling opaque relationship을 가진 worksheet가 실패하는 RED가 첫 삭제 잔존을
+   막으며 `excel-runtime` 725개 회귀가 통과한다.
+   **다음:** target-less collection Copy의 새 workbook 준비·등록 transaction을 닫고,
+   `WorksheetData`의 cell/spill/dirty payload 7개를 하나의 validated command 단계로 이관한
+   뒤 `OOTD-018`/`OOTD-048` common reference subsystem을 진행한다.
 16. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
    structured error에 추가한다.
 

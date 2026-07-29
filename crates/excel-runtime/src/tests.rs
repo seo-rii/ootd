@@ -124704,6 +124704,87 @@
     }
 
     #[test]
+    fn worksheets_delete_later_sheet_failure_rolls_back_earlier_deletes() {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_dangling_image_backed_raw_shape_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open workbook with dangling drawing relationship graph");
+        let application = runtime.root_application();
+        let worksheets = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Worksheets", &[])
+                .expect("Workbook.Worksheets"),
+        );
+        let charts = expect_object_handle(
+            runtime
+                .dispatch_get(workbook.0, "Charts", &[])
+                .expect("Workbook.Charts"),
+        );
+        runtime
+            .dispatch_invoke(charts, "Add", &[])
+            .expect("add surviving chart sheet");
+        runtime
+            .dispatch_invoke(worksheets, "Add", &[])
+            .expect("add clean worksheet before dangling worksheet");
+        runtime
+            .dispatch_set(application, "DisplayAlerts", OmValue::Bool(false), &[])
+            .expect("disable DisplayAlerts");
+        {
+            let state = &runtime
+                .runtime_workbook(workbook)
+                .expect("runtime workbook")
+                .loaded
+                .state;
+            let dangling_sheet_id = state
+                .drawings
+                .values()
+                .find(|drawing| {
+                    drawing.objects.iter().any(|object| {
+                        matches!(object, DrawingObjectModel::UnsupportedRaw { .. })
+                    })
+                })
+                .expect("dangling raw-shape drawing")
+                .host_sheet_id;
+            let worksheet_ids = state
+                .worksheets()
+                .iter()
+                .filter(|worksheet| !state.chart_sheets.contains_key(&worksheet.id))
+                .map(|worksheet| worksheet.id)
+                .collect::<Vec<_>>();
+            assert_eq!(worksheet_ids.len(), 2);
+            assert_eq!(worksheet_ids.last().copied(), Some(dangling_sheet_id));
+        }
+        let before = runtime_workbook_persistence_snapshot(&runtime, workbook);
+        let dirty_before = runtime
+            .workbook_dirty_domains(workbook)
+            .expect("workbook dirty domains");
+        let session_before = runtime_session_mutation_snapshot(&runtime);
+
+        let error = runtime
+            .dispatch_invoke(worksheets, "Delete", &[])
+            .expect_err("later dangling worksheet must reject collection Delete");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("opaque relationship target part is missing"));
+        assert_eq!(
+            runtime_workbook_persistence_snapshot(&runtime, workbook),
+            before
+        );
+        assert_eq!(
+            runtime
+                .workbook_dirty_domains(workbook)
+                .expect("workbook dirty domains after failure"),
+            dirty_before
+        );
+        assert_eq!(runtime_session_mutation_snapshot(&runtime), session_before);
+    }
+
+    #[test]
     fn sheets_collection_copy_and_move_preserve_mixed_sheet_block() {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime

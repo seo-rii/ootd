@@ -110,10 +110,15 @@ package graph state, and requires exact restoration. The shared persistence snap
 model/package, support and pending graphs, runtime chart support sources, calculation state, source
 identity, and every dirty domain.
 
-Each call from a collection Delete is now individually atomic. The collection loop itself and the
-initial registration of a target-less collection-copy workbook still need outer block transactions:
-if a later sheet fails, an earlier successful collection deletion can remain. Those are later
-`OOTD-054` stages.
+Collection Delete adds an outer snapshot after collection, pivot, last-sheet/visible-sheet, and
+DisplayAlerts preflight and before the first item. Nested individual Delete transactions can commit
+inside that prepared target, but any later item error restores the whole pre-call workbook and
+session. The regression deletes a clean worksheet first and then rejects a worksheet whose opaque
+drawing relationship target is missing; neither deletion, stale handle, package rewrite, nor
+selection change remains.
+
+The initial registration of a target-less collection-copy workbook still needs its own prepare and
+publish transaction and remains a later `OOTD-054` stage.
 
 ## Worksheet Data Mutation
 
