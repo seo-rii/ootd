@@ -3787,7 +3787,7 @@ impl XlsxCodec {
         if active_content_policy == ActiveContentPolicy::Strip {
             next_loaded
                 .state
-                .assign_workbook_id(materialized.state.model.id);
+                .assign_workbook_id(materialized.state.model.id)?;
             next_loaded
                 .state
                 .model

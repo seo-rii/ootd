@@ -38,6 +38,26 @@ record and its data as one higher-level operation. Raw public fields can still b
 boundary until `OOTD-054`, but `validate_for_save` rejects the resulting orphan with
 `OmErrorCode::InvalidState` before serialization or graph materialization.
 
+## Workbook Identity Reassignment
+
+`WorkbookState::assign_workbook_id` is fallible and atomic. Its prepare phase clones only the chart
+map, then reconstructs every range-bearing chart source for the target workbook ID:
+
+- `name`, `x_values`, `values`, and `bubble_size`;
+- each source's direct `resolved` range; and
+- each source's `full_reference.resolved` range.
+
+Malformed deserialized ranges return `OmErrorCode::InvalidState` with chart, one-based series,
+source-slot, and direct/full-range context. No model, worksheet, chart, drawing, or chart-object ID
+changes on failure. After every chart source validates, commit updates the workbook model, all
+worksheet owners, the prepared chart map, every drawing owner, and each chart-frame object owner.
+Defined names and raw formula strings carry no workbook ID and are not rewritten.
+
+Runtime open/register increments its next handle only after reassignment succeeds. Active-content
+strip/reload and prepared-save baseline reconstruction propagate the same error instead of
+publishing a partially rebound state. The prepare phase deliberately avoids cloning worksheet cell
+maps, source XML, or opaque package parts.
+
 ## Scoped Names And Spill Topology
 
 A worksheet-scoped defined name must reference an ID in the worksheet collection. Save no longer
@@ -74,9 +94,9 @@ supported workbook-XML rewrites and may lag the model until save. Discovery uses
 
 ## Deliberate Follow-up Boundaries
 
-This stage does not make public model fields private (`OOTD-054`) or make workbook-ID reassignment
-atomic (`OOTD-033`). Until field encapsulation lands, callers can construct malformed state
-directly, but the model save boundary rejects it deterministically.
+This stage does not make public model fields private (`OOTD-054`). Until field encapsulation lands,
+callers can construct malformed state directly, but the model save and identity-reassignment
+boundaries reject it deterministically.
 
 Manifest/content-type coherence and typed chart/drawing model-to-package ownership are enforced by
 later `OOTD-031` stages. The chart/drawing boundary is documented in

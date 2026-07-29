@@ -181,9 +181,15 @@ Active order:
    auto-creating default-entry helper is gone, pre-seeded orphan entries are not mutable through the
    accessor, and save preflight rejects any extra data key introduced through public fields. The
    contract is `docs/interfaces/workbook_state_save_validation.md`.
-   **Active:** `OOTD-033` atomic workbook-ID reassignment, then the common reference AST and
-   `OOTD-048` consumer migration.
-31. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
+31. `OOTD-033` is complete (2026-07-29, synthetic): workbook-ID reassignment prepares a rebound
+   chart map, validates direct and full-reference ranges, and only then commits model, worksheet,
+   chart, drawing, and chart-frame identities. Malformed deserialized ranges return contextual
+   `InvalidState` without partial mutation; runtime registration consumes a handle only after
+   success, and reload/save callers propagate failure. The contract is
+   `docs/interfaces/workbook_state_save_validation.md`.
+   **Active:** stage `OOTD-054` public-field encapsulation into reviewable command boundaries, then
+   build the common reference AST and complete `OOTD-048` consumer migration.
+32. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
    claiming practical chart/pivot/style parity.
 
 Every numbered work unit starts with a failing regression and lands as its own reviewable commit.

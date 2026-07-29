@@ -322,7 +322,17 @@ Wave 2 exit gate:
    `docs/interfaces/workbook_state_save_validation.md`에 있다.
    **다음:** `OOTD-033` atomic workbook-ID reassignment를 완료한 뒤 `OOTD-054` private
    command 전환을 진행한다.
-14. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
+14. `OOTD-033` 완료 (2026-07-29, synthetic): `assign_workbook_id`가 `OmResult`를 반환하고,
+   chart map만 prepare clone해 모든 series `name`/`x_values`/`values`/`bubble_size`의 direct 및
+   full-reference range를 검증·재구성한 뒤 model/worksheet/chart/drawing/chart-frame identity를
+   한 번에 commit한다. malformed deserialized range는 chart/series/source context가 있는
+   `InvalidState`를 반환하며 원본 state 전체가 유지된다. runtime open은 성공 후에만 handle을
+   소비하고 active-content strip 및 prepared-save reload도 오류를 전파한다. `excel-model`
+   86개 회귀가 통과하며 세부 계약은
+   `docs/interfaces/workbook_state_save_validation.md`에 있다.
+   **다음:** `OOTD-054` public field encapsulation을 작은 command boundary로 단계화한 뒤
+   `OOTD-018`/`OOTD-048` common reference subsystem을 진행한다.
+15. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
    structured error에 추가한다.
 
 Wave 3 exit gate:

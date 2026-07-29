@@ -375,41 +375,65 @@ impl WorkbookState {
         Ok(())
     }
 
-    pub fn assign_workbook_id(&mut self, workbook_id: WorkbookId) {
-        self.model.id = workbook_id;
-        for worksheet in &mut self.worksheets {
-            worksheet.workbook_id = workbook_id;
-        }
-        for chart in self.charts.values_mut() {
+    pub fn assign_workbook_id(&mut self, workbook_id: WorkbookId) -> OmResult<()> {
+        let mut rebound_charts = self.charts.clone();
+        for (&chart_id, chart) in &mut rebound_charts {
             chart.workbook_id = workbook_id;
-            for series in &mut chart.series {
-                for source in [
-                    &mut series.name,
-                    &mut series.x_values,
-                    &mut series.values,
-                    &mut series.bubble_size,
-                ]
-                .into_iter()
-                .flatten()
-                {
-                    if let Some(ReferenceTarget::Range(range)) = source.resolved.as_mut()
-                        && let Ok(updated_range) =
-                            RangeSet::new(workbook_id, range.areas().to_vec())
-                    {
+            for (series_index, series) in chart.series.iter_mut().enumerate() {
+                for (source_name, source) in [
+                    ("name", series.name.as_mut()),
+                    ("x-values", series.x_values.as_mut()),
+                    ("values", series.values.as_mut()),
+                    ("bubble-size", series.bubble_size.as_mut()),
+                ] {
+                    let Some(source) = source else {
+                        continue;
+                    };
+                    if let Some(ReferenceTarget::Range(range)) = source.resolved.as_mut() {
+                        let updated_range = RangeSet::new(workbook_id, range.areas().to_vec())
+                            .map_err(|error| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    format!(
+                                        "cannot reassign workbook id for chart {} series {} {} range: {}",
+                                        chart_id.0,
+                                        series_index + 1,
+                                        source_name,
+                                        error.message
+                                    ),
+                                )
+                            })?;
                         *range = updated_range;
                     }
                     if let Some(ReferenceTarget::Range(range)) = source
                         .full_reference
                         .as_mut()
                         .and_then(|reference| reference.resolved.as_mut())
-                        && let Ok(updated_range) =
-                            RangeSet::new(workbook_id, range.areas().to_vec())
                     {
+                        let updated_range = RangeSet::new(workbook_id, range.areas().to_vec())
+                            .map_err(|error| {
+                                OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    format!(
+                                        "cannot reassign workbook id for chart {} series {} {} full range: {}",
+                                        chart_id.0,
+                                        series_index + 1,
+                                        source_name,
+                                        error.message
+                                    ),
+                                )
+                            })?;
                         *range = updated_range;
                     }
                 }
             }
         }
+
+        self.model.id = workbook_id;
+        for worksheet in &mut self.worksheets {
+            worksheet.workbook_id = workbook_id;
+        }
+        self.charts = rebound_charts;
         for drawing in self.drawings.values_mut() {
             drawing.workbook_id = workbook_id;
             for object in &mut drawing.objects {
@@ -418,6 +442,7 @@ impl WorkbookState {
                 }
             }
         }
+        Ok(())
     }
 
     pub fn set_worksheet_source_xml(
@@ -990,7 +1015,8 @@ fn checked_rect_cell_count_sum(rects: &[Rect]) -> OmResult<usize> {
 mod tests {
     use super::{
         CellData, ChartModel, ChartObjectModel, ChartSheetBinding, ChartSourceExpr, ChartType,
-        DefinedNameTable, DrawingModel, DrawingObjectModel, WorkbookState, WorksheetData,
+        DefinedNameTable, DrawingModel, DrawingObjectModel, SeriesModel, WorkbookState,
+        WorksheetData,
     };
     use std::collections::{BTreeMap, BTreeSet};
 
@@ -1116,6 +1142,87 @@ mod tests {
             text: text.to_string(),
             is_r1c1: false,
         }
+    }
+
+    fn chart_model(
+        chart_id: ChartId,
+        workbook_id: WorkbookId,
+        series: Vec<SeriesModel>,
+    ) -> ChartModel {
+        ChartModel {
+            id: chart_id,
+            workbook_id,
+            chart_type: ChartType::Bar,
+            style: None,
+            series,
+            title: None,
+            legend: None,
+            axes: Vec::new(),
+            groups: Vec::new(),
+            vary_by_categories: None,
+            gap_width: None,
+            gap_depth: None,
+            overlap: None,
+            bar_shape: None,
+            has_series_lines: None,
+            has_drop_lines: None,
+            has_hi_lo_lines: None,
+            has_up_down_bars: None,
+            first_slice_angle: None,
+            explosion: None,
+            bubble_scale: None,
+            show_negative_bubbles: None,
+            has_3d_shading: None,
+            doughnut_hole_size: None,
+            second_plot_size: None,
+            size_represents: None,
+            split_type: None,
+            split_value: None,
+            data_labels: None,
+            data_table: None,
+            data_table_dirty: false,
+            plot_area_layout: None,
+            plot_area_layout_dirty: false,
+            show_data_labels_over_maximum: None,
+            display_blanks_as: None,
+            plot_visible_only: None,
+            view_3d: None,
+            view_3d_dirty: false,
+            rounded_corners: None,
+            protection: None,
+            protection_dirty: false,
+            raw_part_uri: Some("xl/charts/chart1.xml".to_string()),
+            series_topology_dirty: false,
+            content_dirty: false,
+            dirty: false,
+        }
+    }
+
+    fn series_model_with_values(values: ChartSourceExpr) -> SeriesModel {
+        SeriesModel {
+            name: None,
+            x_values: None,
+            values: Some(values),
+            bubble_size: None,
+            bar_shape: None,
+            smooth: None,
+            marker_style: None,
+            marker_size: None,
+            invert_if_negative: None,
+            points: BTreeMap::new(),
+            data_labels: None,
+            point_data_labels: BTreeMap::new(),
+            raw_index: None,
+            order: Some(0),
+            axis_group: super::ChartAxisGroup::Primary,
+            is_filtered: false,
+            filter_dirty: false,
+        }
+    }
+
+    fn malformed_empty_range_set() -> RangeSet {
+        serde_json::from_str(r#"{"workbook_id":7,"areas":[]}"#)
+            .expect("serde can currently materialize an invalid private-field range set")
     }
 
     #[test]
@@ -1388,56 +1495,9 @@ mod tests {
         let chart_id = ChartId(11);
         let drawing_id = DrawingId(12);
 
-        state.charts_mut().insert(
-            chart_id,
-            ChartModel {
-                id: chart_id,
-                workbook_id,
-                chart_type: ChartType::Bar,
-                style: None,
-                series: Vec::new(),
-                title: None,
-                legend: None,
-                axes: Vec::new(),
-                groups: Vec::new(),
-                vary_by_categories: None,
-                gap_width: None,
-                gap_depth: None,
-                overlap: None,
-                bar_shape: None,
-                has_series_lines: None,
-                has_drop_lines: None,
-                has_hi_lo_lines: None,
-                has_up_down_bars: None,
-                first_slice_angle: None,
-                explosion: None,
-                bubble_scale: None,
-                show_negative_bubbles: None,
-                has_3d_shading: None,
-                doughnut_hole_size: None,
-                second_plot_size: None,
-                size_represents: None,
-                split_type: None,
-                split_value: None,
-                data_labels: None,
-                data_table: None,
-                data_table_dirty: false,
-                plot_area_layout: None,
-                plot_area_layout_dirty: false,
-                show_data_labels_over_maximum: None,
-                display_blanks_as: None,
-                plot_visible_only: None,
-                view_3d: None,
-                view_3d_dirty: false,
-                rounded_corners: None,
-                protection: None,
-                protection_dirty: false,
-                raw_part_uri: Some("xl/charts/chart1.xml".to_string()),
-                series_topology_dirty: false,
-                content_dirty: false,
-                dirty: false,
-            },
-        );
+        state
+            .charts_mut()
+            .insert(chart_id, chart_model(chart_id, workbook_id, Vec::new()));
         state.drawings_mut().insert(
             drawing_id,
             DrawingModel {
@@ -2269,7 +2329,9 @@ mod tests {
             },
         );
 
-        state.assign_workbook_id(WorkbookId(99));
+        state
+            .assign_workbook_id(WorkbookId(99))
+            .expect("valid workbook references should rebind");
 
         assert_eq!(state.model.id, WorkbookId(99));
         assert_eq!(state.worksheets[0].workbook_id, WorkbookId(99));
@@ -2301,6 +2363,65 @@ mod tests {
             panic!("expected chart object");
         };
         assert_eq!(chart_object.workbook_id, WorkbookId(99));
+    }
+
+    #[test]
+    fn assign_workbook_id_does_not_partially_update_malformed_chart_references() {
+        let mut state = sample_state();
+        let chart_id = ChartId(11);
+        let series = series_model_with_values(ChartSourceExpr {
+            raw: formula_source("Sheet1!$A$1"),
+            resolved: Some(ReferenceTarget::Range(malformed_empty_range_set())),
+            full_reference: None,
+            cache: None,
+            dirty: false,
+        });
+        state.charts.insert(
+            chart_id,
+            chart_model(chart_id, state.model.id, vec![series]),
+        );
+        let original = state.clone();
+
+        let error = state
+            .assign_workbook_id(WorkbookId(99))
+            .expect_err("malformed chart source should reject workbook-id reassignment");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("chart 11 series 1 values range"));
+        assert_eq!(state, original);
+    }
+
+    #[test]
+    fn assign_workbook_id_rejects_malformed_full_reference_atomically() {
+        let mut state = sample_state();
+        let chart_id = ChartId(11);
+        let series = series_model_with_values(ChartSourceExpr {
+            raw: formula_source("Sheet1!$A$1"),
+            resolved: None,
+            full_reference: Some(super::ChartSourceReference {
+                raw: formula_source("Sheet1!$A$1"),
+                resolved: Some(ReferenceTarget::Range(malformed_empty_range_set())),
+            }),
+            cache: None,
+            dirty: false,
+        });
+        state.charts.insert(
+            chart_id,
+            chart_model(chart_id, state.model.id, vec![series]),
+        );
+        let original = state.clone();
+
+        let error = state
+            .assign_workbook_id(WorkbookId(99))
+            .expect_err("malformed full reference should reject workbook-id reassignment");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(
+            error
+                .message
+                .contains("chart 11 series 1 values full range")
+        );
+        assert_eq!(state, original);
     }
 
     #[test]

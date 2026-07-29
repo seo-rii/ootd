@@ -8,3 +8,6 @@ publish.workspace = true
 
 [dependencies]
 office-common = { path = "../office-common" }
+
+[dev-dependencies]
+serde_json = "1"

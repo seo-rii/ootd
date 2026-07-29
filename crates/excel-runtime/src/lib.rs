@@ -1589,9 +1589,9 @@ impl ExcelRuntime {
         }
 
         let handle_value = self.next_handle;
-        self.next_handle += 1;
         let workbook_id = WorkbookId(handle_value);
-        loaded.state.assign_workbook_id(workbook_id);
+        loaded.state.assign_workbook_id(workbook_id)?;
+        self.next_handle += 1;
         if self.calculation_mode_overridden {
             loaded
                 .calculation_properties
@@ -1699,7 +1699,7 @@ impl ExcelRuntime {
                 )?;
                 stripped_loaded
                     .state
-                    .assign_workbook_id(source_loaded.state.model.id);
+                    .assign_workbook_id(source_loaded.state.model.id)?;
                 stripped_loaded
                     .state
                     .model

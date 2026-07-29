@@ -173,6 +173,7 @@ name = "excel-model"
 version = "0.1.0"
 dependencies = [
  "office-common",
+ "serde_json",
 ]
 
 [[package]]
