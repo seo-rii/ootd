@@ -1578,6 +1578,15 @@
             super::parse_cell_reference("BC", Some(7)).expect("cell reference"),
             (7, 55)
         );
+        assert_eq!(
+            super::parse_cell_reference("$bc", Some(7)).expect("absolute column reference"),
+            (7, 55)
+        );
+        assert_eq!(
+            super::parse_cell_reference("XFD", Some(1_048_576))
+                .expect("last column on last current row"),
+            (1_048_576, 16_384)
+        );
     }
 
     #[test]
@@ -1591,6 +1600,72 @@
                 .message
                 .contains("invalid worksheet cell reference: A0")
         );
+    }
+
+    #[test]
+    fn parse_cell_reference_accepts_absolute_excel_grid_boundaries() {
+        assert_eq!(
+            super::parse_cell_reference("A1", None).expect("first Excel cell"),
+            (1, 1)
+        );
+        assert_eq!(
+            super::parse_cell_reference("$XFD$1048576", None).expect("last Excel cell"),
+            (1_048_576, 16_384)
+        );
+        assert_eq!(
+            super::parse_cell_reference("xfd1048576", None).expect("lowercase last Excel cell"),
+            (1_048_576, 16_384)
+        );
+    }
+
+    #[test]
+    fn a1_parser_rejects_beyond_xfd1048576_and_overflow() {
+        let invalid_references = [
+            "",
+            "1",
+            "A0",
+            "XFE1",
+            "A1048577",
+            "XFD1048577",
+            "A4294967296",
+            "ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ1",
+            "A1suffix",
+            "A1:B2",
+            "'Sheet 1'!A1",
+            "$$A1",
+            "A$$1",
+            "A1$",
+            " A1",
+            "A1 ",
+        ];
+
+        for reference in invalid_references {
+            let error = super::parse_cell_reference(reference, None)
+                .expect_err("malformed or out-of-grid A1 reference must fail");
+            assert_eq!(error.code, OmErrorCode::Parse, "{reference:?}");
+            assert!(
+                error.message.contains(reference),
+                "diagnostic for {reference:?} did not preserve the input: {:?}",
+                error.message
+            );
+        }
+
+        let error = super::parse_cell_reference("A", Some(1_048_577))
+            .expect_err("current row beyond the Excel grid must fail");
+        assert_eq!(error.code, OmErrorCode::Parse);
+        assert!(error.message.contains("A"));
+    }
+
+    #[test]
+    fn a1_parser_round_trips_every_excel_column_without_overflow() {
+        for column in 1..=16_384 {
+            let reference = super::cell_reference(1_048_576, column);
+            assert_eq!(
+                super::parse_cell_reference(&reference, None).expect("generated cell reference"),
+                (1_048_576, column),
+                "{reference}"
+            );
+        }
     }
 
     #[test]
@@ -1660,6 +1735,11 @@
                 "zero row index",
                 r#"<row r="0"><c r="A1"><v>1</v></c></row>"#,
                 "invalid worksheet row index: 0",
+            ),
+            (
+                "row index beyond Excel grid",
+                r#"<row r="1048577"><c r="A1048577"><v>1</v></c></row>"#,
+                "invalid worksheet row index: 1048577",
             ),
             (
                 "invalid cell reference",

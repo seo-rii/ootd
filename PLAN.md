@@ -223,8 +223,14 @@ Wave 2 exit gate:
    style ID의 `cellXfs` 범위 진단도 part/cell 문맥을 사용한다. implicit repair는 없고 세부
    계약은 `docs/interfaces/worksheet_cell_records.md`에 있다.
    **다음:** `OOTD-018`/`OOTD-019`/`OOTD-048` checked reference subsystem.
-7. `OOTD-018` + `OOTD-019` + `OOTD-048`: A1/R1C1/range/sheet quoting/grid limits를 checked
-   reference subsystem으로 통합한다.
+7. `OOTD-018` 1단계 완료 (2026-07-29, synthetic): worksheet single-cell A1 parser는 ASCII
+   column+row grammar, optional absolute marker와 enclosing-row 축약을 명시적으로 해석한다.
+   base-26/base-10 누적은 checked arithmetic를 사용하고 `XFD1048576`을 즉시 상한으로
+   적용하며, malformed suffix/range/sheet qualification/marker와 긴 overflow 입력을 원문이
+   포함된 `Parse`로 거부한다. 모든 16,384개 column의 last-row formatter/parser round trip을
+   고정했다. 세부 계약은 `docs/interfaces/worksheet_a1_cell_references.md`에 있다.
+   **다음:** `OOTD-019` ExcelLimits/checked area를 중앙화한 뒤 `OOTD-018`의 공통 range AST와
+   `OOTD-048` consumer migration을 완료한다.
 8. `OOTD-021`: bounded Strict preservation과 일반 target-format capability를 분리하고,
    drawing/chart 등 남은 Strict graph와 cross-dialect conversion을 단계적으로 구현한다.
 9. `OOTD-029` 완료 (2026-07-28, synthetic): `[Content_Types].xml`은 package content-types

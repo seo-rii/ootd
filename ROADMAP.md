@@ -115,9 +115,14 @@ Active order:
    lexicals, and row/cell address mismatches now fail closed with worksheet-part and cell context.
    Coordinate ownership is recorded before blank-cell elision, so duplicate empty or populated
    cells cannot overwrite each other. Numeric style-range diagnostics also identify their part and
-   cell; implicit worksheet repair remains unsupported. **Active:** `OOTD-018`/`OOTD-019`/
-   `OOTD-048` checked reference parsing and Excel limits.
-28. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
+   cell; implicit worksheet repair remains unsupported.
+28. `OOTD-018` stage 1 complete (2026-07-29, synthetic): worksheet single-cell A1 parsing now uses
+   an explicit ASCII grammar, checked base-26/base-10 accumulation, optional absolute markers, and
+   the `XFD1048576` grid boundary. Malformed suffixes, qualification/range syntax, repeated markers,
+   and long overflow inputs fail closed, while all 16,384 last-row column references round-trip.
+   **Active:** `OOTD-019` centralized limits/area arithmetic, then the remaining common range AST
+   and `OOTD-048` consumer migration.
+29. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
    claiming practical chart/pivot/style parity.
 
 Every numbered work unit starts with a failing regression and lands as its own reviewable commit.

@@ -14,6 +14,9 @@ use quick_xml::{NsReader, Writer};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Cursor, Write};
 
+const EXCEL_MAX_ROW_INDEX: u32 = 1_048_576;
+const EXCEL_MAX_COLUMN_INDEX: u32 = 16_384;
+
 #[derive(Debug, Clone)]
 enum RowContentSegment {
     Opaque(Vec<u8>),
@@ -92,24 +95,76 @@ pub(crate) fn parse_cell_reference(
     reference: &str,
     current_row: Option<u32>,
 ) -> OmResult<(u32, u32)> {
-    let mut col = 0u32;
-    let mut row = current_row.unwrap_or(0);
-
-    for ch in reference.chars() {
-        if ch.is_ascii_alphabetic() {
-            col = col * 26 + (ch.to_ascii_uppercase() as u32 - 'A' as u32 + 1);
-        } else if ch.is_ascii_digit() {
-            row = reference
-                .chars()
-                .skip_while(|value| value.is_ascii_alphabetic())
-                .collect::<String>()
-                .parse::<u32>()
-                .map_err(xml_error)?;
-            break;
-        }
+    let bytes = reference.as_bytes();
+    let mut index = 0usize;
+    if bytes.get(index) == Some(&b'$') {
+        index += 1;
     }
 
-    if row == 0 || col == 0 {
+    let column_start = index;
+    let mut col = 0u32;
+    while let Some(byte) = bytes.get(index).copied()
+        && byte.is_ascii_alphabetic()
+    {
+        let value = u32::from(byte.to_ascii_uppercase() - b'A' + 1);
+        col = col
+            .checked_mul(26)
+            .and_then(|current| current.checked_add(value))
+            .ok_or_else(|| {
+                OmError::parse(format!(
+                    "worksheet cell reference exceeds Excel grid XFD1048576: {reference}"
+                ))
+            })?;
+        if col > EXCEL_MAX_COLUMN_INDEX {
+            return Err(OmError::parse(format!(
+                "worksheet cell reference exceeds Excel grid XFD1048576: {reference}"
+            )));
+        }
+        index += 1;
+    }
+    if index == column_start {
+        return Err(OmError::new(
+            OmErrorCode::Parse,
+            format!("invalid worksheet cell reference: {reference}"),
+        ));
+    }
+
+    if index == bytes.len() {
+        let row = current_row.ok_or_else(|| {
+            OmError::parse(format!("invalid worksheet cell reference: {reference}"))
+        })?;
+        if row == 0 || row > EXCEL_MAX_ROW_INDEX {
+            return Err(OmError::parse(format!(
+                "worksheet cell reference exceeds Excel grid XFD1048576: {reference}"
+            )));
+        }
+        return Ok((row, col));
+    }
+
+    if bytes.get(index) == Some(&b'$') {
+        index += 1;
+    }
+    let row_start = index;
+    let mut row = 0u32;
+    while let Some(byte) = bytes.get(index).copied()
+        && byte.is_ascii_digit()
+    {
+        row = row
+            .checked_mul(10)
+            .and_then(|current| current.checked_add(u32::from(byte - b'0')))
+            .ok_or_else(|| {
+                OmError::parse(format!(
+                    "worksheet cell reference exceeds Excel grid XFD1048576: {reference}"
+                ))
+            })?;
+        if row > EXCEL_MAX_ROW_INDEX {
+            return Err(OmError::parse(format!(
+                "worksheet cell reference exceeds Excel grid XFD1048576: {reference}"
+            )));
+        }
+        index += 1;
+    }
+    if index == row_start || index != bytes.len() || row == 0 {
         return Err(OmError::new(
             OmErrorCode::Parse,
             format!("invalid worksheet cell reference: {reference}"),
@@ -168,7 +223,7 @@ pub(crate) fn parse_worksheet_cells(
                                 "{worksheet_part_uri}: invalid worksheet row index: {value}"
                             ))
                         })?;
-                        if parsed == 0 {
+                        if parsed == 0 || parsed > EXCEL_MAX_ROW_INDEX {
                             return Err(OmError::parse(format!(
                                 "{worksheet_part_uri}: invalid worksheet row index: {value}"
                             )));
