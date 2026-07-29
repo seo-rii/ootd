@@ -5,6 +5,28 @@ still be invalidated through public state fields. `XlsxCodec::load` validates th
 before exposing it, and every lossless XLSX save validates the live state before package
 serialization or graph materialization.
 
+## Workbook Model Metadata
+
+The live `WorkbookState` workbook model is private. Callers inspect it through `model()` and can
+change individual metadata only through `set_display_name`, `set_date1904`, `set_is_addin`, and
+`set_format`; each command returns whether the value changed. Workbook identity has no scalar
+setter: `assign_workbook_id` remains the only supported identity command because it validates and
+rebinds every owned model identity atomically.
+
+The metadata commands do not own runtime dirty-state transitions. Runtime dispatch uses their
+change result to mark semantic/serialization state and invalidate interaction state only when the
+value actually changes. Reload, active-content strip, and successful save-baseline reconstruction
+also use the commands instead of mutating metadata through a public field.
+
+`set_format` is only the model-metadata leg of format retagging. Runtime keeps it as the final step
+of the existing transaction that first validates conversion policy, rewrites package content types,
+updates the detected format, and invalidates cached content-type summaries. Calling this command
+alone does not convert an OOXML package; source/model/detected format unification remains tracked
+by `OOTD-036`.
+
+`WorkbookStateParts.model` remains a by-value construction field, but the resulting live state is
+not exposed unless `WorkbookState::try_new` validates the complete parts DTO.
+
 ## Worksheet Collection
 
 Each worksheet must satisfy all of the following:
@@ -60,7 +82,8 @@ instead of being invented.
 This boundary closes external orphan-key insertion and rekeying. The worksheet collection and the
 fields inside each `WorksheetData` remain public in this stage, so worksheet-ID drift and
 cell/spill/dirty-state invariant bypasses remain explicit `OOTD-054` follow-ups and continue to be
-rejected by save preflight.
+rejected by save preflight. Workbook model metadata is separately closed by the command boundary
+above.
 
 ## Workbook Identity Reassignment
 
@@ -118,10 +141,11 @@ supported workbook-XML rewrites and may lag the model until save. Discovery uses
 
 ## Deliberate Follow-up Boundaries
 
-The worksheet-data ownership map is the first `OOTD-054` private-field stage. The worksheet
-collection, workbook model, defined-name, chart, drawing, chart-sheet, opaque-part, and
-`WorksheetData` payload fields remain public. Callers can still create malformed state through
-those surfaces, but model save and identity-reassignment boundaries reject it deterministically.
+The worksheet-data ownership map and live workbook model metadata are the first two `OOTD-054`
+private-field stages. The worksheet collection, defined-name, chart, drawing, chart-sheet,
+opaque-part, and `WorksheetData` payload fields remain public. Callers can still create malformed
+state through those surfaces, but model save and identity-reassignment boundaries reject it
+deterministically.
 
 Manifest/content-type coherence and typed chart/drawing model-to-package ownership are enforced by
 later `OOTD-031` stages. The chart/drawing boundary is documented in

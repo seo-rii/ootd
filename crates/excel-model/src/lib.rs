@@ -118,7 +118,7 @@ impl WorksheetData {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct WorkbookState {
-    pub model: WorkbookModel,
+    model: WorkbookModel,
     pub worksheets: Vec<WorksheetModel>,
     worksheet_data: BTreeMap<SheetId, WorksheetData>,
     pub defined_names: DefinedNameTable,
@@ -164,6 +164,43 @@ impl WorkbookState {
         };
         state.validate_for_save()?;
         Ok(state)
+    }
+
+    pub fn model(&self) -> &WorkbookModel {
+        &self.model
+    }
+
+    pub fn set_display_name(&mut self, display_name: impl Into<String>) -> bool {
+        let display_name = display_name.into();
+        if self.model.display_name == display_name {
+            return false;
+        }
+        self.model.display_name = display_name;
+        true
+    }
+
+    pub fn set_date1904(&mut self, date1904: bool) -> bool {
+        if self.model.date1904 == date1904 {
+            return false;
+        }
+        self.model.date1904 = date1904;
+        true
+    }
+
+    pub fn set_is_addin(&mut self, is_addin: bool) -> bool {
+        if self.model.is_addin == is_addin {
+            return false;
+        }
+        self.model.is_addin = is_addin;
+        true
+    }
+
+    pub fn set_format(&mut self, format: office_common::FileFormat) -> bool {
+        if self.model.format == format {
+            return false;
+        }
+        self.model.format = format;
+        true
     }
 
     pub fn validate_for_save(&self) -> OmResult<()> {
@@ -2713,6 +2750,27 @@ mod tests {
                 .message
                 .contains("worksheet data references unknown worksheet 404")
         );
+    }
+
+    #[test]
+    fn workbook_model_metadata_commands_only_change_requested_fields() {
+        let mut state = sample_state();
+        let workbook_id = state.model.id;
+
+        assert!(state.set_display_name("Renamed"));
+        assert!(!state.set_display_name("Renamed"));
+        assert!(state.set_date1904(true));
+        assert!(!state.set_date1904(true));
+        assert!(state.set_is_addin(true));
+        assert!(!state.set_is_addin(true));
+        assert!(state.set_format(FileFormat::Xltx));
+        assert!(!state.set_format(FileFormat::Xltx));
+
+        assert_eq!(state.model().id, workbook_id);
+        assert_eq!(state.model().display_name, "Renamed");
+        assert!(state.model().date1904);
+        assert!(state.model().is_addin);
+        assert_eq!(state.model().format, FileFormat::Xltx);
     }
 
     #[test]

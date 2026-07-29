@@ -3050,7 +3050,7 @@
         let workbook_display_name = runtime
             .workbook_state(workbook)
             .expect("workbook state")
-            .model
+            .model()
             .display_name
             .clone();
         let quoted_values = format!("='C:\\Reports\\[{workbook_display_name}]SeriesValues'");
@@ -3278,7 +3278,7 @@
         let workbook_display_name = runtime
             .workbook_state(workbook)
             .expect("workbook state")
-            .model
+            .model()
             .display_name
             .clone();
         let worksheets = expect_object_handle(
@@ -3594,7 +3594,7 @@
         let workbook_display_name = runtime
             .workbook_state(workbook)
             .expect("workbook state")
-            .model
+            .model()
             .display_name
             .clone();
         let worksheets = expect_object_handle(
@@ -3834,7 +3834,7 @@
         let workbook_display_name = runtime
             .workbook_state(workbook)
             .expect("workbook state")
-            .model
+            .model()
             .display_name
             .clone();
         let quoted_values = format!("='C:\\Reports\\[{workbook_display_name}]SeriesValues'");
@@ -4058,7 +4058,7 @@
         let workbook_display_name = runtime
             .workbook_state(workbook)
             .expect("workbook state")
-            .model
+            .model()
             .display_name
             .clone();
         let quoted_values = format!("='C:\\Reports\\[{workbook_display_name}]SeriesValues'");
@@ -106040,7 +106040,7 @@
             let Some(ReferenceTarget::Range(range)) = values.resolved.as_ref() else {
                 panic!("string Series.Values should resolve to a range");
             };
-            assert_eq!(range.workbook_id(), state.model.id);
+            assert_eq!(range.workbook_id(), state.model().id);
             assert_eq!(range.areas().len(), 1);
             assert_eq!(range.areas()[0].scope, SheetScope::Single(sheet_id));
             assert_eq!(
@@ -106057,7 +106057,7 @@
             let state = runtime
                 .workbook_state(workbook)
                 .expect("workbook state before qualified string source setter");
-            format!("=[{}]Sheet1!$B$1:$B$3", state.model.display_name.as_str())
+            format!("=[{}]Sheet1!$B$1:$B$3", state.model().display_name.as_str())
         };
         runtime
             .dispatch_set(
@@ -106083,7 +106083,7 @@
             let Some(ReferenceTarget::Range(range)) = values.resolved.as_ref() else {
                 panic!("workbook-qualified Series.Values should resolve to a range");
             };
-            assert_eq!(range.workbook_id(), state.model.id);
+            assert_eq!(range.workbook_id(), state.model().id);
             assert_eq!(range.areas()[0].scope, SheetScope::Single(sheet_id));
             assert_eq!(
                 range.areas()[0].rect,
@@ -106161,7 +106161,7 @@
             let Some(ReferenceTarget::Range(range)) = values.resolved.as_ref() else {
                 panic!("defined-name Series.Values should resolve to a range");
             };
-            assert_eq!(range.workbook_id(), state.model.id);
+            assert_eq!(range.workbook_id(), state.model().id);
             assert_eq!(range.areas()[0].scope, SheetScope::Single(sheet_id));
             assert_eq!(
                 range.areas()[0].rect,
@@ -106215,7 +106215,7 @@
             let Some(ReferenceTarget::Range(range)) = values.resolved.as_ref() else {
                 panic!("R1C1 defined-name Series.Values should resolve to a range");
             };
-            assert_eq!(range.workbook_id(), state.model.id);
+            assert_eq!(range.workbook_id(), state.model().id);
             assert_eq!(range.areas()[0].scope, SheetScope::Single(sheet_id));
             assert_eq!(
                 range.areas()[0].rect,
@@ -110259,7 +110259,7 @@
             let Some(ReferenceTarget::Range(range)) = values.resolved.as_ref() else {
                 panic!("series values should keep a resolved range");
             };
-            assert_eq!(range.workbook_id(), state.model.id);
+            assert_eq!(range.workbook_id(), state.model().id);
             assert_eq!(range.areas().len(), 1);
             assert_eq!(range.areas()[0].scope, SheetScope::Single(sheet_id));
             assert_eq!(
@@ -110305,7 +110305,7 @@
             let Some(ReferenceTarget::Range(range)) = values.resolved.as_ref() else {
                 panic!("multi-area series values should keep a resolved range");
             };
-            assert_eq!(range.workbook_id(), state.model.id);
+            assert_eq!(range.workbook_id(), state.model().id);
             assert_eq!(range.areas().len(), 2);
             assert_eq!(range.areas()[0].scope, SheetScope::Single(sheet_id));
             assert_eq!(
@@ -113711,7 +113711,7 @@
         let workbook_display_name = runtime
             .workbook_state(workbook)
             .expect("workbook state")
-            .model
+            .model()
             .display_name
             .clone();
         let quoted_values = format!("='C:\\Reports\\[{workbook_display_name}]SeriesValues'");
@@ -114747,7 +114747,7 @@
         let workbook_display_name = runtime
             .workbook_state(workbook)
             .expect("workbook state")
-            .model
+            .model()
             .display_name
             .clone();
         let worksheets = expect_object_handle(
@@ -115786,7 +115786,7 @@
             let Some(ReferenceTarget::Range(range)) = values.resolved.as_ref() else {
                 panic!("SetSourceData values should keep a resolved range");
             };
-            assert_eq!(range.workbook_id(), state.model.id);
+            assert_eq!(range.workbook_id(), state.model().id);
             assert_eq!(range.areas().len(), 1);
             assert_eq!(range.areas()[0].scope, SheetScope::Single(sheet_id));
             assert_eq!(
@@ -116104,7 +116104,7 @@
             let Some(ReferenceTarget::Range(range)) = values.resolved.as_ref() else {
                 panic!("multi-area SetSourceData values should keep a resolved range");
             };
-            assert_eq!(range.workbook_id(), state.model.id);
+            assert_eq!(range.workbook_id(), state.model().id);
             assert_eq!(range.areas().len(), 2);
             assert_eq!(range.areas()[0].scope, SheetScope::Single(sheet_id));
             assert_eq!(

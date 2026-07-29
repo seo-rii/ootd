@@ -591,7 +591,7 @@ impl ExcelRuntime {
                         ));
                     }
 
-                    let workbook_id = runtime.loaded.state.model.id;
+                    let workbook_id = runtime.loaded.state.model().id;
                     let chart_id = ChartId(
                         runtime
                             .loaded

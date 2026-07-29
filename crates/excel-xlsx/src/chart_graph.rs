@@ -146,7 +146,7 @@ pub(crate) fn validate_chart_graphs_for_save(
     workbook: &LoadedXlsxWorkbook,
     package: &OpcPackage,
 ) -> OmResult<()> {
-    let workbook_id = workbook.state.model.id;
+    let workbook_id = workbook.state.model().id;
     let sheets = workbook
         .state
         .worksheets
@@ -4352,7 +4352,7 @@ mod tests {
             .expect("load initial drawing");
 
         let second_chart_id = ChartId(2);
-        let loaded_workbook_id = loaded.state.model.id;
+        let loaded_workbook_id = loaded.state.model().id;
         let mut second_chart = state_only_chart(second_chart_id);
         second_chart.workbook_id = loaded_workbook_id;
         loaded.state.charts.insert(second_chart_id, second_chart);

@@ -187,10 +187,12 @@ Active order:
    `InvalidState` without partial mutation; runtime registration consumes a handle only after
    success, and reload/save callers propagate failure. The contract is
    `docs/interfaces/workbook_state_save_validation.md`.
-32. `OOTD-054` stage 1 is complete (2026-07-29, synthetic): the worksheet-data ownership map is
-   private, decoded construction is validated, and runtime add/copy/delete use paired owner/data
-   commands. Read-only access cannot insert or rekey orphan data, and chart materialization fails
-   rather than inventing a missing entry. The contract is
+32. `OOTD-054` stages 1-2 are complete (2026-07-29, synthetic): the worksheet-data ownership map
+   and live workbook-model metadata are private, decoded construction is validated, and runtime
+   add/copy/delete use paired owner/data commands. Read-only access cannot insert or rekey orphan
+   data; model metadata changes use explicit commands while workbook-ID changes remain atomic; and
+   chart materialization fails rather than inventing a missing entry. Format metadata changes stay
+   inside the broader package-retag transaction. The contract is
    `docs/interfaces/workbook_state_save_validation.md`.
    **Active:** continue `OOTD-054` with worksheet-collection identity and `WorksheetData` payload
    command boundaries, then build the common reference AST and complete `OOTD-048` consumer

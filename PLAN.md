@@ -339,6 +339,13 @@ Wave 2 exit gate:
    command 경계를 사용하고 chart-sheet materialization은 missing data를 default로 만들지 않고
    fail-closed한다. `excel-model` 90개 회귀가 통과하며 세부 계약은
    `docs/interfaces/workbook_state_save_validation.md`에 있다.
+   2단계 완료 (2026-07-29, synthetic): live `WorkbookState.model`을 private으로 전환하고
+   immutable getter와 display name/date system/add-in/format metadata command를 추가했다.
+   workbook ID는 range-bearing chart source까지 검증하는 atomic reassignment만 허용한다.
+   runtime dispatch, save baseline, active-content strip/reload와 XLSX codec/test가 모두 이
+   경계를 사용한다. format command는 package content type과 detected format을 함께 갱신하는
+   기존 retag transaction의 마지막 단계로만 사용하며 단독 format conversion을 주장하지
+   않는다. `excel-model` 91개 회귀가 통과한다.
    **다음:** worksheet collection identity와 `WorksheetData` payload field를 별도
    `OOTD-054` 단계로 닫은 뒤 `OOTD-018`/`OOTD-048` common reference subsystem을 진행한다.
 16. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를

@@ -14229,9 +14229,9 @@
                 CommonLoadOptions::default(),
             )
             .expect("load workbook");
-        assert!(!loaded.state.model.date1904);
+        assert!(!loaded.state.model().date1904);
 
-        loaded.state.model.date1904 = true;
+        assert!(loaded.state.set_date1904(true));
         let date1904_bytes = codec
             .save(&loaded, office_common::SaveOptions::default())
             .expect("save date1904 workbook");
@@ -14250,8 +14250,8 @@
         let mut reopened = codec
             .load(date1904_bytes.as_slice(), CommonLoadOptions::default())
             .expect("reopen date1904 workbook");
-        assert!(reopened.state.model.date1904);
-        reopened.state.model.date1904 = false;
+        assert!(reopened.state.model().date1904);
+        assert!(reopened.state.set_date1904(false));
 
         let date1900_bytes = codec
             .save(&reopened, office_common::SaveOptions::default())
@@ -14272,7 +14272,7 @@
                 .load(date1900_bytes.as_slice(), CommonLoadOptions::default())
                 .expect("reopen date1900 workbook")
                 .state
-                .model
+                .model()
                 .date1904
         );
     }
@@ -14286,9 +14286,9 @@
                 CommonLoadOptions::default(),
             )
             .expect("load workbook");
-        assert!(!loaded.state.model.is_addin);
+        assert!(!loaded.state.model().is_addin);
 
-        loaded.state.model.is_addin = true;
+        assert!(loaded.state.set_is_addin(true));
         let addin_bytes = codec
             .save(&loaded, office_common::SaveOptions::default())
             .expect("save addin workbook");
@@ -14306,8 +14306,8 @@
         let mut reopened = codec
             .load(addin_bytes.as_slice(), CommonLoadOptions::default())
             .expect("reopen addin workbook");
-        assert!(reopened.state.model.is_addin);
-        reopened.state.model.is_addin = false;
+        assert!(reopened.state.model().is_addin);
+        assert!(reopened.state.set_is_addin(false));
 
         let normal_bytes = codec
             .save(&reopened, office_common::SaveOptions::default())
@@ -14328,7 +14328,7 @@
                 .load(normal_bytes.as_slice(), CommonLoadOptions::default())
                 .expect("reopen normal workbook")
                 .state
-                .model
+                .model()
                 .is_addin
         );
     }

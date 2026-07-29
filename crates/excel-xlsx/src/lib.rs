@@ -2075,7 +2075,7 @@ impl XlsxCodec {
             ));
         }
         let calculation_inputs_changed = has_dirty_worksheets
-            || saved_workbook.date1904 != workbook.state.model.date1904
+            || saved_workbook.date1904 != workbook.state.model().date1904
             || workbook.state.defined_names.is_dirty()
             || worksheet_structure_changed;
         let effective_calculation_state = workbook
@@ -2087,8 +2087,8 @@ impl XlsxCodec {
             });
         let rewrite_calculation_properties =
             workbook.calculation_properties.mode_dirty || effective_calculation_state.is_some();
-        if saved_workbook.date1904 != workbook.state.model.date1904
-            || saved_workbook.is_addin != workbook.state.model.is_addin
+        if saved_workbook.date1904 != workbook.state.model().date1904
+            || saved_workbook.is_addin != workbook.state.model().is_addin
             || workbook.state.defined_names.is_dirty()
             || worksheet_structure_changed
             || rewrite_calculation_properties
@@ -2183,10 +2183,10 @@ impl XlsxCodec {
                         .into_owned();
                     rewritten.push_attribute((key.as_str(), value.as_str()));
                 }
-                if workbook.state.model.date1904 {
+                if workbook.state.model().date1904 {
                     rewritten.push_attribute(("date1904", "1"));
                 }
-                if workbook.state.model.is_addin {
+                if workbook.state.model().is_addin {
                     rewritten.push_attribute(("isAddin", "1"));
                 }
                 Ok(rewritten)
@@ -2401,13 +2401,13 @@ impl XlsxCodec {
                             .write_event(Event::Start(element.into_owned()))
                             .map_err(xml_error)?;
                         if !saved_workbook.has_workbook_pr
-                            && (workbook.state.model.date1904 || workbook.state.model.is_addin)
+                            && (workbook.state.model().date1904 || workbook.state.model().is_addin)
                         {
                             let mut workbook_pr = BytesStart::new(workbook_pr_name.as_str());
-                            if workbook.state.model.date1904 {
+                            if workbook.state.model().date1904 {
                                 workbook_pr.push_attribute(("date1904", "1"));
                             }
-                            if workbook.state.model.is_addin {
+                            if workbook.state.model().is_addin {
                                 workbook_pr.push_attribute(("isAddin", "1"));
                             }
                             writer
@@ -3786,12 +3786,10 @@ impl XlsxCodec {
         if active_content_policy == ActiveContentPolicy::Strip {
             next_loaded
                 .state
-                .assign_workbook_id(materialized.state.model.id)?;
+                .assign_workbook_id(materialized.state.model().id)?;
             next_loaded
                 .state
-                .model
-                .display_name
-                .clone_from(&materialized.state.model.display_name);
+                .set_display_name(materialized.state.model().display_name.clone());
         } else {
             let mut next_state = materialized.state;
             let sheet_ids = next_state

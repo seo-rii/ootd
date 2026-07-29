@@ -1585,7 +1585,7 @@ impl ExcelRuntime {
         }
 
         if let Some(display_name) = display_name.filter(|value| !value.is_empty()) {
-            loaded.state.model.display_name = display_name;
+            loaded.state.set_display_name(display_name);
         }
 
         let handle_value = self.next_handle;
@@ -1699,12 +1699,10 @@ impl ExcelRuntime {
                 )?;
                 stripped_loaded
                     .state
-                    .assign_workbook_id(source_loaded.state.model.id)?;
+                    .assign_workbook_id(source_loaded.state.model().id)?;
                 stripped_loaded
                     .state
-                    .model
-                    .display_name
-                    .clone_from(&source_loaded.state.model.display_name);
+                    .set_display_name(source_loaded.state.model().display_name.clone());
                 let retagged = retag_loaded_workbook_format(&stripped_loaded, spec.format)?;
                 let bytes = self.codec.save(
                     &retagged,
@@ -2251,7 +2249,7 @@ impl ExcelRuntime {
     }
 
     pub fn workbook_model(&self, workbook: WorkbookHandle) -> OmResult<&WorkbookModel> {
-        Ok(&self.runtime_workbook(workbook)?.loaded.state.model)
+        Ok(self.runtime_workbook(workbook)?.loaded.state.model())
     }
 
     pub fn workbook_state(&self, workbook: WorkbookHandle) -> OmResult<&WorkbookState> {
@@ -3419,8 +3417,7 @@ impl ExcelRuntime {
                                     "cannot modify a read-only workbook",
                                 ));
                             }
-                            if runtime.loaded.state.model.date1904 != date1904 {
-                                runtime.loaded.state.model.date1904 = date1904;
+                            if runtime.loaded.state.set_date1904(date1904) {
                                 runtime.mark_semantic_dirty();
                                 changed = true;
                             }
@@ -3447,8 +3444,7 @@ impl ExcelRuntime {
                                     "cannot modify a read-only workbook",
                                 ));
                             }
-                            if runtime.loaded.state.model.is_addin != is_addin {
-                                runtime.loaded.state.model.is_addin = is_addin;
+                            if runtime.loaded.state.set_is_addin(is_addin) {
                                 runtime.mark_semantic_dirty();
                                 changed = true;
                             }
@@ -3540,9 +3536,9 @@ impl ExcelRuntime {
                             let old_worksheets = runtime.loaded.state.worksheets.clone();
                             runtime.loaded.state.worksheets[worksheet_index].name =
                                 new_name.clone();
-                            let workbook_id = runtime.loaded.state.model.id;
+                            let workbook_id = runtime.loaded.state.model().id;
                             let workbook_display_name =
-                                runtime.loaded.state.model.display_name.clone();
+                                runtime.loaded.state.model().display_name.clone();
                             let sheet_names = runtime
                                 .loaded
                                 .state
@@ -4168,7 +4164,7 @@ impl ExcelRuntime {
                             .clone();
                         let old_defined_names = runtime.loaded.state.defined_names.clone();
                         let worksheets = runtime.loaded.state.worksheets.clone();
-                        let workbook_display_name = runtime.loaded.state.model.display_name.clone();
+                        let workbook_display_name = runtime.loaded.state.model().display_name.clone();
                         let mut chart_source_current_sheets = BTreeMap::new();
                         for (chart_sheet_id, binding) in &runtime.loaded.state.chart_sheets {
                             chart_source_current_sheets.insert(binding.chart_id, *chart_sheet_id);
@@ -4497,9 +4493,9 @@ impl ExcelRuntime {
                                 is_r1c1: matches!(member, "RefersToR1C1" | "RefersToR1C1Local"),
                             },
                         )? {
-                            let workbook_id = runtime.loaded.state.model.id;
+                            let workbook_id = runtime.loaded.state.model().id;
                             let workbook_display_name =
-                                runtime.loaded.state.model.display_name.clone();
+                                runtime.loaded.state.model().display_name.clone();
                             let worksheets = runtime.loaded.state.worksheets.clone();
                             let defined_names = runtime.loaded.state.defined_names.clone();
                             let mut chart_source_current_sheets = BTreeMap::new();
@@ -14950,7 +14946,7 @@ impl ExcelRuntime {
                             .and_then(|chart| chart.raw_part_uri.clone());
                         let mut moved_chart = source_chart;
                         moved_chart.id = target_chart_id;
-                        moved_chart.workbook_id = runtime.loaded.state.model.id;
+                        moved_chart.workbook_id = runtime.loaded.state.model().id;
                         moved_chart.raw_part_uri = target_chart_raw_part_uri;
                         moved_chart.content_dirty = true;
                         moved_chart.dirty = true;
@@ -17201,7 +17197,7 @@ impl ExcelRuntime {
                                 }
                                 let mut moved_chart = source_chart;
                                 moved_chart.id = temporary_chart_id;
-                                moved_chart.workbook_id = runtime.loaded.state.model.id;
+                                moved_chart.workbook_id = runtime.loaded.state.model().id;
                                 moved_chart.raw_part_uri = None;
                                 moved_chart.content_dirty = true;
                                 moved_chart.dirty = true;
@@ -20848,7 +20844,7 @@ impl ExcelRuntime {
                     let escaped_chart_object_name = partial_escape(chart_object_name).to_string();
                     let chart = ChartModel {
                         id: chart_id,
-                        workbook_id: runtime.loaded.state.model.id,
+                        workbook_id: runtime.loaded.state.model().id,
                         chart_type: default_chart_type.clone(),
                         style: None,
                         series: Vec::new(),
@@ -20895,7 +20891,7 @@ impl ExcelRuntime {
                     };
                     let drawing = DrawingModel {
                         id: drawing_id,
-                        workbook_id: runtime.loaded.state.model.id,
+                        workbook_id: runtime.loaded.state.model().id,
                         host_sheet_id: sheet_id,
                         objects: vec![DrawingObjectModel::ChartFrame(ChartObjectModel {
                             id: chart_object_id,
@@ -20917,7 +20913,7 @@ impl ExcelRuntime {
                             client_data_attrs: BTreeMap::new(),
                             client_data_xml: None,
                             anchor_extension_xmls: Vec::new(),
-                            workbook_id: runtime.loaded.state.model.id,
+                            workbook_id: runtime.loaded.state.model().id,
                             host_sheet_id: sheet_id,
                             chart_id,
                             name: chart_object_name.to_string(),
@@ -21095,7 +21091,7 @@ impl ExcelRuntime {
                     worksheet_index,
                     WorksheetModel {
                         id: sheet_id,
-                        workbook_id: runtime.loaded.state.model.id,
+                        workbook_id: runtime.loaded.state.model().id,
                         name: worksheet_name,
                         kind: sheet_kind,
                         visibility: SheetVisibility::Visible,
@@ -21413,7 +21409,7 @@ impl ExcelRuntime {
                         }
                     };
                     (
-                        runtime.loaded.state.model.id,
+                        runtime.loaded.state.model().id,
                         SheetId(
                             runtime
                                 .loaded
@@ -21838,7 +21834,7 @@ impl ExcelRuntime {
                     }
                     let mut copied_chart = source_chart;
                     copied_chart.id = chart_binding.chart_id;
-                    copied_chart.workbook_id = runtime.loaded.state.model.id;
+                    copied_chart.workbook_id = runtime.loaded.state.model().id;
                     copied_chart.raw_part_uri = target_chart_raw_part_uri;
                     copied_chart.content_dirty = true;
                     copied_chart.dirty = true;
@@ -22675,7 +22671,7 @@ impl ExcelRuntime {
                     .worksheet_support_parts
                     .insert(added_sheet_id, copied_support_parts);
                 if !source_drawings.is_empty() {
-                    let workbook_id = runtime.loaded.state.model.id;
+                    let workbook_id = runtime.loaded.state.model().id;
                     let mut next_drawing_id = runtime
                         .loaded
                         .state
@@ -23413,7 +23409,7 @@ impl ExcelRuntime {
                     runtime
                         .loaded
                         .state
-                        .model
+                        .model()
                         .display_name
                         .eq_ignore_ascii_case(name)
                 })
@@ -25291,7 +25287,7 @@ impl ExcelRuntime {
             ));
         };
 
-        let workbook_id = runtime.loaded.state.model.id;
+        let workbook_id = runtime.loaded.state.model().id;
         let new_chart_id = ChartId(
             runtime
                 .loaded
@@ -28023,7 +28019,7 @@ impl ExcelRuntime {
                 runtime
                     .loaded
                     .state
-                    .model
+                    .model()
                     .display_name
                     .eq_ignore_ascii_case(workbook_name)
             })
@@ -28471,7 +28467,7 @@ impl ExcelRuntime {
             runtime.source_path = Some(source_path);
         }
         if let Some(display_name) = display_name {
-            runtime.loaded.state.model.display_name = display_name;
+            runtime.loaded.state.set_display_name(display_name);
         }
         self.clear_workbook_dirty_state(workbook)
     }
@@ -29501,18 +29497,18 @@ fn retag_loaded_workbook_format(
     loaded: &LoadedXlsxWorkbook,
     format: FileFormat,
 ) -> OmResult<LoadedXlsxWorkbook> {
-    if format == loaded.detected_format && loaded.state.model.format == format {
+    if format == loaded.detected_format && loaded.state.model().format == format {
         return Ok(loaded.clone());
     }
     let source_is_strict = loaded.detected_format == FileFormat::StrictXlsx
-        || loaded.state.model.format == FileFormat::StrictXlsx;
+        || loaded.state.model().format == FileFormat::StrictXlsx;
     if source_is_strict != (format == FileFormat::StrictXlsx) {
         return Err(OmError::unsupported(
             "Strict and Transitional OOXML conversion is not implemented",
         ));
     }
     let source_is_macro_enabled = format_allows_vba_project(loaded.detected_format)
-        || format_allows_vba_project(loaded.state.model.format);
+        || format_allows_vba_project(loaded.state.model().format);
     if source_is_macro_enabled
         && !format_allows_vba_project(format)
         && loaded.has_source_or_current_active_content_artifacts()?
@@ -29556,7 +29552,7 @@ fn retag_loaded_workbook_format(
     retagged.support_parts.content_types_source_bytes = None;
     retagged.support_parts.content_types_summary = None;
     retagged.detected_format = format;
-    retagged.state.model.format = format;
+    retagged.state.set_format(format);
     Ok(retagged)
 }
 

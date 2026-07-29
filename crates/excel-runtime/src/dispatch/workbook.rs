@@ -56,7 +56,7 @@ impl ExcelRuntime {
                         .source_path
                         .as_ref()
                         .map(|path| path.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| runtime.loaded.state.model.display_name.clone()),
+                        .unwrap_or_else(|| runtime.loaded.state.model().display_name.clone()),
                 ))
             }
             "FileFormat" => Ok(OmValue::Number(f64::from(file_format_to_excel_value(

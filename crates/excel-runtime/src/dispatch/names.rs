@@ -352,8 +352,8 @@ impl ExcelRuntime {
                         metadata,
                         NameValidationMode::StrictExcel,
                     )?;
-                    let workbook_id = runtime.loaded.state.model.id;
-                    let workbook_display_name = runtime.loaded.state.model.display_name.clone();
+                    let workbook_id = runtime.loaded.state.model().id;
+                    let workbook_display_name = runtime.loaded.state.model().display_name.clone();
                     let worksheets = runtime.loaded.state.worksheets.clone();
                     let defined_names = runtime.loaded.state.defined_names.clone();
                     let mut chart_source_current_sheets = BTreeMap::new();
@@ -510,8 +510,8 @@ impl ExcelRuntime {
                     ));
                 }
                 runtime.loaded.state.defined_names.remove_by_id(name_id)?;
-                let workbook_id = runtime.loaded.state.model.id;
-                let workbook_display_name = runtime.loaded.state.model.display_name.clone();
+                let workbook_id = runtime.loaded.state.model().id;
+                let workbook_display_name = runtime.loaded.state.model().display_name.clone();
                 let worksheets = runtime.loaded.state.worksheets.clone();
                 let defined_names = runtime.loaded.state.defined_names.clone();
                 let mut chart_source_current_sheets = BTreeMap::new();
