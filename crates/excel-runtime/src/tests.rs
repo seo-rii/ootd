@@ -36984,6 +36984,93 @@
     }
 
     #[test]
+    fn range_clear_formats_preserves_blank_spill_child_cell_identity() {
+        for target_address in ["K10", "A1,K10"] {
+            let (mut runtime, workbook, active_sheet, sheet_id) = runtime_with_sequence_spill();
+            {
+                let worksheet = runtime
+                    .runtime_workbook_mut(workbook)
+                    .expect("runtime workbook")
+                    .loaded
+                    .state
+                    .worksheet_data_for_sheet_mut(sheet_id)
+                    .expect("worksheet data");
+                worksheet
+                    .cells
+                    .get_mut(&(1, 1))
+                    .expect("seeded normal cell")
+                    .style_id = Some(StyleId(0));
+                let child = worksheet
+                    .cells
+                    .get_mut(&(10, 11))
+                    .expect("materialized spill child");
+                child.value = CellValue::Blank;
+                child.style_id = Some(StyleId(0));
+            }
+            let target = expect_object_handle(
+                runtime
+                    .dispatch_invoke(
+                        active_sheet,
+                        "Range",
+                        &[OmValue::Text(target_address.to_string())],
+                    )
+                    .expect("ClearFormats target"),
+            );
+
+            assert_eq!(
+                runtime
+                    .dispatch_invoke(target, "ClearFormats", &[])
+                    .expect("Range.ClearFormats"),
+                OmValue::Empty,
+                "{target_address}",
+            );
+
+            let state = runtime
+                .workbook_state(workbook)
+                .expect("workbook state after ClearFormats");
+            let worksheet = state
+                .worksheet_data_for_sheet(sheet_id)
+                .expect("worksheet data after ClearFormats");
+            let child = worksheet
+                .cells
+                .get(&(10, 11))
+                .expect("blank spill child cell must remain materialized");
+            assert_eq!(child.value, CellValue::Blank, "{target_address}");
+            assert!(child.formula.is_none(), "{target_address}");
+            assert!(child.style_id.is_none(), "{target_address}");
+            assert_eq!(
+                worksheet.spill_owners.get(&(10, 11)),
+                Some(&(10, 10)),
+                "{target_address}",
+            );
+            assert_eq!(
+                worksheet.spill_ranges.get(&(10, 10)),
+                Some(&Rect {
+                    row_first: 10,
+                    row_last: 11,
+                    col_first: 10,
+                    col_last: 11,
+                }),
+                "{target_address}",
+            );
+            state
+                .validate_for_save()
+                .unwrap_or_else(|error| panic!("{target_address}: {error:?}"));
+            if target_address.contains(',') {
+                assert!(
+                    worksheet
+                        .cells
+                        .get(&(1, 1))
+                        .expect("normal cell after ClearFormats")
+                        .style_id
+                        .is_none(),
+                    "{target_address}",
+                );
+            }
+        }
+    }
+
+    #[test]
     fn formula_spill_reference_tracks_materialized_sequence_extent() {
         let (mut runtime, workbook, active_sheet, sheet_id) = runtime_with_sequence_spill();
         let sum = expect_object_handle(

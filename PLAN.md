@@ -408,8 +408,14 @@ Wave 2 exit gate:
    dirty tracking을 함께 갱신한다. `K10`과 `A20,K10`에서 materialized spill child 때문에
    실패하는 RED가 정상 cell을 포함한 workbook/dirty/session 불변을 고정하며
    `excel-runtime` 727개 회귀가 통과한다.
-   **다음:** `ClearFormats`와 나머지 structural/copy/sort mutation을 spill-aware batch
-   command로 이관하고 `WorksheetData`의 7개 payload field를 private으로 닫은 뒤
+   12단계 완료 (2026-07-29, synthetic): single-area와 multi-area `Range.ClearFormats`의
+   직접 style/cell/dirty mutation을 `WorkbookState::clear_range_formats_with_change`
+   command로 교체했다. style-only edit는 spill child를 허용하되 topology에 참여하는 blank
+   cell shell을 삭제하지 않으며 owner/range/dynamic metadata를 바꾸지 않는다. blank
+   materialized spill child를 대상으로 한 `K10`과 `A1,K10` RED가 cell identity와 valid save
+   topology를 고정하며 `excel-model` 97개와 `excel-runtime` 728개 회귀가 통과한다.
+   **다음:** 나머지 structural/copy/paste/sort mutation을 spill-aware batch command로
+   이관하고 `WorksheetData`의 7개 payload field를 private으로 닫은 뒤
    `OOTD-018`/`OOTD-048` common reference subsystem을 진행한다.
 16. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
    structured error에 추가한다.

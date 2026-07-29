@@ -146,6 +146,14 @@ dirty state unchanged. Runtime uses this command for both Range object represent
 regression covers direct `K10` and multi-area `A20,K10` attempts against a materialized `J10:K11`
 spill.
 
+`WorkbookState::clear_range_formats_with_change` owns the distinct style-only semantics for both
+`Range.ClearFormats` representations. It validates the target worksheet/ranges, clears only
+`style_id`, and derives dirty state without changing value, formula, dynamic-array marker, spill
+range, or owner. A blank, non-formula cell is removed only when it does not participate in spill
+topology. The regression seeds a styled blank child at `K10`, then verifies direct `K10` and
+multi-area `A1,K10` calls preserve its materialized cell identity and leave the model valid for
+save.
+
 ### Worksheet-data ownership map
 
 The `WorkbookState` worksheet-data map is private. External callers can inspect it through
@@ -170,10 +178,10 @@ instead of being invented.
 This boundary closes external orphan-key insertion and rekeying. The live worksheet collection is
 also private, so callers cannot insert, remove, reorder, or mutate worksheet identity through a
 borrowed element. `WorksheetData` payload fields remain public through the existing live-owner
-accessor; `Range.Clear` no longer uses that bypass, but `ClearFormats` and other structural,
-copy/paste, sort, and calculation writeback paths remain explicit `OOTD-054` follow-ups. Invalid
-state continues to be rejected by save preflight. Production worksheet metadata and ordering paths
-use the command boundary above; workbook model metadata is separately private.
+accessor; `Range.Clear` and `ClearFormats` no longer use that bypass, but structural, copy/paste,
+sort, and calculation writeback paths remain explicit `OOTD-054` follow-ups. Invalid state
+continues to be rejected by save preflight. Production worksheet metadata and ordering paths use
+the command boundary above; workbook model metadata is separately private.
 
 ## Workbook Identity Reassignment
 
@@ -235,11 +243,12 @@ The worksheet-data ownership map and live workbook model metadata are the first 
 private-field stages; the third routes production worksheet metadata, package binding, and order
 changes through validated commands; and the fourth makes the live worksheet collection immutable
 outside the model. The fifth makes runtime worksheet rename an atomic prepared substate commit.
-Stages six through ten close sheet Copy/Add/Delete runtime transactions, and stage eleven introduces
-the first spill-aware payload mutation command for `Range.Clear`. Defined-name, chart, drawing,
-chart-sheet, opaque-part, and the remaining `WorksheetData` payload fields remain public. Callers can
-still create malformed state through those surfaces, but model save and identity-reassignment
-boundaries reject it deterministically.
+Stages six through ten close sheet Copy/Add/Delete runtime transactions, stage eleven introduces the
+first spill-aware payload mutation command for `Range.Clear`, and stage twelve separates
+spill-preserving style-only `Range.ClearFormats`. Defined-name, chart, drawing, chart-sheet,
+opaque-part, and the remaining `WorksheetData` payload fields remain public. Callers can still
+create malformed state through those surfaces, but model save and identity-reassignment boundaries
+reject it deterministically.
 
 Manifest/content-type coherence and typed chart/drawing model-to-package ownership are enforced by
 later `OOTD-031` stages. The chart/drawing boundary is documented in

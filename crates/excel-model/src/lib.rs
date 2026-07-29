@@ -43,22 +43,25 @@ pub struct WorksheetData {
 }
 
 impl WorksheetData {
+    fn spill_owner_for_key(&self, key: (u32, u32)) -> Option<(u32, u32)> {
+        self.spill_owners.get(&key).copied().or_else(|| {
+            self.spill_ranges.iter().find_map(|(anchor, spill_range)| {
+                (key != *anchor
+                    && key.0 >= spill_range.row_first
+                    && key.0 <= spill_range.row_last
+                    && key.1 >= spill_range.col_first
+                    && key.1 <= spill_range.col_last)
+                    .then_some(*anchor)
+            })
+        })
+    }
+
     fn ensure_spill_children_are_not_edited(
         &self,
         keys: impl IntoIterator<Item = (u32, u32)>,
     ) -> OmResult<()> {
         for key in keys {
-            let anchor = self.spill_owners.get(&key).copied().or_else(|| {
-                self.spill_ranges.iter().find_map(|(anchor, spill_range)| {
-                    (key != *anchor
-                        && key.0 >= spill_range.row_first
-                        && key.0 <= spill_range.row_last
-                        && key.1 >= spill_range.col_first
-                        && key.1 <= spill_range.col_last)
-                        .then_some(*anchor)
-                })
-            });
-            if let Some(anchor) = anchor {
+            if let Some(anchor) = self.spill_owner_for_key(key) {
                 return Err(OmError::new(
                     OmErrorCode::InvalidState,
                     format!(
@@ -1400,6 +1403,39 @@ impl WorkbookState {
                         worksheet.dirty = true;
                         worksheet.dirty_cells.insert(key);
                         changed_any = true;
+                    }
+                }
+            }
+        }
+
+        Ok(changed_any)
+    }
+
+    pub fn clear_range_formats_with_change(&mut self, range: &RangeRef) -> OmResult<bool> {
+        let (sheet_id, rects) = self.same_sheet_rects(range)?;
+        let worksheet = self.worksheet_data_for_sheet_mut(sheet_id)?;
+        let mut changed_any = false;
+        for rect in rects {
+            for row in rect.row_first..=rect.row_last {
+                for col in rect.col_first..=rect.col_last {
+                    let key = (row, col);
+                    let preserve_topology_cell = worksheet.spill_owner_for_key(key).is_some()
+                        || worksheet.spill_ranges.contains_key(&key)
+                        || worksheet.dynamic_array_formulas.contains(&key);
+                    let mut remove_cell = false;
+                    if let Some(existing) = worksheet.cells.get_mut(&key)
+                        && existing.style_id.is_some()
+                    {
+                        existing.style_id = None;
+                        remove_cell = !preserve_topology_cell
+                            && matches!(existing.value, CellValue::Blank)
+                            && existing.formula.is_none();
+                        worksheet.dirty = true;
+                        worksheet.dirty_cells.insert(key);
+                        changed_any = true;
+                    }
+                    if remove_cell {
+                        worksheet.cells.remove(&key);
                     }
                 }
             }
@@ -3439,6 +3475,45 @@ mod tests {
                 .expect("worksheet data"),
             &before
         );
+    }
+
+    #[test]
+    fn clear_range_formats_preserves_blank_spill_child_cell() {
+        let mut state = sample_state();
+        seed_two_by_two_spill(&mut state);
+        state
+            .worksheet_data_for_sheet_mut(SheetId(3))
+            .expect("worksheet data")
+            .cells
+            .get_mut(&(4, 4))
+            .expect("styled spill child")
+            .value = CellValue::Blank;
+
+        assert!(
+            state
+                .clear_range_formats_with_change(&RangeRef::single_cell(
+                    WorkbookId(7),
+                    SheetId(3),
+                    4,
+                    4,
+                ))
+                .expect("clear spill-child format")
+        );
+
+        let worksheet = state
+            .worksheet_data_for_sheet(SheetId(3))
+            .expect("worksheet data after clear");
+        let child = worksheet
+            .cells
+            .get(&(4, 4))
+            .expect("blank spill child cell remains materialized");
+        assert_eq!(child.value, CellValue::Blank);
+        assert!(child.formula.is_none());
+        assert!(child.style_id.is_none());
+        assert_eq!(worksheet.spill_owners.get(&(4, 4)), Some(&(3, 3)));
+        assert!(worksheet.dirty);
+        assert!(worksheet.dirty_cells.contains(&(4, 4)));
+        state.validate_for_save().expect("valid spill topology");
     }
 
     #[test]
