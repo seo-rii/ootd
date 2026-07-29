@@ -11462,7 +11462,7 @@ impl ExcelRuntime {
                                     "Range.Clear does not accept arguments",
                                 ));
                             }
-                            let (sheet_id, rects) = Self::range_set_single_sheet_rects(&range)?;
+                            let range_ref = RangeRef::try_from(&range)?;
                             let runtime = self.runtime_workbook_mut(workbook)?;
                             if runtime.read_only {
                                 return Err(OmError::new(
@@ -11470,23 +11470,11 @@ impl ExcelRuntime {
                                     "cannot modify a read-only workbook",
                                 ));
                             }
-                            let worksheet = runtime
+                            if runtime
                                 .loaded
                                 .state
-                                .worksheet_data_for_sheet_mut(sheet_id)?;
-                            let mut changed = false;
-                            for rect in rects {
-                                for row in rect.row_first..=rect.row_last {
-                                    for col in rect.col_first..=rect.col_last {
-                                        if worksheet.cells.remove(&(row, col)).is_some() {
-                                            worksheet.dirty = true;
-                                            worksheet.dirty_cells.insert((row, col));
-                                            changed = true;
-                                        }
-                                    }
-                                }
-                            }
-                            if changed {
+                                .clear_range_with_change(&range_ref)?
+                            {
                                 runtime.mark_semantic_dirty();
                             }
                             self.find_state = None;
@@ -14482,6 +14470,7 @@ impl ExcelRuntime {
                                 "Range.Clear does not accept arguments",
                             ));
                         }
+                        let range = self.range_ref(workbook, sheet_id, rect)?;
                         let runtime = self.runtime_workbook_mut(workbook)?;
                         if runtime.read_only {
                             return Err(OmError::new(
@@ -14489,21 +14478,11 @@ impl ExcelRuntime {
                                 "cannot modify a read-only workbook",
                             ));
                         }
-                        let worksheet = runtime
+                        if runtime
                             .loaded
                             .state
-                            .worksheet_data_for_sheet_mut(sheet_id)?;
-                        let mut changed = false;
-                        for row in rect.row_first..=rect.row_last {
-                            for col in rect.col_first..=rect.col_last {
-                                if worksheet.cells.remove(&(row, col)).is_some() {
-                                    worksheet.dirty = true;
-                                    worksheet.dirty_cells.insert((row, col));
-                                    changed = true;
-                                }
-                            }
-                        }
-                        if changed {
+                            .clear_range_with_change(&range)?
+                        {
                             runtime.mark_semantic_dirty();
                         }
                         self.find_state = None;

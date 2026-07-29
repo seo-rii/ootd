@@ -187,7 +187,7 @@ Active order:
    `InvalidState` without partial mutation; runtime registration consumes a handle only after
    success, and reload/save callers propagate failure. The contract is
    `docs/interfaces/workbook_state_save_validation.md`.
-32. `OOTD-054` stages 1-10 are complete (2026-07-29, synthetic): the worksheet-data ownership map
+32. `OOTD-054` stages 1-11 are complete (2026-07-29, synthetic): the worksheet-data ownership map
    and live workbook-model metadata are private, decoded construction is validated, and runtime
    add/copy/delete use paired owner/data commands. Read-only access cannot insert or rekey orphan
    data; model metadata changes use explicit commands while workbook-ID changes remain atomic; and
@@ -213,11 +213,14 @@ Active order:
    restores earlier successful deletions. Target-less sheet-collection Copy likewise starts an
    outer source-anchored snapshot before creating the destination workbook; a later copy failure
    removes that unpublished workbook and restores registries, allocators, active state, and
-   selection. The contract is
+   selection. Single-area and multi-area `Range.Clear` now share a model command that preflights
+   every spill child before atomically clearing cell/style, owned spill metadata, and dirty
+   tracking. The contract is
    `docs/interfaces/workbook_state_save_validation.md`.
-   **Active:** continue `OOTD-054` by moving the complete `WorksheetData` cell/spill/dirty payload
-   behind validated commands before building the common reference AST and completing `OOTD-048`
-   consumer migration.
+   **Active:** continue `OOTD-054` by moving `ClearFormats` and the remaining structural/copy/sort
+   mutations behind spill-aware batch commands, then make the complete `WorksheetData`
+   cell/spill/dirty payload private before building the common reference AST and completing
+   `OOTD-048` consumer migration.
 33. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
    claiming practical chart/pivot/style parity.
 

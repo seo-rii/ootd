@@ -36915,6 +36915,75 @@
     }
 
     #[test]
+    fn range_clear_spill_child_failure_preserves_workbook_state_and_dirty_domains() {
+        for target_address in ["K10", "A20,K10"] {
+            let (mut runtime, workbook, active_sheet, _) = runtime_with_sequence_spill();
+            let normal_cell = expect_object_handle(
+                runtime
+                    .dispatch_invoke(
+                        active_sheet,
+                        "Range",
+                        &[OmValue::Text("A20".to_string())],
+                    )
+                    .expect("Range(A20)"),
+            );
+            runtime
+                .dispatch_set(
+                    normal_cell,
+                    "Value2",
+                    OmValue::Text("keep".to_string()),
+                    &[],
+                )
+                .expect("set normal cell before Clear");
+            let target = expect_object_handle(
+                runtime
+                    .dispatch_invoke(
+                        active_sheet,
+                        "Range",
+                        &[OmValue::Text(target_address.to_string())],
+                    )
+                    .expect("spill-child Clear target"),
+            );
+            let before = runtime_workbook_persistence_snapshot(&runtime, workbook);
+            let dirty_before = runtime
+                .workbook_dirty_domains(workbook)
+                .expect("workbook dirty domains");
+            let session_before = runtime_session_mutation_snapshot(&runtime);
+
+            let error = runtime
+                .dispatch_invoke(target, "Clear", &[])
+                .expect_err("Range.Clear must reject a spill child");
+
+            assert_eq!(error.code, OmErrorCode::InvalidState, "{target_address}");
+            assert!(
+                error.message.contains("R10C11"),
+                "{target_address}: {error:?}"
+            );
+            assert!(
+                error.message.contains("R10C10"),
+                "{target_address}: {error:?}"
+            );
+            assert_eq!(
+                runtime_workbook_persistence_snapshot(&runtime, workbook),
+                before,
+                "{target_address}",
+            );
+            assert_eq!(
+                runtime
+                    .workbook_dirty_domains(workbook)
+                    .expect("workbook dirty domains after failed Clear"),
+                dirty_before,
+                "{target_address}",
+            );
+            assert_eq!(
+                runtime_session_mutation_snapshot(&runtime),
+                session_before,
+                "{target_address}",
+            );
+        }
+    }
+
+    #[test]
     fn formula_spill_reference_tracks_materialized_sequence_extent() {
         let (mut runtime, workbook, active_sheet, sheet_id) = runtime_with_sequence_spill();
         let sum = expect_object_handle(

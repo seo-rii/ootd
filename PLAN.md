@@ -401,8 +401,16 @@ Wave 2 exit gate:
    제거하고 registry/allocator/active state를 호출 전으로 복원한다. 두 chart sheet 중 두
    번째 binding이 없는 RED가 첫 chart를 담은 새 workbook 등록 잔존을 막으며
    `excel-runtime` 726개 회귀가 통과한다.
-   **다음:** `WorksheetData`의 cell/spill/dirty payload 7개를 하나의 validated command
-   단계로 이관한 뒤 `OOTD-018`/`OOTD-048` common reference subsystem을 진행한다.
+   11단계 완료 (2026-07-29, synthetic): single-area와 multi-area `Range.Clear`의 직접
+   `WorksheetData.cells/dirty/dirty_cells` mutation을
+   `WorkbookState::clear_range_with_change` command로 교체했다. command는 전체 좌표의 spill
+   child를 commit 전에 검사하고, 허용된 anchor의 spill metadata/owned extent와 cell/style,
+   dirty tracking을 함께 갱신한다. `K10`과 `A20,K10`에서 materialized spill child 때문에
+   실패하는 RED가 정상 cell을 포함한 workbook/dirty/session 불변을 고정하며
+   `excel-runtime` 727개 회귀가 통과한다.
+   **다음:** `ClearFormats`와 나머지 structural/copy/sort mutation을 spill-aware batch
+   command로 이관하고 `WorksheetData`의 7개 payload field를 private으로 닫은 뒤
+   `OOTD-018`/`OOTD-048` common reference subsystem을 진행한다.
 16. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
    structured error에 추가한다.
 

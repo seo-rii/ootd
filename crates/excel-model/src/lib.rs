@@ -1382,6 +1382,32 @@ impl WorkbookState {
         Ok(changed_any)
     }
 
+    pub fn clear_range_with_change(&mut self, range: &RangeRef) -> OmResult<bool> {
+        let (sheet_id, rects) = self.same_sheet_rects(range)?;
+        let worksheet = self.worksheet_data_for_sheet_mut(sheet_id)?;
+        worksheet.ensure_spill_children_are_not_edited(rects.iter().flat_map(|rect| {
+            (rect.row_first..=rect.row_last)
+                .flat_map(move |row| (rect.col_first..=rect.col_last).map(move |col| (row, col)))
+        }))?;
+        let mut changed_any = false;
+        for rect in rects {
+            for row in rect.row_first..=rect.row_last {
+                for col in rect.col_first..=rect.col_last {
+                    let key = (row, col);
+                    let metadata_changed = worksheet.prepare_cell_for_edit_with_change(key);
+                    let cell_changed = worksheet.cells.remove(&key).is_some();
+                    if metadata_changed || cell_changed {
+                        worksheet.dirty = true;
+                        worksheet.dirty_cells.insert(key);
+                        changed_any = true;
+                    }
+                }
+            }
+        }
+
+        Ok(changed_any)
+    }
+
     fn single_sheet_rect(&self, range: &RangeRef) -> OmResult<(SheetId, Rect)> {
         let (sheet_id, rects) = self.same_sheet_rects(range)?;
         if rects.len() != 1 {
@@ -3379,6 +3405,34 @@ mod tests {
             .expect_err("spill child clear should fail");
 
         assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert_eq!(
+            state
+                .worksheet_data_for_sheet(SheetId(3))
+                .expect("worksheet data"),
+            &before
+        );
+    }
+
+    #[test]
+    fn clear_range_rejects_spill_child_edits_atomically() {
+        let mut state = sample_state();
+        seed_two_by_two_spill(&mut state);
+        let before = state
+            .worksheet_data_for_sheet(SheetId(3))
+            .expect("worksheet data")
+            .clone();
+
+        let error = state
+            .clear_range_with_change(&RangeRef {
+                workbook_id: WorkbookId(7),
+                scope: SheetScope::Single(SheetId(3)),
+                areas: vec![Rect::single_cell(1, 1), Rect::single_cell(4, 4)],
+            })
+            .expect_err("spill child clear should fail");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("R4C4"));
+        assert!(error.message.contains("R3C3"));
         assert_eq!(
             state
                 .worksheet_data_for_sheet(SheetId(3))
