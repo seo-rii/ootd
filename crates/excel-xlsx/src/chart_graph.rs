@@ -87,6 +87,7 @@ pub fn materialize_state_only_chart_graphs(
 pub(crate) fn materialize_state_only_chart_graphs_in_place(
     workbook: &mut LoadedXlsxWorkbook,
 ) -> OmResult<()> {
+    workbook.state.validate_for_save()?;
     if !has_state_only_chart_graphs(workbook) {
         return Ok(());
     }
@@ -4669,6 +4670,35 @@ mod tests {
             .expect_err("unsupported chart encoding should fail");
         assert_eq!(workbook.state, state_before);
         assert_eq!(workbook.package, package_before);
+    }
+
+    #[test]
+    fn public_materializer_rejects_invalid_model_without_state_only_graphs() {
+        let mut workbook = base_workbook();
+        workbook.state.worksheet_data.clear();
+
+        let error = materialize_state_only_chart_graphs(workbook)
+            .expect_err("model validation must run before the no-graph fast path");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("has no worksheet data"));
+    }
+
+    #[test]
+    fn public_materializer_rejects_invalid_model_before_graph_materialization() {
+        let mut workbook = base_workbook();
+        let chart_id = ChartId(1);
+        workbook
+            .state
+            .charts
+            .insert(chart_id, state_only_chart(chart_id));
+        workbook.state.worksheets.clear();
+
+        let error = materialize_state_only_chart_graphs(workbook)
+            .expect_err("model validation must precede chart graph validation");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("at least one worksheet"));
     }
 
     #[test]

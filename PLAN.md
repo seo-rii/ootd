@@ -261,9 +261,17 @@ Wave 2 exit gate:
    ZIP load, `add_part`, `to_bytes`도 같은 canonical identity validator를 사용하며 production
    재구성 경로는 오류를 전파하고 pinned fixture만 명시적으로 실패한다. 세부 계약은
    `docs/interfaces/opc_package_construction.md`에 있다.
-   **다음:** `OOTD-031` manifest/content-type cache 및 relationship closure save validation,
-   `WorkbookState::validate_for_save()`를 완료한 뒤 `OOTD-032`/`OOTD-033`과 `OOTD-054` private
-   command 전환을 진행한다.
+   2단계 완료 (2026-07-29, synthetic): `WorkbookState::validate_for_save()`가 nonempty sheet
+   collection, model-internal sheet ID/name/binding uniqueness, workbook ownership,
+   worksheet-data presence, defined-name scope와 dynamic-array spill topology를 load/save 및
+   chart graph materialization 경계에서 검증한다. malformed/out-of-range `localSheetId` load와
+   dangling live-model local name은 fail-closed하며, unbound chart-sheet record의 완전한
+   `(None, None)` 쌍만 별도 graph preflight 전 상태로 허용한다. 세부 계약은
+   `docs/interfaces/workbook_state_save_validation.md`에 있다.
+   **다음:** `OOTD-031` manifest/content-type cache, generic relationship closure와
+   package/model sheet identity 및 chart/drawing/support snapshot graph validation을 독립 work
+   unit으로 닫은 뒤
+   `OOTD-032`/`OOTD-033`과 `OOTD-054` private command 전환을 진행한다.
 13. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
    structured error에 추가한다.
 

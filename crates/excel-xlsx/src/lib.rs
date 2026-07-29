@@ -1750,6 +1750,7 @@ impl XlsxCodec {
             chart_sheets,
             opaque_parts,
         };
+        state.validate_for_save()?;
         ensure_workbook_grid_coordinates_are_valid(&state)?;
         ensure_workbook_style_ids_are_valid(&state, &support_parts)?;
 
@@ -1834,6 +1835,7 @@ impl XlsxCodec {
                 "XlsxCodec::save requires lossless=true",
             ));
         }
+        workbook.state.validate_for_save()?;
         let current_digital_signature_inventory =
             collect_digital_signature_inventory(&workbook.package)?;
         if workbook.digital_signature_inventory.has_artifacts()
@@ -3989,11 +3991,20 @@ fn parse_workbook_with_mode(
             DefinedNameId(u32::try_from(index + 1).map_err(|_| {
                 OmError::new(OmErrorCode::InvalidState, "defined name id overflow")
             })?);
-        let scope = record
-            .local_sheet_id
-            .and_then(|local_sheet_id| worksheets.get(local_sheet_id as usize))
-            .map(|worksheet| NameScope::Worksheet(worksheet.id))
-            .unwrap_or(NameScope::Workbook);
+        let scope = match record.local_sheet_id {
+            None => NameScope::Workbook,
+            Some(local_sheet_id) => {
+                let worksheet = worksheets.get(local_sheet_id as usize).ok_or_else(|| {
+                    OmError::parse(format!(
+                        "defined name {} localSheetId {} is outside the workbook collection of {} worksheets",
+                        record.display_name,
+                        local_sheet_id,
+                        worksheets.len()
+                    ))
+                })?;
+                NameScope::Worksheet(worksheet.id)
+            }
+        };
         let mut defined_name = DefinedName::new(
             id,
             scope,
@@ -4112,7 +4123,13 @@ fn parse_defined_name_record(
         let value = value.into_owned();
         match key.as_str() {
             "name" => display_name = value,
-            "localSheetId" => local_sheet_id = value.parse::<u32>().ok(),
+            "localSheetId" => {
+                local_sheet_id = Some(value.parse::<u32>().map_err(|_| {
+                    OmError::parse(format!(
+                        "invalid defined name localSheetId: {value}"
+                    ))
+                })?)
+            }
             "hidden" => hidden = parse_ooxml_bool(value.as_str())?,
             "function" => function = parse_ooxml_bool(value.as_str())?,
             "vbProcedure" => vb_procedure = parse_ooxml_bool(value.as_str())?,

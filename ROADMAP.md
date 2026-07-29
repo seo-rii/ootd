@@ -131,8 +131,16 @@ Active order:
    canonicalizes root-relative names, and atomically rejects malformed or case/percent-equivalent
    duplicate identities. ZIP load, add, and serialization share the identity validator; the
    contract is `docs/interfaces/opc_package_construction.md`.
-   **Active:** `OOTD-031` package graph/model save invariants, then `OOTD-032`/`OOTD-033`, the
-   common reference AST, and `OOTD-048` consumer migration.
+   `OOTD-031` stage 2 is complete (2026-07-29, synthetic): model load/save preflight rejects
+   empty collections, duplicate or malformed model-internal worksheet identity, workbook ownership
+   drift, partial/duplicate package bindings, missing worksheet data, malformed or dangling
+   local-name scope, and inconsistent spill topology. The same gate precedes chart-graph
+   materialization, while unbound chart-sheet records proceed to separate XLSX graph preflight.
+   The contract is
+   `docs/interfaces/workbook_state_save_validation.md`.
+   **Active:** `OOTD-031` manifest/content-type, generic relationship closure, exact package/model
+   sheet identity, and chart/drawing/support-snapshot graph invariants, then `OOTD-032`/`OOTD-033`,
+   the common reference AST, and `OOTD-048` consumer migration.
 30. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
    claiming practical chart/pivot/style parity.
 

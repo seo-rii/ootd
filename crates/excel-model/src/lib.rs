@@ -129,6 +129,246 @@ pub struct WorkbookState {
 }
 
 impl WorkbookState {
+    pub fn validate_for_save(&self) -> OmResult<()> {
+        if self.worksheets.is_empty() {
+            return Err(OmError::new(
+                OmErrorCode::InvalidState,
+                "workbook must contain at least one worksheet",
+            ));
+        }
+
+        let mut worksheet_ids = BTreeSet::new();
+        let mut worksheet_names = BTreeSet::new();
+        let mut worksheet_relationship_ids = BTreeSet::new();
+        let mut worksheet_part_uris = BTreeSet::new();
+
+        for worksheet in &self.worksheets {
+            if worksheet.id.0 == 0 || worksheet.id.0 > u64::from(u32::MAX) {
+                return Err(OmError::new(
+                    OmErrorCode::InvalidState,
+                    format!(
+                        "worksheet {} has id {} outside the supported unsigned 32-bit range",
+                        worksheet.name, worksheet.id.0
+                    ),
+                ));
+            }
+            if !worksheet_ids.insert(worksheet.id) {
+                return Err(OmError::new(
+                    OmErrorCode::InvalidState,
+                    format!("duplicate worksheet id {}", worksheet.id.0),
+                ));
+            }
+            if worksheet.name.trim().is_empty() {
+                return Err(OmError::new(
+                    OmErrorCode::InvalidState,
+                    format!("worksheet {} has an empty name", worksheet.id.0),
+                ));
+            }
+            if worksheet.name.chars().count() > 31 {
+                return Err(OmError::new(
+                    OmErrorCode::InvalidState,
+                    format!(
+                        "worksheet {} name exceeds Excel's 31-character limit",
+                        worksheet.name
+                    ),
+                ));
+            }
+            if worksheet
+                .name
+                .chars()
+                .any(|ch| matches!(ch, ':' | '\\' | '/' | '?' | '*' | '[' | ']') || ch.is_control())
+            {
+                return Err(OmError::new(
+                    OmErrorCode::InvalidState,
+                    format!(
+                        "worksheet {} name contains invalid characters",
+                        worksheet.name
+                    ),
+                ));
+            }
+            if !worksheet_names.insert(worksheet.name.to_ascii_lowercase()) {
+                return Err(OmError::new(
+                    OmErrorCode::InvalidState,
+                    format!("duplicate worksheet name: {}", worksheet.name),
+                ));
+            }
+            if worksheet.workbook_id != self.model.id {
+                return Err(OmError::new(
+                    OmErrorCode::InvalidState,
+                    format!(
+                        "worksheet {} ({}) has workbook id {}, expected {}",
+                        worksheet.name, worksheet.id.0, worksheet.workbook_id.0, self.model.id.0
+                    ),
+                ));
+            }
+            match (&worksheet.relationship_id, &worksheet.part_uri) {
+                (None, None) if worksheet.kind == office_common::SheetKind::ChartSheet => {}
+                (None, None) => {
+                    return Err(OmError::new(
+                        OmErrorCode::InvalidState,
+                        format!(
+                            "worksheet {} ({}) has no package binding; only an unbound chart-sheet record awaiting graph preflight may omit both relationship id and part URI",
+                            worksheet.name, worksheet.id.0
+                        ),
+                    ));
+                }
+                (Some(relationship_id), Some(part_uri))
+                    if !relationship_id.is_empty() && !part_uri.is_empty() =>
+                {
+                    if !worksheet_relationship_ids.insert(relationship_id) {
+                        return Err(OmError::new(
+                            OmErrorCode::InvalidState,
+                            format!("duplicate worksheet relationship id {relationship_id}"),
+                        ));
+                    }
+                    if !worksheet_part_uris.insert(part_uri.to_ascii_lowercase()) {
+                        return Err(OmError::new(
+                            OmErrorCode::InvalidState,
+                            format!("duplicate worksheet part URI {part_uri}"),
+                        ));
+                    }
+                }
+                _ => {
+                    return Err(OmError::new(
+                        OmErrorCode::InvalidState,
+                        format!(
+                            "worksheet {} ({}) must have both a non-empty relationship id and part URI, or neither",
+                            worksheet.name, worksheet.id.0
+                        ),
+                    ));
+                }
+            }
+            if !self.worksheet_data.contains_key(&worksheet.id) {
+                return Err(OmError::new(
+                    OmErrorCode::InvalidState,
+                    format!(
+                        "worksheet {} ({}) has no worksheet data",
+                        worksheet.name, worksheet.id.0
+                    ),
+                ));
+            }
+        }
+
+        for defined_name in self.defined_names.iter() {
+            if let NameScope::Worksheet(sheet_id) = defined_name.scope
+                && !worksheet_ids.contains(&sheet_id)
+            {
+                return Err(OmError::new(
+                    OmErrorCode::InvalidState,
+                    format!(
+                        "defined name {} is scoped to unknown worksheet {}",
+                        defined_name.display_name, sheet_id.0
+                    ),
+                ));
+            }
+        }
+
+        for (&sheet_id, worksheet) in &self.worksheet_data {
+            for &anchor in &worksheet.dynamic_array_formulas {
+                if worksheet
+                    .cells
+                    .get(&anchor)
+                    .is_none_or(|cell| cell.formula.is_none())
+                {
+                    return Err(OmError::new(
+                        OmErrorCode::InvalidState,
+                        format!(
+                            "worksheet {} dynamic-array anchor R{}C{} has no formula cell",
+                            sheet_id.0, anchor.0, anchor.1
+                        ),
+                    ));
+                }
+            }
+
+            let mut previous_spill_ranges = Vec::new();
+            for (&anchor, spill_range) in &worksheet.spill_ranges {
+                if !worksheet.dynamic_array_formulas.contains(&anchor) {
+                    return Err(OmError::new(
+                        OmErrorCode::InvalidState,
+                        format!(
+                            "worksheet {} spill range at R{}C{} has no dynamic-array formula owner",
+                            sheet_id.0, anchor.0, anchor.1
+                        ),
+                    ));
+                }
+                if anchor.0 < spill_range.row_first
+                    || anchor.0 > spill_range.row_last
+                    || anchor.1 < spill_range.col_first
+                    || anchor.1 > spill_range.col_last
+                {
+                    return Err(OmError::new(
+                        OmErrorCode::InvalidState,
+                        format!(
+                            "worksheet {} spill anchor R{}C{} is outside its spill range",
+                            sheet_id.0, anchor.0, anchor.1
+                        ),
+                    ));
+                }
+                if previous_spill_ranges.iter().any(|existing: &&Rect| {
+                    existing.row_first <= spill_range.row_last
+                        && spill_range.row_first <= existing.row_last
+                        && existing.col_first <= spill_range.col_last
+                        && spill_range.col_first <= existing.col_last
+                }) {
+                    return Err(OmError::new(
+                        OmErrorCode::InvalidState,
+                        format!(
+                            "worksheet {} has overlapping spill range at R{}C{}",
+                            sheet_id.0, anchor.0, anchor.1
+                        ),
+                    ));
+                }
+                previous_spill_ranges.push(spill_range);
+            }
+
+            for (&child, &anchor) in &worksheet.spill_owners {
+                let Some(spill_range) = worksheet.spill_ranges.get(&anchor) else {
+                    return Err(OmError::new(
+                        OmErrorCode::InvalidState,
+                        format!(
+                            "worksheet {} spill child R{}C{} references unknown anchor R{}C{}",
+                            sheet_id.0, child.0, child.1, anchor.0, anchor.1
+                        ),
+                    ));
+                };
+                if child == anchor
+                    || child.0 < spill_range.row_first
+                    || child.0 > spill_range.row_last
+                    || child.1 < spill_range.col_first
+                    || child.1 > spill_range.col_last
+                {
+                    return Err(OmError::new(
+                        OmErrorCode::InvalidState,
+                        format!(
+                            "worksheet {} spill child R{}C{} is outside owner R{}C{} spill range",
+                            sheet_id.0, child.0, child.1, anchor.0, anchor.1
+                        ),
+                    ));
+                }
+                let Some(child_cell) = worksheet.cells.get(&child) else {
+                    return Err(OmError::new(
+                        OmErrorCode::InvalidState,
+                        format!(
+                            "worksheet {} spill child R{}C{} has no materialized cell",
+                            sheet_id.0, child.0, child.1
+                        ),
+                    ));
+                };
+                if child_cell.formula.is_some() {
+                    return Err(OmError::new(
+                        OmErrorCode::InvalidState,
+                        format!(
+                            "worksheet {} spill child R{}C{} cannot contain a formula",
+                            sheet_id.0, child.0, child.1
+                        ),
+                    ));
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     pub fn assign_workbook_id(&mut self, workbook_id: WorkbookId) {
         self.model.id = workbook_id;
         for worksheet in &mut self.worksheets {
@@ -845,11 +1085,270 @@ mod tests {
         );
     }
 
+    fn add_second_worksheet(state: &mut WorkbookState) {
+        let mut second = state.worksheets[0].clone();
+        second.id = SheetId(4);
+        second.name = "Sheet2".to_string();
+        second.relationship_id = Some("rId2".to_string());
+        second.part_uri = Some("xl/worksheets/sheet2.xml".to_string());
+        state.worksheets.push(second);
+        state
+            .worksheet_data
+            .insert(SheetId(4), WorksheetData::default());
+    }
+
     fn formula_source(text: &str) -> FormulaSource {
         FormulaSource {
             text: text.to_string(),
             is_r1c1: false,
         }
+    }
+
+    #[test]
+    fn workbook_state_validate_for_save_accepts_consistent_model() {
+        sample_state()
+            .validate_for_save()
+            .expect("consistent workbook state");
+    }
+
+    #[test]
+    fn workbook_state_validate_for_save_accepts_blocked_and_materialized_spills() {
+        let mut blocked = sample_state();
+        let blocked_worksheet = blocked
+            .worksheet_data
+            .get_mut(&SheetId(3))
+            .expect("worksheet data");
+        blocked_worksheet.cells.insert(
+            (3, 3),
+            CellData {
+                value: CellValue::Error(office_common::CellError::Spill),
+                formula: Some(formula_source("SEQUENCE(2,2)")),
+                style_id: None,
+            },
+        );
+        blocked_worksheet.dynamic_array_formulas.insert((3, 3));
+        blocked
+            .validate_for_save()
+            .expect("blocked spill has no materialized range");
+
+        let mut materialized = sample_state();
+        seed_two_by_two_spill(&mut materialized);
+        materialized
+            .validate_for_save()
+            .expect("materialized spill topology");
+    }
+
+    #[test]
+    fn workbook_state_validate_for_save_rejects_empty_worksheet_collection() {
+        let mut state = sample_state();
+        state.worksheets.clear();
+
+        let error = state
+            .validate_for_save()
+            .expect_err("empty workbook must fail");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("at least one worksheet"));
+    }
+
+    #[test]
+    fn workbook_state_validate_for_save_rejects_worksheet_workbook_id_drift() {
+        let mut state = sample_state();
+        state.worksheets[0].workbook_id = WorkbookId(99);
+
+        let error = state
+            .validate_for_save()
+            .expect_err("worksheet ownership drift must fail");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("worksheet Sheet1"));
+        assert!(error.message.contains("workbook id 99"));
+        assert!(error.message.contains("expected 7"));
+    }
+
+    #[test]
+    fn workbook_state_validate_for_save_rejects_duplicate_worksheet_identity() {
+        let mut state = sample_state();
+        let mut duplicate = state.worksheets[0].clone();
+        duplicate.name = "Sheet2".to_string();
+        state.worksheets.push(duplicate);
+
+        let error = state
+            .validate_for_save()
+            .expect_err("duplicate worksheet id must fail");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("duplicate worksheet id 3"));
+    }
+
+    #[test]
+    fn workbook_state_validate_for_save_rejects_duplicate_worksheet_name() {
+        let mut state = sample_state();
+        add_second_worksheet(&mut state);
+        state.worksheets[1].name = "sHeEt1".to_string();
+
+        let error = state
+            .validate_for_save()
+            .expect_err("duplicate worksheet name must fail");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("duplicate worksheet name"));
+        assert!(error.message.contains("sHeEt1"));
+    }
+
+    #[test]
+    fn workbook_state_validate_for_save_rejects_duplicate_worksheet_relationship_id() {
+        let mut state = sample_state();
+        add_second_worksheet(&mut state);
+        state.worksheets[1].relationship_id = Some("rId1".to_string());
+
+        let error = state
+            .validate_for_save()
+            .expect_err("duplicate worksheet relationship id must fail");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(
+            error
+                .message
+                .contains("duplicate worksheet relationship id rId1")
+        );
+    }
+
+    #[test]
+    fn workbook_state_validate_for_save_rejects_duplicate_worksheet_part_uri() {
+        let mut state = sample_state();
+        add_second_worksheet(&mut state);
+        state.worksheets[1].part_uri = Some("xl/worksheets/sheet1.xml".to_string());
+
+        let error = state
+            .validate_for_save()
+            .expect_err("duplicate worksheet part URI must fail");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(
+            error
+                .message
+                .contains("duplicate worksheet part URI xl/worksheets/sheet1.xml")
+        );
+    }
+
+    #[test]
+    fn workbook_state_validate_for_save_allows_unbound_chart_sheet_record_for_graph_preflight() {
+        let mut state = sample_state();
+        add_second_worksheet(&mut state);
+        state.worksheets[1].kind = SheetKind::ChartSheet;
+        state.worksheets[1].relationship_id = None;
+        state.worksheets[1].part_uri = None;
+
+        state
+            .validate_for_save()
+            .expect("XLSX graph layer validates the unbound chart-sheet record");
+    }
+
+    #[test]
+    fn workbook_state_validate_for_save_rejects_unbound_ordinary_worksheet() {
+        let mut state = sample_state();
+        state.worksheets[0].relationship_id = None;
+        state.worksheets[0].part_uri = None;
+
+        let error = state
+            .validate_for_save()
+            .expect_err("ordinary worksheet requires a package binding");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("only an unbound chart-sheet record"));
+    }
+
+    #[test]
+    fn workbook_state_validate_for_save_rejects_incomplete_worksheet_binding() {
+        let mut state = sample_state();
+        state.worksheets[0].part_uri = None;
+
+        let error = state
+            .validate_for_save()
+            .expect_err("partial relationship binding must fail");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("relationship id and part URI"));
+    }
+
+    #[test]
+    fn workbook_state_validate_for_save_rejects_missing_worksheet_data() {
+        let mut state = sample_state();
+        state.worksheet_data.remove(&SheetId(3));
+
+        let error = state
+            .validate_for_save()
+            .expect_err("missing worksheet data must fail");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(
+            error
+                .message
+                .contains("worksheet Sheet1 (3) has no worksheet data")
+        );
+    }
+
+    #[test]
+    fn workbook_state_validate_for_save_rejects_dangling_defined_name_scope() {
+        let mut state = sample_state();
+        state
+            .add_defined_name(
+                NameScope::Worksheet(SheetId(99)),
+                "LocalName",
+                formula_source("Sheet1!$A$1"),
+                NameValidationMode::StrictExcel,
+            )
+            .expect("public API currently permits a dangling scope");
+
+        let error = state
+            .validate_for_save()
+            .expect_err("dangling defined-name scope must fail");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("defined name LocalName"));
+        assert!(error.message.contains("unknown worksheet 99"));
+    }
+
+    #[test]
+    fn workbook_state_validate_for_save_rejects_phantom_spill_owner() {
+        let mut state = sample_state();
+        state
+            .worksheet_data
+            .get_mut(&SheetId(3))
+            .expect("worksheet data")
+            .spill_owners
+            .insert((2, 2), (9, 9));
+
+        let error = state
+            .validate_for_save()
+            .expect_err("spill child with no owner range must fail");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("spill child R2C2"));
+        assert!(error.message.contains("unknown anchor R9C9"));
+    }
+
+    #[test]
+    fn workbook_state_validate_for_save_rejects_formula_spill_child() {
+        let mut state = sample_state();
+        seed_two_by_two_spill(&mut state);
+        state
+            .worksheet_data
+            .get_mut(&SheetId(3))
+            .expect("worksheet data")
+            .cells
+            .get_mut(&(3, 4))
+            .expect("spill child")
+            .formula = Some(formula_source("1+1"));
+
+        let error = state
+            .validate_for_save()
+            .expect_err("spill child formula must fail");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("spill child R3C4"));
+        assert!(error.message.contains("formula"));
     }
 
     #[test]

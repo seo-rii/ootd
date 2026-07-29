@@ -209,6 +209,26 @@
     }
 
     #[test]
+    fn save_rejects_public_worksheet_workbook_id_drift() {
+        let codec = XlsxCodec;
+        let mut loaded = codec
+            .load(
+                synthetic_workbook_bytes().as_slice(),
+                CommonLoadOptions::default(),
+            )
+            .expect("load workbook");
+        loaded.state.worksheets[0].workbook_id = WorkbookId(99);
+
+        let error = codec
+            .save(&loaded, CommonSaveOptions::default())
+            .expect_err("save must reject worksheet ownership drift");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("worksheet Sheet1"));
+        assert!(error.message.contains("workbook id 99"));
+    }
+
+    #[test]
     fn root_relationship_discovers_nonstandard_workbook_part() {
         let codec = XlsxCodec;
         let source_bytes = workbook_with_nonstandard_main_part_bytes();
@@ -12803,6 +12823,35 @@
             .lookup_name(Some(sheet_id), "localtotal")
             .expect("reopened local name");
         assert_eq!(reopened_name.refers_to.text, "Sheet1!$B$2");
+    }
+
+    #[test]
+    fn load_rejects_malformed_defined_name_local_sheet_id() {
+        let error = XlsxCodec
+            .load(
+                &workbook_with_defined_name_local_sheet_id("not-a-number"),
+                CommonLoadOptions::default(),
+            )
+            .expect_err("malformed localSheetId must not become workbook scope");
+
+        assert_eq!(error.code, OmErrorCode::Parse);
+        assert!(error.message.contains("invalid defined name localSheetId"));
+        assert!(error.message.contains("not-a-number"));
+    }
+
+    #[test]
+    fn load_rejects_out_of_range_defined_name_local_sheet_id() {
+        let error = XlsxCodec
+            .load(
+                &workbook_with_defined_name_local_sheet_id("9"),
+                CommonLoadOptions::default(),
+            )
+            .expect_err("out-of-range localSheetId must not become workbook scope");
+
+        assert_eq!(error.code, OmErrorCode::Parse);
+        assert!(error.message.contains("defined name LocalName"));
+        assert!(error.message.contains("localSheetId 9"));
+        assert!(error.message.contains("1 worksheets"));
     }
 
     #[test]
@@ -118036,6 +118085,28 @@
         ]);
 
         package.to_bytes().expect("package bytes")
+    }
+
+    fn workbook_with_defined_name_local_sheet_id(local_sheet_id: &str) -> Vec<u8> {
+        let mut package = OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("package");
+        let workbook_xml = std::str::from_utf8(
+            package
+                .part("xl/workbook.xml")
+                .expect("workbook part")
+                .bytes
+                .as_slice(),
+        )
+        .expect("workbook utf8")
+        .replace(
+            "</sheets>",
+            &format!(
+                "</sheets><definedNames><definedName name=\"LocalName\" localSheetId=\"{local_sheet_id}\">Sheet1!$A$1</definedName></definedNames>"
+            ),
+        );
+        package
+            .replace_part_bytes("xl/workbook.xml", workbook_xml.into_bytes())
+            .expect("replace workbook part");
+        package.to_bytes().expect("defined-name workbook bytes")
     }
 
     fn workbook_with_dynamic_array_formula_bytes() -> Vec<u8> {
