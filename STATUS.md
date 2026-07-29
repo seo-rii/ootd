@@ -46,7 +46,9 @@ contract-based until Milestone M1 pins the first behavioral Excel corpus.
   inline public-router arms remain as the final M2 dispatch debt.
 - M3 input safety: default OPC ZIP loading is resource-bounded; canonical part identities are
   enforced across load/mutation/save; relationship attributes, IDs, target modes, and internal
-  targets fail closed; XML-bearing parts receive a shared bounded well-formedness preflight.
+  targets fail closed; XML-bearing parts receive a shared bounded well-formedness preflight. ZIP
+  output uses a canonical DOS epoch for every entry, so wall-clock boundaries cannot perturb
+  repeated package bytes or artifact hashes.
 - OPC content-types boundary: `[Content_Types].xml` must have the package content-types `Types`
   expanded root name, while arbitrary bound prefixes are accepted. Only direct namespace-matching
   `Default` and `Override` children affect resolution. Required unqualified attributes, absolute

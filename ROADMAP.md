@@ -160,6 +160,9 @@ Active order:
    empty/manifest/relationship owners, single-segment `.rels`, nested reserved `_rels` directories,
    malformed placement, and misplaced relationships MIME fail closed. Strip can remove root-level
    or percent-aliased active edges before the same final gate.
+   `TEST-003` is complete (2026-07-29, synthetic): generic OPC serialization assigns every ZIP
+   entry the canonical DOS epoch instead of the wall clock, making repeated package bytes and
+   pinned artifact hashes stable across two-second timestamp boundaries.
    **Active:** `OOTD-031` chart/drawing/support-snapshot ownership graph invariants, then
    `OOTD-032`/`OOTD-033`, the common reference AST, and `OOTD-048` consumer migration.
 30. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before

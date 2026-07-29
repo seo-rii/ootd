@@ -219,7 +219,7 @@ impl OpcPackage {
         let canonical_names = canonical_part_names(&self.parts, OmErrorCode::InvalidArgument)?;
 
         for (part, canonical_name) in self.parts.iter().zip(canonical_names) {
-            let options = SimpleFileOptions::default().compression_method(part.compression);
+            let options = SimpleFileOptions::DEFAULT.compression_method(part.compression);
             writer
                 .start_file(&canonical_name.spelling, options)
                 .map_err(zip_error)?;
@@ -1091,11 +1091,44 @@ mod tests {
     use super::{CompressionMethod, LoadLimits, OpcPackage, OpcPart};
     use office_common::OmErrorCode;
     use std::io::{Cursor, Write};
-    use zip::ZipWriter;
     use zip::write::SimpleFileOptions;
+    use zip::{DateTime, ZipArchive, ZipWriter};
 
     fn test_package(parts: Vec<OpcPart>) -> OpcPackage {
         OpcPackage::try_new(parts).expect("test OPC package should have valid part identities")
+    }
+
+    #[test]
+    fn serialization_uses_canonical_zip_entry_timestamps() {
+        let package = test_package(vec![
+            OpcPart {
+                name: "one.xml".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: b"<one/>".to_vec(),
+            },
+            OpcPart {
+                name: "nested/two.bin".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Deflated,
+                bytes: vec![1, 2, 3],
+            },
+        ]);
+
+        let bytes = package.to_bytes().expect("package bytes");
+        let mut archive =
+            ZipArchive::new(Cursor::new(bytes.as_slice())).expect("serialized package");
+        for index in 0..archive.len() {
+            let file = archive.by_index(index).expect("serialized package entry");
+            assert_eq!(
+                file.last_modified(),
+                Some(DateTime::DEFAULT),
+                "{}",
+                file.name()
+            );
+        }
+        drop(archive);
+        assert_eq!(bytes, package.to_bytes().expect("repeated package bytes"));
     }
 
     #[test]

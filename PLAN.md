@@ -295,6 +295,9 @@ Wave 2 exit gate:
    single-segment `.rels`, 중첩된 reserved `_rels` directory, relationships MIME의 잘못된 URI
    배치를 거부한다. active-content traversal도 같은 owner derivation을 사용해 root-level 및
    percent-aliased owner 관계를 정리하며, Strip 뒤 살아남은 ownerless part는 출력되지 않는다.
+   `TEST-003` 완료 (2026-07-29, synthetic): `OpcPackage::to_bytes()`가 모든 ZIP entry에
+   canonical DOS epoch `1980-01-01 00:00:00`을 명시해 wall clock을 직렬화에 주입하지 않는다.
+   동일 package의 반복 output bytes와 entry metadata를 `office-opc` 회귀로 고정한다.
    **다음:** `OOTD-031` chart/drawing/support ownership graph validation을 독립 work unit으로
    닫은 뒤 `OOTD-032`/`OOTD-033`과 `OOTD-054` private command 전환을 진행한다.
 13. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
