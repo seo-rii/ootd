@@ -279,9 +279,19 @@ Wave 2 exit gate:
    요구하지 않으며, relationship-part 판별도 OPC lookup과 같은 case/percent canonical
    identity를 사용한다. Strip은 orphan active marker를 먼저 정리한 뒤 남은 closure를
    검사한다. 세부 계약은 `docs/interfaces/opc_relationships.md`에 있다.
-   **다음:** `OOTD-031` manifest/content-type cache와 chart/drawing/support snapshot graph
-   validation을 독립 work unit으로 닫은 뒤
-   `OOTD-032`/`OOTD-033`과 `OOTD-054` private command 전환을 진행한다.
+   5단계 완료 (2026-07-29, synthetic): active-content policy inventory 전에 bounded
+   `[Content_Types].xml` parse와 exact part cache 대조를 수행하고, Preserve/Refuse 최종
+   serialization 및 Strip cleanup 직후에는 manifest 존재, 모든 실제 part의 content-type
+   coverage, canonical Override target 존재를 강제하고 manifest 자체를 향한 Override를
+   거부한다. Default extension은 canonical identity의 마지막 path segment에서만 계산하며
+   Strip Override cleanup도 OPC lookup과 같은 case/percent canonical identity를 사용한다.
+   Strip의 workbook 보호·가시성 검증은 root relationship로 발견한 relocated
+   Transitional/Strict main part를 기준으로 한다. public snapshot `Option`을 지워 검사를
+   우회할 수 없으며 세부 계약은
+   `docs/interfaces/opc_content_types.md`에 있다.
+   **다음:** `OOTD-031` relationship-owner 존재와 chart/drawing/support ownership graph
+   validation을 독립 work unit으로 닫은 뒤 `OOTD-032`/`OOTD-033`과 `OOTD-054` private command
+   전환을 진행한다.
 13. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
    structured error에 추가한다.
 

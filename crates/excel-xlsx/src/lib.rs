@@ -1781,6 +1781,7 @@ impl XlsxCodec {
         workbook: &LoadedXlsxWorkbook,
         options: SaveOptions,
     ) -> OmResult<ActiveContentSaveOutput> {
+        workbook.package.validate_content_type_cache()?;
         let current_inventory = collect_active_content_inventory(&workbook.package)?;
         let detected_kinds = workbook
             .active_content_inventory
@@ -1814,8 +1815,11 @@ impl XlsxCodec {
             ActiveContentPolicy::Strip => {
                 let preserved_bytes = self.save_preserving_active_content(workbook, options)?;
                 let package = OpcPackage::from_bytes(&preserved_bytes)?;
-                let (package, mut audit) = strip_active_content_from_package(package)?;
+                let main_document = discover_workbook_main_document(&package)?;
+                let (package, mut audit) =
+                    strip_active_content_from_package(package, &main_document.part_uri)?;
                 audit.detected_kinds = detected_kinds;
+                package.validate_content_types_for_save()?;
                 ensure_package_relationship_closure(&package)?;
                 Ok(ActiveContentSaveOutput {
                     bytes: package.to_bytes()?,
@@ -3741,6 +3745,7 @@ impl XlsxCodec {
         }
 
         if options.active_content_policy != ActiveContentPolicy::Strip {
+            package.validate_content_types_for_save()?;
             ensure_package_relationship_closure(&package)?;
         }
         package.to_bytes()

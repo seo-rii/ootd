@@ -147,8 +147,16 @@ Active order:
    active-content Strip. Normalized internal targets must resolve to canonical package parts;
    relationship-part recognition shares package lookup's case/percent canonical identity, external
    targets remain exempt, and Strip may clean orphan active markers before the final gate.
-   **Active:** `OOTD-031` manifest/content-type and chart/drawing/support-snapshot graph invariants,
-   then `OOTD-032`/`OOTD-033`, the common reference AST, and `OOTD-048` consumer migration.
+   `OOTD-031` stage 5 is complete (2026-07-29, synthetic): bounded manifest/cache validation now
+   precedes active-content policy inventory, while final Preserve/Refuse and post-Strip gates require
+   `[Content_Types].xml`, exact cache resolution, complete part coverage, and non-orphan canonical
+   Overrides, while an Override cannot target the manifest itself. Default extension lookup uses
+   only the canonical final path segment, Strip cleanup shares the package's case/percent canonical
+   identity, relocated Transitional/Strict main parts remain protected during Strip, and clearing
+   public preservation snapshots cannot bypass the gate.
+   **Active:** `OOTD-031` relationship-owner and chart/drawing/support-snapshot ownership graph
+   invariants, then `OOTD-032`/`OOTD-033`, the common reference AST, and `OOTD-048` consumer
+   migration.
 30. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
    claiming practical chart/pivot/style parity.
 

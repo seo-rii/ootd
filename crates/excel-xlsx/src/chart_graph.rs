@@ -3154,7 +3154,8 @@ mod tests {
         PendingPackagePart, PendingPackageRelationship, XlsxCodec,
     };
     use super::{
-        CHART_PART_CONTENT_TYPE, DRAWING_RELATIONSHIP_TYPE, append_chart_anchors,
+        CHART_PART_CONTENT_TYPE, CONTENT_TYPES_PART_NAME, DRAWING_RELATIONSHIP_TYPE,
+        RELATIONSHIPS_PART_CONTENT_TYPE, append_chart_anchors,
         append_content_type_override_if_missing, append_relationship, attach_drawing_element,
         insert_sheet_into_workbook_xml, materialize_state_only_chart_graphs,
     };
@@ -3210,7 +3211,7 @@ mod tests {
                 },
                 OpcPart {
                     name: "_rels/.rels".to_string(),
-                    content_type: None,
+                    content_type: Some(RELATIONSHIPS_PART_CONTENT_TYPE.to_string()),
                     compression: CompressionMethod::Stored,
                     bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
@@ -3220,7 +3221,10 @@ mod tests {
                 },
                 OpcPart {
                     name: "xl/workbook.xml".to_string(),
-                    content_type: None,
+                    content_type: Some(
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"
+                            .to_string(),
+                    ),
                     compression: CompressionMethod::Stored,
                     bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
 <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
@@ -3230,7 +3234,7 @@ mod tests {
                 },
                 OpcPart {
                     name: "xl/_rels/workbook.xml.rels".to_string(),
-                    content_type: None,
+                    content_type: Some(RELATIONSHIPS_PART_CONTENT_TYPE.to_string()),
                     compression: CompressionMethod::Stored,
                     bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
@@ -3240,7 +3244,10 @@ mod tests {
                 },
                 OpcPart {
                     name: "xl/worksheets/sheet1.xml".to_string(),
-                    content_type: None,
+                    content_type: Some(
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"
+                            .to_string(),
+                    ),
                     compression: CompressionMethod::Stored,
                     bytes: sheet_xml,
                 },
@@ -3515,6 +3522,21 @@ mod tests {
                 bytes: vec![9, 9, 9],
             })
             .expect("reserve image1 target");
+        let content_types = append_content_type_override_if_missing(
+            workbook
+                .package
+                .part(CONTENT_TYPES_PART_NAME)
+                .expect("content types manifest")
+                .bytes
+                .as_slice(),
+            "xl/media/image1.png",
+            "image/png",
+        )
+        .expect("declare reserved image content type");
+        workbook
+            .package
+            .replace_part_bytes(CONTENT_TYPES_PART_NAME, content_types)
+            .expect("replace content types manifest");
         workbook.state.drawings.insert(
             drawing_id,
             DrawingModel {
@@ -4489,12 +4511,16 @@ mod tests {
                 dirty: true,
             },
         );
-        let saved = XlsxCodec
-            .save(&workbook, SaveOptions::default())
-            .expect("stale override URI should be reserved");
-        let package = OpcPackage::from_bytes(&saved).expect("saved package");
-        assert!(!package.contains("xl/charts/chart1.xml"));
-        assert!(package.contains("xl/charts/chart2.xml"));
+        let materialized = materialize_state_only_chart_graphs(workbook)
+            .expect("stale override URI should remain reserved during allocation");
+        assert!(!materialized.package.contains("xl/charts/chart1.xml"));
+        assert!(materialized.package.contains("xl/charts/chart2.xml"));
+
+        let error = XlsxCodec
+            .save(&materialized, SaveOptions::default())
+            .expect_err("final save must reject the stale content type Override");
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("xl/charts/chart1.xml"));
     }
 
     #[test]

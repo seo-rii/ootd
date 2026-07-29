@@ -26,12 +26,16 @@ compile-time fixture whose failure is a programming error.
 
 ## Remaining OOTD-031 Work
 
-This stage closes only part-name and identity construction invariants. `OpcPart` payload fields,
-`OpcPackage::default`, and raw add/replace/remove mutations do not yet prove that a package has a
-valid `[Content_Types].xml` manifest, coherent cached content types, or a relationship part with an
-existing owner. Internal relationship-target closure is enforced separately at XLSX save. The
-remaining checks belong to later OOTD-031 save-validation stages. Workbook/model topology and
-public field encapsulation remain separately tracked by OOTD-031 and OOTD-054.
+Construction alone still closes only part-name and identity invariants. `OpcPart` payload fields,
+`OpcPackage::default`, and raw add/replace/remove mutations may temporarily produce an incomplete
+graph, because generic OPC assembly and active-content cleanup need staged mutation. XLSX policy
+inventory now calls the bounded `validate_content_type_cache`, and final Preserve/Refuse or
+post-Strip serialization calls `validate_content_types_for_save` to require manifest/part/cache
+coherence, reject manifest-self Overrides, and resolve Default extensions from only the canonical
+final path segment. Strip protects the root-relationship-discovered workbook main part rather than
+assuming `xl/workbook.xml`. Internal relationship-target closure is enforced at the same final XLSX
+boundaries. Relationship-owner existence, chart/drawing/support ownership graphs, workbook/model
+topology, and public field encapsulation remain separately tracked by OOTD-031 and OOTD-054.
 
 The current evidence is synthetic; no desktop Excel Oracle claim is attached to this constructor
 contract.

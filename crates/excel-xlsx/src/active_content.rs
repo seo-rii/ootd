@@ -34,6 +34,7 @@ struct PackageRelationshipEntry {
 
 pub(super) fn strip_active_content_from_package(
     mut package: OpcPackage,
+    workbook_part_uri: &str,
 ) -> OmResult<(OpcPackage, ActiveContentAuditManifest)> {
     let inventory = collect_active_content_inventory(&package)?;
     let mut audit = ActiveContentAuditManifest::observed(
@@ -64,7 +65,7 @@ pub(super) fn strip_active_content_from_package(
         }
     }
 
-    for protected_part_uri in [CONTENT_TYPES_PART_NAME, "xl/workbook.xml"] {
+    for protected_part_uri in [CONTENT_TYPES_PART_NAME, workbook_part_uri] {
         if roots
             .iter()
             .any(|part_uri| part_uri.eq_ignore_ascii_case(protected_part_uri))
@@ -289,9 +290,11 @@ pub(super) fn strip_active_content_from_package(
             ),
         ));
     }
-    let workbook_xml = package
-        .part("xl/workbook.xml")
-        .ok_or_else(|| OmError::parse("workbook package is missing xl/workbook.xml"))?;
+    let workbook_xml = package.part(workbook_part_uri).ok_or_else(|| {
+        OmError::parse(format!(
+            "workbook package is missing discovered main part {workbook_part_uri}"
+        ))
+    })?;
     let (sheet_count, visible_sheet_count) = workbook_sheet_counts(&workbook_xml.bytes)?;
     if sheet_count == 0 {
         return Err(OmError::new(
@@ -811,7 +814,7 @@ fn strip_active_content_type_entries(
             Ok(_) if skip_depth > 0 => {}
             Ok(Event::Start(element)) => {
                 if let Some(entry) = content_type_entry(&element, reader.decoder())?
-                    && should_strip_content_type_entry(&entry, removed_part_uris)
+                    && should_strip_content_type_entry(&entry, removed_part_uris)?
                 {
                     removed_entries.push(entry);
                     skip_depth = 1;
@@ -823,7 +826,7 @@ fn strip_active_content_type_entries(
             }
             Ok(Event::Empty(element)) => {
                 if let Some(entry) = content_type_entry(&element, reader.decoder())?
-                    && should_strip_content_type_entry(&entry, removed_part_uris)
+                    && should_strip_content_type_entry(&entry, removed_part_uris)?
                 {
                     removed_entries.push(entry);
                 } else {
@@ -882,15 +885,27 @@ fn content_type_entry(
 fn should_strip_content_type_entry(
     entry: &ActiveContentRemovedContentTypeEntry,
     removed_part_uris: &BTreeSet<String>,
-) -> bool {
-    active_content_kind_from_content_type(&entry.content_type).is_some()
-        || (entry.entry_kind == ActiveContentContentTypeEntryKind::Override
-            && removed_part_uris.iter().any(|part_uri| {
-                entry
-                    .selector
-                    .trim_start_matches('/')
-                    .eq_ignore_ascii_case(part_uri)
-            }))
+) -> OmResult<bool> {
+    if active_content_kind_from_content_type(&entry.content_type).is_some() {
+        return Ok(true);
+    }
+    if entry.entry_kind != ActiveContentContentTypeEntryKind::Override {
+        return Ok(false);
+    }
+
+    let selector_identity =
+        OpcPackage::canonical_part_identity(&entry.selector).map_err(|error| {
+            OmError::invalid_state(format!(
+                "active-content strip found an invalid content type Override PartName {:?}: {}",
+                entry.selector, error.message
+            ))
+        })?;
+    for part_uri in removed_part_uris {
+        if OpcPackage::canonical_part_identity(part_uri)? == selector_identity {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn active_content_kinds_for_part(part: &OpcPart) -> BTreeSet<ActiveContentKind> {
@@ -1273,10 +1288,13 @@ mod tests {
             selector: "/custom/payload.bin".to_string(),
             content_type: "application/octet-stream".to_string(),
         };
-        assert!(should_strip_content_type_entry(
-            &removed_entry,
-            &BTreeSet::from(["custom/payload.bin".to_string()])
-        ));
+        assert!(
+            should_strip_content_type_entry(
+                &removed_entry,
+                &BTreeSet::from(["custom/payload.bin".to_string()])
+            )
+            .expect("canonical content type Override comparison")
+        );
         let (stripped_content_types, stripped_entries) = strip_active_content_type_entries(
             &package
                 .part(CONTENT_TYPES_PART_NAME)
@@ -1293,7 +1311,8 @@ mod tests {
         );
 
         let (stripped_package, audit) =
-            strip_active_content_from_package(package).expect("strip raw manifest package");
+            strip_active_content_from_package(package, "xl/workbook.xml")
+                .expect("strip raw manifest package");
         assert!(!stripped_package.contains("custom/payload.bin"));
         assert_eq!(audit.removed_parts.len(), 1);
     }

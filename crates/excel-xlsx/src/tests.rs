@@ -433,6 +433,332 @@
     }
 
     #[test]
+    fn save_rejects_missing_content_types_manifest_after_snapshot_is_cleared() {
+        let codec = XlsxCodec;
+        let mut loaded = codec
+            .load(
+                synthetic_workbook_bytes().as_slice(),
+                CommonLoadOptions::default(),
+            )
+            .expect("load workbook");
+        assert!(loaded.package.remove_part("[Content_Types].xml"));
+        loaded.support_parts.content_types_source_bytes = None;
+        loaded.support_parts.content_types_summary = None;
+
+        let error = codec
+            .save(&loaded, CommonSaveOptions::default())
+            .expect_err("save must require the OPC content types manifest");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("[Content_Types].xml"));
+    }
+
+    #[test]
+    fn save_rejects_package_part_without_manifest_content_type() {
+        let codec = XlsxCodec;
+        let mut loaded = codec
+            .load(
+                synthetic_workbook_bytes().as_slice(),
+                CommonLoadOptions::default(),
+            )
+            .expect("load workbook");
+        loaded
+            .package
+            .add_part(OpcPart {
+                name: "custom/item.ootd".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: b"opaque".to_vec(),
+            })
+            .expect("add untyped package part");
+
+        let error = codec
+            .save(&loaded, CommonSaveOptions::default())
+            .expect_err("save must require a manifest content type for every package part");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("custom/item.ootd"));
+        assert!(error.message.contains("content type"));
+    }
+
+    #[test]
+    fn save_rejects_stale_content_type_override_after_snapshot_is_cleared() {
+        let codec = XlsxCodec;
+        let mut loaded = codec
+            .load(
+                synthetic_workbook_bytes().as_slice(),
+                CommonLoadOptions::default(),
+            )
+            .expect("load workbook");
+        let content_types = String::from_utf8(
+            loaded
+                .package
+                .part("[Content_Types].xml")
+                .expect("content types manifest")
+                .bytes
+                .clone(),
+        )
+        .expect("content types XML")
+        .replace(
+            "</Types>",
+            "  <Override PartName=\"/custom/missing.bin\" ContentType=\"application/vnd.ootd.missing\"/>\n</Types>",
+        );
+        loaded
+            .package
+            .replace_part_bytes("[Content_Types].xml", content_types.into_bytes())
+            .expect("replace content types manifest");
+        loaded.support_parts.content_types_source_bytes = None;
+        loaded.support_parts.content_types_summary = None;
+
+        let error = codec
+            .save(&loaded, CommonSaveOptions::default())
+            .expect_err("save must reject an Override whose target part is missing");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("custom/missing.bin"));
+        assert!(error.message.contains("Override"));
+    }
+
+    #[test]
+    fn save_rejects_cached_content_type_that_drifted_from_manifest() {
+        let codec = XlsxCodec;
+        let mut loaded = codec
+            .load(
+                synthetic_workbook_bytes().as_slice(),
+                CommonLoadOptions::default(),
+            )
+            .expect("load workbook");
+        let content_types = String::from_utf8(
+            loaded
+                .package
+                .part("[Content_Types].xml")
+                .expect("content types manifest")
+                .bytes
+                .clone(),
+        )
+        .expect("content types XML")
+        .replace(
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml",
+            "application/vnd.ootd.drifted-worksheet+xml",
+        );
+        loaded
+            .package
+            .replace_part_bytes("[Content_Types].xml", content_types.into_bytes())
+            .expect("replace content types manifest");
+        loaded.support_parts.content_types_source_bytes = None;
+        loaded.support_parts.content_types_summary = None;
+
+        let error = codec
+            .save(&loaded, CommonSaveOptions::default())
+            .expect_err("save must reject a stale cached content type");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("xl/worksheets/sheet1.xml"));
+        assert!(error.message.contains("cached content type"));
+    }
+
+    #[test]
+    fn active_content_policy_rejects_fabricated_cached_content_type_before_inventory() {
+        let codec = XlsxCodec;
+        let mut loaded = codec
+            .load(
+                synthetic_workbook_bytes().as_slice(),
+                CommonLoadOptions::default(),
+            )
+            .expect("load workbook");
+        let mut parts = loaded.package.parts().to_vec();
+        parts
+            .iter_mut()
+            .find(|part| part.name == "xl/worksheets/sheet1.xml")
+            .expect("worksheet part")
+            .content_type = Some("application/vnd.ms-office.vbaProject".to_string());
+        loaded.package = OpcPackage::try_new(parts).expect("rebuild package with stale cache");
+
+        let error = codec
+            .save_with_active_content_audit(
+                &loaded,
+                CommonSaveOptions {
+                    active_content_policy: ActiveContentPolicy::Refuse,
+                    ..CommonSaveOptions::default()
+                },
+            )
+            .expect_err("cache drift must fail before active-content classification");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("xl/worksheets/sheet1.xml"));
+        assert!(error.message.contains("cached content type"));
+    }
+
+    #[test]
+    fn strip_policy_rejects_stale_non_active_content_type_override_after_cleanup() {
+        let codec = XlsxCodec;
+        let mut loaded = codec
+            .load(
+                synthetic_workbook_bytes().as_slice(),
+                CommonLoadOptions::default(),
+            )
+            .expect("load workbook");
+        let content_types = String::from_utf8(
+            loaded
+                .package
+                .part("[Content_Types].xml")
+                .expect("content types manifest")
+                .bytes
+                .clone(),
+        )
+        .expect("content types XML")
+        .replace(
+            "</Types>",
+            "  <Override PartName=\"/custom/missing.bin\" ContentType=\"application/vnd.ootd.missing\"/>\n</Types>",
+        );
+        loaded
+            .package
+            .replace_part_bytes("[Content_Types].xml", content_types.into_bytes())
+            .expect("replace content types manifest");
+        loaded.support_parts.content_types_source_bytes = None;
+        loaded.support_parts.content_types_summary = None;
+
+        let error = codec
+            .save_with_active_content_audit(
+                &loaded,
+                CommonSaveOptions {
+                    active_content_policy: ActiveContentPolicy::Strip,
+                    ..CommonSaveOptions::default()
+                },
+            )
+            .expect_err("strip must validate the remaining content types after cleanup");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("custom/missing.bin"));
+        assert!(error.message.contains("Override"));
+    }
+
+    #[test]
+    fn strip_policy_removes_canonical_alias_override_for_removed_active_part() {
+        let codec = XlsxCodec;
+        let mut package = OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("package");
+        let content_types = String::from_utf8(
+            package
+                .part("[Content_Types].xml")
+                .expect("content types manifest")
+                .bytes
+                .clone(),
+        )
+        .expect("content types XML")
+        .replace(
+            "</Types>",
+            "  <Override PartName=\"/XL/%61ctiveX/orphan.bin\" ContentType=\"application/octet-stream\"/>\n</Types>",
+        );
+        package
+            .replace_part_bytes("[Content_Types].xml", content_types.into_bytes())
+            .expect("replace content types manifest");
+        package
+            .add_part(OpcPart {
+                name: "xl/activeX/orphan.bin".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: vec![1, 2, 3],
+            })
+            .expect("add active package part");
+        let loaded = codec
+            .load(
+                &package.to_bytes().expect("active package bytes"),
+                CommonLoadOptions::default(),
+            )
+            .expect("load active package");
+
+        let stripped = codec
+            .save_with_active_content_audit(
+                &loaded,
+                CommonSaveOptions {
+                    active_content_policy: ActiveContentPolicy::Strip,
+                    ..CommonSaveOptions::default()
+                },
+            )
+            .expect("strip must remove a canonical-alias Override with its active part");
+
+        let stripped_package = OpcPackage::from_bytes(&stripped.bytes).expect("stripped package");
+        assert!(!stripped_package.contains("xl/activeX/orphan.bin"));
+        assert!(
+            !std::str::from_utf8(
+                &stripped_package
+                    .part("[Content_Types].xml")
+                    .expect("stripped content types manifest")
+                    .bytes,
+            )
+            .expect("stripped content types XML")
+            .contains("%61ctiveX")
+        );
+    }
+
+    #[test]
+    fn strip_policy_preserves_relocated_transitional_and_strict_main_parts() {
+        let codec = XlsxCodec;
+        for (label, source_bytes) in [
+            (
+                "Transitional",
+                workbook_with_nonstandard_main_part_bytes(),
+            ),
+            (
+                "Strict",
+                strict_workbook_with_nonstandard_main_part_bytes(),
+            ),
+        ] {
+            let mut package = OpcPackage::from_bytes(&source_bytes).expect("source package");
+            let content_types = String::from_utf8(
+                package
+                    .part("[Content_Types].xml")
+                    .expect("content types manifest")
+                    .bytes
+                    .clone(),
+            )
+            .expect("content types XML")
+            .replace(
+                "</Types>",
+                "  <Override PartName=\"/xl/activeX/orphan.bin\" ContentType=\"application/octet-stream\"/>\n</Types>",
+            );
+            package
+                .replace_part_bytes("[Content_Types].xml", content_types.into_bytes())
+                .expect("declare active part");
+            package
+                .add_part(OpcPart {
+                    name: "xl/activeX/orphan.bin".to_string(),
+                    content_type: None,
+                    compression: CompressionMethod::Stored,
+                    bytes: vec![1, 2, 3],
+                })
+                .expect("add active part");
+            let loaded = codec
+                .load(
+                    &package.to_bytes().expect("active package bytes"),
+                    CommonLoadOptions::default(),
+                )
+                .expect("load relocated active workbook");
+
+            let stripped = codec
+                .save_with_active_content_audit(
+                    &loaded,
+                    CommonSaveOptions {
+                        active_content_policy: ActiveContentPolicy::Strip,
+                        ..CommonSaveOptions::default()
+                    },
+                )
+                .unwrap_or_else(|error| panic!("{label} Strip failed: {error}"));
+
+            let stripped_package =
+                OpcPackage::from_bytes(&stripped.bytes).expect("stripped package");
+            assert!(
+                stripped_package.contains("documents/book/main.xml"),
+                "{label} relocated main part"
+            );
+            assert!(
+                !stripped_package.contains("xl/activeX/orphan.bin"),
+                "{label} active part"
+            );
+        }
+    }
+
+    #[test]
     fn save_rejects_dangling_internal_relationship_in_opaque_part() {
         let codec = XlsxCodec;
         let mut package = OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("package");

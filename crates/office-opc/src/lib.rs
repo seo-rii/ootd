@@ -250,6 +250,107 @@ impl OpcPackage {
         &self.parts
     }
 
+    /// Validates cached part content types before policy code inspects the package.
+    pub fn validate_content_type_cache(&self) -> OmResult<()> {
+        let manifest = self.content_types_manifest_for_save()?;
+        self.validate_content_type_cache_against(&manifest)
+    }
+
+    /// Validates the content-types manifest against the current package before serialization.
+    pub fn validate_content_types_for_save(&self) -> OmResult<()> {
+        const CONTENT_TYPES_PART_NAME: &str = "[Content_Types].xml";
+
+        let manifest = self.content_types_manifest_for_save()?;
+        self.validate_content_type_cache_against(&manifest)?;
+        let content_types_identity = part_identity_key(CONTENT_TYPES_PART_NAME)
+            .expect("the fixed content-types part name is canonical");
+        let package_part_identities = self
+            .parts
+            .iter()
+            .filter_map(|part| part_identity_key(&part.name))
+            .filter(|part_identity| part_identity != &content_types_identity)
+            .collect::<BTreeSet<_>>();
+
+        for override_part_identity in manifest.overrides.keys() {
+            if override_part_identity == &content_types_identity {
+                return Err(OmError::invalid_state(format!(
+                    "OPC content type Override cannot target the manifest itself: {override_part_identity}"
+                )));
+            }
+            if !package_part_identities.contains(override_part_identity) {
+                return Err(OmError::invalid_state(format!(
+                    "OPC content type Override targets a missing package part: {override_part_identity}"
+                )));
+            }
+        }
+
+        for part in &self.parts {
+            if part_identity_key(&part.name).as_deref() == Some(content_types_identity.as_str()) {
+                continue;
+            }
+            if manifest.resolve(&part.name).is_none() {
+                return Err(OmError::invalid_state(format!(
+                    "OPC package part has no content type in {CONTENT_TYPES_PART_NAME}: {}",
+                    part.name
+                )));
+            }
+        }
+
+        Ok(())
+    }
+
+    fn content_types_manifest_for_save(&self) -> OmResult<ContentTypesManifest> {
+        const CONTENT_TYPES_PART_NAME: &str = "[Content_Types].xml";
+
+        let manifest_part = self.part(CONTENT_TYPES_PART_NAME).ok_or_else(|| {
+            OmError::invalid_state(format!(
+                "OPC package is missing required {CONTENT_TYPES_PART_NAME}"
+            ))
+        })?;
+        preflight_xml_part(
+            CONTENT_TYPES_PART_NAME,
+            manifest_part.bytes.as_slice(),
+            &LoadLimits::default(),
+        )
+        .map_err(|error| {
+            if error.code == OmErrorCode::ResourceLimit {
+                error
+            } else {
+                OmError::invalid_state(format!(
+                    "invalid {CONTENT_TYPES_PART_NAME}: {}",
+                    error.message
+                ))
+            }
+        })?;
+        parse_content_types(manifest_part.bytes.as_slice()).map_err(|error| {
+            OmError::invalid_state(format!(
+                "invalid {CONTENT_TYPES_PART_NAME}: {}",
+                error.message
+            ))
+        })
+    }
+
+    fn validate_content_type_cache_against(&self, manifest: &ContentTypesManifest) -> OmResult<()> {
+        const CONTENT_TYPES_PART_NAME: &str = "[Content_Types].xml";
+        let content_types_identity = part_identity_key(CONTENT_TYPES_PART_NAME)
+            .expect("the fixed content-types part name is canonical");
+
+        for part in &self.parts {
+            if part_identity_key(&part.name).as_deref() == Some(content_types_identity.as_str()) {
+                continue;
+            }
+            let resolved_content_type = manifest.resolve(&part.name);
+            if part.content_type.as_deref() != resolved_content_type.as_deref() {
+                return Err(OmError::invalid_state(format!(
+                    "OPC package part {} has cached content type {:?} but {CONTENT_TYPES_PART_NAME} resolves {:?}",
+                    part.name, part.content_type, resolved_content_type
+                )));
+            }
+        }
+
+        Ok(())
+    }
+
     pub fn replace_part_bytes(&mut self, name: &str, bytes: Vec<u8>) -> OmResult<()> {
         let canonical_name = canonical_part_name(name, OmErrorCode::InvalidArgument)?;
         let part = self
@@ -632,12 +733,17 @@ struct ContentTypesManifest {
 
 impl ContentTypesManifest {
     fn resolve(&self, part_name: &str) -> Option<String> {
-        let override_key = part_identity_key(part_name)?;
-        if let Some(content_type) = self.overrides.get(&override_key) {
+        let canonical_name = canonical_part_name(part_name, OmErrorCode::InvalidArgument).ok()?;
+        if let Some(content_type) = self.overrides.get(&canonical_name.identity) {
             return Some(content_type.clone());
         }
 
-        let extension = part_name
+        let file_name = canonical_name
+            .identity
+            .rsplit('/')
+            .next()
+            .expect("a canonical OPC part identity has a final path segment");
+        let extension = file_name
             .rsplit_once('.')
             .map(|(_, ext)| ext.to_ascii_lowercase())?;
         self.defaults.get(&extension).cloned()
@@ -851,6 +957,11 @@ fn parse_content_types(xml: &[u8]) -> OmResult<ContentTypesManifest> {
                                     "OPC content type Default requires a non-empty Extension attribute",
                                 ));
                             }
+                            if content_type.trim().is_empty() {
+                                return Err(OmError::parse(
+                                    "OPC content type Default requires a non-empty ContentType attribute",
+                                ));
+                            }
                             let normalized_extension = extension.to_ascii_lowercase();
                             if manifest
                                 .defaults
@@ -889,6 +1000,11 @@ fn parse_content_types(xml: &[u8]) -> OmResult<ContentTypesManifest> {
                                     "OPC content type Override requires PartName and ContentType attributes",
                                 ));
                             };
+                            if content_type.trim().is_empty() {
+                                return Err(OmError::parse(
+                                    "OPC content type Override requires a non-empty ContentType attribute",
+                                ));
+                            }
                             if !part_name.starts_with('/') {
                                 return Err(OmError::parse(format!(
                                     "OPC content type Override requires an absolute PartName: {part_name}"
@@ -1081,7 +1197,7 @@ mod tests {
 
     #[test]
     fn content_types_manifest_rejects_ambiguous_typed_declarations() {
-        let cases: [(&str, &[u8], &str); 6] = [
+        let cases: [(&str, &[u8], &str); 8] = [
             (
                 "duplicate default",
                 br#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/first"/><Default Extension="XML" ContentType="application/second"/></Types>"#,
@@ -1106,6 +1222,16 @@ mod tests {
                 "canonical duplicate override",
                 br#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/XL/WORKBOOK.XML" ContentType="application/first"/><Override PartName="/xl/workbook.xml" ContentType="application/second"/></Types>"#,
                 "duplicate OPC content type override",
+            ),
+            (
+                "empty default content type",
+                br#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType=""/></Types>"#,
+                "Default requires a non-empty ContentType",
+            ),
+            (
+                "blank override content type",
+                br#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/xl/workbook.xml" ContentType=" "/></Types>"#,
+                "Override requires a non-empty ContentType",
             ),
             (
                 "nonempty default declaration",
@@ -1443,6 +1569,141 @@ mod tests {
                 .and_then(|part| part.content_type.clone()),
             Some("application/xml".to_string())
         );
+    }
+
+    #[test]
+    fn resolves_default_content_type_from_canonical_percent_aliased_extension() {
+        for part_name in ["custom/item.%78ml", "custom/item%2Exml"] {
+            let package = test_package(vec![
+                OpcPart {
+                    name: "[Content_Types].xml".to_string(),
+                    content_type: None,
+                    compression: CompressionMethod::Stored,
+                    bytes: br#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/></Types>"#.to_vec(),
+                },
+                OpcPart {
+                    name: part_name.to_string(),
+                    content_type: None,
+                    compression: CompressionMethod::Stored,
+                    bytes: b"<custom/>".to_vec(),
+                },
+            ]);
+
+            let reparsed = OpcPackage::from_bytes(&package.to_bytes().expect("package bytes"))
+                .expect("package parse");
+
+            assert_eq!(
+                reparsed
+                    .part(part_name)
+                    .and_then(|part| part.content_type.as_deref()),
+                Some("application/xml"),
+                "part: {part_name}"
+            );
+        }
+    }
+
+    #[test]
+    fn default_content_type_does_not_treat_dotted_parent_as_part_extension() {
+        let package = test_package(vec![
+            OpcPart {
+                name: "[Content_Types].xml".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: br#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="v1/item" ContentType="application/vnd.ootd.false-positive"/></Types>"#.to_vec(),
+            },
+            OpcPart {
+                name: "custom.v1/item".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: b"opaque".to_vec(),
+            },
+        ]);
+
+        let reparsed = OpcPackage::from_bytes(&package.to_bytes().expect("package bytes"))
+            .expect("package parse");
+
+        assert_eq!(
+            reparsed
+                .part("custom.v1/item")
+                .and_then(|part| part.content_type.as_deref()),
+            None
+        );
+    }
+
+    #[test]
+    fn content_type_save_validation_rejects_manifest_self_override() {
+        let package = test_package(vec![OpcPart {
+            name: "[Content_Types].xml".to_string(),
+            content_type: None,
+            compression: CompressionMethod::Stored,
+            bytes: br#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/[Content_Types].xml" ContentType="application/vnd.ootd.invalid-manifest"/></Types>"#.to_vec(),
+        }]);
+
+        let error = package
+            .validate_content_types_for_save()
+            .expect_err("the content-types manifest is not an OPC part target");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("[content_types].xml"));
+        assert!(error.message.contains("Override"));
+    }
+
+    #[test]
+    fn content_type_save_validation_distinguishes_cache_drift_from_final_coverage() {
+        let manifest = OpcPart {
+            name: "[Content_Types].xml".to_string(),
+            content_type: None,
+            compression: CompressionMethod::Stored,
+            bytes: br#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/></Types>"#.to_vec(),
+        };
+        let coherent = test_package(vec![
+            manifest.clone(),
+            OpcPart {
+                name: "custom/item.xml".to_string(),
+                content_type: Some("application/xml".to_string()),
+                compression: CompressionMethod::Stored,
+                bytes: b"<custom/>".to_vec(),
+            },
+        ]);
+        coherent
+            .validate_content_type_cache()
+            .expect("coherent cache");
+        coherent
+            .validate_content_types_for_save()
+            .expect("complete content type graph");
+
+        let missing_cache = test_package(vec![
+            manifest.clone(),
+            OpcPart {
+                name: "custom/item.xml".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: b"<custom/>".to_vec(),
+            },
+        ]);
+        let error = missing_cache
+            .validate_content_type_cache()
+            .expect_err("resolved content type requires an exact cache");
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("cached content type"));
+
+        let uncovered = test_package(vec![
+            manifest,
+            OpcPart {
+                name: "custom/item.ootd".to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes: b"opaque".to_vec(),
+            },
+        ]);
+        uncovered
+            .validate_content_type_cache()
+            .expect("unresolved part has no fabricated cache");
+        let error = uncovered
+            .validate_content_types_for_save()
+            .expect_err("final validation requires content type coverage");
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("custom/item.ootd"));
     }
 
     #[test]
