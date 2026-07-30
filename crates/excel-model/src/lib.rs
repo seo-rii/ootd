@@ -80,24 +80,25 @@ impl WorksheetData {
         Ok(())
     }
 
-    fn ensure_spill_topology_is_not_rearranged(
+    fn ensure_spill_topology_is_not_modified(
         &self,
         keys: impl IntoIterator<Item = (u32, u32)>,
+        operation: &str,
     ) -> OmResult<()> {
         for key in keys {
             if let Some(anchor) = self.spill_owner_for_key(key) {
                 return Err(OmError::new(
                     OmErrorCode::InvalidState,
                     format!(
-                        "cannot rearrange spill child R{}C{}; spill anchor is R{}C{}",
-                        key.0, key.1, anchor.0, anchor.1,
+                        "cannot {operation} spill child R{}C{}; spill anchor is R{}C{}",
+                        key.0, key.1, anchor.0, anchor.1
                     ),
                 ));
             }
             if self.spill_ranges.contains_key(&key) || self.dynamic_array_formulas.contains(&key) {
                 return Err(OmError::new(
                     OmErrorCode::InvalidState,
-                    format!("cannot rearrange spill anchor R{}C{}", key.0, key.1),
+                    format!("cannot {operation} spill anchor R{}C{}", key.0, key.1),
                 ));
             }
         }
@@ -1375,6 +1376,37 @@ impl WorkbookState {
         self.apply_cell_batch_with_change(sheet_id, replacements, CellBatchMutationKind::Rearrange)
     }
 
+    pub fn fill_cells_with_change(
+        &mut self,
+        sheet_id: SheetId,
+        source_keys: BTreeSet<(u32, u32)>,
+        replacements: BTreeMap<(u32, u32), Option<CellData>>,
+    ) -> OmResult<bool> {
+        let worksheet = self.worksheet_data_for_sheet(sheet_id)?;
+        for &(row, col) in &source_keys {
+            ExcelLimits::validate_cell(row, col)?;
+        }
+        for &(row, col) in replacements.keys() {
+            ExcelLimits::validate_cell(row, col)?;
+        }
+        if replacements.is_empty() {
+            return Ok(false);
+        }
+        if source_keys.is_empty() {
+            return Err(OmError::invalid_argument(
+                "fill cell batch requires at least one source cell",
+            ));
+        }
+        worksheet.ensure_spill_topology_is_not_modified(
+            source_keys
+                .iter()
+                .copied()
+                .chain(replacements.keys().copied()),
+            "fill",
+        )?;
+        self.apply_cell_batch_with_change(sheet_id, replacements, CellBatchMutationKind::Rearrange)
+    }
+
     fn apply_cell_batch_with_change(
         &mut self,
         sheet_id: SheetId,
@@ -1395,8 +1427,10 @@ impl WorkbookState {
                     .ensure_spill_children_are_not_edited(updates.iter().map(|(key, _)| *key))?;
             }
             CellBatchMutationKind::Rearrange => {
-                worksheet
-                    .ensure_spill_topology_is_not_rearranged(updates.iter().map(|(key, _)| *key))?;
+                worksheet.ensure_spill_topology_is_not_modified(
+                    updates.iter().map(|(key, _)| *key),
+                    "rearrange",
+                )?;
             }
         }
 
@@ -3728,6 +3762,129 @@ mod tests {
         assert!(worksheet.dirty_cells.contains(&(1, 1)));
         assert!(worksheet.dirty_cells.contains(&(1, 2)));
         state.validate_for_save().expect("valid rearranged state");
+    }
+
+    #[test]
+    fn fill_cells_rejects_spill_sources_atomically() {
+        for source_key in [(3, 3), (4, 4)] {
+            let mut state = sample_state();
+            seed_two_by_two_spill(&mut state);
+            let before = state
+                .worksheet_data_for_sheet(SheetId(3))
+                .expect("worksheet data")
+                .clone();
+
+            let error = state
+                .fill_cells_with_change(
+                    SheetId(3),
+                    BTreeSet::from([source_key]),
+                    BTreeMap::from([(
+                        (1, 1),
+                        Some(CellData {
+                            value: CellValue::Text("changed".to_string()),
+                            formula: None,
+                            style_id: None,
+                        }),
+                    )]),
+                )
+                .expect_err("spill source should reject the whole fill");
+
+            assert_eq!(error.code, OmErrorCode::InvalidState, "{source_key:?}");
+            assert!(
+                error
+                    .message
+                    .contains(&format!("R{}C{}", source_key.0, source_key.1)),
+                "{source_key:?}: {error:?}",
+            );
+            assert_eq!(
+                state
+                    .worksheet_data_for_sheet(SheetId(3))
+                    .expect("worksheet data"),
+                &before,
+                "{source_key:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn fill_cells_preflights_unchanged_spill_destinations_before_updates() {
+        for destination_key in [(3, 3), (4, 4)] {
+            let mut state = sample_state();
+            seed_two_by_two_spill(&mut state);
+            let before = state
+                .worksheet_data_for_sheet(SheetId(3))
+                .expect("worksheet data")
+                .clone();
+            let unchanged_spill_cell = before
+                .cells
+                .get(&destination_key)
+                .expect("materialized spill cell")
+                .clone();
+
+            let error = state
+                .fill_cells_with_change(
+                    SheetId(3),
+                    BTreeSet::from([(1, 1)]),
+                    BTreeMap::from([
+                        (
+                            (1, 2),
+                            Some(CellData {
+                                value: CellValue::Text("changed".to_string()),
+                                formula: None,
+                                style_id: None,
+                            }),
+                        ),
+                        (destination_key, Some(unchanged_spill_cell)),
+                    ]),
+                )
+                .expect_err("spill destination should reject the whole fill");
+
+            assert_eq!(error.code, OmErrorCode::InvalidState, "{destination_key:?}");
+            assert!(
+                error
+                    .message
+                    .contains(&format!("R{}C{}", destination_key.0, destination_key.1)),
+                "{destination_key:?}: {error:?}",
+            );
+            assert_eq!(
+                state
+                    .worksheet_data_for_sheet(SheetId(3))
+                    .expect("worksheet data"),
+                &before,
+                "{destination_key:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn fill_cells_applies_plain_batch_and_tracks_dirty_cells() {
+        let mut state = sample_state();
+        let source = state
+            .worksheet_data_for_sheet(SheetId(3))
+            .expect("worksheet data")
+            .cells
+            .get(&(1, 1))
+            .expect("source cell")
+            .clone();
+
+        assert!(
+            state
+                .fill_cells_with_change(
+                    SheetId(3),
+                    BTreeSet::from([(1, 1)]),
+                    BTreeMap::from([((1, 2), Some(source.clone()))]),
+                )
+                .expect("fill plain cell")
+        );
+
+        let worksheet = state
+            .worksheet_data_for_sheet(SheetId(3))
+            .expect("worksheet data after fill");
+        assert_eq!(worksheet.cells.get(&(1, 1)), Some(&source));
+        assert_eq!(worksheet.cells.get(&(1, 2)), Some(&source));
+        assert!(worksheet.dirty);
+        assert!(worksheet.dirty_cells.contains(&(1, 2)));
+        state.validate_for_save().expect("valid filled state");
     }
 
     #[test]

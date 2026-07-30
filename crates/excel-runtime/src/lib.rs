@@ -11295,6 +11295,279 @@ impl ExcelRuntime {
                     return Ok(OmValue::Bool(replaced_any));
                 }
 
+                if matches!(member, "FillDown" | "FillRight" | "FillUp" | "FillLeft") {
+                    if !args.is_empty() {
+                        return Err(OmError::invalid_argument(format!(
+                            "Range.{member} does not accept arguments"
+                        )));
+                    }
+                    let (sheet_id, rects) = Self::range_set_single_sheet_rects(&range)?;
+                    let (source_keys, replacements) = {
+                        let runtime = self.runtime_workbook(workbook)?;
+                        if runtime.read_only {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+                        let original_cells = &runtime
+                            .loaded
+                            .state
+                            .worksheet_data_for_sheet(sheet_id)?
+                            .cells;
+                        let mut staged_cells: BTreeMap<
+                            (u32, u32),
+                            Option<excel_model::CellData>,
+                        > = BTreeMap::new();
+                        let mut source_keys = BTreeSet::new();
+                        for rect in rects {
+                            match member {
+                            "FillDown" => {
+                                let mut source_cells =
+                                    Vec::with_capacity(rect.width() as usize);
+                                for col in rect.col_first..=rect.col_last {
+                                    let key = (rect.row_first, col);
+                                    source_keys.insert(key);
+                                    source_cells.push(
+                                        staged_cells
+                                            .get(&key)
+                                            .cloned()
+                                            .unwrap_or_else(|| original_cells.get(&key).cloned()),
+                                    );
+                                }
+                                if rect.height() > 1 {
+                                    for row in (rect.row_first + 1)..=rect.row_last {
+                                        for (index, col) in
+                                            (rect.col_first..=rect.col_last).enumerate()
+                                        {
+                                            let key = (row, col);
+                                            let next_cell =
+                                                match source_cells[index].clone() {
+                                                    Some(mut cell) => {
+                                                        if let Some(formula) =
+                                                            cell.formula.as_mut()
+                                                            && !formula.is_r1c1
+                                                        {
+                                                            formula.text =
+                                                                shift_formula_a1_references(
+                                                                    &formula.text,
+                                                                    i64::from(row)
+                                                                        - i64::from(rect.row_first),
+                                                                    0,
+                                                                );
+                                                        }
+                                                        Some(cell)
+                                                    }
+                                                    None => staged_cells
+                                                        .get(&key)
+                                                        .cloned()
+                                                        .unwrap_or_else(|| {
+                                                            original_cells.get(&key).cloned()
+                                                        })
+                                                        .and_then(|existing| {
+                                                            existing.style_id.map(|_| {
+                                                                let mut cell = existing;
+                                                                cell.value = CellValue::Blank;
+                                                                cell.formula = None;
+                                                                cell
+                                                            })
+                                                        }),
+                                                };
+                                            staged_cells.insert(key, next_cell);
+                                        }
+                                    }
+                                }
+                            }
+                            "FillRight" => {
+                                let mut source_cells =
+                                    Vec::with_capacity(rect.height() as usize);
+                                for row in rect.row_first..=rect.row_last {
+                                    let key = (row, rect.col_first);
+                                    source_keys.insert(key);
+                                    source_cells.push(
+                                        staged_cells
+                                            .get(&key)
+                                            .cloned()
+                                            .unwrap_or_else(|| original_cells.get(&key).cloned()),
+                                    );
+                                }
+                                if rect.width() > 1 {
+                                    for (index, row) in
+                                        (rect.row_first..=rect.row_last).enumerate()
+                                    {
+                                        for col in (rect.col_first + 1)..=rect.col_last {
+                                            let key = (row, col);
+                                            let next_cell =
+                                                match source_cells[index].clone() {
+                                                    Some(mut cell) => {
+                                                        if let Some(formula) =
+                                                            cell.formula.as_mut()
+                                                            && !formula.is_r1c1
+                                                        {
+                                                            formula.text =
+                                                                shift_formula_a1_references(
+                                                                    &formula.text,
+                                                                    0,
+                                                                    i64::from(col)
+                                                                        - i64::from(rect.col_first),
+                                                                );
+                                                        }
+                                                        Some(cell)
+                                                    }
+                                                    None => staged_cells
+                                                        .get(&key)
+                                                        .cloned()
+                                                        .unwrap_or_else(|| {
+                                                            original_cells.get(&key).cloned()
+                                                        })
+                                                        .and_then(|existing| {
+                                                            existing.style_id.map(|_| {
+                                                                let mut cell = existing;
+                                                                cell.value = CellValue::Blank;
+                                                                cell.formula = None;
+                                                                cell
+                                                            })
+                                                        }),
+                                                };
+                                            staged_cells.insert(key, next_cell);
+                                        }
+                                    }
+                                }
+                            }
+                            "FillUp" => {
+                                let mut source_cells =
+                                    Vec::with_capacity(rect.width() as usize);
+                                for col in rect.col_first..=rect.col_last {
+                                    let key = (rect.row_last, col);
+                                    source_keys.insert(key);
+                                    source_cells.push(
+                                        staged_cells
+                                            .get(&key)
+                                            .cloned()
+                                            .unwrap_or_else(|| original_cells.get(&key).cloned()),
+                                    );
+                                }
+                                if rect.height() > 1 {
+                                    for row in rect.row_first..rect.row_last {
+                                        for (index, col) in
+                                            (rect.col_first..=rect.col_last).enumerate()
+                                        {
+                                            let key = (row, col);
+                                            let next_cell =
+                                                match source_cells[index].clone() {
+                                                    Some(mut cell) => {
+                                                        if let Some(formula) =
+                                                            cell.formula.as_mut()
+                                                            && !formula.is_r1c1
+                                                        {
+                                                            formula.text =
+                                                                shift_formula_a1_references(
+                                                                    &formula.text,
+                                                                    i64::from(row)
+                                                                        - i64::from(rect.row_last),
+                                                                    0,
+                                                                );
+                                                        }
+                                                        Some(cell)
+                                                    }
+                                                    None => staged_cells
+                                                        .get(&key)
+                                                        .cloned()
+                                                        .unwrap_or_else(|| {
+                                                            original_cells.get(&key).cloned()
+                                                        })
+                                                        .and_then(|existing| {
+                                                            existing.style_id.map(|_| {
+                                                                let mut cell = existing;
+                                                                cell.value = CellValue::Blank;
+                                                                cell.formula = None;
+                                                                cell
+                                                            })
+                                                        }),
+                                                };
+                                            staged_cells.insert(key, next_cell);
+                                        }
+                                    }
+                                }
+                            }
+                            "FillLeft" => {
+                                let mut source_cells =
+                                    Vec::with_capacity(rect.height() as usize);
+                                for row in rect.row_first..=rect.row_last {
+                                    let key = (row, rect.col_last);
+                                    source_keys.insert(key);
+                                    source_cells.push(
+                                        staged_cells
+                                            .get(&key)
+                                            .cloned()
+                                            .unwrap_or_else(|| original_cells.get(&key).cloned()),
+                                    );
+                                }
+                                if rect.width() > 1 {
+                                    for (index, row) in
+                                        (rect.row_first..=rect.row_last).enumerate()
+                                    {
+                                        for col in rect.col_first..rect.col_last {
+                                            let key = (row, col);
+                                            let next_cell =
+                                                match source_cells[index].clone() {
+                                                    Some(mut cell) => {
+                                                        if let Some(formula) =
+                                                            cell.formula.as_mut()
+                                                            && !formula.is_r1c1
+                                                        {
+                                                            formula.text =
+                                                                shift_formula_a1_references(
+                                                                    &formula.text,
+                                                                    0,
+                                                                    i64::from(col)
+                                                                        - i64::from(rect.col_last),
+                                                                );
+                                                        }
+                                                        Some(cell)
+                                                    }
+                                                    None => staged_cells
+                                                        .get(&key)
+                                                        .cloned()
+                                                        .unwrap_or_else(|| {
+                                                            original_cells.get(&key).cloned()
+                                                        })
+                                                        .and_then(|existing| {
+                                                            existing.style_id.map(|_| {
+                                                                let mut cell = existing;
+                                                                cell.value = CellValue::Blank;
+                                                                cell.formula = None;
+                                                                cell
+                                                            })
+                                                        }),
+                                                };
+                                            staged_cells.insert(key, next_cell);
+                                        }
+                                    }
+                                }
+                            }
+                                _ => unreachable!("Range fill member should be recognized"),
+                            }
+                        }
+                        (source_keys, staged_cells)
+                    };
+                    {
+                        let runtime = self.runtime_workbook_mut(workbook)?;
+                        let changed = runtime.loaded.state.fill_cells_with_change(
+                            sheet_id,
+                            source_keys,
+                            replacements,
+                        )?;
+                        if changed {
+                            runtime.mark_semantic_dirty();
+                        }
+                    }
+                    self.find_state = None;
+                    self.cut_copy_mode = None;
+                    self.clipboard = None;
+                    return Ok(OmValue::Empty);
+                }
+
                 if range.areas().len() != 1 {
                     self.focus_member_supported("Range", member, false)?;
                     match member {
@@ -11604,19 +11877,6 @@ impl ExcelRuntime {
                                 workbook, sheet_id, rect, projection,
                             );
                             return self.dispatch_invoke(handle.0, member, args);
-                        }
-                        "FillDown" | "FillRight" | "FillUp" | "FillLeft" => {
-                            if !args.is_empty() {
-                                return Err(OmError::invalid_argument(format!(
-                                    "Range.{member} does not accept arguments"
-                                )));
-                            }
-                            let (sheet_id, rects) = Self::range_set_single_sheet_rects(&range)?;
-                            for rect in rects {
-                                let handle = self.register_range_handle(workbook, sheet_id, rect);
-                                self.dispatch_invoke(handle.0, member, &[])?;
-                            }
-                            return Ok(OmValue::Empty);
                         }
                         "ClearContents" => {
                             if !args.is_empty() {
@@ -14070,310 +14330,6 @@ impl ExcelRuntime {
                                 "Range.PasteSpecial clipboard mode is invalid",
                             )),
                         }
-                    }
-                    "FillDown" => {
-                        if !args.is_empty() {
-                            return Err(OmError::invalid_argument(
-                                "Range.FillDown does not accept arguments",
-                            ));
-                        }
-                        let runtime = self.runtime_workbook_mut(workbook)?;
-                        if runtime.read_only {
-                            return Err(OmError::new(
-                                OmErrorCode::InvalidState,
-                                "cannot modify a read-only workbook",
-                            ));
-                        }
-                        let worksheet = runtime
-                            .loaded
-                            .state
-                            .worksheet_data_for_sheet_mut(sheet_id)?;
-                        let mut changed = false;
-                        let mut source_cells = Vec::with_capacity(rect.width() as usize);
-                        for col in rect.col_first..=rect.col_last {
-                            source_cells.push(worksheet.cells.get(&(rect.row_first, col)).cloned());
-                        }
-                        if rect.height() > 1 {
-                            for row in (rect.row_first + 1)..=rect.row_last {
-                                for (index, col) in (rect.col_first..=rect.col_last).enumerate() {
-                                    match source_cells[index].clone() {
-                                        Some(mut cell) => {
-                                            if let Some(formula) = cell.formula.as_mut() {
-                                                if !formula.is_r1c1 {
-                                                    formula.text = shift_formula_a1_references(
-                                                        &formula.text,
-                                                        i64::from(row) - i64::from(rect.row_first),
-                                                        0,
-                                                    );
-                                                }
-                                            }
-                                            if worksheet.cells.get(&(row, col)) != Some(&cell) {
-                                                worksheet.cells.insert((row, col), cell);
-                                                worksheet.dirty = true;
-                                                worksheet.dirty_cells.insert((row, col));
-                                                changed = true;
-                                            }
-                                        }
-                                        None => match worksheet.cells.get_mut(&(row, col)) {
-                                            Some(existing) if existing.style_id.is_some() => {
-                                                if existing.value != office_common::CellValue::Blank
-                                                    || existing.formula.is_some()
-                                                {
-                                                    existing.value =
-                                                        office_common::CellValue::Blank;
-                                                    existing.formula = None;
-                                                    worksheet.dirty = true;
-                                                    worksheet.dirty_cells.insert((row, col));
-                                                    changed = true;
-                                                }
-                                            }
-                                            Some(_) => {
-                                                worksheet.cells.remove(&(row, col));
-                                                worksheet.dirty = true;
-                                                worksheet.dirty_cells.insert((row, col));
-                                                changed = true;
-                                            }
-                                            None => {}
-                                        },
-                                    }
-                                }
-                            }
-                        }
-                        if changed {
-                            runtime.mark_semantic_dirty();
-                        }
-                        self.find_state = None;
-                        self.cut_copy_mode = None;
-                        self.clipboard = None;
-                        Ok(OmValue::Empty)
-                    }
-                    "FillRight" => {
-                        if !args.is_empty() {
-                            return Err(OmError::invalid_argument(
-                                "Range.FillRight does not accept arguments",
-                            ));
-                        }
-                        let runtime = self.runtime_workbook_mut(workbook)?;
-                        if runtime.read_only {
-                            return Err(OmError::new(
-                                OmErrorCode::InvalidState,
-                                "cannot modify a read-only workbook",
-                            ));
-                        }
-                        let worksheet = runtime
-                            .loaded
-                            .state
-                            .worksheet_data_for_sheet_mut(sheet_id)?;
-                        let mut changed = false;
-                        let mut source_cells = Vec::with_capacity(rect.height() as usize);
-                        for row in rect.row_first..=rect.row_last {
-                            source_cells.push(worksheet.cells.get(&(row, rect.col_first)).cloned());
-                        }
-                        if rect.width() > 1 {
-                            for (index, row) in (rect.row_first..=rect.row_last).enumerate() {
-                                for col in (rect.col_first + 1)..=rect.col_last {
-                                    match source_cells[index].clone() {
-                                        Some(mut cell) => {
-                                            if let Some(formula) = cell.formula.as_mut() {
-                                                if !formula.is_r1c1 {
-                                                    formula.text = shift_formula_a1_references(
-                                                        &formula.text,
-                                                        0,
-                                                        i64::from(col) - i64::from(rect.col_first),
-                                                    );
-                                                }
-                                            }
-                                            if worksheet.cells.get(&(row, col)) != Some(&cell) {
-                                                worksheet.cells.insert((row, col), cell);
-                                                worksheet.dirty = true;
-                                                worksheet.dirty_cells.insert((row, col));
-                                                changed = true;
-                                            }
-                                        }
-                                        None => match worksheet.cells.get_mut(&(row, col)) {
-                                            Some(existing) if existing.style_id.is_some() => {
-                                                if existing.value != office_common::CellValue::Blank
-                                                    || existing.formula.is_some()
-                                                {
-                                                    existing.value =
-                                                        office_common::CellValue::Blank;
-                                                    existing.formula = None;
-                                                    worksheet.dirty = true;
-                                                    worksheet.dirty_cells.insert((row, col));
-                                                    changed = true;
-                                                }
-                                            }
-                                            Some(_) => {
-                                                worksheet.cells.remove(&(row, col));
-                                                worksheet.dirty = true;
-                                                worksheet.dirty_cells.insert((row, col));
-                                                changed = true;
-                                            }
-                                            None => {}
-                                        },
-                                    }
-                                }
-                            }
-                        }
-                        if changed {
-                            runtime.mark_semantic_dirty();
-                        }
-                        self.find_state = None;
-                        self.cut_copy_mode = None;
-                        self.clipboard = None;
-                        Ok(OmValue::Empty)
-                    }
-                    "FillUp" => {
-                        if !args.is_empty() {
-                            return Err(OmError::invalid_argument(
-                                "Range.FillUp does not accept arguments",
-                            ));
-                        }
-                        let runtime = self.runtime_workbook_mut(workbook)?;
-                        if runtime.read_only {
-                            return Err(OmError::new(
-                                OmErrorCode::InvalidState,
-                                "cannot modify a read-only workbook",
-                            ));
-                        }
-                        let worksheet = runtime
-                            .loaded
-                            .state
-                            .worksheet_data_for_sheet_mut(sheet_id)?;
-                        let mut changed = false;
-                        let mut source_cells = Vec::with_capacity(rect.width() as usize);
-                        for col in rect.col_first..=rect.col_last {
-                            source_cells.push(worksheet.cells.get(&(rect.row_last, col)).cloned());
-                        }
-                        if rect.height() > 1 {
-                            for row in rect.row_first..rect.row_last {
-                                for (index, col) in (rect.col_first..=rect.col_last).enumerate() {
-                                    match source_cells[index].clone() {
-                                        Some(mut cell) => {
-                                            if let Some(formula) = cell.formula.as_mut() {
-                                                if !formula.is_r1c1 {
-                                                    formula.text = shift_formula_a1_references(
-                                                        &formula.text,
-                                                        i64::from(row) - i64::from(rect.row_last),
-                                                        0,
-                                                    );
-                                                }
-                                            }
-                                            if worksheet.cells.get(&(row, col)) != Some(&cell) {
-                                                worksheet.cells.insert((row, col), cell);
-                                                worksheet.dirty = true;
-                                                worksheet.dirty_cells.insert((row, col));
-                                                changed = true;
-                                            }
-                                        }
-                                        None => match worksheet.cells.get_mut(&(row, col)) {
-                                            Some(existing) if existing.style_id.is_some() => {
-                                                if existing.value != office_common::CellValue::Blank
-                                                    || existing.formula.is_some()
-                                                {
-                                                    existing.value =
-                                                        office_common::CellValue::Blank;
-                                                    existing.formula = None;
-                                                    worksheet.dirty = true;
-                                                    worksheet.dirty_cells.insert((row, col));
-                                                    changed = true;
-                                                }
-                                            }
-                                            Some(_) => {
-                                                worksheet.cells.remove(&(row, col));
-                                                worksheet.dirty = true;
-                                                worksheet.dirty_cells.insert((row, col));
-                                                changed = true;
-                                            }
-                                            None => {}
-                                        },
-                                    }
-                                }
-                            }
-                        }
-                        if changed {
-                            runtime.mark_semantic_dirty();
-                        }
-                        self.find_state = None;
-                        self.cut_copy_mode = None;
-                        self.clipboard = None;
-                        Ok(OmValue::Empty)
-                    }
-                    "FillLeft" => {
-                        if !args.is_empty() {
-                            return Err(OmError::invalid_argument(
-                                "Range.FillLeft does not accept arguments",
-                            ));
-                        }
-                        let runtime = self.runtime_workbook_mut(workbook)?;
-                        if runtime.read_only {
-                            return Err(OmError::new(
-                                OmErrorCode::InvalidState,
-                                "cannot modify a read-only workbook",
-                            ));
-                        }
-                        let worksheet = runtime
-                            .loaded
-                            .state
-                            .worksheet_data_for_sheet_mut(sheet_id)?;
-                        let mut changed = false;
-                        let mut source_cells = Vec::with_capacity(rect.height() as usize);
-                        for row in rect.row_first..=rect.row_last {
-                            source_cells.push(worksheet.cells.get(&(row, rect.col_last)).cloned());
-                        }
-                        if rect.width() > 1 {
-                            for (index, row) in (rect.row_first..=rect.row_last).enumerate() {
-                                for col in rect.col_first..rect.col_last {
-                                    match source_cells[index].clone() {
-                                        Some(mut cell) => {
-                                            if let Some(formula) = cell.formula.as_mut() {
-                                                if !formula.is_r1c1 {
-                                                    formula.text = shift_formula_a1_references(
-                                                        &formula.text,
-                                                        0,
-                                                        i64::from(col) - i64::from(rect.col_last),
-                                                    );
-                                                }
-                                            }
-                                            if worksheet.cells.get(&(row, col)) != Some(&cell) {
-                                                worksheet.cells.insert((row, col), cell);
-                                                worksheet.dirty = true;
-                                                worksheet.dirty_cells.insert((row, col));
-                                                changed = true;
-                                            }
-                                        }
-                                        None => match worksheet.cells.get_mut(&(row, col)) {
-                                            Some(existing) if existing.style_id.is_some() => {
-                                                if existing.value != office_common::CellValue::Blank
-                                                    || existing.formula.is_some()
-                                                {
-                                                    existing.value =
-                                                        office_common::CellValue::Blank;
-                                                    existing.formula = None;
-                                                    worksheet.dirty = true;
-                                                    worksheet.dirty_cells.insert((row, col));
-                                                    changed = true;
-                                                }
-                                            }
-                                            Some(_) => {
-                                                worksheet.cells.remove(&(row, col));
-                                                worksheet.dirty = true;
-                                                worksheet.dirty_cells.insert((row, col));
-                                                changed = true;
-                                            }
-                                            None => {}
-                                        },
-                                    }
-                                }
-                            }
-                        }
-                        if changed {
-                            runtime.mark_semantic_dirty();
-                        }
-                        self.find_state = None;
-                        self.cut_copy_mode = None;
-                        self.clipboard = None;
-                        Ok(OmValue::Empty)
                     }
                     "Select" => {
                         if !args.is_empty() {

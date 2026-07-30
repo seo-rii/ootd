@@ -173,6 +173,17 @@ workbook lookup. The regressions put a normal changed destination before the `J1
 both orientations (`I10:K11` rows and `J9:K11` columns) and require workbook persistence,
 dirty-domain, and session snapshots to remain unchanged.
 
+`WorkbookState::fill_cells_with_change` owns the source boundary and final destination overlay
+produced by `Range.FillDown`, `FillRight`, `FillUp`, and `FillLeft`. Runtime stages only touched
+destinations over the immutable original cell map, processes multi-area input in declared order,
+and lets later overlapping areas read earlier staged results. This preserves existing overlap,
+styled-blank, and A1 formula-shift behavior without registering temporary per-area Range handles.
+For every nontrivial fill, the command validates every source and destination coordinate before
+diff filtering and refuses any dynamic spill anchor or materialized/geometric child, including an
+unchanged protected destination. Four-direction destination and source-only regressions, a
+multi-area earlier-commit regression, and an overlap-order regression fix the workbook,
+dirty-domain, and session contracts.
+
 ### Worksheet-data ownership map
 
 The `WorkbookState` worksheet-data map is private. External callers can inspect it through
@@ -197,10 +208,11 @@ instead of being invented.
 This boundary closes external orphan-key insertion and rekeying. The live worksheet collection is
 also private, so callers cannot insert, remove, reorder, or mutate worksheet identity through a
 borrowed element. `WorksheetData` payload fields remain public through the existing live-owner
-accessor; `Range.Clear`, `ClearFormats`, `Replace`, and `Sort` no longer use that bypass, but
-structural, copy/paste, fill, and calculation writeback paths remain explicit `OOTD-054`
-follow-ups. Invalid state continues to be rejected by save preflight. Production worksheet metadata
-and ordering paths use the command boundary above; workbook model metadata is separately private.
+accessor; `Range.Clear`, `ClearFormats`, `Replace`, and `Sort` no longer use that bypass.
+`FillDown`, `FillRight`, `FillUp`, and `FillLeft` now use the same boundary as well. Structural,
+copy/paste, and calculation writeback paths remain explicit `OOTD-054` follow-ups. Invalid state
+continues to be rejected by save preflight. Production worksheet metadata and ordering paths use
+the command boundary above; workbook model metadata is separately private.
 
 ## Workbook Identity Reassignment
 
@@ -266,9 +278,10 @@ Stages six through ten close sheet Copy/Add/Delete runtime transactions, stage e
 first spill-aware payload mutation command for `Range.Clear`, and stage twelve separates
 spill-preserving style-only `Range.ClearFormats`. Stage thirteen makes `Range.Replace` one
 immutable-snapshot, spill-aware cell batch, and stage fourteen gives `Range.Sort` a
-spill-refusing rearrangement batch for both orientations. Defined-name, chart, drawing,
-chart-sheet, opaque-part, and the remaining `WorksheetData` payload fields remain public. Callers
-can still create malformed state through those surfaces, but model save and
+spill-refusing rearrangement batch for both orientations. Stage fifteen moves all four directional
+Fill methods to one ordered overlay and source/destination-preflighted model commit. Defined-name,
+chart, drawing, chart-sheet, opaque-part, and the remaining `WorksheetData` payload fields remain
+public. Callers can still create malformed state through those surfaces, but model save and
 identity-reassignment boundaries reject it deterministically.
 
 Manifest/content-type coherence and typed chart/drawing model-to-package ownership are enforced by

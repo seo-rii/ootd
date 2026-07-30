@@ -30,6 +30,8 @@
     };
     use office_opc::{CompressionMethod, OpcPackage, OpcPart};
 
+    mod range_fill_spill;
+
     mod encrypted_ooxml_fixture {
         include!(concat!(
             env!("CARGO_MANIFEST_DIR"),

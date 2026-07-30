@@ -429,7 +429,16 @@ Wave 2 exit gate:
    sort의 `J9` normal destination이 `J10` spill anchor보다 먼저 오는 RED가 두 orientation의
    workbook/dirty/session 불변을 고정하며 `excel-model` 101개와 `excel-runtime` 731개
    회귀가 통과한다.
-   **다음:** 나머지 structural/copy/paste/fill mutation을 spill-aware batch command로
+   15단계 완료 (2026-07-30, synthetic): `Range.FillDown/Right/Up/Left`의 네 직접
+   cell/dirty mutation과 multi-area 재귀 dispatch를 제거했다. runtime은 원본 cell map 위에
+   destination-only overlay를 두고 area 순서대로 Fill을 시뮬레이션해 overlap 의미와 A1
+   formula shift를 유지하며, 최종 source/destination 집합을
+   `WorkbookState::fill_cells_with_change`로 한 번만 commit한다. command는 실제 값 변화와
+   무관하게 비자명한 Fill의 모든 source/destination spill anchor/child를 먼저 거부한다.
+   네 방향 destination·source-only spill RED, multi-area 앞선 area rollback, overlap 회귀가
+   workbook/dirty/session 불변과 기존 의미를 고정하며 `excel-model` 104개와
+   `excel-runtime` 735개 회귀가 통과한다.
+   **다음:** 나머지 structural/copy/paste mutation을 spill-aware batch command로
    이관하고 `WorksheetData`의 7개 payload field를 private으로 닫은 뒤
    `OOTD-018`/`OOTD-048` common reference subsystem을 진행한다.
 16. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
