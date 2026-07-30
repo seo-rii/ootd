@@ -1412,22 +1412,56 @@ impl WorkbookState {
         sheet_id: SheetId,
         source_keys: &BTreeSet<(u32, u32)>,
     ) -> OmResult<()> {
+        self.validate_transfer_source_cells(sheet_id, source_keys, "copy")
+    }
+
+    pub fn validate_cut_source_cells(
+        &self,
+        sheet_id: SheetId,
+        source_keys: &BTreeSet<(u32, u32)>,
+    ) -> OmResult<()> {
+        self.validate_transfer_source_cells(sheet_id, source_keys, "cut")
+    }
+
+    fn validate_transfer_source_cells(
+        &self,
+        sheet_id: SheetId,
+        source_keys: &BTreeSet<(u32, u32)>,
+        operation: &str,
+    ) -> OmResult<()> {
         if source_keys.is_empty() {
-            return Err(OmError::invalid_argument(
-                "copy source requires at least one cell",
-            ));
+            return Err(OmError::invalid_argument(format!(
+                "{operation} source requires at least one cell"
+            )));
         }
         for &(row, col) in source_keys {
             ExcelLimits::validate_cell(row, col)?;
         }
         self.worksheet_data_for_sheet(sheet_id)?
-            .ensure_spill_topology_is_not_modified(source_keys.iter().copied(), "copy")
+            .ensure_spill_topology_is_not_modified(source_keys.iter().copied(), operation)
     }
 
     pub fn copy_cells_with_change(
         &mut self,
         sheet_id: SheetId,
         replacements: BTreeMap<(u32, u32), Option<CellData>>,
+    ) -> OmResult<bool> {
+        self.transfer_cells_with_change(sheet_id, replacements, "copy into")
+    }
+
+    pub fn cut_cells_with_change(
+        &mut self,
+        sheet_id: SheetId,
+        replacements: BTreeMap<(u32, u32), Option<CellData>>,
+    ) -> OmResult<bool> {
+        self.transfer_cells_with_change(sheet_id, replacements, "cut")
+    }
+
+    fn transfer_cells_with_change(
+        &mut self,
+        sheet_id: SheetId,
+        replacements: BTreeMap<(u32, u32), Option<CellData>>,
+        operation: &str,
     ) -> OmResult<bool> {
         let worksheet = self.worksheet_data_for_sheet(sheet_id)?;
         for &(row, col) in replacements.keys() {
@@ -1436,8 +1470,7 @@ impl WorkbookState {
         if replacements.is_empty() {
             return Ok(false);
         }
-        worksheet
-            .ensure_spill_topology_is_not_modified(replacements.keys().copied(), "copy into")?;
+        worksheet.ensure_spill_topology_is_not_modified(replacements.keys().copied(), operation)?;
         self.apply_cell_batch_with_change(sheet_id, replacements, CellBatchMutationKind::Rearrange)
     }
 
@@ -4032,6 +4065,120 @@ mod tests {
         assert!(worksheet.dirty);
         assert!(worksheet.dirty_cells.contains(&(1, 2)));
         state.validate_for_save().expect("valid copied state");
+    }
+
+    #[test]
+    fn cut_source_validation_rejects_spill_anchor_and_child() {
+        for source_key in [(3, 3), (4, 4)] {
+            let mut state = sample_state();
+            seed_two_by_two_spill(&mut state);
+            let before = state
+                .worksheet_data_for_sheet(SheetId(3))
+                .expect("worksheet data")
+                .clone();
+
+            let error = state
+                .validate_cut_source_cells(SheetId(3), &BTreeSet::from([source_key]))
+                .expect_err("spill source should be rejected");
+
+            assert_eq!(error.code, OmErrorCode::InvalidState, "{source_key:?}");
+            assert!(
+                error
+                    .message
+                    .contains(&format!("R{}C{}", source_key.0, source_key.1)),
+                "{source_key:?}: {error:?}",
+            );
+            assert_eq!(
+                state
+                    .worksheet_data_for_sheet(SheetId(3))
+                    .expect("worksheet data"),
+                &before,
+                "{source_key:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn cut_cells_preflights_unchanged_spill_cells_before_updates() {
+        for protected_key in [(3, 3), (4, 4)] {
+            let mut state = sample_state();
+            seed_two_by_two_spill(&mut state);
+            let before = state
+                .worksheet_data_for_sheet(SheetId(3))
+                .expect("worksheet data")
+                .clone();
+            let unchanged_spill_cell = before
+                .cells
+                .get(&protected_key)
+                .expect("materialized spill cell")
+                .clone();
+
+            let error = state
+                .cut_cells_with_change(
+                    SheetId(3),
+                    BTreeMap::from([
+                        (
+                            (1, 2),
+                            Some(CellData {
+                                value: CellValue::Text("changed".to_string()),
+                                formula: None,
+                                style_id: None,
+                            }),
+                        ),
+                        (protected_key, Some(unchanged_spill_cell)),
+                    ]),
+                )
+                .expect_err("spill cell should reject the whole cut");
+
+            assert_eq!(error.code, OmErrorCode::InvalidState, "{protected_key:?}");
+            assert!(
+                error
+                    .message
+                    .contains(&format!("R{}C{}", protected_key.0, protected_key.1)),
+                "{protected_key:?}: {error:?}",
+            );
+            assert_eq!(
+                state
+                    .worksheet_data_for_sheet(SheetId(3))
+                    .expect("worksheet data"),
+                &before,
+                "{protected_key:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn cut_cells_applies_plain_batch_and_tracks_dirty_cells() {
+        let mut state = sample_state();
+        let source = state
+            .worksheet_data_for_sheet(SheetId(3))
+            .expect("worksheet data")
+            .cells
+            .get(&(1, 1))
+            .expect("source cell")
+            .clone();
+        state
+            .validate_cut_source_cells(SheetId(3), &BTreeSet::from([(1, 1)]))
+            .expect("plain source should be movable");
+
+        assert!(
+            state
+                .cut_cells_with_change(
+                    SheetId(3),
+                    BTreeMap::from([((1, 1), None), ((1, 2), Some(source.clone()))]),
+                )
+                .expect("cut plain cell")
+        );
+
+        let worksheet = state
+            .worksheet_data_for_sheet(SheetId(3))
+            .expect("worksheet data after cut");
+        assert_eq!(worksheet.cells.get(&(1, 1)), None);
+        assert_eq!(worksheet.cells.get(&(1, 2)), Some(&source));
+        assert!(worksheet.dirty);
+        assert!(worksheet.dirty_cells.contains(&(1, 1)));
+        assert!(worksheet.dirty_cells.contains(&(1, 2)));
+        state.validate_for_save().expect("valid cut state");
     }
 
     #[test]

@@ -31,6 +31,7 @@
     use office_opc::{CompressionMethod, OpcPackage, OpcPart};
 
     mod range_copy_spill;
+    mod range_cut_spill;
     mod range_fill_spill;
 
     mod encrypted_ooxml_fixture {

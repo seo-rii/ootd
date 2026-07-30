@@ -195,6 +195,20 @@ mutating the source. Regressions cover a normal destination before a spill ancho
 child sources, and cross-workbook destination failure while preserving both workbooks, dirty
 domains, and seeded Find/clipboard session state.
 
+`WorkbookState::validate_cut_source_cells` and `cut_cells_with_change` extend that strict transfer
+boundary to single-area `Range.Cut Destination`. Runtime snapshots source cells once, builds both
+the destination replacement map and style-preserving source-clear map from immutable worksheet
+views, and executes every fallible command against prepared `WorkbookState` clones. A same-workbook
+cut swaps in one prepared state only after destination and source commands succeed; a cross-workbook
+cut prepares both states before either live owner is replaced. Same-sheet overlap excludes target
+coordinates from the clear map so destination values win, while moved formulas keep their exact
+text and cache instead of receiving Copy's A1 offset. Source and destination validation includes
+unchanged coordinates and rejects dynamic spill anchors and materialized/geometric children.
+Regressions cover spill failures after an earlier normal target, anchor/child sources,
+cross-sheet/cross-workbook rollback, exact session preservation through default Cut-mode
+`PasteSpecial`, and memmove-style overlap. Temporary Range handles used by the default PasteSpecial
+delegation are released on both success and failure.
+
 ### Worksheet-data ownership map
 
 The `WorkbookState` worksheet-data map is private. External callers can inspect it through
@@ -220,9 +234,10 @@ This boundary closes external orphan-key insertion and rekeying. The live worksh
 also private, so callers cannot insert, remove, reorder, or mutate worksheet identity through a
 borrowed element. `WorksheetData` payload fields remain public through the existing live-owner
 accessor; `Range.Clear`, `ClearFormats`, `Replace`, and `Sort` no longer use that bypass.
-`FillDown`, `FillRight`, `FillUp`, `FillLeft`, and `Range.Copy Destination` now use the same boundary
-as well. Structural, Cut/custom PasteSpecial, and calculation writeback paths remain explicit
-`OOTD-054` follow-ups. Invalid state continues to be rejected by save preflight. Production
+`FillDown`, `FillRight`, `FillUp`, `FillLeft`, `Range.Copy Destination`, and transactional
+`Range.Cut Destination` now use the same boundary as well. Structural, custom PasteSpecial, and
+calculation writeback paths remain explicit `OOTD-054` follow-ups. Invalid state continues to be
+rejected by save preflight. Production
 worksheet metadata and ordering paths use the command boundary above; workbook model metadata is
 separately private.
 
@@ -293,7 +308,9 @@ immutable-snapshot, spill-aware cell batch, and stage fourteen gives `Range.Sort
 spill-refusing rearrangement batch for both orientations. Stage fifteen moves all four directional
 Fill methods to one ordered overlay and source/destination-preflighted model commit. Stage sixteen
 moves `Range.Copy Destination` to separate source validation and one atomic destination commit
-across same- and cross-workbook copies. Defined-name, chart, drawing, chart-sheet, opaque-part, and
+across same- and cross-workbook copies. Stage seventeen prepares source-clear and destination maps
+for `Range.Cut Destination`, completes every fallible same/cross-workbook command on cloned state,
+and commits only after both sides succeed. Defined-name, chart, drawing, chart-sheet, opaque-part, and
 the remaining `WorksheetData` payload fields remain public. Callers can still create malformed
 state through those surfaces, but model save and
 identity-reassignment boundaries reject it deterministically.

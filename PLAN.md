@@ -446,7 +446,17 @@ Wave 2 exit gate:
    shift, same/cross-workbook 의미는 유지한다. normal destination 뒤 spill anchor, spill
    anchor/child source, cross-workbook destination spill RED가 양쪽 workbook/dirty/session
    불변을 고정하며 `excel-model` 107개와 `excel-runtime` 738개 회귀가 통과한다.
-   **다음:** `Range.Cut Destination`, custom `PasteSpecial`, structural Insert/Delete를 각각
+   17단계 완료 (2026-07-30, synthetic): single-area `Range.Cut Destination`의 source write와
+   destination clear/write를 immutable transfer plan과 prepared `WorkbookState` transaction으로
+   이관했다. source와 destination의 모든 좌표를 diff 전에 spill anchor/child 검사하고,
+   same-workbook은 하나의 state clone, cross-workbook은 양쪽 state clone에서 모든 fallible
+   command를 끝낸 뒤 live state를 교체한다. same-sheet overlap은 destination 우선 의미를,
+   styled source blank shell과 formula 이동 원문은 기존대로 유지한다. 기본 all-like Cut-mode
+   `PasteSpecial`도 같은 경계를 사용하며 내부 임시 Range handle을 성공/실패 모두 회수한다.
+   normal destination 뒤 spill anchor, anchor/child source, cross-sheet/workbook rollback,
+   PasteSpecial session rollback, overlap RED가 양쪽 workbook/dirty/session 불변을 고정하며
+   `excel-model` 110개와 `excel-runtime` 744개 회귀가 통과한다.
+   **다음:** custom `PasteSpecial`, structural Insert/Delete를 각각
    spill-aware transaction/command로 이관하고 `WorksheetData`의 7개 payload field를
    private으로 닫은 뒤
    `OOTD-018`/`OOTD-048` common reference subsystem을 진행한다.
