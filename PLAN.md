@@ -438,8 +438,17 @@ Wave 2 exit gate:
    네 방향 destination·source-only spill RED, multi-area 앞선 area rollback, overlap 회귀가
    workbook/dirty/session 불변과 기존 의미를 고정하며 `excel-model` 104개와
    `excel-runtime` 735개 회귀가 통과한다.
-   **다음:** 나머지 structural/copy/paste mutation을 spill-aware batch command로
-   이관하고 `WorksheetData`의 7개 payload field를 private으로 닫은 뒤
+   16단계 완료 (2026-07-30, synthetic): single-area `Range.Copy Destination`의 직접
+   destination cell/dirty mutation을 immutable source snapshot과 최종 replacement map으로
+   교체했다. source workbook은 복제 전에 모든 source coordinate의 spill anchor/child를
+   검증하고, destination workbook은 실제 diff와 무관하게 전체 destination을 선검사한 뒤
+   `WorkbookState::copy_cells_with_change`로 한 번만 commit한다. styled blank와 A1 formula
+   shift, same/cross-workbook 의미는 유지한다. normal destination 뒤 spill anchor, spill
+   anchor/child source, cross-workbook destination spill RED가 양쪽 workbook/dirty/session
+   불변을 고정하며 `excel-model` 107개와 `excel-runtime` 738개 회귀가 통과한다.
+   **다음:** `Range.Cut Destination`, custom `PasteSpecial`, structural Insert/Delete를 각각
+   spill-aware transaction/command로 이관하고 `WorksheetData`의 7개 payload field를
+   private으로 닫은 뒤
    `OOTD-018`/`OOTD-048` common reference subsystem을 진행한다.
 16. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
    structured error에 추가한다.

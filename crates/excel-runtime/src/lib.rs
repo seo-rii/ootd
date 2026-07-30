@@ -13252,87 +13252,78 @@ impl ExcelRuntime {
                             let state = &self.runtime_workbook(workbook)?.loaded.state;
                             let source_worksheet = state.worksheet_data_for_sheet(sheet_id)?;
                             let mut cells = Vec::with_capacity(rect.checked_cell_count_usize()?);
+                            let mut source_keys = BTreeSet::new();
                             for row in rect.row_first..=rect.row_last {
                                 for col in rect.col_first..=rect.col_last {
+                                    source_keys.insert((row, col));
                                     cells.push(source_worksheet.cells.get(&(row, col)).cloned());
                                 }
                             }
+                            state.validate_copy_source_cells(sheet_id, &source_keys)?;
                             cells
                         };
 
-                        let runtime = self.runtime_workbook_mut(destination_workbook)?;
-                        if runtime.read_only {
-                            return Err(OmError::new(
-                                OmErrorCode::InvalidState,
-                                "cannot modify a read-only workbook",
-                            ));
-                        }
-                        let destination_worksheet = runtime
-                            .loaded
-                            .state
-                            .worksheet_data_for_sheet_mut(destination_sheet_id)?;
-                        let mut index = 0usize;
-                        let mut changed = false;
-                        for row in target_rect.row_first..=target_rect.row_last {
-                            for col in target_rect.col_first..=target_rect.col_last {
-                                let source_row = rect.row_first + (row - target_rect.row_first);
-                                let source_col = rect.col_first + (col - target_rect.col_first);
-                                let mut next_cell = source_cells[index].clone();
-                                index += 1;
-                                if let Some(cell) = next_cell.as_mut() {
-                                    if let Some(formula) = cell.formula.as_mut() {
-                                        if !formula.is_r1c1 {
-                                            formula.text = shift_formula_a1_references(
-                                                &formula.text,
-                                                i64::from(row) - i64::from(source_row),
-                                                i64::from(col) - i64::from(source_col),
-                                            );
-                                        }
+                        let replacements = {
+                            let runtime = self.runtime_workbook(destination_workbook)?;
+                            if runtime.read_only {
+                                return Err(OmError::new(
+                                    OmErrorCode::InvalidState,
+                                    "cannot modify a read-only workbook",
+                                ));
+                            }
+                            let destination_worksheet = runtime
+                                .loaded
+                                .state
+                                .worksheet_data_for_sheet(destination_sheet_id)?;
+                            let mut replacements = BTreeMap::new();
+                            let mut index = 0usize;
+                            for row in target_rect.row_first..=target_rect.row_last {
+                                for col in target_rect.col_first..=target_rect.col_last {
+                                    let source_row =
+                                        rect.row_first + (row - target_rect.row_first);
+                                    let source_col =
+                                        rect.col_first + (col - target_rect.col_first);
+                                    let mut next_cell = source_cells[index].clone();
+                                    index += 1;
+                                    if let Some(cell) = next_cell.as_mut()
+                                        && let Some(formula) = cell.formula.as_mut()
+                                        && !formula.is_r1c1
+                                    {
+                                        formula.text = shift_formula_a1_references(
+                                            &formula.text,
+                                            i64::from(row) - i64::from(source_row),
+                                            i64::from(col) - i64::from(source_col),
+                                        );
                                     }
-                                }
-                                match next_cell {
-                                    Some(cell) => {
-                                        if destination_worksheet.cells.get(&(row, col))
-                                            != Some(&cell)
-                                        {
-                                            destination_worksheet.cells.insert((row, col), cell);
-                                            destination_worksheet.dirty = true;
-                                            destination_worksheet.dirty_cells.insert((row, col));
-                                            changed = true;
-                                        }
-                                    }
-                                    None => {
-                                        match destination_worksheet.cells.get_mut(&(row, col)) {
-                                            Some(existing) if existing.style_id.is_some() => {
-                                                if existing.value != office_common::CellValue::Blank
-                                                    || existing.formula.is_some()
-                                                {
-                                                    existing.value =
-                                                        office_common::CellValue::Blank;
-                                                    existing.formula = None;
-                                                    destination_worksheet.dirty = true;
-                                                    destination_worksheet
-                                                        .dirty_cells
-                                                        .insert((row, col));
-                                                    changed = true;
-                                                }
-                                            }
-                                            Some(_) => {
-                                                destination_worksheet.cells.remove(&(row, col));
-                                                destination_worksheet.dirty = true;
-                                                destination_worksheet
-                                                    .dirty_cells
-                                                    .insert((row, col));
-                                                changed = true;
-                                            }
-                                            None => {}
-                                        }
-                                    }
+                                    let replacement = match next_cell {
+                                        Some(cell) => Some(cell),
+                                        None => destination_worksheet
+                                            .cells
+                                            .get(&(row, col))
+                                            .cloned()
+                                            .and_then(|existing| {
+                                                existing.style_id.map(|_| {
+                                                    let mut cell = existing;
+                                                    cell.value = CellValue::Blank;
+                                                    cell.formula = None;
+                                                    cell
+                                                })
+                                            }),
+                                    };
+                                    replacements.insert((row, col), replacement);
                                 }
                             }
-                        }
-                        if changed {
-                            runtime.mark_semantic_dirty();
+                            replacements
+                        };
+                        {
+                            let runtime = self.runtime_workbook_mut(destination_workbook)?;
+                            if runtime
+                                .loaded
+                                .state
+                                .copy_cells_with_change(destination_sheet_id, replacements)?
+                            {
+                                runtime.mark_semantic_dirty();
+                            }
                         }
                         self.cut_copy_mode = None;
                         self.clipboard = None;
