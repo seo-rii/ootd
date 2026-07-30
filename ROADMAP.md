@@ -187,7 +187,7 @@ Active order:
    `InvalidState` without partial mutation; runtime registration consumes a handle only after
    success, and reload/save callers propagate failure. The contract is
    `docs/interfaces/workbook_state_save_validation.md`.
-32. `OOTD-054` stages 1-17 are complete (2026-07-30, synthetic): the worksheet-data ownership map
+32. `OOTD-054` stages 1-18 are complete (2026-07-30, synthetic): the worksheet-data ownership map
    and live workbook-model metadata are private, decoded construction is validated, and runtime
    add/copy/delete use paired owner/data commands. Read-only access cannot insert or rekey orphan
    data; model metadata changes use explicit commands while workbook-ID changes remain atomic; and
@@ -238,11 +238,19 @@ Active order:
    cross-sheet/workbook failures preserve every touched workbook and session state, and moved
    formulas remain exact rather than copy-shifted. Default all-like Cut-mode `PasteSpecial` delegates
    to this transaction and releases its internal temporary Range handles on both success and error.
+   Cell-materializing custom `Range.PasteSpecial` now validates clipboard mode, writable owners,
+   and the complete source spill topology before planning destination cells from immutable views.
+   Late arithmetic/type errors cannot publish an earlier cell; Copy commits one destination command,
+   while same- and cross-workbook Cut complete destination and style-preserving source-clear
+   commands on cloned state before replacing either live owner. Every non-skipped destination is
+   spill-preflighted even when unchanged, while `SkipBlanks` can leave a protected spill cell
+   untouched. Same-sheet overlap, Copy-only A1 formula shifting, exact Cut formulas, and session
+   cleanup semantics remain fixed by regressions.
    The contract is
    `docs/interfaces/workbook_state_save_validation.md`.
-   **Active:** continue `OOTD-054` by moving custom `PasteSpecial` and
-   structural Insert/Delete behind spill-aware transactions and batch commands, then make the
-   complete `WorksheetData` cell/spill/dirty payload private before building the common reference
+   **Active:** continue `OOTD-054` by moving structural Insert/Delete behind spill-aware
+   transactions and batch commands, then make the complete `WorksheetData` cell/spill/dirty payload
+   private before building the common reference
    AST and completing `OOTD-048` consumer
    migration.
 33. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before

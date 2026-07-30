@@ -13693,6 +13693,11 @@ impl ExcelRuntime {
                                 "Range.PasteSpecial requires an active copy or cut range",
                             )
                         })?;
+                        if !matches!(clipboard.mode, XL_COPY | XL_CUT) {
+                            return Err(OmError::invalid_state(
+                                "Range.PasteSpecial clipboard mode is invalid",
+                            ));
+                        }
                         if clipboard.range.areas().len() != 1 {
                             return Err(OmError::unsupported(
                                 "Range.PasteSpecial requires a single-area clipboard range for cell paste materialization",
@@ -13701,17 +13706,10 @@ impl ExcelRuntime {
                         let (clipboard_sheet_id, clipboard_rect) =
                             Self::range_set_single_area(&clipboard.range)?;
                         if paste_type_is_metadata_only {
-                            return match clipboard.mode {
-                                XL_COPY | XL_CUT => {
-                                    self.cut_copy_mode = None;
-                                    self.clipboard = None;
-                                    self.find_state = None;
-                                    Ok(OmValue::Empty)
-                                }
-                                _ => Err(OmError::invalid_state(
-                                    "Range.PasteSpecial clipboard mode is invalid",
-                                )),
-                            };
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
+                            self.find_state = None;
+                            return Ok(OmValue::Empty);
                         }
                         if paste_type_is_all_like
                             && operation == XL_PASTE_SPECIAL_OPERATION_NONE
@@ -13726,20 +13724,18 @@ impl ExcelRuntime {
                             );
                             let destination =
                                 self.register_range_handle(workbook, sheet_id, rect);
-                            let result = match clipboard.mode {
-                                XL_COPY => self.dispatch_invoke(
+                            let result = if clipboard.mode == XL_COPY {
+                                self.dispatch_invoke(
                                     source.0,
                                     "Copy",
                                     &[OmValue::Object(destination.0)],
-                                ),
-                                XL_CUT => self.dispatch_invoke(
+                                )
+                            } else {
+                                self.dispatch_invoke(
                                     source.0,
                                     "Cut",
                                     &[OmValue::Object(destination.0)],
-                                ),
-                                _ => Err(OmError::invalid_state(
-                                    "Range.PasteSpecial clipboard mode is invalid",
-                                )),
+                                )
                             };
                             self.objects.remove(&source.0.0);
                             self.objects.remove(&destination.0.0);
@@ -13747,20 +13743,59 @@ impl ExcelRuntime {
                             return result;
                         }
 
-                        let source_cells = {
+                        if self.runtime_workbook(workbook)?.read_only
+                            || (clipboard.mode == XL_CUT
+                                && self.runtime_workbook(clipboard.workbook)?.read_only)
+                        {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                "cannot modify a read-only workbook",
+                            ));
+                        }
+
+                        let (source_cells, source_keys, source_replacements) = {
                             let state = &self.runtime_workbook(clipboard.workbook)?.loaded.state;
                             let source_worksheet =
                                 state.worksheet_data_for_sheet(clipboard_sheet_id)?;
                             let mut cells = Vec::with_capacity(
                                 clipboard_rect.checked_cell_count_usize()?,
                             );
+                            let mut keys = BTreeSet::new();
+                            let mut replacements = BTreeMap::new();
                             for row in clipboard_rect.row_first..=clipboard_rect.row_last {
                                 for col in clipboard_rect.col_first..=clipboard_rect.col_last {
-                                    cells.push(source_worksheet.cells.get(&(row, col)).cloned());
+                                    let key = (row, col);
+                                    let source_cell = source_worksheet.cells.get(&key).cloned();
+                                    keys.insert(key);
+                                    if clipboard.mode == XL_CUT {
+                                        let replacement = match source_cell.as_ref() {
+                                            Some(cell) if cell.style_id.is_some() => {
+                                                let mut cell = cell.clone();
+                                                cell.value = CellValue::Blank;
+                                                cell.formula = None;
+                                                Some(cell)
+                                            }
+                                            Some(_) | None => None,
+                                        };
+                                        replacements.insert(key, replacement);
+                                    }
+                                    cells.push(source_cell);
                                 }
                             }
-                            cells
+                            (cells, keys, replacements)
                         };
+                        let source_state = &self.runtime_workbook(clipboard.workbook)?.loaded.state;
+                        if clipboard.mode == XL_COPY {
+                            source_state.validate_copy_source_cells(
+                                clipboard_sheet_id,
+                                &source_keys,
+                            )?;
+                        } else {
+                            source_state.validate_cut_source_cells(
+                                clipboard_sheet_id,
+                                &source_keys,
+                            )?;
+                        }
                         let source_height = clipboard_rect.height();
                         let source_width = clipboard_rect.width();
                         let paste_height = if transpose {
@@ -13815,9 +13850,15 @@ impl ExcelRuntime {
                             rect
                         };
 
-                        let apply_paste =
-                            |destination_worksheet: &mut WorksheetData| -> OmResult<bool> {
-                                let mut changed = false;
+                        let destination_state = &self.runtime_workbook(workbook)?.loaded.state;
+                        let destination_worksheet =
+                            destination_state.worksheet_data_for_sheet(sheet_id)?;
+                        let plan_paste =
+                            |destination_worksheet: &WorksheetData|
+                             -> OmResult<
+                                BTreeMap<(u32, u32), Option<excel_model::CellData>>,
+                            > {
+                                let mut replacements = BTreeMap::new();
                                 for row in target_rect.row_first..=target_rect.row_last {
                                     for col in target_rect.col_first..=target_rect.col_last {
                                         let key = (row, col);
@@ -13831,10 +13872,25 @@ impl ExcelRuntime {
                                             clipboard_rect.row_first + source_row_offset;
                                         let source_col =
                                             clipboard_rect.col_first + source_col_offset;
-                                        let source_index = (source_row_offset * source_width
-                                            + source_col_offset)
-                                            as usize;
-                                        let source_cell = source_cells[source_index].as_ref();
+                                        let source_index = u64::from(source_row_offset)
+                                            .checked_mul(u64::from(source_width))
+                                            .and_then(|index| {
+                                                index.checked_add(u64::from(source_col_offset))
+                                            })
+                                            .and_then(|index| usize::try_from(index).ok())
+                                            .ok_or_else(|| {
+                                                OmError::invalid_argument(
+                                                    "Range.PasteSpecial source index overflows platform limits",
+                                                )
+                                            })?;
+                                        let source_cell = source_cells
+                                            .get(source_index)
+                                            .ok_or_else(|| {
+                                                OmError::invalid_state(
+                                                    "Range.PasteSpecial source snapshot is incomplete",
+                                                )
+                                            })?
+                                            .as_ref();
                                         let source_is_blank = match paste_type {
                                             XL_PASTE_ALL
                                             | XL_PASTE_ALL_EXCEPT_BORDERS
@@ -14020,137 +14076,102 @@ impl ExcelRuntime {
                                                 unreachable!("unsupported paste type was rejected")
                                             }
                                         }
-                                        if matches!(next_cell.value, CellValue::Blank)
+                                        let replacement = if matches!(
+                                            next_cell.value,
+                                            CellValue::Blank
+                                        )
                                             && next_cell.formula.is_none()
                                             && next_cell.style_id.is_none()
                                         {
-                                            if existing.is_some() {
-                                                destination_worksheet.cells.remove(&key);
-                                                destination_worksheet.dirty = true;
-                                                destination_worksheet.dirty_cells.insert(key);
-                                                changed = true;
-                                            }
-                                        } else if existing.as_ref() != Some(&next_cell) {
-                                            destination_worksheet.cells.insert(key, next_cell);
-                                            destination_worksheet.dirty = true;
-                                            destination_worksheet.dirty_cells.insert(key);
-                                            changed = true;
-                                        }
+                                            None
+                                        } else {
+                                            Some(next_cell)
+                                        };
+                                        replacements.insert(key, replacement);
                                     }
                                 }
-                                Ok(changed)
+                                Ok(replacements)
                             };
-                        let clear_source =
-                            |source_worksheet: &mut WorksheetData,
-                             skip_target_overlap: bool|
-                             -> bool {
-                                let mut changed = false;
-                                for row in clipboard_rect.row_first..=clipboard_rect.row_last {
-                                    for col in clipboard_rect.col_first..=clipboard_rect.col_last {
-                                        if skip_target_overlap
-                                            && (target_rect.row_first..=target_rect.row_last)
-                                                .contains(&row)
-                                            && (target_rect.col_first..=target_rect.col_last)
-                                                .contains(&col)
-                                        {
-                                            continue;
-                                        }
-                                        let key = (row, col);
-                                        match source_worksheet.cells.get_mut(&key) {
-                                            Some(existing) if existing.style_id.is_some() => {
-                                                if existing.value != CellValue::Blank
-                                                    || existing.formula.is_some()
-                                                {
-                                                    existing.value = CellValue::Blank;
-                                                    existing.formula = None;
-                                                    source_worksheet.dirty = true;
-                                                    source_worksheet.dirty_cells.insert(key);
-                                                    changed = true;
-                                                }
-                                            }
-                                            Some(_) => {
-                                                source_worksheet.cells.remove(&key);
-                                                source_worksheet.dirty = true;
-                                                source_worksheet.dirty_cells.insert(key);
-                                                changed = true;
-                                            }
-                                            None => {}
-                                        }
-                                    }
-                                }
+                        let destination_replacements = plan_paste(destination_worksheet)?;
+                        if clipboard.mode == XL_COPY {
+                            let runtime = self.runtime_workbook_mut(workbook)?;
+                            if runtime
+                                .loaded
+                                .state
+                                .copy_cells_with_change(sheet_id, destination_replacements)?
+                            {
+                                runtime.mark_semantic_dirty();
+                            }
+                        } else if workbook == clipboard.workbook {
+                            let mut prepared_state =
+                                self.runtime_workbook(workbook)?.loaded.state.clone();
+                            let changed = if sheet_id == clipboard_sheet_id {
+                                let mut replacements = source_replacements;
+                                replacements.retain(|(row, col), _| {
+                                    !(target_rect.row_first..=target_rect.row_last).contains(row)
+                                        || !(target_rect.col_first..=target_rect.col_last)
+                                            .contains(col)
+                                });
+                                replacements.extend(destination_replacements);
+                                prepared_state.cut_cells_with_change(sheet_id, replacements)?
+                            } else {
+                                let mut changed = prepared_state
+                                    .cut_cells_with_change(sheet_id, destination_replacements)?;
+                                changed |= prepared_state.cut_cells_with_change(
+                                    clipboard_sheet_id,
+                                    source_replacements,
+                                )?;
                                 changed
                             };
-
-                        if workbook == clipboard.workbook {
-                            let runtime = self.runtime_workbook_mut(workbook)?;
-                            if runtime.read_only {
-                                return Err(OmError::new(
-                                    OmErrorCode::InvalidState,
-                                    "cannot modify a read-only workbook",
-                                ));
-                            }
-                            let mut changed = {
-                                let destination_worksheet = runtime
-                                    .loaded
-                                    .state
-                                    .worksheet_data_for_sheet_mut(sheet_id)?;
-                                apply_paste(destination_worksheet)?
-                            };
-                            if clipboard.mode == XL_CUT {
-                                let source_worksheet = runtime
-                                    .loaded
-                                    .state
-                                    .worksheet_data_for_sheet_mut(clipboard_sheet_id)?;
-                                changed |=
-                                    clear_source(source_worksheet, sheet_id == clipboard_sheet_id);
-                            }
+                            let runtime = self
+                                .workbooks
+                                .get_mut(&workbook.0.0)
+                                .expect("validated workbook must remain registered");
+                            runtime.loaded.state = prepared_state;
                             if changed {
                                 runtime.mark_semantic_dirty();
                             }
                         } else {
-                            if self.runtime_workbook(workbook)?.read_only
-                                || (clipboard.mode == XL_CUT
-                                    && self.runtime_workbook(clipboard.workbook)?.read_only)
+                            let mut prepared_destination_state =
+                                self.runtime_workbook(workbook)?.loaded.state.clone();
+                            let destination_changed = prepared_destination_state
+                                .cut_cells_with_change(sheet_id, destination_replacements)?;
+                            let mut prepared_source_state = self
+                                .runtime_workbook(clipboard.workbook)?
+                                .loaded
+                                .state
+                                .clone();
+                            let source_changed = prepared_source_state.cut_cells_with_change(
+                                clipboard_sheet_id,
+                                source_replacements,
+                            )?;
+
                             {
-                                return Err(OmError::new(
-                                    OmErrorCode::InvalidState,
-                                    "cannot modify a read-only workbook",
-                                ));
-                            }
-                            {
-                                let destination_runtime = self.runtime_workbook_mut(workbook)?;
-                                let destination_worksheet = destination_runtime
-                                    .loaded
-                                    .state
-                                    .worksheet_data_for_sheet_mut(sheet_id)?;
-                                if apply_paste(destination_worksheet)? {
+                                let destination_runtime = self
+                                    .workbooks
+                                    .get_mut(&workbook.0.0)
+                                    .expect("validated destination workbook must remain registered");
+                                destination_runtime.loaded.state = prepared_destination_state;
+                                if destination_changed {
                                     destination_runtime.mark_semantic_dirty();
                                 }
                             }
-                            if clipboard.mode == XL_CUT {
-                                let source_runtime =
-                                    self.runtime_workbook_mut(clipboard.workbook)?;
-                                let source_worksheet = source_runtime
-                                    .loaded
-                                    .state
-                                    .worksheet_data_for_sheet_mut(clipboard_sheet_id)?;
-                                if clear_source(source_worksheet, false) {
+                            {
+                                let source_runtime = self
+                                    .workbooks
+                                    .get_mut(&clipboard.workbook.0.0)
+                                    .expect("validated source workbook must remain registered");
+                                source_runtime.loaded.state = prepared_source_state;
+                                if source_changed {
                                     source_runtime.mark_semantic_dirty();
                                 }
                             }
                         }
 
-                        match clipboard.mode {
-                            XL_COPY | XL_CUT => {
-                                self.cut_copy_mode = None;
-                                self.clipboard = None;
-                                self.find_state = None;
-                                Ok(OmValue::Empty)
-                            }
-                            _ => Err(OmError::invalid_state(
-                                "Range.PasteSpecial clipboard mode is invalid",
-                            )),
-                        }
+                        self.cut_copy_mode = None;
+                        self.clipboard = None;
+                        self.find_state = None;
+                        Ok(OmValue::Empty)
                     }
                     "Select" => {
                         if !args.is_empty() {
