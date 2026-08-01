@@ -13392,19 +13392,32 @@ impl ExcelRuntime {
                                         "Range.PasteSpecial Paste expects an integral XlPasteType value",
                                     ));
                                 }
-                                match *paste_type as i32 {
+                                let paste_type = *paste_type as i32;
+                                match paste_type {
                                     XL_PASTE_ALL
                                     | XL_PASTE_ALL_EXCEPT_BORDERS
                                     | XL_PASTE_ALL_MERGING_CONDITIONAL_FORMATS
                                     | XL_PASTE_ALL_USING_SOURCE_THEME
-                                    | XL_PASTE_COLUMN_WIDTHS
-                                    | XL_PASTE_COMMENTS
                                     | XL_PASTE_VALUES
                                     | XL_PASTE_FORMULAS
                                     | XL_PASTE_FORMATS
-                                    | XL_PASTE_VALIDATION
                                     | XL_PASTE_VALUES_AND_NUMBER_FORMATS
-                                    | XL_PASTE_FORMULAS_AND_NUMBER_FORMATS => *paste_type as i32,
+                                    | XL_PASTE_FORMULAS_AND_NUMBER_FORMATS => paste_type,
+                                    XL_PASTE_COLUMN_WIDTHS
+                                    | XL_PASTE_COMMENTS
+                                    | XL_PASTE_VALIDATION => {
+                                        let paste_name = match paste_type {
+                                            XL_PASTE_COLUMN_WIDTHS => "xlPasteColumnWidths",
+                                            XL_PASTE_COMMENTS => "xlPasteComments",
+                                            XL_PASTE_VALIDATION => "xlPasteValidation",
+                                            _ => unreachable!(
+                                                "metadata-only paste type match is exhaustive"
+                                            ),
+                                        };
+                                        return Err(OmError::unsupported(format!(
+                                            "Range.PasteSpecial Paste {paste_name} is not implemented",
+                                        )));
+                                    }
                                     other => {
                                         return Err(OmError::unsupported(format!(
                                             "Range.PasteSpecial Paste {other} is not implemented",
@@ -13424,10 +13437,6 @@ impl ExcelRuntime {
                                 | XL_PASTE_ALL_EXCEPT_BORDERS
                                 | XL_PASTE_ALL_MERGING_CONDITIONAL_FORMATS
                                 | XL_PASTE_ALL_USING_SOURCE_THEME
-                        );
-                        let paste_type_is_metadata_only = matches!(
-                            paste_type,
-                            XL_PASTE_COLUMN_WIDTHS | XL_PASTE_COMMENTS | XL_PASTE_VALIDATION
                         );
                         let operation = match args.get(1) {
                             None | Some(OmValue::Missing | OmValue::Empty | OmValue::Null) => {
@@ -13511,12 +13520,6 @@ impl ExcelRuntime {
                         }
                         let (clipboard_sheet_id, clipboard_rect) =
                             Self::range_set_single_area(&clipboard.range)?;
-                        if paste_type_is_metadata_only {
-                            self.cut_copy_mode = None;
-                            self.clipboard = None;
-                            self.find_state = None;
-                            return Ok(OmValue::Empty);
-                        }
                         if paste_type_is_all_like
                             && operation == XL_PASTE_SPECIAL_OPERATION_NONE
                             && !skip_blanks

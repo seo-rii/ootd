@@ -254,10 +254,15 @@ Active order:
    atomicity contract rather than complete Excel structural-edit parity.
    The contract is
    `docs/interfaces/workbook_state_save_validation.md`.
-   **Active:** fail closed metadata-only `Range.PasteSpecial` variants that still report success
-   without an observable result, then make the complete `WorksheetData` cell/spill/dirty payload
-   private before building the common reference AST and completing `OOTD-048` consumer migration.
-33. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
+   **Active:** make the complete `WorksheetData` cell/spill/dirty payload private before building
+   the common reference AST and completing `OOTD-048` consumer migration.
+33. `BUG-004` is complete (2026-08-01, synthetic): metadata-only `Range.PasteSpecial` selectors
+   `xlPasteComments`, `xlPasteValidation`, and `xlPasteColumnWidths` now return a named stable
+   `Unsupported` before clipboard or owner-state handling. Copy/Cut and writable/read-only
+   destination regressions preserve both workbook snapshots, dirty domains, and the complete
+   Find/CutCopyMode/clipboard session. The analogous format/metadata-only `Chart.Paste` false
+   success remains tracked as `BUG-005`.
+34. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
    claiming practical chart/pivot/style parity.
 
 Every numbered work unit starts with a failing regression and lands as its own reviewable commit.

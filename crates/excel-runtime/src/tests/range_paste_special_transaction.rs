@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
-    XL_COPY, XL_CUT, XL_PASTE_SPECIAL_OPERATION_ADD, XL_PASTE_SPECIAL_OPERATION_DIVIDE,
-    XL_PASTE_VALUES,
+    XL_COPY, XL_CUT, XL_PASTE_COLUMN_WIDTHS, XL_PASTE_COMMENTS, XL_PASTE_SPECIAL_OPERATION_ADD,
+    XL_PASTE_SPECIAL_OPERATION_DIVIDE, XL_PASTE_VALIDATION, XL_PASTE_VALUES,
 };
 
 fn open_clean_workbook(runtime: &mut ExcelRuntime) -> WorkbookHandle {
@@ -193,6 +193,148 @@ fn assert_custom_paste_failure_preserves_workbooks_and_session(
         session_before,
         "{label}: session",
     );
+}
+
+#[test]
+fn range_metadata_only_paste_special_is_fail_closed_and_atomic() {
+    for (paste_type, paste_name) in [
+        (XL_PASTE_COMMENTS, "xlPasteComments"),
+        (XL_PASTE_VALIDATION, "xlPasteValidation"),
+        (XL_PASTE_COLUMN_WIDTHS, "xlPasteColumnWidths"),
+    ] {
+        for clipboard_member in ["Copy", "Cut"] {
+            let label = format!("{clipboard_member} {paste_name}");
+            let mut runtime = ExcelRuntime::new();
+            let workbook = open_clean_workbook(&mut runtime);
+            let worksheet = worksheet_handle(&mut runtime, workbook);
+            let source = range_handle(&mut runtime, worksheet, "A60:B60");
+            let destination = range_handle(&mut runtime, worksheet, "D60:E60");
+            set_row_values(
+                &mut runtime,
+                source,
+                vec![OmValue::Number(1.0), OmValue::Number(2.0)],
+                &label,
+            );
+            set_row_values(
+                &mut runtime,
+                destination,
+                vec![OmValue::Number(3.0), OmValue::Number(4.0)],
+                &label,
+            );
+            commit_workbook_baseline(&mut runtime, workbook, &label);
+
+            assert_custom_paste_failure_preserves_workbooks_and_session(
+                &mut runtime,
+                workbook,
+                workbook,
+                source,
+                destination,
+                clipboard_member,
+                &[OmValue::Number(f64::from(paste_type))],
+                OmErrorCode::Unsupported,
+                paste_name,
+                &label,
+            );
+        }
+    }
+}
+
+#[test]
+fn range_metadata_only_paste_special_is_stably_unsupported_for_read_only_destination() {
+    for (paste_type, paste_name) in [
+        (XL_PASTE_COMMENTS, "xlPasteComments"),
+        (XL_PASTE_VALIDATION, "xlPasteValidation"),
+        (XL_PASTE_COLUMN_WIDTHS, "xlPasteColumnWidths"),
+    ] {
+        for clipboard_member in ["Copy", "Cut"] {
+            let label = format!("read-only {clipboard_member} {paste_name}");
+            let mut runtime = ExcelRuntime::new();
+            let source_workbook = open_clean_workbook(&mut runtime);
+            let source_worksheet = worksheet_handle(&mut runtime, source_workbook);
+            let source = range_handle(&mut runtime, source_worksheet, "A60:B60");
+            set_row_values(
+                &mut runtime,
+                source,
+                vec![OmValue::Number(1.0), OmValue::Number(2.0)],
+                &label,
+            );
+            commit_workbook_baseline(&mut runtime, source_workbook, &label);
+
+            let destination_workbook = runtime
+                .open_workbook(OpenWorkbookSpec {
+                    bytes: synthetic_workbook_bytes(),
+                    format_hint: Some(FileFormat::Xlsx),
+                    profile: ExcelProfile::Excel365,
+                    read_only: true,
+                })
+                .unwrap_or_else(|error| panic!("{label}: open read-only workbook: {error:?}"));
+            let destination_worksheet = worksheet_handle(&mut runtime, destination_workbook);
+            let destination = range_handle(&mut runtime, destination_worksheet, "D60:E60");
+
+            assert_custom_paste_failure_preserves_workbooks_and_session(
+                &mut runtime,
+                source_workbook,
+                destination_workbook,
+                source,
+                destination,
+                clipboard_member,
+                &[OmValue::Number(f64::from(paste_type))],
+                OmErrorCode::Unsupported,
+                paste_name,
+                &label,
+            );
+        }
+    }
+}
+
+#[test]
+fn range_metadata_only_paste_special_reports_capability_before_clipboard_state() {
+    for (paste_type, paste_name) in [
+        (XL_PASTE_COMMENTS, "xlPasteComments"),
+        (XL_PASTE_VALIDATION, "xlPasteValidation"),
+        (XL_PASTE_COLUMN_WIDTHS, "xlPasteColumnWidths"),
+    ] {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = open_clean_workbook(&mut runtime);
+        let worksheet = worksheet_handle(&mut runtime, workbook);
+        let destination = range_handle(&mut runtime, worksheet, "D60:E60");
+        let workbook_before = runtime_workbook_persistence_snapshot(&runtime, workbook);
+        let dirty_before = runtime
+            .workbook_dirty_domains(workbook)
+            .unwrap_or_else(|error| panic!("{paste_name}: dirty domains: {error:?}"));
+        let session_before = runtime_session_mutation_snapshot(&runtime);
+
+        let error = runtime
+            .dispatch_invoke(
+                destination,
+                "PasteSpecial",
+                &[OmValue::Number(f64::from(paste_type))],
+            )
+            .expect_err("metadata-only PasteSpecial should report unsupported capability");
+
+        assert_eq!(error.code, OmErrorCode::Unsupported, "{paste_name}");
+        assert_eq!(
+            error.message,
+            format!("Range.PasteSpecial Paste {paste_name} is not implemented"),
+        );
+        assert_eq!(
+            runtime_workbook_persistence_snapshot(&runtime, workbook),
+            workbook_before,
+            "{paste_name}: workbook",
+        );
+        assert_eq!(
+            runtime
+                .workbook_dirty_domains(workbook)
+                .unwrap_or_else(|error| panic!("{paste_name}: dirty domains after: {error:?}")),
+            dirty_before,
+            "{paste_name}: dirty domains",
+        );
+        assert_eq!(
+            runtime_session_mutation_snapshot(&runtime),
+            session_before,
+            "{paste_name}: session",
+        );
+    }
 }
 
 #[test]

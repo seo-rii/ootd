@@ -39950,7 +39950,7 @@
     }
 
     #[test]
-    fn range_paste_special_accepts_remaining_xl_paste_types() {
+    fn range_paste_special_supports_all_like_and_rejects_metadata_only_types() {
         let mut runtime = ExcelRuntime::new();
         runtime
             .open_workbook(OpenWorkbookSpec {
@@ -40043,16 +40043,23 @@
             ));
         }
 
-        for (destination_address, paste_type, seed) in [
-            ("D3", super::XL_PASTE_COMMENTS, "keep-comments-destination"),
+        for (destination_address, paste_type, paste_name, seed) in [
+            (
+                "D3",
+                super::XL_PASTE_COMMENTS,
+                "xlPasteComments",
+                "keep-comments-destination",
+            ),
             (
                 "E3",
                 super::XL_PASTE_VALIDATION,
+                "xlPasteValidation",
                 "keep-validation-destination",
             ),
             (
                 "F3",
                 super::XL_PASTE_COLUMN_WIDTHS,
+                "xlPasteColumnWidths",
                 "keep-column-widths-destination",
             ),
         ] {
@@ -40071,26 +40078,36 @@
             runtime
                 .dispatch_invoke(source, "Copy", &[])
                 .expect("Range.Copy before metadata-only PasteSpecial");
-            runtime
+            let error = runtime
                 .dispatch_invoke(
                     destination,
                     "PasteSpecial",
                     &[OmValue::Number(f64::from(paste_type))],
                 )
-                .expect("Range.PasteSpecial metadata-only paste type");
+                .expect_err("Range.PasteSpecial rejects metadata-only paste type");
+            assert_eq!(
+                error.code,
+                OmErrorCode::Unsupported,
+                "{paste_name}: {error:?}"
+            );
+            assert!(
+                error.message.contains(paste_name),
+                "{paste_name}: {error:?}"
+            );
             assert_eq!(
                 expect_text(
                     runtime
                         .dispatch_get(destination, "Value", &[])
-                        .expect("metadata-only destination Value after PasteSpecial")
+                        .expect("metadata-only destination Value after rejected PasteSpecial")
                 ),
                 seed
             );
-            assert!(!expect_bool(
+            assert_eq!(
                 runtime
                     .dispatch_get(application, "CutCopyMode", &[])
-                    .expect("Application.CutCopyMode after metadata-only PasteSpecial")
-            ));
+                    .expect("Application.CutCopyMode after rejected metadata-only PasteSpecial"),
+                OmValue::Number(f64::from(super::XL_COPY))
+            );
         }
     }
 
