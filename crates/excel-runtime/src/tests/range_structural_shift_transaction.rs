@@ -1,0 +1,344 @@
+use super::*;
+use crate::{XL_COPY, XL_SHIFT_DOWN, XL_SHIFT_TO_LEFT, XL_SHIFT_TO_RIGHT, XL_SHIFT_UP};
+
+fn open_clean_workbook(runtime: &mut ExcelRuntime) -> WorkbookHandle {
+    runtime
+        .open_workbook(OpenWorkbookSpec {
+            bytes: synthetic_workbook_bytes(),
+            format_hint: Some(FileFormat::Xlsx),
+            profile: ExcelProfile::Excel365,
+            read_only: false,
+        })
+        .expect("open synthetic workbook")
+}
+
+fn worksheet_handle(runtime: &mut ExcelRuntime, workbook: WorkbookHandle) -> ObjectHandle {
+    let worksheets = expect_object_handle(
+        runtime
+            .dispatch_get(workbook.0, "Worksheets", &[])
+            .expect("Workbook.Worksheets"),
+    );
+    expect_object_handle(
+        runtime
+            .dispatch_invoke(worksheets, "Item", &[OmValue::Number(1.0)])
+            .expect("Worksheets.Item(1)"),
+    )
+}
+
+fn range_handle(
+    runtime: &mut ExcelRuntime,
+    worksheet: ObjectHandle,
+    address: &str,
+) -> ObjectHandle {
+    expect_object_handle(
+        runtime
+            .dispatch_invoke(worksheet, "Range", &[OmValue::Text(address.to_string())])
+            .unwrap_or_else(|error| panic!("Range({address}): {error:?}")),
+    )
+}
+
+fn set_number(runtime: &mut ExcelRuntime, worksheet: ObjectHandle, address: &str, value: f64) {
+    let range = range_handle(runtime, worksheet, address);
+    runtime
+        .dispatch_set(range, "Value2", OmValue::Number(value), &[])
+        .unwrap_or_else(|error| panic!("{address}.Value2: {error:?}"));
+}
+
+fn commit_workbook_baseline(runtime: &mut ExcelRuntime, workbook: WorkbookHandle, label: &str) {
+    let mut bytes = Vec::new();
+    runtime
+        .save_workbook_to_writer(
+            workbook,
+            SaveWorkbookSpec {
+                format: FileFormat::Xlsx,
+                profile: ExcelProfile::Excel365,
+                lossless: true,
+            },
+            &mut bytes,
+        )
+        .unwrap_or_else(|error| panic!("{label}: commit baseline: {error:?}"));
+    assert!(!bytes.is_empty(), "{label}: baseline bytes");
+    assert_eq!(
+        runtime
+            .workbook_dirty_domains(workbook)
+            .unwrap_or_else(|error| panic!("{label}: clean dirty domains: {error:?}")),
+        WorkbookDirtyDomains::default(),
+        "{label}: clean baseline",
+    );
+}
+
+fn assert_structural_failure_is_atomic(
+    runtime: &mut ExcelRuntime,
+    workbook: WorkbookHandle,
+    target: ObjectHandle,
+    member: &str,
+    shift: i32,
+    expected_code: OmErrorCode,
+    expected_message_fragments: &[&str],
+    label: &str,
+) {
+    runtime
+        .dispatch_invoke(
+            target,
+            "Find",
+            &[OmValue::Text("structural session marker".to_string())],
+        )
+        .unwrap_or_else(|error| panic!("{label}: seed Find state: {error:?}"));
+    runtime
+        .dispatch_invoke(target, "Copy", &[])
+        .unwrap_or_else(|error| panic!("{label}: arm clipboard: {error:?}"));
+    assert!(
+        runtime.find_state.is_some(),
+        "{label}: Find state precondition"
+    );
+    assert_eq!(runtime.cut_copy_mode, Some(XL_COPY), "{label}");
+    assert!(
+        runtime.clipboard.is_some(),
+        "{label}: clipboard precondition"
+    );
+
+    let workbook_before = runtime_workbook_persistence_snapshot(runtime, workbook);
+    let dirty_before = runtime
+        .workbook_dirty_domains(workbook)
+        .unwrap_or_else(|error| panic!("{label}: dirty domains before: {error:?}"));
+    let session_before = runtime_session_mutation_snapshot(runtime);
+
+    let error = match runtime.dispatch_invoke(target, member, &[OmValue::Number(f64::from(shift))])
+    {
+        Ok(value) => panic!("{label}: Range.{member} unexpectedly succeeded: {value:?}"),
+        Err(error) => error,
+    };
+
+    assert_eq!(error.code, expected_code, "{label}: {error:?}");
+    for fragment in expected_message_fragments {
+        assert!(error.message.contains(fragment), "{label}: {error:?}");
+    }
+    assert_eq!(
+        runtime_workbook_persistence_snapshot(runtime, workbook),
+        workbook_before,
+        "{label}: workbook",
+    );
+    assert_eq!(
+        runtime
+            .workbook_dirty_domains(workbook)
+            .unwrap_or_else(|error| panic!("{label}: dirty domains after: {error:?}")),
+        dirty_before,
+        "{label}: dirty domains",
+    );
+    assert_eq!(
+        runtime_session_mutation_snapshot(runtime),
+        session_before,
+        "{label}: runtime session",
+    );
+}
+
+#[test]
+fn range_insert_late_lane_overflow_is_atomic() {
+    for (target_address, shift, seeds, message_fragment, label) in [
+        (
+            "D1:E1",
+            XL_SHIFT_DOWN,
+            [("D2", 11.0), ("E1048576", 22.0)],
+            "rows",
+            "late column row overflow",
+        ),
+        (
+            "A20:A21",
+            XL_SHIFT_TO_RIGHT,
+            [("B20", 11.0), ("XFD21", 22.0)],
+            "columns",
+            "late row column overflow",
+        ),
+    ] {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = open_clean_workbook(&mut runtime);
+        let worksheet = worksheet_handle(&mut runtime, workbook);
+        for (address, value) in seeds {
+            set_number(&mut runtime, worksheet, address, value);
+        }
+        commit_workbook_baseline(&mut runtime, workbook, label);
+        let target = range_handle(&mut runtime, worksheet, target_address);
+
+        assert_structural_failure_is_atomic(
+            &mut runtime,
+            workbook,
+            target,
+            "Insert",
+            shift,
+            OmErrorCode::InvalidArgument,
+            &[message_fragment],
+            label,
+        );
+    }
+}
+
+#[test]
+fn range_insert_delete_reject_spill_corridors_atomically() {
+    for (member, target_address, shift, normal_address, expected_message_fragments, label) in [
+        (
+            "Insert",
+            "I9:J9",
+            XL_SHIFT_DOWN,
+            "I10",
+            &["R10C10"][..],
+            "insert down through spill anchor",
+        ),
+        (
+            "Delete",
+            "I11:J11",
+            XL_SHIFT_UP,
+            "I12",
+            &["R11C10", "R10C10"][..],
+            "delete up through spill child",
+        ),
+        (
+            "Insert",
+            "K9:K10",
+            XL_SHIFT_TO_RIGHT,
+            "L9",
+            &["R10C11", "R10C10"][..],
+            "insert right through spill child",
+        ),
+        (
+            "Delete",
+            "I9:I10",
+            XL_SHIFT_TO_LEFT,
+            "J9",
+            &["R10C10"][..],
+            "delete left through spill anchor",
+        ),
+    ] {
+        let (mut runtime, workbook, worksheet, _) = runtime_with_sequence_spill();
+        set_number(&mut runtime, worksheet, normal_address, 99.0);
+        commit_workbook_baseline(&mut runtime, workbook, label);
+        let target = range_handle(&mut runtime, worksheet, target_address);
+
+        assert_structural_failure_is_atomic(
+            &mut runtime,
+            workbook,
+            target,
+            member,
+            shift,
+            OmErrorCode::InvalidState,
+            expected_message_fragments,
+            label,
+        );
+    }
+}
+
+#[test]
+fn range_insert_rejects_unmaterialized_spill_intersection() {
+    let (mut runtime, workbook, worksheet, sheet_id) = runtime_with_sequence_spill();
+    {
+        let worksheet_data = runtime
+            .runtime_workbook_mut(workbook)
+            .expect("runtime workbook")
+            .loaded
+            .state
+            .worksheet_data_for_sheet_mut(sheet_id)
+            .expect("worksheet data");
+        for key in [(10, 11), (11, 11)] {
+            worksheet_data.cells.remove(&key);
+            worksheet_data.spill_owners.remove(&key);
+        }
+    }
+    set_number(&mut runtime, worksheet, "K20", 17.0);
+    commit_workbook_baseline(&mut runtime, workbook, "unmaterialized spill child");
+    let target = range_handle(&mut runtime, worksheet, "K10");
+
+    assert_structural_failure_is_atomic(
+        &mut runtime,
+        workbook,
+        target,
+        "Insert",
+        XL_SHIFT_DOWN,
+        OmErrorCode::InvalidState,
+        &["R10C11", "R10C10"],
+        "unmaterialized spill child",
+    );
+}
+
+#[test]
+fn range_structural_multilane_insert_commits_and_reopens() {
+    let mut runtime = ExcelRuntime::new();
+    let workbook = open_clean_workbook(&mut runtime);
+    let worksheet = worksheet_handle(&mut runtime, workbook);
+    let target = range_handle(&mut runtime, worksheet, "A1:B1");
+    runtime
+        .dispatch_invoke(target, "Find", &[OmValue::Text("shared".to_string())])
+        .expect("seed Find state");
+    runtime
+        .dispatch_invoke(target, "Copy", &[])
+        .expect("arm clipboard");
+
+    runtime
+        .dispatch_invoke(
+            target,
+            "Insert",
+            &[OmValue::Number(f64::from(XL_SHIFT_DOWN))],
+        )
+        .expect("A1:B1.Insert(xlShiftDown)");
+
+    assert!(runtime.find_state.is_none());
+    assert!(runtime.cut_copy_mode.is_none());
+    assert!(runtime.clipboard.is_none());
+    assert_eq!(
+        runtime
+            .workbook_dirty_domains(workbook)
+            .expect("dirty domains after Insert"),
+        WorkbookDirtyDomains {
+            prompt_dirty: true,
+            semantic_dirty: true,
+            serialization_dirty: true,
+            ..WorkbookDirtyDomains::default()
+        },
+    );
+    runtime
+        .workbook_state(workbook)
+        .expect("workbook state after Insert")
+        .validate_for_save()
+        .expect("valid state after Insert");
+
+    let mut bytes = Vec::new();
+    runtime
+        .save_workbook_to_writer(
+            workbook,
+            SaveWorkbookSpec {
+                format: FileFormat::Xlsx,
+                profile: ExcelProfile::Excel365,
+                lossless: true,
+            },
+            &mut bytes,
+        )
+        .expect("save inserted workbook");
+    let reopened = runtime
+        .codec
+        .load(&bytes, LoadOptions::default())
+        .expect("reopen inserted workbook");
+    let reopened_sheet_id = reopened.state.worksheets()[0].id;
+    assert!(
+        reopened.state.cell(reopened_sheet_id, 1, 1).is_none(),
+        "A1 should be vacated",
+    );
+    assert!(
+        reopened.state.cell(reopened_sheet_id, 1, 2).is_none(),
+        "B1 should be vacated",
+    );
+    assert_eq!(
+        reopened
+            .state
+            .cell(reopened_sheet_id, 2, 1)
+            .expect("A2 after reopen")
+            .value,
+        CellValue::Number(42.0),
+    );
+    let formula_cell = reopened
+        .state
+        .cell(reopened_sheet_id, 2, 2)
+        .expect("B2 after reopen");
+    assert_eq!(formula_cell.value, CellValue::Text("SHARED".to_string()));
+    assert_eq!(
+        formula_cell.formula.as_ref().expect("B2 formula").text,
+        r#"UPPER("shared")"#,
+    );
+}

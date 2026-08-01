@@ -37,6 +37,14 @@ enum CellBatchMutationKind {
     Rearrange,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CellShiftDirection {
+    Up,
+    Left,
+    Down,
+    Right,
+}
+
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct WorksheetData {
     pub cells: BTreeMap<(u32, u32), CellData>,
@@ -1376,6 +1384,128 @@ impl WorkbookState {
         self.apply_cell_batch_with_change(sheet_id, replacements, CellBatchMutationKind::Rearrange)
     }
 
+    pub fn shift_cells_with_change(
+        &mut self,
+        sheet_id: SheetId,
+        rect: Rect,
+        direction: CellShiftDirection,
+    ) -> OmResult<bool> {
+        ExcelLimits::validate_rect(rect)?;
+        let affected_rect = match direction {
+            CellShiftDirection::Up | CellShiftDirection::Down => Rect {
+                row_first: rect.row_first,
+                row_last: ExcelLimits::MAX_ROW_INDEX,
+                col_first: rect.col_first,
+                col_last: rect.col_last,
+            },
+            CellShiftDirection::Left | CellShiftDirection::Right => Rect {
+                row_first: rect.row_first,
+                row_last: rect.row_last,
+                col_first: rect.col_first,
+                col_last: ExcelLimits::MAX_COLUMN_INDEX,
+            },
+        };
+        let worksheet = self.worksheet_data_for_sheet(sheet_id)?;
+        let mut protected_keys = Vec::new();
+        for spill_range in worksheet.spill_ranges.values() {
+            if affected_rect.row_first <= spill_range.row_last
+                && spill_range.row_first <= affected_rect.row_last
+                && affected_rect.col_first <= spill_range.col_last
+                && spill_range.col_first <= affected_rect.col_last
+            {
+                protected_keys.push((
+                    affected_rect.row_first.max(spill_range.row_first),
+                    affected_rect.col_first.max(spill_range.col_first),
+                ));
+            }
+        }
+        for &anchor in &worksheet.dynamic_array_formulas {
+            if (affected_rect.row_first..=affected_rect.row_last).contains(&anchor.0)
+                && (affected_rect.col_first..=affected_rect.col_last).contains(&anchor.1)
+            {
+                protected_keys.push(anchor);
+            }
+        }
+        for &child in worksheet.spill_owners.keys() {
+            if (affected_rect.row_first..=affected_rect.row_last).contains(&child.0)
+                && (affected_rect.col_first..=affected_rect.col_last).contains(&child.1)
+            {
+                protected_keys.push(child);
+            }
+        }
+        let operation = match direction {
+            CellShiftDirection::Up | CellShiftDirection::Left => "delete",
+            CellShiftDirection::Down | CellShiftDirection::Right => "insert",
+        };
+        worksheet.ensure_spill_topology_is_not_modified(protected_keys, operation)?;
+
+        let source_cells = worksheet
+            .cells
+            .iter()
+            .filter_map(|(&key, cell)| {
+                ((affected_rect.row_first..=affected_rect.row_last).contains(&key.0)
+                    && (affected_rect.col_first..=affected_rect.col_last).contains(&key.1))
+                .then_some((key, cell.clone()))
+            })
+            .collect::<Vec<_>>();
+        let mut replacements = BTreeMap::new();
+        for (key, _) in &source_cells {
+            replacements.insert(*key, None);
+        }
+        match direction {
+            CellShiftDirection::Up => {
+                let shift_height = rect.height();
+                for ((row, col), cell) in source_cells {
+                    if row > rect.row_last {
+                        replacements.insert((row - shift_height, col), Some(cell));
+                    }
+                }
+            }
+            CellShiftDirection::Left => {
+                let shift_width = rect.width();
+                for ((row, col), cell) in source_cells {
+                    if col > rect.col_last {
+                        replacements.insert((row, col - shift_width), Some(cell));
+                    }
+                }
+            }
+            CellShiftDirection::Down => {
+                let shift_height = rect.height();
+                for ((row, col), cell) in source_cells {
+                    let target_row = row.checked_add(shift_height).ok_or_else(|| {
+                        OmError::invalid_argument(
+                            "Range.Insert would shift cells beyond worksheet rows",
+                        )
+                    })?;
+                    if target_row > ExcelLimits::MAX_ROW_INDEX {
+                        return Err(OmError::invalid_argument(
+                            "Range.Insert would shift cells beyond worksheet rows",
+                        ));
+                    }
+                    replacements.insert((target_row, col), Some(cell));
+                }
+            }
+            CellShiftDirection::Right => {
+                let shift_width = rect.width();
+                for ((row, col), cell) in source_cells {
+                    let target_col = col.checked_add(shift_width).ok_or_else(|| {
+                        OmError::invalid_argument(
+                            "Range.Insert would shift cells beyond worksheet columns",
+                        )
+                    })?;
+                    if target_col > ExcelLimits::MAX_COLUMN_INDEX {
+                        return Err(OmError::invalid_argument(
+                            "Range.Insert would shift cells beyond worksheet columns",
+                        ));
+                    }
+                    replacements.insert((row, target_col), Some(cell));
+                }
+            }
+        }
+
+        self.apply_cell_batch_with_change(sheet_id, replacements, CellBatchMutationKind::Rearrange)
+    }
+
     pub fn fill_cells_with_change(
         &mut self,
         sheet_id: SheetId,
@@ -1697,17 +1827,17 @@ fn checked_rect_cell_count_sum(rects: &[Rect]) -> OmResult<usize> {
 #[cfg(test)]
 mod tests {
     use super::{
-        CellData, ChartModel, ChartObjectModel, ChartSheetBinding, ChartSourceExpr, ChartType,
-        DefinedNameTable, DrawingModel, DrawingObjectModel, SeriesModel, WorkbookState,
-        WorkbookStateParts, WorksheetData,
+        CellData, CellShiftDirection, ChartModel, ChartObjectModel, ChartSheetBinding,
+        ChartSourceExpr, ChartType, DefinedNameTable, DrawingModel, DrawingObjectModel,
+        SeriesModel, WorkbookState, WorkbookStateParts, WorksheetData,
     };
     use std::collections::{BTreeMap, BTreeSet};
 
     use office_common::{
-        CellValue, ChartId, ChartObjectId, DrawingId, FileFormat, FormulaSource, NameScope,
-        NameValidationMode, ObjectHandle, ObjectPlacement, OmArray, OmErrorCode, OmValue, RangeRef,
-        RangeSet, Rect, ReferenceTarget, SheetId, SheetKind, SheetScope, SheetVisibility, StyleId,
-        WorkbookId, WorkbookModel, WorksheetModel,
+        CellValue, ChartId, ChartObjectId, DrawingId, ExcelLimits, FileFormat, FormulaSource,
+        NameScope, NameValidationMode, ObjectHandle, ObjectPlacement, OmArray, OmErrorCode,
+        OmValue, RangeRef, RangeSet, Rect, ReferenceTarget, SheetId, SheetKind, SheetScope,
+        SheetVisibility, StyleId, WorkbookId, WorkbookModel, WorksheetModel,
     };
 
     fn sample_state() -> WorkbookState {
@@ -3829,6 +3959,90 @@ mod tests {
         assert!(worksheet.dirty_cells.contains(&(1, 1)));
         assert!(worksheet.dirty_cells.contains(&(1, 2)));
         state.validate_for_save().expect("valid rearranged state");
+    }
+
+    #[test]
+    fn shift_cells_rejects_late_overflow_atomically() {
+        let mut state = sample_state();
+        state
+            .insert_cell(
+                SheetId(3),
+                2,
+                4,
+                CellData {
+                    value: CellValue::Number(11.0),
+                    formula: None,
+                    style_id: None,
+                },
+            )
+            .expect("seed safe shift lane");
+        state
+            .insert_cell(
+                SheetId(3),
+                ExcelLimits::MAX_ROW_INDEX,
+                5,
+                CellData {
+                    value: CellValue::Number(22.0),
+                    formula: None,
+                    style_id: None,
+                },
+            )
+            .expect("seed overflowing shift lane");
+        let before = state.clone();
+
+        let error = state
+            .shift_cells_with_change(
+                SheetId(3),
+                Rect {
+                    row_first: 1,
+                    row_last: 1,
+                    col_first: 4,
+                    col_last: 5,
+                },
+                CellShiftDirection::Down,
+            )
+            .expect_err("late row overflow should reject the whole shift");
+
+        assert_eq!(error.code, OmErrorCode::InvalidArgument);
+        assert!(error.message.contains("rows"), "{error:?}");
+        assert_eq!(state, before);
+    }
+
+    #[test]
+    fn shift_cells_rejects_unmaterialized_spill_intersection() {
+        let mut state = sample_state();
+        seed_two_by_two_spill(&mut state);
+        {
+            let worksheet = state
+                .worksheet_data_for_sheet_mut(SheetId(3))
+                .expect("worksheet data");
+            for key in [(3, 4), (4, 4)] {
+                worksheet.cells.remove(&key);
+                worksheet.spill_owners.remove(&key);
+            }
+            worksheet.cells.insert(
+                (10, 4),
+                CellData {
+                    value: CellValue::Number(17.0),
+                    formula: None,
+                    style_id: None,
+                },
+            );
+        }
+        let before = state.clone();
+
+        let error = state
+            .shift_cells_with_change(
+                SheetId(3),
+                Rect::single_cell(3, 4),
+                CellShiftDirection::Down,
+            )
+            .expect_err("geometric spill intersection should reject the whole shift");
+
+        assert_eq!(error.code, OmErrorCode::InvalidState);
+        assert!(error.message.contains("R3C4"), "{error:?}");
+        assert!(error.message.contains("R3C3"), "{error:?}");
+        assert_eq!(state, before);
     }
 
     #[test]

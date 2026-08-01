@@ -466,10 +466,19 @@ Wave 2 exit gate:
    style-preserving clear 의미는 유지한다. 늦은 type/divide-by-zero, source/destination spill,
    SkipBlanks, overlap, cross-sheet/workbook commit RED가 양쪽 workbook/dirty/session 불변을 고정하며
    `excel-model` 110개와 `excel-runtime` 752개 회귀가 통과한다.
-   **다음:** structural Insert/Delete를 각각
-   spill-aware transaction/command로 이관하고 `WorksheetData`의 7개 payload field를
-   private으로 닫은 뒤
-   `OOTD-018`/`OOTD-048` common reference subsystem을 진행한다.
+   19단계 완료 (2026-08-01, synthetic): `Range.Insert`/`Delete`의 네 방향 live lane
+   mutation을 `WorkbookState::shift_cells_with_change` command로 교체했다. command는 전체
+   shift corridor와 dynamic spill range/anchor/owner의 기하학적 교차를 실제 child cell
+   materialization 여부와 무관하게 먼저 거부한다. immutable sparse cell snapshot의 모든
+   source를 지운 final map 위에 허용된 shifted target을 덮고, Insert의 전체 target bounds를
+   검증한 뒤 한 번만 commit한다. 뒤 column/row overflow와 Insert/Delete 네 방향 spill
+   anchor/child, unmaterialized spill child RED가 workbook/dirty/session 불변을 고정하며,
+   multi-lane Insert의 formula/cache payload가 save/reopen된다. `excel-model` 112개와
+   `excel-runtime` 756개 회귀가 통과한다. formula/name/table/chart/drawing reference와 raw
+   row/column metadata retarget은 이 cell-payload 단계의 호환성 주장에 포함하지 않는다.
+   **다음:** metadata-only `Range.PasteSpecial`의 거짓 성공을 fail-closed한 뒤
+   `WorksheetData`의 7개 payload field를 private으로 닫고 `OOTD-018`/`OOTD-048` common
+   reference subsystem을 진행한다.
 16. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
    structured error에 추가한다.
 

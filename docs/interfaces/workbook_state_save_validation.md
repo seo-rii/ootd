@@ -224,6 +224,25 @@ dirty domains, and the Find/clipboard session. Metadata-only column-width, comme
 variants are not part of this boundary; their legacy no-op success remains a fail-closed
 compatibility gap.
 
+`WorkbookState::shift_cells_with_change` owns the cell-payload plan for `Range.Insert` and
+`Range.Delete`. Up/down shifts use the selected columns from the first selected row through the
+Excel row limit; left/right shifts use the selected rows from the first selected column through the
+column limit. Before diff filtering, the command rejects any geometric intersection between that
+complete corridor and a dynamic-array anchor, materialized owner, or spill range. This includes a
+spill child with no cached `CellData`. It then snapshots only stored cells in the corridor, clears
+every source coordinate in a final replacement map, and overlays Delete survivors or Insert
+targets. Every Insert target is bounds-checked before the one batch commit. Late row/column
+overflow, all four anchor/child intersections, and unmaterialized-child regressions require exact
+workbook, dirty-domain, and Find/clipboard session rollback. A successful multi-lane Insert
+preserves moved formula text and cache through synthetic save/reopen; the replacement plan carries
+the complete `CellData`, including style identity.
+
+This is deliberately a cell-payload atomicity boundary, not complete Excel structural-edit parity.
+Formula references inside or outside the corridor, defined names, tables, validation, charts,
+drawings, merged cells, and raw row/column metadata are not retargeted by this command. Those
+owners remain part of the common reference and typed worksheet-metadata follow-up, and no desktop
+Excel Oracle claim is attached to the current behavior.
+
 ### Worksheet-data ownership map
 
 The `WorkbookState` worksheet-data map is private. External callers can inspect it through
@@ -250,10 +269,9 @@ also private, so callers cannot insert, remove, reorder, or mutate worksheet ide
 borrowed element. `WorksheetData` payload fields remain public through the existing live-owner
 accessor; `Range.Clear`, `ClearFormats`, `Replace`, and `Sort` no longer use that bypass.
 `FillDown`, `FillRight`, `FillUp`, `FillLeft`, `Range.Copy Destination`, transactional
-`Range.Cut Destination`, and cell-materializing custom `Range.PasteSpecial` now use the same
-boundary as well.
-Structural and calculation writeback paths remain explicit `OOTD-054` follow-ups. Invalid state
-continues to be rejected by save preflight. Production
+`Range.Cut Destination`, cell-materializing custom `Range.PasteSpecial`, and cell-payload
+`Range.Insert`/`Delete` now use the same boundary as well. Calculation writeback paths remain
+explicit `OOTD-054` follow-ups. Invalid state continues to be rejected by save preflight. Production
 worksheet metadata and ordering paths use the command boundary above; workbook model metadata is
 separately private.
 
@@ -328,9 +346,11 @@ across same- and cross-workbook copies. Stage seventeen prepares source-clear an
 for `Range.Cut Destination`, completes every fallible same/cross-workbook command on cloned state,
 and commits only after both sides succeed. Stage eighteen gives cell-materializing custom
 `Range.PasteSpecial` the same immutable planning and prepared publication boundary, including
-source/destination spill preflight and late-operation rollback. Defined-name, chart, drawing,
-chart-sheet, opaque-part, and the remaining `WorksheetData` payload fields remain public. Callers
-can still create malformed
+source/destination spill preflight and late-operation rollback. Stage nineteen moves
+`Range.Insert`/`Delete` cell shifts to an immutable sparse plan and one spill-corridor-aware command,
+with complete bounds validation before commit. Defined-name, chart, drawing, chart-sheet,
+opaque-part, and the remaining `WorksheetData` payload fields remain public. Callers can still
+create malformed
 state through those surfaces, but model save and
 identity-reassignment boundaries reject it deterministically.
 

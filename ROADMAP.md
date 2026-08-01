@@ -187,7 +187,7 @@ Active order:
    `InvalidState` without partial mutation; runtime registration consumes a handle only after
    success, and reload/save callers propagate failure. The contract is
    `docs/interfaces/workbook_state_save_validation.md`.
-32. `OOTD-054` stages 1-18 are complete (2026-07-30, synthetic): the worksheet-data ownership map
+32. `OOTD-054` stages 1-19 are complete (2026-08-01, synthetic): the worksheet-data ownership map
    and live workbook-model metadata are private, decoded construction is validated, and runtime
    add/copy/delete use paired owner/data commands. Read-only access cannot insert or rekey orphan
    data; model metadata changes use explicit commands while workbook-ID changes remain atomic; and
@@ -246,13 +246,17 @@ Active order:
    spill-preflighted even when unchanged, while `SkipBlanks` can leave a protected spill cell
    untouched. Same-sheet overlap, Copy-only A1 formula shifting, exact Cut formulas, and session
    cleanup semantics remain fixed by regressions.
+   `Range.Insert` and `Range.Delete` now stage all four directional cell-payload shifts from one
+   immutable sparse snapshot and publish one model command. Insert validates every shifted target
+   before commit, and both operations reject any geometric intersection between the full shift
+   corridor and dynamic spill topology, including an unmaterialized child. Formula/name/table/chart/
+   drawing references and raw row/column metadata are not yet retargeted, so this remains a bounded
+   atomicity contract rather than complete Excel structural-edit parity.
    The contract is
    `docs/interfaces/workbook_state_save_validation.md`.
-   **Active:** continue `OOTD-054` by moving structural Insert/Delete behind spill-aware
-   transactions and batch commands, then make the complete `WorksheetData` cell/spill/dirty payload
-   private before building the common reference
-   AST and completing `OOTD-048` consumer
-   migration.
+   **Active:** fail closed metadata-only `Range.PasteSpecial` variants that still report success
+   without an observable result, then make the complete `WorksheetData` cell/spill/dirty payload
+   private before building the common reference AST and completing `OOTD-048` consumer migration.
 33. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
    claiming practical chart/pivot/style parity.
 
