@@ -15389,76 +15389,94 @@ impl ExcelRuntime {
                             }
                             OmArray::new(1, values.len(), values)?
                         };
-                        {
-                            let runtime = self.runtime_workbook_mut(workbook)?;
-                            if runtime.read_only {
-                                return Err(OmError::new(
-                                    OmErrorCode::InvalidState,
-                                    "cannot modify a read-only workbook",
-                                ));
-                            }
-                            let chart = runtime.loaded.state.charts.get_mut(&chart_id).ok_or_else(
-                                || OmError::new(OmErrorCode::NotFound, "chart not found"),
-                            )?;
-                            chart.series.clear();
-                            for group in &mut chart.groups {
-                                group.series_raw_indices.clear();
-                            }
-                            chart.series_topology_dirty = !chart.groups.is_empty();
-                            chart.series.push(SeriesModel {
-                                name: None,
-                                x_values: None,
-                                values: None,
-                                bubble_size: None,
-                                bar_shape: None,
-                                smooth: None,
-                                marker_style: None,
-                                marker_size: None,
-                                invert_if_negative: None,
-                                points: BTreeMap::new(),
-                                data_labels: None,
-                                point_data_labels: BTreeMap::new(),
-                                raw_index: Some(0),
-                                order: Some(0),
-                                axis_group: ChartAxisGroup::Primary,
-                                is_filtered: false,
-                                filter_dirty: false,
-                            });
-                            if let Some(group) = chart
-                                .groups
-                                .iter_mut()
-                                .find(|group| group.axis_group == ChartAxisGroup::Primary)
+                        let snapshot = self.begin_runtime_workbook_mutation(workbook)?;
+                        let paste_result: OmResult<()> = (|| {
                             {
-                                group.series_raw_indices.push(0);
+                                let runtime = self.runtime_workbook_mut(workbook)?;
+                                if runtime.read_only {
+                                    return Err(OmError::new(
+                                        OmErrorCode::InvalidState,
+                                        "cannot modify a read-only workbook",
+                                    ));
+                                }
+                                let chart = runtime
+                                    .loaded
+                                    .state
+                                    .charts
+                                    .get_mut(&chart_id)
+                                    .ok_or_else(|| {
+                                        OmError::new(OmErrorCode::NotFound, "chart not found")
+                                    })?;
+                                chart.series.clear();
+                                for group in &mut chart.groups {
+                                    group.series_raw_indices.clear();
+                                }
+                                chart.series_topology_dirty = !chart.groups.is_empty();
+                                chart.series.push(SeriesModel {
+                                    name: None,
+                                    x_values: None,
+                                    values: None,
+                                    bubble_size: None,
+                                    bar_shape: None,
+                                    smooth: None,
+                                    marker_style: None,
+                                    marker_size: None,
+                                    invert_if_negative: None,
+                                    points: BTreeMap::new(),
+                                    data_labels: None,
+                                    point_data_labels: BTreeMap::new(),
+                                    raw_index: Some(0),
+                                    order: Some(0),
+                                    axis_group: ChartAxisGroup::Primary,
+                                    is_filtered: false,
+                                    filter_dirty: false,
+                                });
+                                if let Some(group) = chart
+                                    .groups
+                                    .iter_mut()
+                                    .find(|group| group.axis_group == ChartAxisGroup::Primary)
+                                {
+                                    group.series_raw_indices.push(0);
+                                }
+                                normalize_volume_stock_chart(chart);
+                                chart.content_dirty = true;
+                                chart.dirty = true;
+                                runtime.mark_semantic_dirty();
                             }
-                            normalize_volume_stock_chart(chart);
-                            chart.content_dirty = true;
-                            chart.dirty = true;
-                            runtime.mark_semantic_dirty();
+                            self.cut_copy_mode = None;
+                            self.clipboard = None;
+                            self.find_state = None;
+                            self.stale_series_handles_for_chart(workbook, chart_id);
+                            let chart = self.register_chart_handle(workbook, chart_id);
+                            let OmValue::Object(series_collection) =
+                                self.dispatch_get(chart, "SeriesCollection", &[])?
+                            else {
+                                return Err(OmError::type_mismatch(
+                                    "Chart.SeriesCollection did not return an object",
+                                ));
+                            };
+                            let OmValue::Object(series) = self.dispatch_invoke(
+                                series_collection,
+                                "Item",
+                                &[OmValue::Number(1.0)],
+                            )?
+                            else {
+                                return Err(OmError::type_mismatch(
+                                    "SeriesCollection.Item did not return a Series object",
+                                ));
+                            };
+                            self.dispatch_set(
+                                series,
+                                "Values",
+                                OmValue::Array(pasted_values),
+                                &[],
+                            )?;
+                            Ok(())
+                        })();
+                        if paste_result.is_err() {
+                            self.rollback_runtime_workbook_mutation(snapshot);
                         }
-                        self.cut_copy_mode = None;
-                        self.clipboard = None;
-                        self.find_state = None;
-                        self.stale_series_handles_for_chart(workbook, chart_id);
-                        let chart = self.register_chart_handle(workbook, chart_id);
-                        let OmValue::Object(series_collection) =
-                            self.dispatch_get(chart, "SeriesCollection", &[])?
-                        else {
-                            return Err(OmError::type_mismatch(
-                                "Chart.SeriesCollection did not return an object",
-                            ));
-                        };
-                        let OmValue::Object(series) = self.dispatch_invoke(
-                            series_collection,
-                            "Item",
-                            &[OmValue::Number(1.0)],
-                        )?
-                        else {
-                            return Err(OmError::type_mismatch(
-                                "SeriesCollection.Item did not return a Series object",
-                            ));
-                        };
-                        self.dispatch_set(series, "Values", OmValue::Array(pasted_values), &[])?;
+                        paste_result?;
                     } else {
                         let source =
                             self.register_range_set_handle(clipboard.workbook, clipboard.range);

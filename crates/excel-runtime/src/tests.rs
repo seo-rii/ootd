@@ -31,6 +31,7 @@
     use office_opc::{CompressionMethod, OpcPackage, OpcPart};
 
     mod chart_paste_fail_closed;
+    mod chart_paste_values_transaction;
     mod range_copy_spill;
     mod range_cut_spill;
     mod range_fill_spill;

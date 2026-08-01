@@ -488,9 +488,16 @@ Wave 2 exit gate:
    Copy/Cut, writable/read-only chart destination, clipboard 없음 회귀가 양쪽 workbook/chart
    snapshot, dirty domain, object registry/allocator, Find/CutCopyMode/clipboard session 불변과
    selector-first 오류 메시지를 고정하며 `excel-runtime` 762개 회귀가 통과한다.
-   **다음:** `BUG-006` `Chart.Paste xlPasteValues` 후반 오류의 chart/session 부분
-   commit을 닫고, cross-workbook handle 누수·Cut 의미·format 부분 무시를 각각
-   `BUG-007`~`BUG-009`로 고정한 뒤 `WorksheetData` payload private 전환을 재개한다.
+   `BUG-006` 완료 (2026-08-01, synthetic): `Chart.Paste xlPasteValues`가 source array를
+   읽은 뒤 첫 chart mutation 직전에 runtime workbook transaction을 열고, series topology
+   교체, dirty 전파, 기존 series handle stale 처리, 임시 handle dispatch와 fallible
+   `Series.Values` 설정을 하나의 commit/rollback 경계로 묶는다. non-finite source value가
+   후반 검증에서 거절되는 same/cross-workbook Copy 회귀가 source/destination persistence
+   snapshot, dirty domain, object registry/stale set/allocator, 기존 Series handle과
+   Find/CutCopyMode/clipboard 상태를 정확히 복원하며 `excel-runtime` 764개 회귀가 통과한다.
+   **다음:** `BUG-007` `Chart.Paste` 내부 임시 handle lifecycle을 닫고, Cut 의미와 format
+   부분 무시를 `BUG-008`~`BUG-009`로 고정한 뒤 `WorksheetData` payload private 전환을
+   재개한다.
 16. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
    structured error에 추가한다.
 

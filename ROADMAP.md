@@ -266,10 +266,15 @@ Active order:
    named stable `Unsupported` before clipboard or owner-state handling. Copy/Cut and
    writable/read-only chart-destination regressions preserve source/destination workbook and chart
    state, dirty domains, object registries/allocators, and Find/CutCopyMode/clipboard session; the
-   no-clipboard lane pins selector-first capability reporting. **Active:** close the later
-   `xlPasteValues` partial-commit path as `BUG-006`, followed by `BUG-007`~`BUG-009` handle/Cut/format
-   semantics, before resuming the queued `WorksheetData` payload closure.
-35. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
+   no-clipboard lane pins selector-first capability reporting.
+35. `BUG-006` is complete (2026-08-01, synthetic): the `Chart.Paste xlPasteValues` branch opens a
+   runtime workbook transaction before replacing series topology and rolls back chart state, dirty
+   domains, stale/object handle registries and allocators, plus Find/CutCopyMode/clipboard when the
+   later `Series.Values` dispatch rejects a non-finite source. Same- and cross-workbook Copy
+   regressions retain the original Series handle and both persistence snapshots. **Active:** close
+   internal temporary-handle lifetime on success and failure as `BUG-007`, then `BUG-008`~`BUG-009`
+   Cut/format semantics, before resuming the queued `WorksheetData` payload closure.
+36. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
    claiming practical chart/pivot/style parity.
 
 Every numbered work unit starts with a failing regression and lands as its own reviewable commit.
