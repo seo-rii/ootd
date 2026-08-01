@@ -482,9 +482,15 @@ Wave 2 exit gate:
    Copy/Cut과 writable/read-only destination 회귀는 source/destination workbook snapshot,
    dirty domain, Find/CutCopyMode/clipboard session이 모두 불변임을 고정하며,
    `excel-model` 112개와 `excel-runtime` 759개 회귀가 통과한다.
-   **다음:** 같은 거짓 성공을 남긴 metadata/format-only `Chart.Paste`를
-   `BUG-005`로 fail-closed한 뒤 `WorksheetData`의 7개 payload field를 private으로
-   닫고 `OOTD-018`/`OOTD-048` common reference subsystem을 진행한다.
+   `BUG-005` 완료 (2026-08-01, synthetic): observable chart/format delta가 없는
+   `xlPasteFormats`, `xlPasteComments`, `xlPasteValidation`, `xlPasteColumnWidths` `Chart.Paste`를
+   Type selector 해석 단계에서 named `Unsupported`로 거절한다. 네 selector ×
+   Copy/Cut, writable/read-only chart destination, clipboard 없음 회귀가 양쪽 workbook/chart
+   snapshot, dirty domain, object registry/allocator, Find/CutCopyMode/clipboard session 불변과
+   selector-first 오류 메시지를 고정하며 `excel-runtime` 762개 회귀가 통과한다.
+   **다음:** `BUG-006` `Chart.Paste xlPasteValues` 후반 오류의 chart/session 부분
+   commit을 닫고, cross-workbook handle 누수·Cut 의미·format 부분 무시를 각각
+   `BUG-007`~`BUG-009`로 고정한 뒤 `WorksheetData` payload private 전환을 재개한다.
 16. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
    structured error에 추가한다.
 

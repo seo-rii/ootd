@@ -15293,26 +15293,38 @@ impl ExcelRuntime {
                                 ));
                             }
                             let paste_type = *number as i32;
-                            if !matches!(
-                                paste_type,
+                            match paste_type {
                                 XL_PASTE_ALL
-                                    | XL_PASTE_ALL_EXCEPT_BORDERS
-                                    | XL_PASTE_ALL_MERGING_CONDITIONAL_FORMATS
-                                    | XL_PASTE_ALL_USING_SOURCE_THEME
-                                    | XL_PASTE_COLUMN_WIDTHS
-                                    | XL_PASTE_COMMENTS
-                                    | XL_PASTE_FORMATS
-                                    | XL_PASTE_FORMULAS
-                                    | XL_PASTE_FORMULAS_AND_NUMBER_FORMATS
-                                    | XL_PASTE_VALIDATION
-                                    | XL_PASTE_VALUES
-                                    | XL_PASTE_VALUES_AND_NUMBER_FORMATS
-                            ) {
-                                return Err(OmError::invalid_argument(
-                                    "Chart.Paste Type supports all-like, xlPasteColumnWidths, xlPasteComments, xlPasteFormats, xlPasteFormulas, xlPasteFormulasAndNumberFormats, xlPasteValidation, xlPasteValues, and xlPasteValuesAndNumberFormats",
-                                ));
+                                | XL_PASTE_ALL_EXCEPT_BORDERS
+                                | XL_PASTE_ALL_MERGING_CONDITIONAL_FORMATS
+                                | XL_PASTE_ALL_USING_SOURCE_THEME
+                                | XL_PASTE_FORMULAS
+                                | XL_PASTE_FORMULAS_AND_NUMBER_FORMATS
+                                | XL_PASTE_VALUES
+                                | XL_PASTE_VALUES_AND_NUMBER_FORMATS => paste_type,
+                                XL_PASTE_FORMATS
+                                | XL_PASTE_COLUMN_WIDTHS
+                                | XL_PASTE_COMMENTS
+                                | XL_PASTE_VALIDATION => {
+                                    let paste_name = match paste_type {
+                                        XL_PASTE_FORMATS => "xlPasteFormats",
+                                        XL_PASTE_COLUMN_WIDTHS => "xlPasteColumnWidths",
+                                        XL_PASTE_COMMENTS => "xlPasteComments",
+                                        XL_PASTE_VALIDATION => "xlPasteValidation",
+                                        _ => unreachable!(
+                                            "format/metadata-only chart paste match is exhaustive"
+                                        ),
+                                    };
+                                    return Err(OmError::unsupported(format!(
+                                        "Chart.Paste Type {paste_name} is not implemented",
+                                    )));
+                                }
+                                _ => {
+                                    return Err(OmError::invalid_argument(
+                                        "Chart.Paste Type supports all-like, xlPasteFormulas, xlPasteFormulasAndNumberFormats, xlPasteValues, and xlPasteValuesAndNumberFormats",
+                                    ));
+                                }
                             }
-                            paste_type
                         }
                         Some(_) => {
                             return Err(OmError::type_mismatch(
@@ -15447,13 +15459,7 @@ impl ExcelRuntime {
                             ));
                         };
                         self.dispatch_set(series, "Values", OmValue::Array(pasted_values), &[])?;
-                    } else if !matches!(
-                        paste_type,
-                        XL_PASTE_FORMATS
-                            | XL_PASTE_COLUMN_WIDTHS
-                            | XL_PASTE_COMMENTS
-                            | XL_PASTE_VALIDATION
-                    ) {
+                    } else {
                         let source =
                             self.register_range_set_handle(clipboard.workbook, clipboard.range);
                         let chart = self.register_chart_handle(workbook, chart_id);

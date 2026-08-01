@@ -30,6 +30,7 @@
     };
     use office_opc::{CompressionMethod, OpcPackage, OpcPart};
 
+    mod chart_paste_fail_closed;
     mod range_copy_spill;
     mod range_cut_spill;
     mod range_fill_spill;
@@ -88800,36 +88801,6 @@
 
         runtime
             .dispatch_invoke(source, "Copy", &[])
-            .expect("Range.Copy before Chart.Paste formats");
-        runtime
-            .dispatch_invoke(source, "Find", &[OmValue::Text("10".to_string())])
-            .expect("Range.Find before Chart.Paste formats");
-        assert_eq!(
-            runtime
-                .dispatch_invoke(
-                    chart,
-                    "Paste",
-                    &[OmValue::Number(f64::from(super::XL_PASTE_FORMATS))],
-                )
-                .expect("Chart.Paste xlPasteFormats"),
-            OmValue::Empty
-        );
-        assert_eq!(
-            runtime
-                .dispatch_get(application, "CutCopyMode", &[])
-                .expect("Application.CutCopyMode after Chart.Paste formats"),
-            OmValue::Bool(false)
-        );
-        assert_eq!(
-            runtime
-                .dispatch_invoke(source, "FindNext", &[])
-                .expect_err("Range.FindNext should require a new Find after Chart.Paste formats")
-                .code,
-            OmErrorCode::InvalidState
-        );
-
-        runtime
-            .dispatch_invoke(source, "Copy", &[])
             .expect("Range.Copy before Chart.Paste values");
         runtime
             .dispatch_invoke(source, "Find", &[OmValue::Text("10".to_string())])
@@ -88927,60 +88898,6 @@
             ),
             "={10,20;30,40;50,60}"
         );
-
-        for (paste_type, label) in [
-            (super::XL_PASTE_COMMENTS, "xlPasteComments"),
-            (super::XL_PASTE_VALIDATION, "xlPasteValidation"),
-            (super::XL_PASTE_COLUMN_WIDTHS, "xlPasteColumnWidths"),
-        ] {
-            runtime
-                .dispatch_invoke(source, "Copy", &[])
-                .unwrap_or_else(|_| panic!("Range.Copy before Chart.Paste {label}"));
-            assert_eq!(
-                runtime
-                    .dispatch_invoke(chart, "Paste", &[OmValue::Number(f64::from(paste_type))],)
-                    .unwrap_or_else(|_| panic!("Chart.Paste {label}")),
-                OmValue::Empty
-            );
-            assert_eq!(
-                runtime
-                    .dispatch_get(application, "CutCopyMode", &[])
-                    .unwrap_or_else(|_| {
-                        panic!("Application.CutCopyMode after Chart.Paste {label}")
-                    }),
-                OmValue::Bool(false)
-            );
-            assert_eq!(
-                match runtime.dispatch_invoke(source, "FindNext", &[]) {
-                    Ok(_) => {
-                        panic!("Range.FindNext should require a new Find after Chart.Paste {label}")
-                    }
-                    Err(error) => error,
-                }
-                .code,
-                OmErrorCode::InvalidState
-            );
-            let series_collection = expect_object_handle(
-                runtime
-                    .dispatch_get(chart, "SeriesCollection", &[])
-                    .unwrap_or_else(|_| panic!("Chart.SeriesCollection after Chart.Paste {label}")),
-            );
-            let series = expect_object_handle(
-                runtime
-                    .dispatch_invoke(series_collection, "Item", &[OmValue::Number(1.0)])
-                    .unwrap_or_else(|_| {
-                        panic!("SeriesCollection.Item(1) after Chart.Paste {label}")
-                    }),
-            );
-            assert_eq!(
-                expect_text(
-                    runtime
-                        .dispatch_get(series, "Values", &[])
-                        .unwrap_or_else(|_| panic!("Series.Values after Chart.Paste {label}"))
-                ),
-                "={10,20;30,40;50,60}"
-            );
-        }
 
         assert_eq!(
             runtime
