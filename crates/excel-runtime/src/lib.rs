@@ -15447,9 +15447,9 @@ impl ExcelRuntime {
                             self.clipboard = None;
                             self.find_state = None;
                             self.stale_series_handles_for_chart(workbook, chart_id);
-                            let chart = self.register_chart_handle(workbook, chart_id);
+                            let next_object_handle = self.next_object_handle;
                             let OmValue::Object(series_collection) =
-                                self.dispatch_get(chart, "SeriesCollection", &[])?
+                                self.dispatch_get(handle, "SeriesCollection", &[])?
                             else {
                                 return Err(OmError::type_mismatch(
                                     "Chart.SeriesCollection did not return an object",
@@ -15471,6 +15471,11 @@ impl ExcelRuntime {
                                 OmValue::Array(pasted_values),
                                 &[],
                             )?;
+                            self.objects
+                                .retain(|object_id, _| *object_id < next_object_handle);
+                            self.stale_objects
+                                .retain(|object_id| *object_id < next_object_handle);
+                            self.next_object_handle = next_object_handle;
                             Ok(())
                         })();
                         if paste_result.is_err() {
@@ -15478,10 +15483,20 @@ impl ExcelRuntime {
                         }
                         paste_result?;
                     } else {
+                        let next_object_handle = self.next_object_handle;
                         let source =
                             self.register_range_set_handle(clipboard.workbook, clipboard.range);
-                        let chart = self.register_chart_handle(workbook, chart_id);
-                        self.dispatch_invoke(chart, "SetSourceData", &[OmValue::Object(source.0)])?;
+                        let paste_result = self.dispatch_invoke(
+                            handle,
+                            "SetSourceData",
+                            &[OmValue::Object(source.0)],
+                        );
+                        self.objects
+                            .retain(|object_id, _| *object_id < next_object_handle);
+                        self.stale_objects
+                            .retain(|object_id| *object_id < next_object_handle);
+                        self.next_object_handle = next_object_handle;
+                        paste_result?;
                     }
                     self.cut_copy_mode = None;
                     self.clipboard = None;

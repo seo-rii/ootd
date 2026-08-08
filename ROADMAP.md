@@ -271,10 +271,14 @@ Active order:
    runtime workbook transaction before replacing series topology and rolls back chart state, dirty
    domains, stale/object handle registries and allocators, plus Find/CutCopyMode/clipboard when the
    later `Series.Values` dispatch rejects a non-finite source. Same- and cross-workbook Copy
-   regressions retain the original Series handle and both persistence snapshots. **Active:** close
-   internal temporary-handle lifetime on success and failure as `BUG-007`, then `BUG-008`~`BUG-009`
-   Cut/format semantics, before resuming the queued `WorksheetData` payload closure.
-36. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
+   regressions retain the original Series handle and both persistence snapshots.
+36. `BUG-007` is complete (2026-08-08, synthetic): values and formula `Chart.Paste` reuse the
+   caller-visible chart handle and scope internal Range/SeriesCollection/Series handles to the
+   call's allocator boundary. Success preserves only the intended stale transition for replaced
+   caller-owned Series handles without registry or allocator growth; cross-workbook formula failure
+   preserves both workbook snapshots and the complete session. **Active:** close `BUG-008` Cut and
+   `BUG-009` partial-format semantics before resuming the queued `WorksheetData` payload closure.
+37. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
    claiming practical chart/pivot/style parity.
 
 Every numbered work unit starts with a failing regression and lands as its own reviewable commit.

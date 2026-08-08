@@ -495,9 +495,15 @@ Wave 2 exit gate:
    후반 검증에서 거절되는 same/cross-workbook Copy 회귀가 source/destination persistence
    snapshot, dirty domain, object registry/stale set/allocator, 기존 Series handle과
    Find/CutCopyMode/clipboard 상태를 정확히 복원하며 `excel-runtime` 764개 회귀가 통과한다.
-   **다음:** `BUG-007` `Chart.Paste` 내부 임시 handle lifecycle을 닫고, Cut 의미와 format
-   부분 무시를 `BUG-008`~`BUG-009`로 고정한 뒤 `WorksheetData` payload private 전환을
-   재개한다.
+   `BUG-007` 완료 (2026-08-08, synthetic): `Chart.Paste`가 values/formula source 적용을
+   위해 생성하던 비공개 Chart/Range/SeriesCollection/Series handle을 allocator 경계 안에
+   가두고, caller가 준 chart handle을 재사용한다. 성공 시 기존 caller-owned Series handle만
+   의도대로 stale 처리하고 내부 handle과 allocator 증분은 제거하며, cross-workbook formula
+   실패 시 source/destination workbook·dirty·전체 session을 그대로 복원한다. Copy 기반
+   values/formula 성공과 formula 실패 회귀를 더해 `excel-runtime` 767개가 통과한다.
+   **다음:** `BUG-008` `Chart.Paste` Cut의 거짓 move semantics를 fail-closed하거나 실제
+   atomic 이동으로 고정하고, `BUG-009` format 부분 무시를 닫은 뒤 `WorksheetData` payload
+   private 전환을 재개한다.
 16. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
    structured error에 추가한다.
 
