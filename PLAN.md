@@ -549,6 +549,14 @@ Wave 2 exit gate:
    validation range만 sheet/range-bearing `Unsupported`로 preflight하며 workbook/dirty/session을
    보존한다. 비교차 validation은 Insert와 save/reopen 뒤에도 원문과 inventory가 유지된다.
    `excel-model` 117개, `excel-runtime` 774개, `excel-xlsx` 2,925개 회귀가 통과한다.
+   `ARCH-024` standard data-validation formula-owner 3c단계 완료 (2026-08-09, synthetic): direct
+   `dataValidation`의 QName-aware `formula1/formula2` text와 CDATA를 source order로 inventory한다.
+   common bounded A1 detector가 reference-bearing validation formula를 발견하면 적용 `sqref`와
+   shift corridor의 교차 여부와 무관하게 workbook-wide structural preflight에서 formula owner
+   diagnostics를 포함한 `Unsupported`로 거절한다. reference-free number/string formula는 기존
+   비교차 Insert/save/reopen 경로를 유지하고, formula simple-content에 nested XML이 있으면 part
+   URI가 있는 parse error로 fail-closed한다. `excel-model` 118개, `excel-runtime` 775개,
+   `excel-xlsx` 2,925개 회귀가 통과한다.
    **다음:** `ARCH-024` extension-backed validation, table, raw row-column metadata owner
    inventory를 실제 model/support 표면별로 분리해 fail-closed 경계를 닫는다.
 16. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를

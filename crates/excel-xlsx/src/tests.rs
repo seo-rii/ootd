@@ -3075,7 +3075,7 @@
  xmlns:f="urn:foreign">
   <sheetData/>
   <x:dataValidations count="1">
-    <x:dataValidation type="whole" sqref="$D$4:$E$5 F8"><x:formula1>1</x:formula1></x:dataValidation>
+    <x:dataValidation type="whole" sqref="$D$4:$E$5 F8"><x:formula1>1</x:formula1><x:formula2><![CDATA[=$A$1>0]]></x:formula2></x:dataValidation>
   </x:dataValidations>
   <extLst><ext uri="urn:test"><f:dataValidations><f:dataValidation sqref="A1:XFD1048576"/></f:dataValidations></ext></extLst>
 </worksheet>"#,
@@ -3097,16 +3097,21 @@
                 Rect::single_cell(8, 6),
             ],
         );
+        assert_eq!(
+            parsed.structural_owners.data_validation_formulas,
+            vec!["1".to_string(), "=$A$1>0".to_string()],
+        );
     }
 
     #[test]
-    fn invalid_data_validation_structural_owner_ranges_fail_closed() {
+    fn invalid_data_validation_structural_owner_metadata_fails_closed() {
         for data_validation in [
             r#"<dataValidation/>"#,
             r#"<dataValidation sqref=""/>"#,
             r#"<dataValidation sqref="XFE1:XFE2"/>"#,
             r#"<dataValidation sqref="E5:D4"/>"#,
             r#"<dataValidation sqref="D4:E5 invalid"/>"#,
+            r#"<dataValidation sqref="D4"><formula1><nested>A1</nested></formula1></dataValidation>"#,
         ] {
             let worksheet_xml = format!(
                 r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">

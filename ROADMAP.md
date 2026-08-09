@@ -308,10 +308,14 @@ Active order:
 43. `ARCH-024` standard data-validation owner stage 3b is complete (2026-08-09, synthetic):
    QName-aware direct-parent load expands bounded multi-area `sqref`, rejects malformed owner
    ranges, and atomically refuses only intersecting Insert/Delete corridors. Non-intersecting
-   Insert preserves the validation XML and inventory through save/reopen. **Active:** inventory
-   extension-backed validation, table, and raw row/column metadata owners in independently
-   reviewable stages.
-44. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
+   Insert preserves the validation XML and inventory through save/reopen.
+44. `ARCH-024` standard data-validation formula-owner stage 3c is complete (2026-08-09,
+   synthetic): QName-aware `formula1`/`formula2` text and CDATA are inventoried in source order;
+   reference-bearing formulas refuse structural mutation workbook-wide before corridor planning,
+   while reference-free formulas preserve the non-intersecting save/reopen path. **Active:**
+   inventory extension-backed validation, table, and raw row/column metadata owners in
+   independently reviewable stages.
+45. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
    claiming practical chart/pivot/style parity.
 
 Every numbered work unit starts with a failing regression and lands as its own reviewable commit.

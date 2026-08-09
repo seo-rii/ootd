@@ -713,8 +713,12 @@ pub(crate) fn parse_worksheet_cells(
     let mut element_depth = 0usize;
     let mut merge_cells_depth = None;
     let mut data_validations_depth = None;
+    let mut data_validation_depth = None;
+    let mut data_validation_formula_depth = None;
+    let mut current_data_validation_formula = None;
     let mut merged_ranges = Vec::new();
     let mut data_validation_ranges = Vec::new();
+    let mut data_validation_formulas = Vec::new();
     loop {
         match metadata_reader.read_resolved_event_into(&mut metadata_buffer) {
             Ok((namespace, Event::Start(element))) => {
@@ -755,6 +759,26 @@ pub(crate) fn parse_worksheet_cells(
                         &element,
                         metadata_reader.decoder(),
                     )?);
+                    data_validation_depth = Some(element_depth + 1);
+                } else if data_validation_depth == Some(element_depth)
+                    && (resolved_element_is(
+                        &namespace,
+                        element.local_name(),
+                        spreadsheet_namespace.as_bytes(),
+                        b"formula1",
+                    ) || resolved_element_is(
+                        &namespace,
+                        element.local_name(),
+                        spreadsheet_namespace.as_bytes(),
+                        b"formula2",
+                    ))
+                {
+                    data_validation_formula_depth = Some(element_depth + 1);
+                    current_data_validation_formula = Some(String::new());
+                } else if data_validation_formula_depth == Some(element_depth) {
+                    return Err(OmError::parse(format!(
+                        "{worksheet_part_uri}: worksheet dataValidation formula contains nested XML"
+                    )));
                 }
                 element_depth += 1;
             }
@@ -780,9 +804,68 @@ pub(crate) fn parse_worksheet_cells(
                         &element,
                         metadata_reader.decoder(),
                     )?);
+                } else if data_validation_depth == Some(element_depth)
+                    && (resolved_element_is(
+                        &namespace,
+                        element.local_name(),
+                        spreadsheet_namespace.as_bytes(),
+                        b"formula1",
+                    ) || resolved_element_is(
+                        &namespace,
+                        element.local_name(),
+                        spreadsheet_namespace.as_bytes(),
+                        b"formula2",
+                    ))
+                {
+                    data_validation_formulas.push(String::new());
+                } else if data_validation_formula_depth == Some(element_depth) {
+                    return Err(OmError::parse(format!(
+                        "{worksheet_part_uri}: worksheet dataValidation formula contains nested XML"
+                    )));
+                }
+            }
+            Ok((_, Event::Text(text))) => {
+                if data_validation_formula_depth == Some(element_depth)
+                    && let Some(formula) = current_data_validation_formula.as_mut()
+                {
+                    formula.push_str(&text.xml_content().map_err(xml_error)?);
+                }
+            }
+            Ok((_, Event::CData(text))) => {
+                if data_validation_formula_depth == Some(element_depth)
+                    && let Some(formula) = current_data_validation_formula.as_mut()
+                {
+                    formula.push_str(&text.xml_content().map_err(xml_error)?);
                 }
             }
             Ok((namespace, Event::End(element))) => {
+                if data_validation_formula_depth == Some(element_depth)
+                    && (resolved_element_is(
+                        &namespace,
+                        element.local_name(),
+                        spreadsheet_namespace.as_bytes(),
+                        b"formula1",
+                    ) || resolved_element_is(
+                        &namespace,
+                        element.local_name(),
+                        spreadsheet_namespace.as_bytes(),
+                        b"formula2",
+                    ))
+                {
+                    data_validation_formulas
+                        .push(current_data_validation_formula.take().unwrap_or_default());
+                    data_validation_formula_depth = None;
+                }
+                if data_validation_depth == Some(element_depth)
+                    && resolved_element_is(
+                        &namespace,
+                        element.local_name(),
+                        spreadsheet_namespace.as_bytes(),
+                        b"dataValidation",
+                    )
+                {
+                    data_validation_depth = None;
+                }
                 if merge_cells_depth == Some(element_depth)
                     && resolved_element_is(
                         &namespace,
@@ -820,6 +903,7 @@ pub(crate) fn parse_worksheet_cells(
         structural_owners: WorksheetStructuralOwners {
             merged_ranges,
             data_validation_ranges,
+            data_validation_formulas,
         },
     })
 }

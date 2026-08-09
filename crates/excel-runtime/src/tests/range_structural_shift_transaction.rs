@@ -645,6 +645,73 @@ fn range_structural_shifts_reject_intersecting_data_validations_atomically() {
 }
 
 #[test]
+fn range_structural_shifts_reject_data_validation_formula_owners_atomically() {
+    let mut package = OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("base package");
+    let source_xml = String::from_utf8(
+        package
+            .part("xl/worksheets/sheet1.xml")
+            .expect("source worksheet")
+            .bytes
+            .clone(),
+    )
+    .expect("worksheet utf8");
+    let validation_xml = source_xml.replace(
+        "</sheetData>",
+        "</sheetData>\n  <dataValidations count=\"1\"><dataValidation type=\"custom\" sqref=\"D4:E5\"><formula1>=$A$1&gt;0</formula1></dataValidation></dataValidations>",
+    );
+    assert_ne!(
+        validation_xml, source_xml,
+        "data-validation formula fixture replacement"
+    );
+    package
+        .replace_part_bytes("xl/worksheets/sheet1.xml", validation_xml.into_bytes())
+        .expect("replace worksheet");
+    let input = package
+        .to_bytes()
+        .expect("data-validation formula workbook bytes");
+
+    for (member, shift, label) in [
+        (
+            "Insert",
+            XL_SHIFT_DOWN,
+            "insert moves a data-validation formula precedent",
+        ),
+        (
+            "Delete",
+            XL_SHIFT_UP,
+            "delete moves a data-validation formula precedent",
+        ),
+    ] {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: input.clone(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .unwrap_or_else(|error| panic!("{label}: open: {error:?}"));
+        let worksheet = worksheet_handle(&mut runtime, workbook);
+        let target = range_handle(&mut runtime, worksheet, "A1");
+
+        assert_structural_failure_is_atomic(
+            &mut runtime,
+            workbook,
+            target,
+            member,
+            shift,
+            OmErrorCode::Unsupported,
+            &[
+                "structural data-validation formula retarget",
+                "worksheet 1",
+                "formula 1",
+            ],
+            label,
+        );
+    }
+}
+
+#[test]
 fn range_structural_multilane_insert_commits_and_reopens() {
     let mut runtime = ExcelRuntime::new();
     let workbook = open_clean_workbook(&mut runtime);

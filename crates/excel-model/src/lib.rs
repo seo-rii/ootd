@@ -61,6 +61,7 @@ pub struct WorksheetData {
 pub struct WorksheetStructuralOwners {
     pub merged_ranges: Vec<Rect>,
     pub data_validation_ranges: Vec<Rect>,
+    pub data_validation_formulas: Vec<String>,
 }
 
 impl WorksheetData {
@@ -1425,6 +1426,20 @@ impl WorkbookState {
                     )));
                 }
             }
+            for (formula_index, formula) in owner
+                .structural_owners
+                .data_validation_formulas
+                .iter()
+                .enumerate()
+            {
+                if formula_contains_a1_reference(formula) {
+                    return Err(OmError::unsupported(format!(
+                        "Range.{member} structural data-validation formula retarget is not implemented for worksheet {} formula {}",
+                        owner_sheet_id.0,
+                        formula_index + 1,
+                    )));
+                }
+            }
         }
         for defined_name in self.defined_names.iter() {
             if defined_name.refers_to.is_r1c1
@@ -2422,6 +2437,52 @@ mod tests {
                 .structural_owners
                 .data_validation_ranges,
             vec![validation_range],
+        );
+    }
+
+    #[test]
+    fn structural_cell_shifts_reject_data_validation_reference_formulas() {
+        let mut blocked = sample_state();
+        blocked
+            .worksheet_data_for_sheet_mut(SheetId(3))
+            .expect("worksheet data")
+            .structural_owners = WorksheetStructuralOwners {
+            data_validation_formulas: vec!["=$D$4>0".to_string()],
+            ..WorksheetStructuralOwners::default()
+        };
+        let before = blocked.clone();
+
+        let error = blocked
+            .shift_cells_with_change(
+                SheetId(3),
+                Rect::single_cell(1, 1),
+                CellShiftDirection::Down,
+            )
+            .expect_err("data-validation reference formula must fail closed");
+
+        assert_eq!(error.code, OmErrorCode::Unsupported);
+        assert_eq!(
+            error.message,
+            "Range.Insert structural data-validation formula retarget is not implemented for worksheet 3 formula 1",
+        );
+        assert_eq!(blocked, before);
+
+        let mut allowed = sample_state();
+        allowed
+            .worksheet_data_for_sheet_mut(SheetId(3))
+            .expect("worksheet data")
+            .structural_owners = WorksheetStructuralOwners {
+            data_validation_formulas: vec!["1".to_string(), r#""A1""#.to_string()],
+            ..WorksheetStructuralOwners::default()
+        };
+        assert!(
+            allowed
+                .shift_cells_with_change(
+                    SheetId(3),
+                    Rect::single_cell(1, 1),
+                    CellShiftDirection::Down,
+                )
+                .expect("reference-free data-validation formulas must remain eligible"),
         );
     }
 
