@@ -3067,6 +3067,70 @@
     }
 
     #[test]
+    fn parses_qname_aware_data_validation_structural_owners() {
+        let parsed = parse_worksheet_cells(
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+ xmlns:x="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+ xmlns:f="urn:foreign">
+  <sheetData/>
+  <x:dataValidations count="1">
+    <x:dataValidation type="whole" sqref="$D$4:$E$5 F8"><x:formula1>1</x:formula1></x:dataValidation>
+  </x:dataValidations>
+  <extLst><ext uri="urn:test"><f:dataValidations><f:dataValidation sqref="A1:XFD1048576"/></f:dataValidations></ext></extLst>
+</worksheet>"#,
+            &[],
+            "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
+            "/xl/worksheets/sheet1.xml",
+        )
+        .expect("worksheet data-validation inventory");
+
+        assert_eq!(
+            parsed.structural_owners.data_validation_ranges,
+            vec![
+                Rect {
+                    row_first: 4,
+                    row_last: 5,
+                    col_first: 4,
+                    col_last: 5,
+                },
+                Rect::single_cell(8, 6),
+            ],
+        );
+    }
+
+    #[test]
+    fn invalid_data_validation_structural_owner_ranges_fail_closed() {
+        for data_validation in [
+            r#"<dataValidation/>"#,
+            r#"<dataValidation sqref=""/>"#,
+            r#"<dataValidation sqref="XFE1:XFE2"/>"#,
+            r#"<dataValidation sqref="E5:D4"/>"#,
+            r#"<dataValidation sqref="D4:E5 invalid"/>"#,
+        ] {
+            let worksheet_xml = format!(
+                r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData/><dataValidations count="1">{data_validation}</dataValidations>
+</worksheet>"#,
+            );
+
+            let error = parse_worksheet_cells(
+                worksheet_xml.as_bytes(),
+                &[],
+                "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
+                "/xl/worksheets/sheet1.xml",
+            )
+            .expect_err("invalid data-validation metadata must fail closed");
+
+            assert_eq!(error.code, OmErrorCode::Parse, "{data_validation}");
+            assert!(
+                error.message.contains("/xl/worksheets/sheet1.xml"),
+                "{data_validation}: {error:?}",
+            );
+        }
+    }
+
+    #[test]
     fn non_finite_worksheet_numbers_fail_parse_and_rewrite_boundaries() {
         for lexical in ["NaN", "inf", "-inf"] {
             let worksheet_xml = format!(

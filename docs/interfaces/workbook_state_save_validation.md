@@ -253,11 +253,14 @@ preserves reference-free formula text and cache through synthetic save/reopen; t
 carries the complete `CellData`, including style identity.
 
 This is deliberately a cell-payload atomicity boundary, not complete Excel structural-edit parity.
-Direct A1/R1C1 cell-formula and defined-name references plus intersecting merged-cell ranges are
-fail-closed rather than retargeted. Tables, validation, charts, drawings, and raw row/column metadata
-are not yet inventoried or retargeted by this command. Those owners remain part of the common
-reference and typed worksheet-metadata follow-up, and no desktop Excel Oracle claim is attached to
-the current behavior.
+Direct A1/R1C1 cell-formula and defined-name references plus intersecting merged-cell and standard
+data-validation ranges are fail-closed rather than retargeted. Standard SpreadsheetML
+`dataValidation@sqref` is inventoried as bounded, whitespace-separated multi-area rectangles;
+malformed owner ranges fail load, while a non-intersecting structural edit preserves the original
+validation XML through save/reopen. Extension-backed validation, tables, charts, drawings, and raw
+row/column metadata are not yet inventoried or retargeted by this command. Those owners remain part
+of the common reference and typed worksheet-metadata follow-up, and no desktop Excel Oracle claim
+is attached to the current behavior.
 
 ### Worksheet-data ownership map
 

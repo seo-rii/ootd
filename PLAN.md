@@ -541,8 +541,16 @@ Wave 2 exit gate:
    교차하는 merge만 scope/range-bearing `Unsupported`로 preflight하며 workbook/dirty/session을
    보존한다. 비교차 merge는 Insert와 save/reopen 뒤에도 유지된다. `excel-model` 116개,
    `excel-runtime` 773개, `excel-xlsx` 2,923개 회귀가 통과한다.
-   **다음:** `ARCH-024` table/validation/raw row-column metadata owner inventory를 실제
-   model/support 표면별로 분리해 fail-closed 경계를 닫는다.
+   `ARCH-024` standard data-validation owner 3b단계 완료 (2026-08-09, synthetic): worksheet
+   `dataValidations/dataValidation@sqref`를 namespace URI/local-name과 direct-parent depth로
+   읽고, whitespace-separated multi-area reference를 bounded `Rect` inventory로 확장한다.
+   foreign/nested same-local node는 무시하고 missing/empty/out-of-grid/inverted/malformed sqref는
+   part URI가 있는 parse error로 거절한다. Insert/Delete의 실제 shift corridor와 교차하는
+   validation range만 sheet/range-bearing `Unsupported`로 preflight하며 workbook/dirty/session을
+   보존한다. 비교차 validation은 Insert와 save/reopen 뒤에도 원문과 inventory가 유지된다.
+   `excel-model` 117개, `excel-runtime` 774개, `excel-xlsx` 2,925개 회귀가 통과한다.
+   **다음:** `ARCH-024` extension-backed validation, table, raw row-column metadata owner
+   inventory를 실제 model/support 표면별로 분리해 fail-closed 경계를 닫는다.
 16. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
    structured error에 추가한다.
 

@@ -60,6 +60,7 @@ pub struct WorksheetData {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct WorksheetStructuralOwners {
     pub merged_ranges: Vec<Rect>,
+    pub data_validation_ranges: Vec<Rect>,
 }
 
 impl WorksheetData {
@@ -1474,6 +1475,26 @@ impl WorkbookState {
                 merged_range.col_last,
             )));
         }
+        if let Some(validation_range) = worksheet
+            .structural_owners
+            .data_validation_ranges
+            .iter()
+            .find(|range| {
+                affected_rect.row_first <= range.row_last
+                    && range.row_first <= affected_rect.row_last
+                    && affected_rect.col_first <= range.col_last
+                    && range.col_first <= affected_rect.col_last
+            })
+        {
+            return Err(OmError::unsupported(format!(
+                "Range.{member} structural data-validation retarget is not implemented for worksheet {} range R{}C{}:R{}C{}",
+                sheet_id.0,
+                validation_range.row_first,
+                validation_range.col_first,
+                validation_range.row_last,
+                validation_range.col_last,
+            )));
+        }
         let mut protected_keys = Vec::new();
         for spill_range in worksheet.spill_ranges.values() {
             if affected_rect.row_first <= spill_range.row_last
@@ -2288,6 +2309,7 @@ mod tests {
             .expect("worksheet data")
             .structural_owners = WorksheetStructuralOwners {
             merged_ranges: vec![merged_range],
+            ..WorksheetStructuralOwners::default()
         };
         let before = blocked.clone();
 
@@ -2317,6 +2339,7 @@ mod tests {
             .expect("worksheet data")
             .structural_owners = WorksheetStructuralOwners {
             merged_ranges: vec![merged_range],
+            ..WorksheetStructuralOwners::default()
         };
         assert!(
             allowed
@@ -2334,6 +2357,71 @@ mod tests {
                 .structural_owners
                 .merged_ranges,
             vec![merged_range],
+        );
+    }
+
+    #[test]
+    fn structural_cell_shifts_reject_only_intersecting_data_validation_ranges() {
+        let validation_range = Rect {
+            row_first: 4,
+            row_last: 5,
+            col_first: 4,
+            col_last: 5,
+        };
+        let mut blocked = sample_state();
+        blocked
+            .worksheet_data_for_sheet_mut(SheetId(3))
+            .expect("worksheet data")
+            .structural_owners = WorksheetStructuralOwners {
+            data_validation_ranges: vec![validation_range],
+            ..WorksheetStructuralOwners::default()
+        };
+        let before = blocked.clone();
+
+        let error = blocked
+            .shift_cells_with_change(
+                SheetId(3),
+                Rect {
+                    row_first: 1,
+                    row_last: 1,
+                    col_first: 4,
+                    col_last: 5,
+                },
+                CellShiftDirection::Down,
+            )
+            .expect_err("intersecting data validation must fail closed");
+
+        assert_eq!(error.code, OmErrorCode::Unsupported);
+        assert_eq!(
+            error.message,
+            "Range.Insert structural data-validation retarget is not implemented for worksheet 3 range R4C4:R5C5",
+        );
+        assert_eq!(blocked, before);
+
+        let mut allowed = sample_state();
+        allowed
+            .worksheet_data_for_sheet_mut(SheetId(3))
+            .expect("worksheet data")
+            .structural_owners = WorksheetStructuralOwners {
+            data_validation_ranges: vec![validation_range],
+            ..WorksheetStructuralOwners::default()
+        };
+        assert!(
+            allowed
+                .shift_cells_with_change(
+                    SheetId(3),
+                    Rect::single_cell(1, 1),
+                    CellShiftDirection::Down,
+                )
+                .expect("non-intersecting data validation must remain eligible"),
+        );
+        assert_eq!(
+            allowed
+                .worksheet_data_for_sheet(SheetId(3))
+                .expect("worksheet data after shift")
+                .structural_owners
+                .data_validation_ranges,
+            vec![validation_range],
         );
     }
 
