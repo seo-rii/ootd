@@ -1419,6 +1419,20 @@ impl WorkbookState {
                 }
             }
         }
+        for defined_name in self.defined_names.iter() {
+            if defined_name.refers_to.is_r1c1
+                || formula_contains_a1_reference(&defined_name.refers_to.text)
+            {
+                let scope = match defined_name.scope {
+                    NameScope::Workbook => "workbook".to_string(),
+                    NameScope::Worksheet(sheet_id) => format!("worksheet {}", sheet_id.0),
+                };
+                return Err(OmError::unsupported(format!(
+                    "Range.{member} structural defined-name retarget is not implemented for {scope} name '{}'",
+                    defined_name.display_name
+                )));
+            }
+        }
         let affected_rect = match direction {
             CellShiftDirection::Up | CellShiftDirection::Down => Rect {
                 row_first: rect.row_first,
@@ -2156,6 +2170,82 @@ mod tests {
             );
             assert_eq!(state, before, "{formula_text}");
         }
+    }
+
+    #[test]
+    fn structural_cell_shifts_fail_closed_for_reference_defined_names() {
+        for (scope, refers_to, is_r1c1, expected_scope) in [
+            (NameScope::Workbook, "Sheet1!$M$50", false, "workbook"),
+            (
+                NameScope::Worksheet(SheetId(3)),
+                "Sheet1!R1C1",
+                true,
+                "worksheet 3",
+            ),
+        ] {
+            let mut state = sample_state();
+            state
+                .add_defined_name(
+                    scope,
+                    "ShiftOwner",
+                    FormulaSource {
+                        text: refers_to.to_string(),
+                        is_r1c1,
+                    },
+                    NameValidationMode::StrictExcel,
+                )
+                .expect("seed defined name");
+            let before = state.clone();
+
+            let error = state
+                .shift_cells_with_change(
+                    SheetId(3),
+                    Rect::single_cell(1, 1),
+                    CellShiftDirection::Down,
+                )
+                .expect_err("reference-bearing defined name must fail closed");
+
+            assert_eq!(error.code, OmErrorCode::Unsupported, "{refers_to}");
+            assert_eq!(
+                error.message,
+                format!(
+                    "Range.Insert structural defined-name retarget is not implemented for {expected_scope} name 'ShiftOwner'"
+                ),
+                "{refers_to}",
+            );
+            assert_eq!(state, before, "{refers_to}");
+        }
+
+        let mut state = sample_state();
+        state
+            .add_defined_name(
+                NameScope::Workbook,
+                "ConstantOwner",
+                FormulaSource {
+                    text: r#""A1""#.to_string(),
+                    is_r1c1: false,
+                },
+                NameValidationMode::StrictExcel,
+            )
+            .expect("seed reference-free defined name");
+
+        assert!(
+            state
+                .shift_cells_with_change(
+                    SheetId(3),
+                    Rect::single_cell(1, 1),
+                    CellShiftDirection::Down,
+                )
+                .expect("reference-free defined name must remain eligible"),
+        );
+        assert_eq!(
+            state
+                .lookup_name_in_scope(NameScope::Workbook, "ConstantOwner")
+                .expect("reference-free defined name after shift")
+                .refers_to
+                .text,
+            r#""A1""#,
+        );
     }
 
     #[test]

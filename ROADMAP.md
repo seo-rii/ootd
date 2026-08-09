@@ -296,9 +296,13 @@ Active order:
    lexical detector skips quoted strings and non-reference tokens, while `Range.Insert`/`Delete`
    rejects any workbook-owned A1-reference or R1C1 formula before corridor planning and live
    mutation. Insert/Delete atomic regressions preserve workbook, dirty, and session snapshots;
-   reference-free formula payload shifts still save/reopen. **Active:** add the defined-name owner
-   inventory and fail-closed target-resolution boundary as the next independently reviewable stage.
-41. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
+   reference-free formula payload shifts still save/reopen.
+41. `ARCH-024` defined-name owner stage 2 is complete (2026-08-09, synthetic): workbook- and
+   worksheet-scoped A1-reference or R1C1 names now return a scope/name-bearing stable `Unsupported`
+   before structural mutation, while A1-family reference-free constants survive Insert and
+   save/reopen. **Active:** inventory table, validation, merged-cell, and raw row/column metadata
+   owners in independently reviewable stages.
+42. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
    claiming practical chart/pivot/style parity.
 
 Every numbered work unit starts with a failing regression and lands as its own reviewable commit.

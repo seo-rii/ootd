@@ -309,10 +309,116 @@ fn range_structural_shifts_fail_closed_for_reference_formulas_atomically() {
 }
 
 #[test]
+fn range_structural_shifts_fail_closed_for_reference_defined_names_atomically() {
+    for (
+        member,
+        target_address,
+        shift,
+        worksheet_scope,
+        defined_name,
+        refers_to,
+        is_r1c1,
+        scope_fragment,
+        label,
+    ) in [
+        (
+            "Insert",
+            "A1",
+            XL_SHIFT_DOWN,
+            false,
+            "WorkbookShiftOwner",
+            "=Sheet1!$M$50",
+            false,
+            "workbook",
+            "insert with external workbook name owner",
+        ),
+        (
+            "Delete",
+            "A1",
+            XL_SHIFT_TO_LEFT,
+            true,
+            "WorksheetShiftOwner",
+            "=Sheet1!R1C1",
+            true,
+            "worksheet 1",
+            "delete with moved worksheet name owner",
+        ),
+    ] {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = open_clean_workbook(&mut runtime);
+        let worksheet = worksheet_handle(&mut runtime, workbook);
+        let names_owner = if worksheet_scope {
+            worksheet
+        } else {
+            workbook.0
+        };
+        let names = expect_object_handle(
+            runtime
+                .dispatch_get(names_owner, "Names", &[])
+                .unwrap_or_else(|error| panic!("{label}: Names: {error:?}")),
+        );
+        let add_args = if is_r1c1 {
+            vec![
+                OmValue::Text(defined_name.to_string()),
+                OmValue::Missing,
+                OmValue::Missing,
+                OmValue::Missing,
+                OmValue::Missing,
+                OmValue::Missing,
+                OmValue::Missing,
+                OmValue::Missing,
+                OmValue::Missing,
+                OmValue::Text(refers_to.to_string()),
+            ]
+        } else {
+            vec![
+                OmValue::Text(defined_name.to_string()),
+                OmValue::Text(refers_to.to_string()),
+            ]
+        };
+        runtime
+            .dispatch_invoke(names, "Add", &add_args)
+            .unwrap_or_else(|error| panic!("{label}: Names.Add: {error:?}"));
+        commit_workbook_baseline(&mut runtime, workbook, label);
+        let target = range_handle(&mut runtime, worksheet, target_address);
+
+        assert_structural_failure_is_atomic(
+            &mut runtime,
+            workbook,
+            target,
+            member,
+            shift,
+            OmErrorCode::Unsupported,
+            &[
+                "structural defined-name retarget",
+                defined_name,
+                scope_fragment,
+            ],
+            label,
+        );
+    }
+}
+
+#[test]
 fn range_structural_multilane_insert_commits_and_reopens() {
     let mut runtime = ExcelRuntime::new();
     let workbook = open_clean_workbook(&mut runtime);
     let worksheet = worksheet_handle(&mut runtime, workbook);
+    let names = expect_object_handle(
+        runtime
+            .dispatch_get(workbook.0, "Names", &[])
+            .expect("Workbook.Names"),
+    );
+    runtime
+        .dispatch_invoke(
+            names,
+            "Add",
+            &[
+                OmValue::Text("ConstantShiftOwner".to_string()),
+                OmValue::Text("=42".to_string()),
+            ],
+        )
+        .expect("Names.Add constant owner");
     let target = range_handle(&mut runtime, worksheet, "A1:B1");
     runtime
         .dispatch_invoke(target, "Find", &[OmValue::Text("shared".to_string())])
@@ -390,5 +496,14 @@ fn range_structural_multilane_insert_commits_and_reopens() {
     assert_eq!(
         formula_cell.formula.as_ref().expect("B2 formula").text,
         r#"UPPER("shared")"#,
+    );
+    assert_eq!(
+        reopened
+            .state
+            .lookup_name_in_scope(office_common::NameScope::Workbook, "ConstantShiftOwner")
+            .expect("constant defined name after reopen")
+            .refers_to
+            .text,
+        "42",
     );
 }

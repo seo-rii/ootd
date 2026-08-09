@@ -527,8 +527,15 @@ Wave 2 exit gate:
    workbook/dirty/session snapshot 불변을 고정하고, reference-free formula payload의 기존
    save/reopen 성공 경로도 유지한다. `office-common` 27개, `excel-model` 114개,
    `excel-runtime` 771개 회귀가 통과한다.
-   **다음:** `ARCH-024` defined-name owner inventory와 target-resolution 전 fail-closed 경계를
-   같은 독립 작업 단위로 닫는다.
+   `ARCH-024` defined-name owner 2단계 완료 (2026-08-09, synthetic): workbook/worksheet scope의
+   모든 defined name `FormulaSource`를 같은 structural preflight에 연결했다. bounded A1
+   reference 또는 R1C1 source가 있는 이름은 scope와 display name을 포함한 stable
+   `Unsupported`로 live mutation 전에 거절한다. 두 scope와 Insert/Delete runtime 회귀는
+   workbook/dirty/session 불변을 고정하고, A1-family reference-free constant name은 기존
+   structural shift와 save/reopen에서 그대로 보존된다. `excel-model` 115개와
+   `excel-runtime` 772개 회귀가 통과한다.
+   **다음:** `ARCH-024` table/validation/merged-cell/raw row-column metadata owner inventory를
+   실제 model/support 표면별로 분리해 fail-closed 경계를 닫는다.
 16. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
    structured error에 추가한다.
 
