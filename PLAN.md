@@ -607,7 +607,14 @@ Wave 2 exit gate:
    drawing XML/typed anchor를 save/reopen에서 보존하며 교차 Insert/Delete와 opaque owner 실패는
    workbook/dirty/session snapshot을 유지한다. `excel-model` 123개, `excel-runtime` 780개,
    `excel-xlsx` 2,934개 회귀가 통과한다.
-   **다음:** `OOTD-043`/`OOTD-085`의 첫 hash-pinned desktop Excel corpus와 replay gate를 확보한다.
+   `OOTD-043`/`OOTD-085` corpus replay 기반 1단계 완료 (2026-08-10, synthetic): 고정
+   `manifest/suite_manifest.json`에서 case/input을, 각 run의 `manifest/run_manifest.json`에서
+   observation을 읽는 bounded `PinnedSuiteArtifacts` 경로를 추가했다. root/parent/file symlink,
+   non-regular file, Windows portable-path alias와 크기 초과를 fail-closed하고 suite/case/input/
+   observation metadata 및 exact SHA-256을 replay 전에 검증한다. 변조와 symlink regression을
+   포함한 `excel-oracle` 23개 테스트가 통과한다. 실제 Excel observation은 아직 없다.
+   **다음:** 동일한 pinned Excel profile에서 독립 실행한 두 run의 required completeness와 typed
+   observation 일치를 검증하는 repeated-capture gate를 추가한다.
 16. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
    structured error에 추가한다.
 

@@ -5,9 +5,11 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Display, Formatter};
 
+mod corpus;
 mod report;
 mod runtime;
 
+pub use corpus::{PinnedSuiteArtifacts, RUN_MANIFEST_PATH, SUITE_MANIFEST_PATH};
 pub use report::{RunBundle, build_behavioral_differential_report};
 pub use runtime::{RuntimeCaseOutput, run_runtime_case};
 

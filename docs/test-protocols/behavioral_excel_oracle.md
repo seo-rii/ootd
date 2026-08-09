@@ -22,6 +22,13 @@ Native COM messages and HRESULTs remain diagnostic data; comparison uses the can
 and code so locale-specific messages cannot change a golden result. Number comparison is exact by
 default and tolerances must be opted into per comparison policy.
 
+The checked-in suite root uses `manifest/suite_manifest.json`; case and input paths are relative to
+that root. Each captured run root uses `manifest/run_manifest.json`; observation paths are relative
+to the run root. `PinnedSuiteArtifacts` loads this graph without following a root, parent, or file
+symlink, rejects non-regular artifacts and non-portable Windows aliases, and validates the exact
+case, input, and observation bytes before replay. JSON case/manifest artifacts are capped at 16 MiB,
+observations at 64 MiB, and individual workbook inputs at 512 MiB.
+
 ## Excel Execution
 
 One runner process owns and records every Excel Application it activates. The host must have no
@@ -40,8 +47,8 @@ timestamps.
 
 ## Current Verification Boundary
 
-Rust contract, manifest, comparator, report bridge, `ExcelRuntime` adapter, .NET contract
-normalization, and fake-backed runner lifecycle tests execute in this repository. The COM session
-and watchdog compile on Linux but require a real Windows Excel host for execution. No real Excel
-observation or 20-case required corpus is pinned as of 2026-07-26, so no behavior is yet
-Oracle-verified.
+Rust contract, manifest, bounded filesystem loader, comparator, report bridge, `ExcelRuntime`
+adapter, .NET contract normalization, and fake-backed runner lifecycle tests execute in this
+repository. The COM session and watchdog compile on Linux but require a real Windows Excel host for
+execution. No real Excel observation or 20-case required corpus is pinned as of 2026-08-10, so no
+behavior is yet Oracle-verified.

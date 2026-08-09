@@ -341,8 +341,12 @@ Active order:
    absolute/free-floating anchors remain eligible, and opaque/unresolved anchors fail closed on the
    host sheet. A non-intersecting Insert preserves the two-cell XML and typed anchor through
    save/reopen.
-51. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
-   claiming practical chart/pivot/style parity.
+51. `OOTD-043`/`OOTD-085` replay foundation stage 1 is complete (2026-08-10, synthetic): a bounded
+   filesystem loader resolves the fixed suite/run manifests, refuses symlinked, non-regular,
+   oversized, or non-portable artifacts, and checks exact case/input/observation hashes before
+   replay. No desktop Excel observation is claimed.
+52. **Active:** require two independent complete runs from the same pinned Excel fingerprint and
+   reject typed observation drift before accepting the first desktop corpus.
 
 Every numbered work unit starts with a failing regression and lands as its own reviewable commit.
 The complete `OOTD-001`~`OOTD-086` ordering, regression inventory, and compatibility completion
