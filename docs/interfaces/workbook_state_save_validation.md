@@ -265,15 +265,21 @@ containing an A1-family reference fails structural mutation workbook-wide before
 reference-free number or string formulas retain the bounded non-intersecting path.
 
 Direct worksheet `tableParts/tablePart@r:id` markers are inventoried with the active
-Strict/Transitional SpreadsheetML and Office Document Relationships namespaces. Empty containers,
-missing or empty IDs, and duplicate relationship IDs fail load with worksheet-part context; foreign
-or nested same-local trees do not create owners. Because the relationship target, table `ref`, and
-structured/calculated-column formulas are not modeled yet, any inventoried table relationship blocks
-structural mutation workbook-wide with stable worksheet/relationship diagnostics. This conservative
-boundary prevents a non-intersecting cell shift from silently invalidating structured references.
-Charts, drawings, resolved table semantics, and raw row/column metadata are not yet retargeted by
-this command. Those owners remain part of the common reference and typed worksheet-metadata
-follow-up, and no desktop Excel Oracle claim is attached to the current behavior.
+Strict/Transitional SpreadsheetML and Office Document Relationships namespaces. Each marker must
+resolve through the corresponding exact-dialect table relationship to an internal, existing target
+whose content type and root QName identify a SpreadsheetML table. Empty or duplicate markers,
+unmarked table relationships, external or wrong-type targets, missing parts, wrong content types, and
+malformed table roots fail load with relationship and part context. Foreign or nested same-local
+trees do not create owners.
+
+The resolved typed owner records the relationship ID, canonical part URI, bounded `table@ref`, and
+direct `calculatedColumnFormula`/`totalsRowFormula` simple content. An A1-family reference in either
+formula blocks structural mutation workbook-wide; a table range blocks only a shift corridor that
+intersects it. A reference-free table outside the corridor therefore remains eligible and preserves
+its part plus typed owner inventory through synthetic save/reopen. Marker/owner drift also fails
+save validation instead of falling back to an unsafe edit. Actual table range/formula retargeting,
+charts, drawings, and raw row/column metadata remain outside this command, and no desktop Excel
+Oracle claim is attached to the current behavior.
 
 ### Worksheet-data ownership map
 

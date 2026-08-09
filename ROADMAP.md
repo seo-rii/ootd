@@ -322,9 +322,13 @@ Active order:
    dialect-aware worksheet `tableParts`/`tablePart@r:id` owners are inventoried by QName and direct
    parent, malformed or ambiguous markers fail load, and any loaded table marker refuses structural
    mutation workbook-wide before table-part range and structured-formula semantics are modeled.
-   **Active:** resolve the relationship-bound table part and its range/formula owners, then inventory
-   raw row/column metadata in independently reviewable stages.
-47. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
+47. `ARCH-024` relationship-bound table owner stage 3f is complete (2026-08-09, synthetic): each
+   worksheet marker resolves through an exact dialect table relationship to an internal, existing,
+   correctly typed SpreadsheetML table part. Bounded `table@ref` and direct calculated/totals formulas
+   become typed owners; malformed bindings fail load/save, A1-bearing formulas and intersecting table
+   ranges refuse structural mutation atomically, and a non-intersecting reference-free table survives
+   Insert plus save/reopen. **Active:** inventory raw row/column metadata as stage 3g.
+48. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
    claiming practical chart/pivot/style parity.
 
 Every numbered work unit starts with a failing regression and lands as its own reviewable commit.

@@ -1,4 +1,70 @@
+use office_common::{OmError, OmResult};
+use quick_xml::events::BytesRef;
 use quick_xml::name::{LocalName, NamespaceResolver, QName, ResolveResult};
+
+pub(crate) fn decode_general_reference(
+    reference: &BytesRef<'_>,
+    context: &str,
+) -> OmResult<String> {
+    let reference = reference
+        .decode()
+        .map_err(|error| OmError::parse(error.to_string()))?;
+    let value = if let Some(number) = reference.strip_prefix("#x") {
+        let codepoint = u32::from_str_radix(number, 16).map_err(|_| {
+            OmError::parse(format!(
+                "{context}: invalid XML character reference: &{reference};"
+            ))
+        })?;
+        char::from_u32(codepoint)
+            .ok_or_else(|| {
+                OmError::parse(format!(
+                    "{context}: invalid XML character reference: &{reference};"
+                ))
+            })?
+            .to_string()
+    } else if let Some(number) = reference.strip_prefix("#X") {
+        let codepoint = u32::from_str_radix(number, 16).map_err(|_| {
+            OmError::parse(format!(
+                "{context}: invalid XML character reference: &{reference};"
+            ))
+        })?;
+        char::from_u32(codepoint)
+            .ok_or_else(|| {
+                OmError::parse(format!(
+                    "{context}: invalid XML character reference: &{reference};"
+                ))
+            })?
+            .to_string()
+    } else if let Some(number) = reference.strip_prefix('#') {
+        let codepoint = number.parse::<u32>().map_err(|_| {
+            OmError::parse(format!(
+                "{context}: invalid XML character reference: &{reference};"
+            ))
+        })?;
+        char::from_u32(codepoint)
+            .ok_or_else(|| {
+                OmError::parse(format!(
+                    "{context}: invalid XML character reference: &{reference};"
+                ))
+            })?
+            .to_string()
+    } else {
+        match reference.as_ref() {
+            "amp" => "&",
+            "lt" => "<",
+            "gt" => ">",
+            "quot" => "\"",
+            "apos" => "'",
+            _ => {
+                return Err(OmError::parse(format!(
+                    "{context}: unknown XML entity reference: &{reference};"
+                )));
+            }
+        }
+        .to_string()
+    };
+    Ok(value)
+}
 
 pub(crate) fn resolved_element_is(
     namespace: &ResolveResult<'_>,

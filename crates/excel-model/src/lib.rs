@@ -63,6 +63,15 @@ pub struct WorksheetStructuralOwners {
     pub data_validation_ranges: Vec<Rect>,
     pub data_validation_formulas: Vec<String>,
     pub table_relationship_ids: Vec<String>,
+    pub table_owners: Vec<TableStructuralOwner>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TableStructuralOwner {
+    pub relationship_id: String,
+    pub part_uri: String,
+    pub range: Rect,
+    pub formulas: Vec<String>,
 }
 
 impl WorksheetData {
@@ -550,6 +559,48 @@ impl WorkbookState {
                     OmErrorCode::InvalidState,
                     format!("worksheet data references unknown worksheet {}", sheet_id.0),
                 ));
+            }
+            let table_relationship_ids = worksheet
+                .structural_owners
+                .table_relationship_ids
+                .iter()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>();
+            if table_relationship_ids.len()
+                != worksheet.structural_owners.table_relationship_ids.len()
+            {
+                return Err(OmError::invalid_state(format!(
+                    "worksheet {} has duplicate structural table relationship IDs",
+                    sheet_id.0,
+                )));
+            }
+            let table_owner_relationship_ids = worksheet
+                .structural_owners
+                .table_owners
+                .iter()
+                .map(|owner| owner.relationship_id.as_str())
+                .collect::<BTreeSet<_>>();
+            if table_owner_relationship_ids.len() != worksheet.structural_owners.table_owners.len()
+                || table_owner_relationship_ids != table_relationship_ids
+            {
+                return Err(OmError::invalid_state(format!(
+                    "worksheet {} structural table owner bindings do not match table relationships",
+                    sheet_id.0,
+                )));
+            }
+            for table_owner in &worksheet.structural_owners.table_owners {
+                if table_owner.relationship_id.is_empty() || table_owner.part_uri.is_empty() {
+                    return Err(OmError::invalid_state(format!(
+                        "worksheet {} has an incomplete structural table owner binding",
+                        sheet_id.0,
+                    )));
+                }
+                ExcelLimits::validate_rect(table_owner.range).map_err(|_| {
+                    OmError::invalid_state(format!(
+                        "worksheet {} table relationship {} has an out-of-grid range",
+                        sheet_id.0, table_owner.relationship_id,
+                    ))
+                })?;
             }
             for (&(row, col), cell) in &worksheet.cells {
                 if cell.value.validate().is_err() {
@@ -1441,11 +1492,52 @@ impl WorkbookState {
                     )));
                 }
             }
-            if let Some(relationship_id) = owner.structural_owners.table_relationship_ids.first() {
+            let table_relationship_ids = owner
+                .structural_owners
+                .table_relationship_ids
+                .iter()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>();
+            let table_owner_relationship_ids = owner
+                .structural_owners
+                .table_owners
+                .iter()
+                .map(|table_owner| table_owner.relationship_id.as_str())
+                .collect::<BTreeSet<_>>();
+            if table_relationship_ids.len() != owner.structural_owners.table_relationship_ids.len()
+                || table_owner_relationship_ids.len() != owner.structural_owners.table_owners.len()
+                || table_relationship_ids != table_owner_relationship_ids
+            {
+                let relationship_id = owner
+                    .structural_owners
+                    .table_relationship_ids
+                    .first()
+                    .map(String::as_str)
+                    .or_else(|| {
+                        owner
+                            .structural_owners
+                            .table_owners
+                            .first()
+                            .map(|table_owner| table_owner.relationship_id.as_str())
+                    })
+                    .unwrap_or("<unknown>");
                 return Err(OmError::unsupported(format!(
                     "Range.{member} structural table owner retarget is not implemented for worksheet {} relationship {relationship_id}",
                     owner_sheet_id.0,
                 )));
+            }
+            for table_owner in &owner.structural_owners.table_owners {
+                for (formula_index, formula) in table_owner.formulas.iter().enumerate() {
+                    if formula_contains_a1_reference(formula) {
+                        return Err(OmError::unsupported(format!(
+                            "Range.{member} structural table formula retarget is not implemented for worksheet {} relationship {} part {} formula {}",
+                            owner_sheet_id.0,
+                            table_owner.relationship_id,
+                            table_owner.part_uri,
+                            formula_index + 1,
+                        )));
+                    }
+                }
             }
         }
         for defined_name in self.defined_names.iter() {
@@ -1515,6 +1607,29 @@ impl WorkbookState {
                 validation_range.col_first,
                 validation_range.row_last,
                 validation_range.col_last,
+            )));
+        }
+        if let Some(table_owner) =
+            worksheet
+                .structural_owners
+                .table_owners
+                .iter()
+                .find(|table_owner| {
+                    affected_rect.row_first <= table_owner.range.row_last
+                        && table_owner.range.row_first <= affected_rect.row_last
+                        && affected_rect.col_first <= table_owner.range.col_last
+                        && table_owner.range.col_first <= affected_rect.col_last
+                })
+        {
+            return Err(OmError::unsupported(format!(
+                "Range.{member} structural table range retarget is not implemented for worksheet {} relationship {} part {} range R{}C{}:R{}C{}",
+                sheet_id.0,
+                table_owner.relationship_id,
+                table_owner.part_uri,
+                table_owner.range.row_first,
+                table_owner.range.col_first,
+                table_owner.range.row_last,
+                table_owner.range.col_last,
             )));
         }
         let mut protected_keys = Vec::new();
@@ -1939,7 +2054,8 @@ mod tests {
     use super::{
         CellData, CellShiftDirection, ChartModel, ChartObjectModel, ChartSheetBinding,
         ChartSourceExpr, ChartType, DefinedNameTable, DrawingModel, DrawingObjectModel,
-        SeriesModel, WorkbookState, WorkbookStateParts, WorksheetData, WorksheetStructuralOwners,
+        SeriesModel, TableStructuralOwner, WorkbookState, WorkbookStateParts, WorksheetData,
+        WorksheetStructuralOwners,
     };
     use std::collections::{BTreeMap, BTreeSet};
 
@@ -2519,6 +2635,96 @@ mod tests {
             "Range.Insert structural table owner retarget is not implemented for worksheet 3 relationship rIdTable1",
         );
         assert_eq!(state, before);
+        assert_eq!(
+            state
+                .validate_for_save()
+                .expect_err("unresolved table relationship must fail save validation")
+                .code,
+            OmErrorCode::InvalidState,
+        );
+    }
+
+    #[test]
+    fn structural_cell_shifts_use_resolved_table_ranges_and_formulas() {
+        let table_range = Rect {
+            row_first: 4,
+            row_last: 5,
+            col_first: 4,
+            col_last: 5,
+        };
+        let owners = |formulas| WorksheetStructuralOwners {
+            table_relationship_ids: vec!["rIdTable1".to_string()],
+            table_owners: vec![TableStructuralOwner {
+                relationship_id: "rIdTable1".to_string(),
+                part_uri: "xl/tables/table1.xml".to_string(),
+                range: table_range,
+                formulas,
+            }],
+            ..WorksheetStructuralOwners::default()
+        };
+
+        let mut blocked = sample_state();
+        blocked
+            .worksheet_data_for_sheet_mut(SheetId(3))
+            .expect("worksheet data")
+            .structural_owners = owners(Vec::new());
+        let before = blocked.clone();
+        let error = blocked
+            .shift_cells_with_change(
+                SheetId(3),
+                Rect {
+                    row_first: 4,
+                    row_last: 4,
+                    col_first: 4,
+                    col_last: 5,
+                },
+                CellShiftDirection::Up,
+            )
+            .expect_err("intersecting resolved table range must fail closed");
+        assert_eq!(error.code, OmErrorCode::Unsupported);
+        assert_eq!(
+            error.message,
+            "Range.Delete structural table range retarget is not implemented for worksheet 3 relationship rIdTable1 part xl/tables/table1.xml range R4C4:R5C5",
+        );
+        assert_eq!(blocked, before);
+
+        let mut allowed = sample_state();
+        allowed
+            .worksheet_data_for_sheet_mut(SheetId(3))
+            .expect("worksheet data")
+            .structural_owners = owners(Vec::new());
+        assert!(
+            allowed
+                .shift_cells_with_change(
+                    SheetId(3),
+                    Rect::single_cell(1, 1),
+                    CellShiftDirection::Down,
+                )
+                .expect("non-intersecting resolved table range must remain eligible"),
+        );
+        allowed
+            .validate_for_save()
+            .expect("resolved table owner must pass save validation");
+
+        let mut formula_blocked = sample_state();
+        formula_blocked
+            .worksheet_data_for_sheet_mut(SheetId(3))
+            .expect("worksheet data")
+            .structural_owners = owners(vec!["=$A$1+1".to_string()]);
+        let formula_before = formula_blocked.clone();
+        let formula_error = formula_blocked
+            .shift_cells_with_change(
+                SheetId(3),
+                Rect::single_cell(1, 1),
+                CellShiftDirection::Down,
+            )
+            .expect_err("table reference formula must fail closed");
+        assert_eq!(formula_error.code, OmErrorCode::Unsupported);
+        assert_eq!(
+            formula_error.message,
+            "Range.Insert structural table formula retarget is not implemented for worksheet 3 relationship rIdTable1 part xl/tables/table1.xml formula 1",
+        );
+        assert_eq!(formula_blocked, formula_before);
     }
 
     #[test]

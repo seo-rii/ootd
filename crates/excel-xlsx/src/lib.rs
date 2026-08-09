@@ -72,7 +72,7 @@ use relationships::parse_workbook_relationship_entries;
 use shared_strings::parse_shared_strings;
 use worksheet::{
     cell_reference, collect_support_part_dimension_coords, format_cell_error,
-    parse_worksheet_cells, rewrite_worksheet_xml,
+    parse_worksheet_cells, resolve_table_structural_owners, rewrite_worksheet_xml,
 };
 use xml::{
     expanded_name_is, namespaced_attribute_is, qualified_name_like, resolved_element_is,
@@ -83,6 +83,7 @@ use xml::{
 use worksheet::{
     compute_dimension_ref, compute_dimension_ref_with_preserved,
     extend_dimension_coords_from_reference, parse_cell_error, parse_cell_reference,
+    parse_table_structural_owner,
 };
 
 pub use chart_encoder::encode_chart_model_xml;
@@ -1674,11 +1675,17 @@ impl XlsxCodec {
                         main_document.dialect.spreadsheetml_namespace(),
                         part_uri,
                     )?;
-                    let parsed_cells = parse_worksheet_cells(
+                    let mut parsed_cells = parse_worksheet_cells(
                         sheet_part.bytes.as_slice(),
                         &shared_strings,
                         main_document.dialect.spreadsheetml_namespace(),
                         part_uri,
+                    )?;
+                    resolve_table_structural_owners(
+                        &mut parsed_cells.structural_owners,
+                        part_uri,
+                        &package,
+                        main_document.dialect,
                     )?;
                     worksheet_data.insert(
                         worksheet.id,

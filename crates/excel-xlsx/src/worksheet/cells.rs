@@ -6,8 +6,8 @@ use super::super::{
     },
     io_error,
     xml::{
-        expanded_name_is, namespaced_attribute_is, qualified_name_like, resolved_element_is,
-        unqualified_attribute_is,
+        decode_general_reference, expanded_name_is, namespaced_attribute_is, qualified_name_like,
+        resolved_element_is, unqualified_attribute_is,
     },
     xml_error,
 };
@@ -17,7 +17,7 @@ use office_common::{
     CellError, CellValue, ExcelLimits, FormulaSource, OmError, OmErrorCode, OmResult, Rect, StyleId,
 };
 use quick_xml::escape::partial_escape;
-use quick_xml::events::{BytesEnd, BytesRef, BytesStart, BytesText, Event};
+use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::name::NamespaceResolver;
 use quick_xml::{NsReader, Writer};
 use std::collections::{BTreeMap, BTreeSet};
@@ -184,6 +184,31 @@ pub(crate) fn parse_cell_reference(
     }
 
     Ok((row, col))
+}
+
+pub(crate) fn parse_bounded_a1_rect(
+    reference: &str,
+    part_uri: &str,
+    owner: &str,
+) -> OmResult<Rect> {
+    let (first, last) = reference
+        .split_once(':')
+        .map_or((reference, reference), |(first, last)| (first, last));
+    let (row_first, col_first) = parse_cell_reference(first, None)
+        .map_err(|error| OmError::new(error.code, format!("{part_uri}: {}", error.message)))?;
+    let (row_last, col_last) = parse_cell_reference(last, None)
+        .map_err(|error| OmError::new(error.code, format!("{part_uri}: {}", error.message)))?;
+    if row_first > row_last || col_first > col_last {
+        return Err(OmError::parse(format!(
+            "{part_uri}: invalid {owner} range: {reference}"
+        )));
+    }
+    Ok(Rect {
+        row_first,
+        row_last,
+        col_first,
+        col_last,
+    })
 }
 
 pub(crate) fn parse_worksheet_cells(
@@ -642,34 +667,6 @@ pub(crate) fn parse_worksheet_cells(
         }
     }
 
-    let parse_structural_range = |reference: &str, owner: &str| -> OmResult<Rect> {
-        let (first, last) = reference
-            .split_once(':')
-            .map_or((reference, reference), |(first, last)| (first, last));
-        let (row_first, col_first) = parse_cell_reference(first, None).map_err(|error| {
-            OmError::new(
-                error.code,
-                format!("{worksheet_part_uri}: {}", error.message),
-            )
-        })?;
-        let (row_last, col_last) = parse_cell_reference(last, None).map_err(|error| {
-            OmError::new(
-                error.code,
-                format!("{worksheet_part_uri}: {}", error.message),
-            )
-        })?;
-        if row_first > row_last || col_first > col_last {
-            return Err(OmError::parse(format!(
-                "{worksheet_part_uri}: invalid {owner} range: {reference}"
-            )));
-        }
-        Ok(Rect {
-            row_first,
-            row_last,
-            col_first,
-            col_last,
-        })
-    };
     let parse_merged_range =
         |element: &BytesStart<'_>, decoder: quick_xml::encoding::Decoder| -> OmResult<Rect> {
             let mut reference = None;
@@ -688,12 +685,14 @@ pub(crate) fn parse_worksheet_cells(
                     "{worksheet_part_uri}: worksheet mergeCell is missing an A1 range reference"
                 ))
             })?;
-            parse_structural_range(&reference, "merged-cell")
+            parse_bounded_a1_rect(&reference, worksheet_part_uri, "merged-cell")
         };
     let parse_sqref_ranges = |sqref: &str, owner: &str| -> OmResult<Vec<Rect>> {
         let ranges = sqref
             .split_ascii_whitespace()
-            .map(|reference| parse_structural_range(reference, "data-validation"))
+            .map(|reference| {
+                parse_bounded_a1_rect(reference, worksheet_part_uri, "data-validation")
+            })
             .collect::<OmResult<Vec<_>>>()?;
         if ranges.is_empty() {
             return Err(OmError::parse(format!(
@@ -701,64 +700,6 @@ pub(crate) fn parse_worksheet_cells(
             )));
         }
         Ok(ranges)
-    };
-    let decode_general_ref_text = |reference: &BytesRef<'_>| -> OmResult<String> {
-        let reference = reference.decode().map_err(xml_error)?;
-        let value = if let Some(number) = reference.strip_prefix("#x") {
-            let codepoint = u32::from_str_radix(number, 16).map_err(|_| {
-                OmError::parse(format!(
-                    "{worksheet_part_uri}: invalid XML character reference: &{reference};"
-                ))
-            })?;
-            char::from_u32(codepoint)
-                .ok_or_else(|| {
-                    OmError::parse(format!(
-                        "{worksheet_part_uri}: invalid XML character reference: &{reference};"
-                    ))
-                })?
-                .to_string()
-        } else if let Some(number) = reference.strip_prefix("#X") {
-            let codepoint = u32::from_str_radix(number, 16).map_err(|_| {
-                OmError::parse(format!(
-                    "{worksheet_part_uri}: invalid XML character reference: &{reference};"
-                ))
-            })?;
-            char::from_u32(codepoint)
-                .ok_or_else(|| {
-                    OmError::parse(format!(
-                        "{worksheet_part_uri}: invalid XML character reference: &{reference};"
-                    ))
-                })?
-                .to_string()
-        } else if let Some(number) = reference.strip_prefix('#') {
-            let codepoint = number.parse::<u32>().map_err(|_| {
-                OmError::parse(format!(
-                    "{worksheet_part_uri}: invalid XML character reference: &{reference};"
-                ))
-            })?;
-            char::from_u32(codepoint)
-                .ok_or_else(|| {
-                    OmError::parse(format!(
-                        "{worksheet_part_uri}: invalid XML character reference: &{reference};"
-                    ))
-                })?
-                .to_string()
-        } else {
-            match reference.as_ref() {
-                "amp" => "&",
-                "lt" => "<",
-                "gt" => ">",
-                "quot" => "\"",
-                "apos" => "'",
-                _ => {
-                    return Err(OmError::parse(format!(
-                        "{worksheet_part_uri}: unknown XML entity reference: &{reference};"
-                    )));
-                }
-            }
-            .to_string()
-        };
-        Ok(value)
     };
     let parse_data_validation_ranges =
         |element: &BytesStart<'_>, decoder: quick_xml::encoding::Decoder| -> OmResult<Vec<Rect>> {
@@ -1219,7 +1160,7 @@ pub(crate) fn parse_worksheet_cells(
                 }
             }
             Ok((_, Event::GeneralRef(reference))) => {
-                let value = decode_general_ref_text(&reference)?;
+                let value = decode_general_reference(&reference, worksheet_part_uri)?;
                 if x14_formula_value_depth == Some(element_depth)
                     && let Some(formula) = current_x14_formula.as_mut()
                 {
@@ -1416,6 +1357,7 @@ pub(crate) fn parse_worksheet_cells(
             data_validation_ranges,
             data_validation_formulas,
             table_relationship_ids,
+            table_owners: Vec::new(),
         },
     })
 }

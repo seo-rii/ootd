@@ -17,7 +17,8 @@
         WorksheetRelationshipBinding, WorksheetSupportParts, XlsxCodec, chart_object_anchor_xml,
         collect_support_part_dimension_coords, compute_dimension_ref,
         compute_dimension_ref_with_preserved, parse_shared_strings, parse_workbook,
-        parse_workbook_relationships, parse_worksheet_cells, rewrite_worksheet_xml,
+        parse_table_structural_owner, parse_workbook_relationships, parse_worksheet_cells,
+        resolve_table_structural_owners, rewrite_worksheet_xml,
     };
     use excel_model::{
         ChartCacheKind, ChartCellMarkerXmlAttrs, ChartDisplayBlanksAs, ChartLayoutMode,
@@ -3292,6 +3293,231 @@
             assert!(
                 error.message.contains("/xl/worksheets/sheet1.xml"),
                 "{table_parts}: {error:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn parses_qname_aware_table_range_and_formula_owners() {
+        for spreadsheet_namespace in [
+            "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
+            "http://purl.oclc.org/ooxml/spreadsheetml/main",
+        ] {
+            let table_xml = format!(
+                r#"<s:table xmlns:s="{spreadsheet_namespace}" xmlns:f="urn:foreign" ref="$D$4:$E$5">
+  <s:tableColumns count="2">
+    <s:tableColumn id="1" name="Left"><s:calculatedColumnFormula>=$A$&#49;+1</s:calculatedColumnFormula></s:tableColumn>
+    <s:tableColumn id="2" name="Right"><s:totalsRowFormula><![CDATA[SUM([Left])]]></s:totalsRowFormula><f:calculatedColumnFormula>=$XFE$1</f:calculatedColumnFormula></s:tableColumn>
+  </s:tableColumns>
+  <s:extLst><s:ext uri="urn:test"><s:tableColumns><s:tableColumn><s:calculatedColumnFormula>=$XFE$1</s:calculatedColumnFormula></s:tableColumn></s:tableColumns></s:ext></s:extLst>
+</s:table>"#,
+            );
+
+            let owner = parse_table_structural_owner(
+                table_xml.as_bytes(),
+                spreadsheet_namespace,
+                "rIdTable1",
+                "xl/tables/table1.xml",
+            )
+            .expect("table structural owner");
+
+            assert_eq!(owner.relationship_id, "rIdTable1");
+            assert_eq!(owner.part_uri, "xl/tables/table1.xml");
+            assert_eq!(
+                owner.range,
+                Rect {
+                    row_first: 4,
+                    row_last: 5,
+                    col_first: 4,
+                    col_last: 5,
+                },
+            );
+            assert_eq!(
+                owner.formulas,
+                vec!["=$A$1+1".to_string(), "SUM([Left])".to_string()],
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_table_range_and_formula_metadata_fails_closed() {
+        for table_xml in [
+            r#"<table xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"/>"#,
+            r#"<table xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" ref=""/>"#,
+            r#"<table xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" ref="XFE1:XFE2"/>"#,
+            r#"<table xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" ref="E5:D4"/>"#,
+            r#"<table xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" ref="D4:E5:F6"/>"#,
+            r#"<table xmlns="urn:foreign" ref="D4:E5"/>"#,
+            r#"<table xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:f="urn:foreign" ref="D4:E5"><tableColumns><tableColumn><calculatedColumnFormula><f:nested/></calculatedColumnFormula></tableColumn></tableColumns></table>"#,
+            r#"<table xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" ref="D4:E5">"#,
+        ] {
+            let error = parse_table_structural_owner(
+                table_xml.as_bytes(),
+                "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
+                "rIdTable1",
+                "xl/tables/table1.xml",
+            )
+            .expect_err("invalid table owner metadata must fail closed");
+
+            assert_eq!(error.code, OmErrorCode::Parse, "{table_xml}");
+            assert!(
+                error.message.contains("xl/tables/table1.xml"),
+                "{table_xml}: {error:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn table_relationship_bindings_resolve_both_dialects_and_fail_closed() {
+        for (dialect, spreadsheet_namespace, relationship_type) in [
+            (
+                OoxmlDialect::Transitional,
+                "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
+                "http://schemas.openxmlformats.org/officeDocument/2006/relationships/table",
+            ),
+            (
+                OoxmlDialect::Strict,
+                "http://purl.oclc.org/ooxml/spreadsheetml/main",
+                "http://purl.oclc.org/ooxml/officeDocument/relationships/table",
+            ),
+        ] {
+            let mut package =
+                OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("base table package");
+            package
+                .add_part(OpcPart {
+                    name: "xl/worksheets/_rels/sheet1.xml.rels".to_string(),
+                    content_type: Some(
+                        "application/vnd.openxmlformats-package.relationships+xml".to_string(),
+                    ),
+                    compression: CompressionMethod::Stored,
+                    bytes: format!(
+                        r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdTable1" Type="{relationship_type}" Target="../tables/table1.xml"/></Relationships>"#,
+                    )
+                    .into_bytes(),
+                })
+                .expect("add dialect table relationship");
+            package
+                .add_part(OpcPart {
+                    name: "xl/tables/table1.xml".to_string(),
+                    content_type: Some(
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml"
+                            .to_string(),
+                    ),
+                    compression: CompressionMethod::Stored,
+                    bytes: format!(r#"<table xmlns="{spreadsheet_namespace}" ref="D4:E5"/>"#)
+                        .into_bytes(),
+                })
+                .expect("add dialect table part");
+            let mut owners = excel_model::WorksheetStructuralOwners {
+                table_relationship_ids: vec!["rIdTable1".to_string()],
+                ..excel_model::WorksheetStructuralOwners::default()
+            };
+
+            resolve_table_structural_owners(
+                &mut owners,
+                "xl/worksheets/sheet1.xml",
+                &package,
+                dialect,
+            )
+            .expect("resolve dialect table relationship");
+
+            assert_eq!(owners.table_owners.len(), 1, "{dialect:?}");
+            assert_eq!(owners.table_owners[0].relationship_id, "rIdTable1");
+            assert_eq!(owners.table_owners[0].part_uri, "xl/tables/table1.xml");
+            assert_eq!(
+                owners.table_owners[0].range,
+                Rect {
+                    row_first: 4,
+                    row_last: 5,
+                    col_first: 4,
+                    col_last: 5,
+                },
+            );
+        }
+
+        let table_xml = br#"<table xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" ref="D4:E5"/>"#;
+        for (label, relationships_xml, content_type, table_bytes) in [
+            (
+                "missing relationship",
+                br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>"#.as_slice(),
+                Some("application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml"),
+                table_xml.as_slice(),
+            ),
+            (
+                "wrong relationship type",
+                br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdTable1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../tables/table1.xml"/></Relationships>"#.as_slice(),
+                Some("application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml"),
+                table_xml.as_slice(),
+            ),
+            (
+                "external table relationship",
+                br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdTable1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/table" Target="https://example.invalid/table.xml" TargetMode="External"/></Relationships>"#.as_slice(),
+                Some("application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml"),
+                table_xml.as_slice(),
+            ),
+            (
+                "unmarked table relationship",
+                br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdOther" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/table" Target="../tables/table1.xml"/></Relationships>"#.as_slice(),
+                Some("application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml"),
+                table_xml.as_slice(),
+            ),
+            (
+                "missing table target",
+                br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdTable1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/table" Target="../tables/missing.xml"/></Relationships>"#.as_slice(),
+                Some("application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml"),
+                table_xml.as_slice(),
+            ),
+            (
+                "wrong table content type",
+                br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdTable1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/table" Target="../tables/table1.xml"/></Relationships>"#.as_slice(),
+                Some("application/xml"),
+                table_xml.as_slice(),
+            ),
+            (
+                "wrong table root namespace",
+                br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdTable1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/table" Target="../tables/table1.xml"/></Relationships>"#.as_slice(),
+                Some("application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml"),
+                br#"<table xmlns="urn:foreign" ref="D4:E5"/>"#.as_slice(),
+            ),
+        ] {
+            let mut package = OpcPackage::from_bytes(&synthetic_workbook_bytes())
+                .unwrap_or_else(|error| panic!("{label}: base package: {error:?}"));
+            package
+                .add_part(OpcPart {
+                    name: "xl/worksheets/_rels/sheet1.xml.rels".to_string(),
+                    content_type: Some(
+                        "application/vnd.openxmlformats-package.relationships+xml".to_string(),
+                    ),
+                    compression: CompressionMethod::Stored,
+                    bytes: relationships_xml.to_vec(),
+                })
+                .unwrap_or_else(|error| panic!("{label}: relationship part: {error:?}"));
+            package
+                .add_part(OpcPart {
+                    name: "xl/tables/table1.xml".to_string(),
+                    content_type: content_type.map(str::to_string),
+                    compression: CompressionMethod::Stored,
+                    bytes: table_bytes.to_vec(),
+                })
+                .unwrap_or_else(|error| panic!("{label}: table part: {error:?}"));
+            let mut owners = excel_model::WorksheetStructuralOwners {
+                table_relationship_ids: vec!["rIdTable1".to_string()],
+                ..excel_model::WorksheetStructuralOwners::default()
+            };
+
+            let error = resolve_table_structural_owners(
+                &mut owners,
+                "xl/worksheets/sheet1.xml",
+                &package,
+                OoxmlDialect::Transitional,
+            )
+            .expect_err("invalid table relationship binding must fail closed");
+
+            assert_eq!(error.code, OmErrorCode::Parse, "{label}: {error:?}");
+            assert!(
+                error.message.contains("sheet1.xml")
+                    || error.message.contains("table1.xml"),
+                "{label}: {error:?}",
             );
         }
     }

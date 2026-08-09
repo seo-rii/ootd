@@ -873,7 +873,7 @@ fn range_structural_shifts_inventory_x14_data_validation_owners() {
 }
 
 #[test]
-fn range_structural_shifts_reject_table_part_owners_atomically() {
+fn range_structural_shifts_use_resolved_table_range_owners() {
     let mut package = OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("base package");
     let content_types = String::from_utf8(
         package
@@ -934,47 +934,152 @@ fn range_structural_shifts_reject_table_part_owners_atomically() {
         .expect("add table part");
     let input = package.to_bytes().expect("table workbook bytes");
 
-    for (member, target_address, shift, label) in [
-        (
+    let mut allowed_runtime = ExcelRuntime::new();
+    let allowed_workbook = allowed_runtime
+        .open_workbook(OpenWorkbookSpec {
+            bytes: input.clone(),
+            format_hint: Some(FileFormat::Xlsx),
+            profile: ExcelProfile::Excel365,
+            read_only: false,
+        })
+        .expect("open non-intersecting table fixture");
+    let allowed_worksheet = worksheet_handle(&mut allowed_runtime, allowed_workbook);
+    let allowed_target = range_handle(&mut allowed_runtime, allowed_worksheet, "A1");
+    allowed_runtime
+        .dispatch_invoke(
+            allowed_target,
             "Insert",
-            "A1",
-            XL_SHIFT_DOWN,
-            "non-intersecting insert with table owner",
-        ),
-        (
-            "Delete",
-            "D4:E4",
-            XL_SHIFT_UP,
-            "intersecting delete with table owner",
-        ),
-    ] {
-        let mut runtime = ExcelRuntime::new();
-        let workbook = runtime
-            .open_workbook(OpenWorkbookSpec {
-                bytes: input.clone(),
-                format_hint: Some(FileFormat::Xlsx),
+            &[OmValue::Number(f64::from(XL_SHIFT_DOWN))],
+        )
+        .expect("non-intersecting table insert must remain eligible");
+    let mut saved = Vec::new();
+    allowed_runtime
+        .save_workbook_to_writer(
+            allowed_workbook,
+            SaveWorkbookSpec {
+                format: FileFormat::Xlsx,
                 profile: ExcelProfile::Excel365,
-                read_only: false,
-            })
-            .unwrap_or_else(|error| panic!("{label}: open: {error:?}"));
-        let worksheet = worksheet_handle(&mut runtime, workbook);
-        let target = range_handle(&mut runtime, worksheet, target_address);
+                lossless: true,
+            },
+            &mut saved,
+        )
+        .expect("save non-intersecting table insert");
+    let reopened = allowed_runtime
+        .codec
+        .load(&saved, LoadOptions::default())
+        .expect("reopen non-intersecting table insert");
+    assert_eq!(
+        reopened
+            .package
+            .part("xl/tables/table1.xml")
+            .expect("reopened table part")
+            .bytes,
+        package
+            .part("xl/tables/table1.xml")
+            .expect("source table part")
+            .bytes,
+    );
+    let reopened_sheet_id = reopened.state.worksheets()[0].id;
+    let reopened_owners = &reopened
+        .state
+        .worksheet_data_for_sheet(reopened_sheet_id)
+        .expect("reopened table worksheet data")
+        .structural_owners;
+    assert_eq!(
+        reopened_owners.table_relationship_ids,
+        vec!["rIdTable1".to_string()],
+    );
+    assert_eq!(reopened_owners.table_owners.len(), 1);
+    assert_eq!(reopened_owners.table_owners[0].relationship_id, "rIdTable1");
+    assert_eq!(
+        reopened_owners.table_owners[0].part_uri,
+        "xl/tables/table1.xml"
+    );
+    assert_eq!(
+        reopened_owners.table_owners[0].range,
+        Rect {
+            row_first: 4,
+            row_last: 5,
+            col_first: 4,
+            col_last: 5,
+        },
+    );
+    assert!(reopened_owners.table_owners[0].formulas.is_empty());
 
-        assert_structural_failure_is_atomic(
-            &mut runtime,
-            workbook,
-            target,
-            member,
-            shift,
-            OmErrorCode::Unsupported,
-            &[
-                "structural table owner retarget",
-                "worksheet 1",
-                "rIdTable1",
-            ],
-            label,
-        );
-    }
+    let mut blocked_runtime = ExcelRuntime::new();
+    let blocked_workbook = blocked_runtime
+        .open_workbook(OpenWorkbookSpec {
+            bytes: input.clone(),
+            format_hint: Some(FileFormat::Xlsx),
+            profile: ExcelProfile::Excel365,
+            read_only: false,
+        })
+        .expect("open intersecting table fixture");
+    let blocked_worksheet = worksheet_handle(&mut blocked_runtime, blocked_workbook);
+    let blocked_target = range_handle(&mut blocked_runtime, blocked_worksheet, "D4:E4");
+    assert_structural_failure_is_atomic(
+        &mut blocked_runtime,
+        blocked_workbook,
+        blocked_target,
+        "Delete",
+        XL_SHIFT_UP,
+        OmErrorCode::Unsupported,
+        &[
+            "structural table range retarget",
+            "worksheet 1",
+            "rIdTable1",
+            "xl/tables/table1.xml",
+            "R4C4:R5C5",
+        ],
+        "intersecting delete with resolved table owner",
+    );
+
+    let mut formula_package = OpcPackage::from_bytes(&input).expect("formula table package");
+    let formula_table_xml = String::from_utf8(
+        formula_package
+            .part("xl/tables/table1.xml")
+            .expect("formula table part")
+            .bytes
+            .clone(),
+    )
+    .expect("formula table utf8")
+    .replace(
+        r#"<tableColumn id="1" name="Left"/>"#,
+        r#"<tableColumn id="1" name="Left"><calculatedColumnFormula>=$A$1+1</calculatedColumnFormula></tableColumn>"#,
+    );
+    formula_package
+        .replace_part_bytes("xl/tables/table1.xml", formula_table_xml.into_bytes())
+        .expect("replace formula table part");
+    let formula_input = formula_package
+        .to_bytes()
+        .expect("formula table workbook bytes");
+    let mut formula_runtime = ExcelRuntime::new();
+    let formula_workbook = formula_runtime
+        .open_workbook(OpenWorkbookSpec {
+            bytes: formula_input,
+            format_hint: Some(FileFormat::Xlsx),
+            profile: ExcelProfile::Excel365,
+            read_only: false,
+        })
+        .expect("open formula table fixture");
+    let formula_worksheet = worksheet_handle(&mut formula_runtime, formula_workbook);
+    let formula_target = range_handle(&mut formula_runtime, formula_worksheet, "A1");
+    assert_structural_failure_is_atomic(
+        &mut formula_runtime,
+        formula_workbook,
+        formula_target,
+        "Insert",
+        XL_SHIFT_DOWN,
+        OmErrorCode::Unsupported,
+        &[
+            "structural table formula retarget",
+            "worksheet 1",
+            "rIdTable1",
+            "xl/tables/table1.xml",
+            "formula 1",
+        ],
+        "table formula owner",
+    );
 }
 
 #[test]

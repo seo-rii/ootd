@@ -37,7 +37,7 @@ contract-based until Milestone M1 pins the first behavioral Excel corpus.
 
 - Rust MSRV: 1.88; development toolchain: 1.94.0.
 - Linux workspace tests: enabled in CI.
-- Current root test inventory: 119 `excel-model`, 777 `excel-runtime`, and 2,929 `excel-xlsx`
+- Current root test inventory: 120 `excel-model`, 777 `excel-runtime`, and 2,932 `excel-xlsx`
   tests.
 - M2 boundary progress: the `excel-xlsx` and `excel-runtime` unit tests now live outside their
   library roots with test identities unchanged; calculation and recalculation/writeback are
@@ -156,17 +156,18 @@ contract-based until Milestone M1 pins the first behavioral Excel corpus.
   replaced caller-owned Series handles; cross-workbook preflight failure retains the whole session.
   A1/R1C1 cell-formula and defined-name owners fail closed before structural mutation; QName-aware
   merged-cell plus standard/x14 multi-area data-validation ranges fail closed only when they
-  intersect the exact shift corridor, reference-bearing standard/x14 validation formulas fail
-  closed workbook-wide before corridor planning, and exact dialect-aware worksheet `tablePart`
-  relationship owners conservatively block structural mutation workbook-wide; resolved table
-  ranges/structured formulas, charts, drawings, and raw worksheet metadata remain outside this
-  bounded command.
+  intersect the exact shift corridor, and reference-bearing standard/x14 validation formulas fail
+  closed workbook-wide before corridor planning. Exact dialect-aware worksheet `tablePart` markers
+  now resolve to internal, existing, correctly typed table parts with bounded ranges and direct
+  calculated/totals formulas; malformed bindings fail load/save, A1-bearing table formulas block
+  workbook-wide, and only an intersecting table range blocks an otherwise reference-free shift.
+  Table retargeting, charts, drawings, and raw worksheet metadata remain outside this bounded command.
   Details are in
   `docs/interfaces/workbook_state_save_validation.md`,
   `docs/interfaces/chart_drawing_graph_validation.md`, and
   `docs/interfaces/support_snapshot_validation.md`.
 - CI portability: Ubuntu Rust 1.94, Ubuntu MSRV Rust 1.88, and Windows Rust 1.94 run as independent
-  test lanes. A bounded rustfmt gate covers 61 tracked files with four guarded monolith exceptions;
+  test lanes. A bounded rustfmt gate covers 62 tracked files with four guarded monolith exceptions;
   strict Clippy is enforced for the six foundational/model crates, while runtime/XLSX warnings
   remain staged M3 debt.
 - M4 spill lifecycle: model value, A1/R1C1 formula families, `ClearContents`, Fill, Copy, Cut, and

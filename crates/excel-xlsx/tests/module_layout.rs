@@ -44,3 +44,16 @@ fn worksheet_cell_codec_is_isolated_from_library_root() {
     assert!(!library.contains("enum RowContentSegment"));
     assert!(!library.contains("fn parse_cell_reference("));
 }
+
+#[test]
+fn worksheet_table_owner_parser_is_isolated_from_library_root() {
+    let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let library = fs::read_to_string(crate_root.join("src/lib.rs")).expect("read library root");
+    let worksheet_module =
+        fs::read_to_string(crate_root.join("src/worksheet/mod.rs")).expect("read worksheet module");
+
+    assert!(crate_root.join("src/worksheet/table.rs").is_file());
+    assert!(worksheet_module.contains("mod table;"));
+    assert!(!library.contains("fn parse_table_structural_owner("));
+    assert!(!library.contains("fn resolve_table_structural_owners("));
+}

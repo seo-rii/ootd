@@ -43,6 +43,8 @@ pub(crate) const TRANSITIONAL_COMMENTS_RELATIONSHIP_TYPE: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments";
 pub(crate) const TRANSITIONAL_VML_DRAWING_RELATIONSHIP_TYPE: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/vmlDrawing";
+pub(crate) const TRANSITIONAL_TABLE_RELATIONSHIP_TYPE: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/table";
 
 const STRICT_OFFICE_DOCUMENT_RELATIONSHIP_TYPE: &str =
     "http://purl.oclc.org/ooxml/officeDocument/relationships/officeDocument";
@@ -66,6 +68,8 @@ const STRICT_HYPERLINK_RELATIONSHIP_TYPE: &str =
     "http://purl.oclc.org/ooxml/officeDocument/relationships/hyperlink";
 const STRICT_COMMENTS_RELATIONSHIP_TYPE: &str =
     "http://purl.oclc.org/ooxml/officeDocument/relationships/comments";
+const STRICT_TABLE_RELATIONSHIP_TYPE: &str =
+    "http://purl.oclc.org/ooxml/officeDocument/relationships/table";
 
 const XLSX_MAIN_CONTENT_TYPE: &str =
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml";
@@ -122,6 +126,7 @@ pub(crate) enum OoxmlRelationshipKind {
     Hyperlink,
     Comments,
     VmlDrawing,
+    Table,
 }
 
 const RELATIONSHIP_TYPES: &[(OoxmlRelationshipKind, &str, Option<&str>)] = &[
@@ -189,6 +194,11 @@ const RELATIONSHIP_TYPES: &[(OoxmlRelationshipKind, &str, Option<&str>)] = &[
         OoxmlRelationshipKind::VmlDrawing,
         TRANSITIONAL_VML_DRAWING_RELATIONSHIP_TYPE,
         None,
+    ),
+    (
+        OoxmlRelationshipKind::Table,
+        TRANSITIONAL_TABLE_RELATIONSHIP_TYPE,
+        Some(STRICT_TABLE_RELATIONSHIP_TYPE),
     ),
 ];
 
