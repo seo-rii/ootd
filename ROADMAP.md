@@ -332,8 +332,12 @@ Active order:
    direct row attributes/opaque children and bounded direct column ranges become full-axis owners;
    malformed column ranges and duplicate direct rows fail load, intersecting shift corridors refuse
    atomically, and a non-intersecting Insert preserves raw XML plus inventory through save/reopen.
-   **Active:** inventory chart-source and drawing-anchor owners in separate stages.
-49. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
+49. `ARCH-024` chart-source owner stage 3h is complete (2026-08-09, synthetic): every series
+   name/x-values/values/bubble-size source and full reference is checked as a typed workbook range;
+   intersecting corridors, unresolved A1/R1C1 sources, invalid ownership, and 3D ranges fail before
+   mutation, while a non-intersecting Insert preserves chart formulas through save/reopen.
+   **Active:** inventory drawing-anchor owners as stage 3i.
+50. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
    claiming practical chart/pivot/style parity.
 
 Every numbered work unit starts with a failing regression and lands as its own reviewable commit.

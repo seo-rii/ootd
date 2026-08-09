@@ -290,6 +290,18 @@ the raw row/column XML and typed inventory through synthetic save/reopen. Typed 
 and formatting-inheritance semantics remain unsupported, and no desktop Excel Oracle claim is
 attached to the current behavior.
 
+Chart series sources are checked at the same pre-mutation boundary. The command inventories
+`name`, `x_values`, `values`, and `bubble_size`, including each source's optional full reference.
+A typed range must belong to the current workbook and contain valid bounded areas. A single-sheet
+area blocks only when it belongs to the target worksheet and intersects the exact shift corridor;
+the error identifies the chart, one-based series, source slot, worksheet, and rectangle. An
+unresolved A1/R1C1 source or a 3D range is rejected globally because the command cannot prove a safe
+target. Literal/value/array/error/external sources with no workbook range remain eligible. Synthetic
+runtime coverage requires intersecting Insert/Delete to preserve workbook, dirty-domain, and
+Find/clipboard snapshots, while a non-intersecting Insert moves its cell and preserves all loaded
+chart formulas through save/reopen. Actual chart-source retargeting and desktop Excel evidence remain
+separate `OOTD-079` work.
+
 ### Worksheet-data ownership map
 
 The `WorkbookState` worksheet-data map is private. External callers can inspect it through

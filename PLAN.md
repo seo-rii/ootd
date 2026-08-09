@@ -590,7 +590,15 @@ Wave 2 exit gate:
    row/column owner만 stable `Unsupported`로 거절하며, 비교차 Insert는 raw XML과 typed inventory를
    save/reopen에서 보존한다. `excel-model` 121개, `excel-runtime` 778개, `excel-xlsx` 2,934개
    회귀가 통과한다.
-   **다음:** `ARCH-024` chart source와 drawing anchor owner를 독립 단계로 inventory한다.
+   `ARCH-024` chart-source owner 3h단계 완료 (2026-08-09, synthetic): 모든 chart series의
+   name/x-values/values/bubble-size 직접 source와 optional full-reference의 typed `RangeSet`을
+   structural preflight에 연결한다. workbook identity와 range shape를 검증하고, target worksheet의
+   실제 shift corridor와 교차하는 source만 chart/series/slot/sheet/range diagnostics를 포함한
+   stable `Unsupported`로 거절한다. 위치를 증명할 수 없는 unresolved A1/R1C1 source와 3D range도
+   mutation 전에 fail-closed한다. 비교차 Insert는 chart formula와 cell 이동을 save/reopen에서
+   보존하고 Insert/Delete 실패는 workbook/dirty/session snapshot을 유지한다. `excel-model` 122개,
+   `excel-runtime` 779개, `excel-xlsx` 2,934개 회귀가 통과한다.
+   **다음:** `ARCH-024` drawing anchor owner를 독립 3i단계로 inventory한다.
 16. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
    structured error에 추가한다.
 

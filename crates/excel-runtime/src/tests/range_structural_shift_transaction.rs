@@ -1344,3 +1344,117 @@ fn range_structural_shifts_inventory_row_and_column_metadata_owners() {
         );
     }
 }
+
+#[test]
+fn range_structural_shifts_inventory_chart_source_owners() {
+    let input = synthetic_workbook_with_embedded_chart_bytes();
+
+    let mut allowed_runtime = ExcelRuntime::new();
+    let allowed_workbook = allowed_runtime
+        .open_workbook(OpenWorkbookSpec {
+            bytes: input.clone(),
+            format_hint: Some(FileFormat::Xlsx),
+            profile: ExcelProfile::Excel365,
+            read_only: false,
+        })
+        .expect("open non-intersecting chart source fixture");
+    let allowed_worksheet = worksheet_handle(&mut allowed_runtime, allowed_workbook);
+    set_number(&mut allowed_runtime, allowed_worksheet, "F1", 6.0);
+    let allowed_target = range_handle(&mut allowed_runtime, allowed_worksheet, "F1");
+    allowed_runtime
+        .dispatch_invoke(
+            allowed_target,
+            "Insert",
+            &[OmValue::Number(f64::from(XL_SHIFT_TO_RIGHT))],
+        )
+        .expect("non-intersecting chart source insert must remain eligible");
+    let mut saved = Vec::new();
+    allowed_runtime
+        .save_workbook_to_writer(
+            allowed_workbook,
+            SaveWorkbookSpec {
+                format: FileFormat::Xlsx,
+                profile: ExcelProfile::Excel365,
+                lossless: true,
+            },
+            &mut saved,
+        )
+        .expect("save non-intersecting chart source insert");
+    let reopened = allowed_runtime
+        .codec
+        .load(&saved, LoadOptions::default())
+        .expect("reopen non-intersecting chart source insert");
+    let reopened_sheet_id = reopened.state.worksheets()[0].id;
+    assert_eq!(
+        reopened
+            .state
+            .cell(reopened_sheet_id, 1, 7)
+            .expect("G1 after reopen")
+            .value,
+        CellValue::Number(6.0),
+    );
+    let reopened_chart = reopened
+        .state
+        .charts()
+        .values()
+        .next()
+        .expect("reopened chart");
+    let reopened_series = reopened_chart.series.first().expect("reopened series");
+    assert_eq!(
+        reopened_series
+            .name
+            .as_ref()
+            .expect("reopened series name")
+            .raw
+            .text,
+        "Sheet1!$C$1",
+    );
+    assert_eq!(
+        reopened_series
+            .x_values
+            .as_ref()
+            .expect("reopened x-values")
+            .raw
+            .text,
+        "Sheet1!$A$1:$B$1",
+    );
+    assert_eq!(
+        reopened_series
+            .values
+            .as_ref()
+            .expect("reopened values")
+            .raw
+            .text,
+        "Sheet1!$A$1:$C$1",
+    );
+
+    for (member, shift) in [("Insert", XL_SHIFT_DOWN), ("Delete", XL_SHIFT_UP)] {
+        let mut blocked_runtime = ExcelRuntime::new();
+        let blocked_workbook = blocked_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: input.clone(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .unwrap_or_else(|error| panic!("open intersecting chart source fixture: {error:?}"));
+        let blocked_worksheet = worksheet_handle(&mut blocked_runtime, blocked_workbook);
+        let blocked_target = range_handle(&mut blocked_runtime, blocked_worksheet, "A1");
+        assert_structural_failure_is_atomic(
+            &mut blocked_runtime,
+            blocked_workbook,
+            blocked_target,
+            member,
+            shift,
+            OmErrorCode::Unsupported,
+            &[
+                "structural chart source retarget",
+                "series 1",
+                "x-values",
+                "worksheet 1",
+                "range R1C1:R1C2",
+            ],
+            &format!("chart source corridor {member}"),
+        );
+    }
+}

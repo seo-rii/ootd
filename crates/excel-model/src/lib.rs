@@ -1595,6 +1595,107 @@ impl WorkbookState {
                 col_last: ExcelLimits::MAX_COLUMN_INDEX,
             },
         };
+        for (&chart_id, chart) in &self.charts {
+            for (series_index, series) in chart.series.iter().enumerate() {
+                for (source_name, source) in [
+                    ("name", series.name.as_ref()),
+                    ("x-values", series.x_values.as_ref()),
+                    ("values", series.values.as_ref()),
+                    ("bubble-size", series.bubble_size.as_ref()),
+                ] {
+                    let Some(source) = source else {
+                        continue;
+                    };
+                    for (is_full_reference, reference) in [
+                        (false, Some((&source.raw, source.resolved.as_ref()))),
+                        (
+                            true,
+                            source
+                                .full_reference
+                                .as_ref()
+                                .map(|reference| (&reference.raw, reference.resolved.as_ref())),
+                        ),
+                    ] {
+                        let Some((raw, resolved)) = reference else {
+                            continue;
+                        };
+                        let reference_suffix = if is_full_reference {
+                            " full-reference"
+                        } else {
+                            ""
+                        };
+                        let Some(resolved) = resolved else {
+                            if raw.is_r1c1 || formula_contains_a1_reference(&raw.text) {
+                                return Err(OmError::unsupported(format!(
+                                    "Range.{member} structural chart source retarget is not implemented for chart {} series {} {source_name}{reference_suffix} unresolved reference",
+                                    chart_id.0,
+                                    series_index + 1,
+                                )));
+                            }
+                            continue;
+                        };
+                        let ReferenceTarget::Range(range) = resolved else {
+                            continue;
+                        };
+                        if range.workbook_id() != self.model.id {
+                            return Err(OmError::invalid_state(format!(
+                                "chart {} series {} {source_name}{reference_suffix} range belongs to workbook {}, expected {}",
+                                chart_id.0,
+                                series_index + 1,
+                                range.workbook_id().0,
+                                self.model.id.0,
+                            )));
+                        }
+                        if range.areas().is_empty() {
+                            return Err(OmError::invalid_state(format!(
+                                "chart {} series {} {source_name}{reference_suffix} range has no areas",
+                                chart_id.0,
+                                series_index + 1,
+                            )));
+                        }
+                        for area in range.areas() {
+                            ExcelLimits::validate_rect(area.rect).map_err(|error| {
+                                OmError::invalid_state(format!(
+                                    "chart {} series {} {source_name}{reference_suffix} range is invalid: {}",
+                                    chart_id.0,
+                                    series_index + 1,
+                                    error.message,
+                                ))
+                            })?;
+                            let owner_sheet_id = match area.scope {
+                                SheetScope::Single(owner_sheet_id) => owner_sheet_id,
+                                SheetScope::Multi3D { start, end } => {
+                                    return Err(OmError::unsupported(format!(
+                                        "Range.{member} structural chart source retarget is not implemented for chart {} series {} {source_name}{reference_suffix} 3D range worksheets {}:{}",
+                                        chart_id.0,
+                                        series_index + 1,
+                                        start.0,
+                                        end.0,
+                                    )));
+                                }
+                            };
+                            if owner_sheet_id == sheet_id
+                                && affected_rect.row_first <= area.rect.row_last
+                                && area.rect.row_first <= affected_rect.row_last
+                                && affected_rect.col_first <= area.rect.col_last
+                                && area.rect.col_first <= affected_rect.col_last
+                            {
+                                return Err(OmError::unsupported(format!(
+                                    "Range.{member} structural chart source retarget is not implemented for chart {} series {} {source_name}{reference_suffix} worksheet {} range R{}C{}:R{}C{}",
+                                    chart_id.0,
+                                    series_index + 1,
+                                    owner_sheet_id.0,
+                                    area.rect.row_first,
+                                    area.rect.col_first,
+                                    area.rect.row_last,
+                                    area.rect.col_last,
+                                )));
+                            }
+                        }
+                    }
+                }
+            }
+        }
         let worksheet = self.worksheet_data_for_sheet(sheet_id)?;
         if let Some(merged_range) = worksheet
             .structural_owners
@@ -2490,6 +2591,155 @@ mod tests {
                 .text,
             r#""A1""#,
         );
+    }
+
+    #[test]
+    fn structural_cell_shifts_inventory_chart_source_owners_atomically() {
+        let chart_id = ChartId(11);
+        let chart_range = Rect {
+            row_first: 4,
+            row_last: 5,
+            col_first: 4,
+            col_last: 5,
+        };
+        let chart_source = |workbook_id| ChartSourceExpr {
+            raw: formula_source("Sheet1!$D$4:$E$5"),
+            resolved: Some(ReferenceTarget::Range(
+                RangeSet::single_rect(workbook_id, SheetId(3), chart_range)
+                    .expect("chart source range"),
+            )),
+            full_reference: None,
+            cache: None,
+            dirty: false,
+        };
+
+        let mut blocked = sample_state();
+        blocked.charts.insert(
+            chart_id,
+            chart_model(
+                chart_id,
+                blocked.model.id,
+                vec![series_model_with_values(chart_source(blocked.model.id))],
+            ),
+        );
+        let before = blocked.clone();
+        let error = blocked
+            .shift_cells_with_change(
+                SheetId(3),
+                Rect {
+                    row_first: 1,
+                    row_last: 1,
+                    col_first: 4,
+                    col_last: 5,
+                },
+                CellShiftDirection::Down,
+            )
+            .expect_err("intersecting chart source must fail closed");
+        assert_eq!(error.code, OmErrorCode::Unsupported);
+        assert_eq!(
+            error.message,
+            "Range.Insert structural chart source retarget is not implemented for chart 11 series 1 values worksheet 3 range R4C4:R5C5",
+        );
+        assert_eq!(blocked, before);
+
+        let mut full_reference = sample_state();
+        full_reference.charts.insert(
+            chart_id,
+            chart_model(
+                chart_id,
+                full_reference.model.id,
+                vec![series_model_with_values(ChartSourceExpr {
+                    raw: formula_source("42"),
+                    resolved: Some(ReferenceTarget::Value(CellValue::Number(42.0))),
+                    full_reference: Some(super::ChartSourceReference {
+                        raw: formula_source("Sheet1!$D$4:$E$5"),
+                        resolved: Some(ReferenceTarget::Range(
+                            RangeSet::single_rect(full_reference.model.id, SheetId(3), chart_range)
+                                .expect("full chart source range"),
+                        )),
+                    }),
+                    cache: None,
+                    dirty: false,
+                })],
+            ),
+        );
+        let before = full_reference.clone();
+        let error = full_reference
+            .shift_cells_with_change(
+                SheetId(3),
+                Rect {
+                    row_first: 1,
+                    row_last: 1,
+                    col_first: 4,
+                    col_last: 5,
+                },
+                CellShiftDirection::Down,
+            )
+            .expect_err("intersecting full chart source must fail closed");
+        assert_eq!(error.code, OmErrorCode::Unsupported);
+        assert!(
+            error
+                .message
+                .contains("chart 11 series 1 values full-reference worksheet 3 range R4C4:R5C5"),
+            "{error:?}",
+        );
+        assert_eq!(full_reference, before);
+
+        let mut unresolved = sample_state();
+        unresolved.charts.insert(
+            chart_id,
+            chart_model(
+                chart_id,
+                unresolved.model.id,
+                vec![series_model_with_values(ChartSourceExpr {
+                    raw: FormulaSource {
+                        text: "R1C1:R2C2".to_string(),
+                        is_r1c1: true,
+                    },
+                    resolved: None,
+                    full_reference: None,
+                    cache: None,
+                    dirty: false,
+                })],
+            ),
+        );
+        let before = unresolved.clone();
+        let error = unresolved
+            .shift_cells_with_change(
+                SheetId(3),
+                Rect::single_cell(1, 1),
+                CellShiftDirection::Down,
+            )
+            .expect_err("unresolved chart reference must fail closed");
+        assert_eq!(error.code, OmErrorCode::Unsupported);
+        assert!(
+            error
+                .message
+                .contains("chart 11 series 1 values unresolved reference"),
+            "{error:?}",
+        );
+        assert_eq!(unresolved, before);
+
+        let mut allowed = sample_state();
+        allowed.charts.insert(
+            chart_id,
+            chart_model(
+                chart_id,
+                allowed.model.id,
+                vec![series_model_with_values(chart_source(allowed.model.id))],
+            ),
+        );
+        let chart_before = allowed.charts.get(&chart_id).expect("chart").clone();
+        assert!(
+            allowed
+                .shift_cells_with_change(
+                    SheetId(3),
+                    Rect::single_cell(1, 1),
+                    CellShiftDirection::Down,
+                )
+                .expect("non-intersecting chart source must remain eligible"),
+        );
+        assert_eq!(allowed.charts.get(&chart_id), Some(&chart_before));
     }
 
     #[test]
