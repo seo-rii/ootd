@@ -276,9 +276,14 @@ Active order:
    caller-visible chart handle and scope internal Range/SeriesCollection/Series handles to the
    call's allocator boundary. Success preserves only the intended stale transition for replaced
    caller-owned Series handles without registry or allocator growth; cross-workbook formula failure
-   preserves both workbook snapshots and the complete session. **Active:** close `BUG-008` Cut and
-   `BUG-009` partial-format semantics before resuming the queued `WorksheetData` payload closure.
-37. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
+   preserves both workbook snapshots and the complete session.
+37. `BUG-008` is complete (2026-08-09, synthetic): `Chart.Paste` rejects a Cut range clipboard with
+   stable `Unsupported` before checking destination mutability or changing chart/workbook/session
+   state. Same-workbook all/formulas/values and cross-workbook read-only destination regressions
+   preserve both workbook snapshots, dirty domains, object registry/allocator, and the complete
+   Find/CutCopyMode/clipboard session. **Active:** close `BUG-009` partial-format semantics before
+   resuming the queued `WorksheetData` payload closure.
+38. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
    claiming practical chart/pivot/style parity.
 
 Every numbered work unit starts with a failing regression and lands as its own reviewable commit.

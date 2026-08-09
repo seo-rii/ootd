@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
-    XL_COPY, XL_CUT, XL_PASTE_COLUMN_WIDTHS, XL_PASTE_COMMENTS, XL_PASTE_FORMATS,
-    XL_PASTE_VALIDATION,
+    XL_COPY, XL_CUT, XL_PASTE_ALL, XL_PASTE_COLUMN_WIDTHS, XL_PASTE_COMMENTS, XL_PASTE_FORMATS,
+    XL_PASTE_FORMULAS, XL_PASTE_VALIDATION, XL_PASTE_VALUES,
 };
 
 fn open_chart_workbook(
@@ -306,4 +306,120 @@ fn chart_metadata_only_paste_reports_capability_before_clipboard_state() {
             "{paste_name}: session",
         );
     }
+}
+
+#[test]
+fn chart_cut_paste_is_fail_closed_and_atomic() {
+    for (paste_type, paste_name) in [
+        (XL_PASTE_ALL, "xlPasteAll"),
+        (XL_PASTE_FORMULAS, "xlPasteFormulas"),
+        (XL_PASTE_VALUES, "xlPasteValues"),
+    ] {
+        let label = format!("Cut {paste_name}");
+        let mut runtime = ExcelRuntime::new();
+        let (workbook, worksheet, chart) = open_chart_workbook(&mut runtime, false);
+        let source = seed_chart_paste_source(&mut runtime, worksheet, &label);
+        commit_workbook_baseline(&mut runtime, workbook, &label);
+        runtime
+            .dispatch_invoke(
+                source,
+                "Find",
+                &[OmValue::Text("chart cut paste marker".to_string())],
+            )
+            .unwrap_or_else(|error| panic!("{label}: seed Find state: {error:?}"));
+        runtime
+            .dispatch_invoke(source, "Cut", &[])
+            .unwrap_or_else(|error| panic!("{label}: arm Cut clipboard: {error:?}"));
+
+        let workbook_before = runtime_workbook_persistence_snapshot(&runtime, workbook);
+        let dirty_before = runtime
+            .workbook_dirty_domains(workbook)
+            .unwrap_or_else(|error| panic!("{label}: dirty domains: {error:?}"));
+        let session_before = runtime_session_mutation_snapshot(&runtime);
+
+        let error = runtime
+            .dispatch_invoke(chart, "Paste", &[OmValue::Number(f64::from(paste_type))])
+            .expect_err("Chart.Paste must not silently consume a Cut clipboard");
+
+        assert_eq!(error.code, OmErrorCode::Unsupported, "{label}: {error:?}");
+        assert_eq!(
+            error.message, "Chart.Paste does not support a Cut range clipboard",
+            "{label}",
+        );
+        assert_eq!(
+            runtime_workbook_persistence_snapshot(&runtime, workbook),
+            workbook_before,
+            "{label}: workbook",
+        );
+        assert_eq!(
+            runtime
+                .workbook_dirty_domains(workbook)
+                .unwrap_or_else(|error| panic!("{label}: dirty domains after: {error:?}")),
+            dirty_before,
+            "{label}: dirty domains",
+        );
+        assert_eq!(
+            runtime_session_mutation_snapshot(&runtime),
+            session_before,
+            "{label}: session",
+        );
+    }
+}
+
+#[test]
+fn chart_cut_paste_reports_cut_capability_before_destination_mutability() {
+    let label = "read-only cross-workbook Cut xlPasteValues";
+    let mut runtime = ExcelRuntime::new();
+    let source_workbook = runtime
+        .open_workbook(OpenWorkbookSpec {
+            bytes: synthetic_workbook_bytes(),
+            format_hint: Some(FileFormat::Xlsx),
+            profile: ExcelProfile::Excel365,
+            read_only: false,
+        })
+        .unwrap_or_else(|error| panic!("{label}: open source workbook: {error:?}"));
+    let source_worksheet = expect_object_handle(
+        runtime
+            .dispatch_get(source_workbook.0, "Worksheets", &[OmValue::Number(1.0)])
+            .unwrap_or_else(|error| panic!("{label}: source Worksheets(1): {error:?}")),
+    );
+    let source = seed_chart_paste_source(&mut runtime, source_worksheet, label);
+    commit_workbook_baseline(&mut runtime, source_workbook, label);
+    let (destination_workbook, _, chart) = open_chart_workbook(&mut runtime, true);
+    runtime
+        .dispatch_invoke(source, "Cut", &[])
+        .unwrap_or_else(|error| panic!("{label}: arm Cut clipboard: {error:?}"));
+
+    let source_before = runtime_workbook_persistence_snapshot(&runtime, source_workbook);
+    let destination_before = runtime_workbook_persistence_snapshot(&runtime, destination_workbook);
+    let session_before = runtime_session_mutation_snapshot(&runtime);
+
+    let error = runtime
+        .dispatch_invoke(
+            chart,
+            "Paste",
+            &[OmValue::Number(f64::from(XL_PASTE_VALUES))],
+        )
+        .expect_err("Chart.Paste Cut must fail before destination mutation checks");
+
+    assert_eq!(error.code, OmErrorCode::Unsupported, "{label}: {error:?}");
+    assert_eq!(
+        error.message, "Chart.Paste does not support a Cut range clipboard",
+        "{label}",
+    );
+    assert_eq!(
+        runtime_workbook_persistence_snapshot(&runtime, source_workbook),
+        source_before,
+        "{label}: source workbook",
+    );
+    assert_eq!(
+        runtime_workbook_persistence_snapshot(&runtime, destination_workbook),
+        destination_before,
+        "{label}: destination workbook",
+    );
+    assert_eq!(
+        runtime_session_mutation_snapshot(&runtime),
+        session_before,
+        "{label}: session",
+    );
 }

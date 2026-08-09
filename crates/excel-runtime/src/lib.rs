@@ -15343,6 +15343,11 @@ impl ExcelRuntime {
                             "Chart.Paste clipboard mode is invalid",
                         ));
                     }
+                    if clipboard.mode == XL_CUT {
+                        return Err(OmError::unsupported(
+                            "Chart.Paste does not support a Cut range clipboard",
+                        ));
+                    }
                     if self.runtime_workbook(workbook)?.read_only {
                         return Err(OmError::new(
                             OmErrorCode::InvalidState,
