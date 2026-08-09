@@ -3221,6 +3221,82 @@
     }
 
     #[test]
+    fn parses_qname_aware_table_part_structural_owners() {
+        for (spreadsheet_namespace, relationships_namespace) in [
+            (
+                "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
+                "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
+            ),
+            (
+                "http://purl.oclc.org/ooxml/spreadsheetml/main",
+                "http://purl.oclc.org/ooxml/officeDocument/relationships",
+            ),
+        ] {
+            let worksheet_xml = format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<s:worksheet xmlns:s="{spreadsheet_namespace}" xmlns:rel="{relationships_namespace}" xmlns:f="urn:foreign">
+  <s:sheetData/>
+  <s:tableParts count="1"><s:tablePart rel:id="rIdTable1"></s:tablePart></s:tableParts>
+  <s:extLst><s:ext uri="urn:test">
+    <f:tableParts><f:tablePart rel:id="rIdForeign"/></f:tableParts>
+    <s:tableParts><s:tablePart rel:id="rIdNested"/></s:tableParts>
+  </s:ext></s:extLst>
+</s:worksheet>"#,
+            );
+
+            let parsed = parse_worksheet_cells(
+                worksheet_xml.as_bytes(),
+                &[],
+                spreadsheet_namespace,
+                "/xl/worksheets/sheet1.xml",
+            )
+            .expect("worksheet table relationship inventory");
+
+            assert_eq!(
+                parsed.structural_owners.table_relationship_ids,
+                vec!["rIdTable1".to_string()],
+                "{spreadsheet_namespace}",
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_table_part_structural_owner_metadata_fails_closed() {
+        for table_parts in [
+            r#"<tableParts/>"#,
+            r#"<tableParts></tableParts>"#,
+            r#"<tableParts><tablePart/></tableParts>"#,
+            r#"<tableParts><tablePart r:id=""/></tableParts>"#,
+            r#"<tableParts><tablePart f:id="rIdForeign"/></tableParts>"#,
+            r#"<tableParts><tablePart r:id="rIdTable1"/><tablePart r:id="rIdTable1"/></tableParts>"#,
+            r#"<tableParts><tablePart r:id="rIdTable1" rr:id="rIdTable2"/></tableParts>"#,
+        ] {
+            let worksheet_xml = format!(
+                r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+ xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+ xmlns:rr="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+ xmlns:f="urn:foreign">
+  <sheetData/>{table_parts}
+</worksheet>"#,
+            );
+
+            let error = parse_worksheet_cells(
+                worksheet_xml.as_bytes(),
+                &[],
+                "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
+                "/xl/worksheets/sheet1.xml",
+            )
+            .expect_err("invalid table relationship metadata must fail closed");
+
+            assert_eq!(error.code, OmErrorCode::Parse, "{table_parts}");
+            assert!(
+                error.message.contains("/xl/worksheets/sheet1.xml"),
+                "{table_parts}: {error:?}",
+            );
+        }
+    }
+
+    #[test]
     fn non_finite_worksheet_numbers_fail_parse_and_rewrite_boundaries() {
         for lexical in ["NaN", "inf", "-inf"] {
             let worksheet_xml = format!(

@@ -873,6 +873,111 @@ fn range_structural_shifts_inventory_x14_data_validation_owners() {
 }
 
 #[test]
+fn range_structural_shifts_reject_table_part_owners_atomically() {
+    let mut package = OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("base package");
+    let content_types = String::from_utf8(
+        package
+            .part("[Content_Types].xml")
+            .expect("content types")
+            .bytes
+            .clone(),
+    )
+    .expect("content types utf8")
+    .replace(
+        "</Types>",
+        "  <Override PartName=\"/xl/tables/table1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml\"/>\n</Types>",
+    );
+    package
+        .replace_part_bytes("[Content_Types].xml", content_types.into_bytes())
+        .expect("replace table content types");
+    let source_xml = String::from_utf8(
+        package
+            .part("xl/worksheets/sheet1.xml")
+            .expect("source worksheet")
+            .bytes
+            .clone(),
+    )
+    .expect("worksheet utf8");
+    let table_xml = source_xml.replace(
+        "</worksheet>",
+        r#"  <tableParts xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" count="1"><tablePart r:id="rIdTable1"/></tableParts>
+</worksheet>"#,
+    );
+    assert_ne!(table_xml, source_xml, "table fixture replacement");
+    package
+        .replace_part_bytes("xl/worksheets/sheet1.xml", table_xml.into_bytes())
+        .expect("replace worksheet");
+    package
+        .add_part(OpcPart {
+            name: "xl/worksheets/_rels/sheet1.xml.rels".to_string(),
+            content_type: None,
+            compression: CompressionMethod::Stored,
+            bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rIdTable1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/table" Target="../tables/table1.xml"/>
+</Relationships>"#
+                .to_vec(),
+        })
+        .expect("add worksheet table relationship");
+    package
+        .add_part(OpcPart {
+            name: "xl/tables/table1.xml".to_string(),
+            content_type: None,
+            compression: CompressionMethod::Stored,
+            bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
+<table xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" id="1" name="Table1" displayName="Table1" ref="D4:E5" totalsRowShown="0">
+  <autoFilter ref="D4:E5"/>
+  <tableColumns count="2"><tableColumn id="1" name="Left"/><tableColumn id="2" name="Right"/></tableColumns>
+</table>"#
+                .to_vec(),
+        })
+        .expect("add table part");
+    let input = package.to_bytes().expect("table workbook bytes");
+
+    for (member, target_address, shift, label) in [
+        (
+            "Insert",
+            "A1",
+            XL_SHIFT_DOWN,
+            "non-intersecting insert with table owner",
+        ),
+        (
+            "Delete",
+            "D4:E4",
+            XL_SHIFT_UP,
+            "intersecting delete with table owner",
+        ),
+    ] {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: input.clone(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .unwrap_or_else(|error| panic!("{label}: open: {error:?}"));
+        let worksheet = worksheet_handle(&mut runtime, workbook);
+        let target = range_handle(&mut runtime, worksheet, target_address);
+
+        assert_structural_failure_is_atomic(
+            &mut runtime,
+            workbook,
+            target,
+            member,
+            shift,
+            OmErrorCode::Unsupported,
+            &[
+                "structural table owner retarget",
+                "worksheet 1",
+                "rIdTable1",
+            ],
+            label,
+        );
+    }
+}
+
+#[test]
 fn range_structural_multilane_insert_commits_and_reopens() {
     let mut runtime = ExcelRuntime::new();
     let workbook = open_clean_workbook(&mut runtime);

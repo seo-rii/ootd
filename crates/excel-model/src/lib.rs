@@ -62,6 +62,7 @@ pub struct WorksheetStructuralOwners {
     pub merged_ranges: Vec<Rect>,
     pub data_validation_ranges: Vec<Rect>,
     pub data_validation_formulas: Vec<String>,
+    pub table_relationship_ids: Vec<String>,
 }
 
 impl WorksheetData {
@@ -1440,6 +1441,12 @@ impl WorkbookState {
                     )));
                 }
             }
+            if let Some(relationship_id) = owner.structural_owners.table_relationship_ids.first() {
+                return Err(OmError::unsupported(format!(
+                    "Range.{member} structural table owner retarget is not implemented for worksheet {} relationship {relationship_id}",
+                    owner_sheet_id.0,
+                )));
+            }
         }
         for defined_name in self.defined_names.iter() {
             if defined_name.refers_to.is_r1c1
@@ -2484,6 +2491,34 @@ mod tests {
                 )
                 .expect("reference-free data-validation formulas must remain eligible"),
         );
+    }
+
+    #[test]
+    fn structural_cell_shifts_reject_table_relationship_owners() {
+        let mut state = sample_state();
+        state
+            .worksheet_data_for_sheet_mut(SheetId(3))
+            .expect("worksheet data")
+            .structural_owners = WorksheetStructuralOwners {
+            table_relationship_ids: vec!["rIdTable1".to_string()],
+            ..WorksheetStructuralOwners::default()
+        };
+        let before = state.clone();
+
+        let error = state
+            .shift_cells_with_change(
+                SheetId(3),
+                Rect::single_cell(1, 1),
+                CellShiftDirection::Down,
+            )
+            .expect_err("table relationship owner must fail closed");
+
+        assert_eq!(error.code, OmErrorCode::Unsupported);
+        assert_eq!(
+            error.message,
+            "Range.Insert structural table owner retarget is not implemented for worksheet 3 relationship rIdTable1",
+        );
+        assert_eq!(state, before);
     }
 
     #[test]

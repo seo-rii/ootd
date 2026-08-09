@@ -1,6 +1,14 @@
 use super::super::{
-    WorksheetSupportParts, io_error,
-    xml::{expanded_name_is, qualified_name_like, resolved_element_is, unqualified_attribute_is},
+    WorksheetSupportParts,
+    dialect::{
+        STRICT_OFFICE_DOCUMENT_RELATIONSHIPS_NAMESPACE, STRICT_SPREADSHEETML_NAMESPACE,
+        TRANSITIONAL_OFFICE_DOCUMENT_RELATIONSHIPS_NAMESPACE,
+    },
+    io_error,
+    xml::{
+        expanded_name_is, namespaced_attribute_is, qualified_name_like, resolved_element_is,
+        unqualified_attribute_is,
+    },
     xml_error,
 };
 
@@ -10,6 +18,7 @@ use office_common::{
 };
 use quick_xml::escape::partial_escape;
 use quick_xml::events::{BytesEnd, BytesRef, BytesStart, BytesText, Event};
+use quick_xml::name::NamespaceResolver;
 use quick_xml::{NsReader, Writer};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Cursor, Write};
@@ -771,11 +780,56 @@ pub(crate) fn parse_worksheet_cells(
             })?;
             parse_sqref_ranges(&sqref, "worksheet dataValidation")
         };
+    let office_document_relationships_namespace =
+        if spreadsheet_namespace == STRICT_SPREADSHEETML_NAMESPACE {
+            STRICT_OFFICE_DOCUMENT_RELATIONSHIPS_NAMESPACE
+        } else {
+            TRANSITIONAL_OFFICE_DOCUMENT_RELATIONSHIPS_NAMESPACE
+        };
+    let parse_table_relationship_id = |element: &BytesStart<'_>,
+                                       resolver: &NamespaceResolver,
+                                       decoder: quick_xml::encoding::Decoder|
+     -> OmResult<String> {
+        let mut relationship_id = None;
+        for attr in element.attributes() {
+            let attr = attr.map_err(xml_error)?;
+            if namespaced_attribute_is(
+                resolver,
+                attr.key,
+                office_document_relationships_namespace.as_bytes(),
+                b"id",
+            ) {
+                if relationship_id.is_some() {
+                    return Err(OmError::parse(format!(
+                        "{worksheet_part_uri}: worksheet tablePart has duplicate relationship IDs"
+                    )));
+                }
+                relationship_id = Some(
+                    attr.decode_and_unescape_value(decoder)
+                        .map_err(xml_error)?
+                        .into_owned(),
+                );
+            }
+        }
+        let relationship_id = relationship_id.ok_or_else(|| {
+            OmError::parse(format!(
+                "{worksheet_part_uri}: worksheet tablePart is missing a relationship ID"
+            ))
+        })?;
+        if relationship_id.trim().is_empty() {
+            return Err(OmError::parse(format!(
+                "{worksheet_part_uri}: worksheet tablePart relationship ID cannot be empty"
+            )));
+        }
+        Ok(relationship_id)
+    };
     let mut metadata_reader = NsReader::from_reader(Cursor::new(worksheet_xml));
     metadata_reader.config_mut().trim_text(false);
     let mut metadata_buffer = Vec::new();
     let mut element_depth = 0usize;
     let mut merge_cells_depth = None;
+    let mut table_parts_depth = None;
+    let mut table_parts_has_owner = false;
     let mut data_validations_depth = None;
     let mut data_validation_depth = None;
     let mut data_validation_formula_depth = None;
@@ -795,6 +849,8 @@ pub(crate) fn parse_worksheet_cells(
     let mut merged_ranges = Vec::new();
     let mut data_validation_ranges = Vec::new();
     let mut data_validation_formulas = Vec::new();
+    let mut table_relationship_ids = Vec::new();
+    let mut seen_table_relationship_ids = BTreeSet::new();
     loop {
         match metadata_reader.read_resolved_event_into(&mut metadata_buffer) {
             Ok((namespace, Event::Start(element))) => {
@@ -810,6 +866,12 @@ pub(crate) fn parse_worksheet_cells(
                     spreadsheet_namespace.as_bytes(),
                     b"dataValidations",
                 );
+                let is_table_parts = resolved_element_is(
+                    &namespace,
+                    element.local_name(),
+                    spreadsheet_namespace.as_bytes(),
+                    b"tableParts",
+                );
                 let is_ext_lst = resolved_element_is(
                     &namespace,
                     element.local_name(),
@@ -820,6 +882,9 @@ pub(crate) fn parse_worksheet_cells(
                     merge_cells_depth = Some(element_depth + 1);
                 } else if element_depth == 1 && is_data_validations {
                     data_validations_depth = Some(element_depth + 1);
+                } else if element_depth == 1 && is_table_parts {
+                    table_parts_depth = Some(element_depth + 1);
+                    table_parts_has_owner = false;
                 } else if element_depth == 1 && is_ext_lst {
                     worksheet_ext_lst_depth = Some(element_depth + 1);
                 } else if worksheet_ext_lst_depth == Some(element_depth)
@@ -907,6 +972,26 @@ pub(crate) fn parse_worksheet_cells(
                     return Err(OmError::parse(format!(
                         "{worksheet_part_uri}: worksheet x14:dataValidation formula contains a non-xm:f child"
                     )));
+                } else if table_parts_depth == Some(element_depth)
+                    && resolved_element_is(
+                        &namespace,
+                        element.local_name(),
+                        spreadsheet_namespace.as_bytes(),
+                        b"tablePart",
+                    )
+                {
+                    let relationship_id = parse_table_relationship_id(
+                        &element,
+                        metadata_reader.resolver(),
+                        metadata_reader.decoder(),
+                    )?;
+                    if !seen_table_relationship_ids.insert(relationship_id.clone()) {
+                        return Err(OmError::parse(format!(
+                            "{worksheet_part_uri}: duplicate worksheet tablePart relationship ID: {relationship_id}"
+                        )));
+                    }
+                    table_relationship_ids.push(relationship_id);
+                    table_parts_has_owner = true;
                 } else if merge_cells_depth == Some(element_depth)
                     && resolved_element_is(
                         &namespace,
@@ -952,7 +1037,18 @@ pub(crate) fn parse_worksheet_cells(
                 element_depth += 1;
             }
             Ok((namespace, Event::Empty(element))) => {
-                if worksheet_ext_depth == Some(element_depth)
+                if element_depth == 1
+                    && resolved_element_is(
+                        &namespace,
+                        element.local_name(),
+                        spreadsheet_namespace.as_bytes(),
+                        b"tableParts",
+                    )
+                {
+                    return Err(OmError::parse(format!(
+                        "{worksheet_part_uri}: worksheet tableParts has no tablePart owners"
+                    )));
+                } else if worksheet_ext_depth == Some(element_depth)
                     && resolved_element_is(
                         &namespace,
                         element.local_name(),
@@ -1031,6 +1127,26 @@ pub(crate) fn parse_worksheet_cells(
                     return Err(OmError::parse(format!(
                         "{worksheet_part_uri}: worksheet x14:dataValidation formula contains a non-xm:f child"
                     )));
+                } else if table_parts_depth == Some(element_depth)
+                    && resolved_element_is(
+                        &namespace,
+                        element.local_name(),
+                        spreadsheet_namespace.as_bytes(),
+                        b"tablePart",
+                    )
+                {
+                    let relationship_id = parse_table_relationship_id(
+                        &element,
+                        metadata_reader.resolver(),
+                        metadata_reader.decoder(),
+                    )?;
+                    if !seen_table_relationship_ids.insert(relationship_id.clone()) {
+                        return Err(OmError::parse(format!(
+                            "{worksheet_part_uri}: duplicate worksheet tablePart relationship ID: {relationship_id}"
+                        )));
+                    }
+                    table_relationship_ids.push(relationship_id);
+                    table_parts_has_owner = true;
                 } else if merge_cells_depth == Some(element_depth)
                     && resolved_element_is(
                         &namespace,
@@ -1265,6 +1381,22 @@ pub(crate) fn parse_worksheet_cells(
                 {
                     data_validations_depth = None;
                 }
+                if table_parts_depth == Some(element_depth)
+                    && resolved_element_is(
+                        &namespace,
+                        element.local_name(),
+                        spreadsheet_namespace.as_bytes(),
+                        b"tableParts",
+                    )
+                {
+                    if !table_parts_has_owner {
+                        return Err(OmError::parse(format!(
+                            "{worksheet_part_uri}: worksheet tableParts has no tablePart owners"
+                        )));
+                    }
+                    table_parts_depth = None;
+                    table_parts_has_owner = false;
+                }
                 element_depth = element_depth.saturating_sub(1);
             }
             Ok((_, Event::Eof)) => break,
@@ -1283,6 +1415,7 @@ pub(crate) fn parse_worksheet_cells(
             merged_ranges,
             data_validation_ranges,
             data_validation_formulas,
+            table_relationship_ids,
         },
     })
 }

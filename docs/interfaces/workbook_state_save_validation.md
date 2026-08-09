@@ -262,10 +262,18 @@ inventoried in source order. The Office 2010 extension path is bounded to a dire
 `extLst`/`ext` owner, exact x14 `dataValidations`/`dataValidation` elements, and exact xm `sqref` and
 formula `f` values; malformed or ambiguous extension owners fail load. Any standard or x14 formula
 containing an A1-family reference fails structural mutation workbook-wide before corridor planning;
-reference-free number or string formulas retain the bounded non-intersecting path. Tables, charts,
-drawings, and raw row/column metadata are not yet inventoried or retargeted by this command. Those
-owners remain part of the common reference and typed worksheet-metadata follow-up, and no desktop
-Excel Oracle claim is attached to the current behavior.
+reference-free number or string formulas retain the bounded non-intersecting path.
+
+Direct worksheet `tableParts/tablePart@r:id` markers are inventoried with the active
+Strict/Transitional SpreadsheetML and Office Document Relationships namespaces. Empty containers,
+missing or empty IDs, and duplicate relationship IDs fail load with worksheet-part context; foreign
+or nested same-local trees do not create owners. Because the relationship target, table `ref`, and
+structured/calculated-column formulas are not modeled yet, any inventoried table relationship blocks
+structural mutation workbook-wide with stable worksheet/relationship diagnostics. This conservative
+boundary prevents a non-intersecting cell shift from silently invalidating structured references.
+Charts, drawings, resolved table semantics, and raw row/column metadata are not yet retargeted by
+this command. Those owners remain part of the common reference and typed worksheet-metadata
+follow-up, and no desktop Excel Oracle claim is attached to the current behavior.
 
 ### Worksheet-data ownership map
 

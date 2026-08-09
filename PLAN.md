@@ -566,8 +566,16 @@ Wave 2 exit gate:
    workbook-wide reference-formula preflight를 사용하고, reference-free 비교차 Insert는 x14
    XML과 inventory를 save/reopen에서 보존한다. `excel-model` 118개, `excel-runtime` 776개,
    `excel-xlsx` 2,927개 회귀가 통과한다.
-   **다음:** `ARCH-024` table과 raw row-column metadata owner
-   inventory를 실제 model/support 표면별로 분리해 fail-closed 경계를 닫는다.
+   `ARCH-024` table relationship-owner 3e단계 완료 (2026-08-09, synthetic): worksheet direct
+   `tableParts/tablePart@r:id`를 active Strict/Transitional dialect의 SpreadsheetML 및 Office
+   Document Relationships QName으로 inventory한다. foreign/nested same-local tree는 무시하고,
+   empty container와 missing/empty/duplicate relationship ID는 part URI가 있는 parse error로
+   거절한다. table part target/range와 structured formula 의미가 아직 model에 없으므로 table
+   relationship owner가 하나라도 있으면 workbook-wide structural preflight에서 worksheet/ID를
+   포함한 stable `Unsupported`로 거절하고 workbook/dirty/session을 보존한다. `excel-model`
+   119개, `excel-runtime` 777개, `excel-xlsx` 2,929개 회귀가 통과한다.
+   **다음:** `ARCH-024` table relationship target과 `table@ref`/formula owner를 결합한 3f단계,
+   이어서 raw row-column metadata owner inventory를 독립 단계로 닫는다.
 16. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
    structured error에 추가한다.
 
