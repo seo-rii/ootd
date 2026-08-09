@@ -37,7 +37,7 @@ contract-based until Milestone M1 pins the first behavioral Excel corpus.
 
 - Rust MSRV: 1.88; development toolchain: 1.94.0.
 - Linux workspace tests: enabled in CI.
-- Current root test inventory: 120 `excel-model`, 777 `excel-runtime`, and 2,932 `excel-xlsx`
+- Current root test inventory: 121 `excel-model`, 778 `excel-runtime`, and 2,934 `excel-xlsx`
   tests.
 - M2 boundary progress: the `excel-xlsx` and `excel-runtime` unit tests now live outside their
   library roots with test identities unchanged; calculation and recalculation/writeback are
@@ -161,7 +161,10 @@ contract-based until Milestone M1 pins the first behavioral Excel corpus.
   now resolve to internal, existing, correctly typed table parts with bounded ranges and direct
   calculated/totals formulas; malformed bindings fail load/save, A1-bearing table formulas block
   workbook-wide, and only an intersecting table range blocks an otherwise reference-free shift.
-  Table retargeting, charts, drawings, and raw worksheet metadata remain outside this bounded command.
+  Direct row attributes/opaque children and bounded direct column ranges are also inventoried as
+  full-axis owners; malformed owner ranges fail load and only an intersecting shift corridor is
+  blocked, while non-intersecting edits preserve raw XML through save/reopen. Actual table/row/column
+  retargeting plus chart sources and drawing anchors remain outside this bounded command.
   Details are in
   `docs/interfaces/workbook_state_save_validation.md`,
   `docs/interfaces/chart_drawing_graph_validation.md`, and

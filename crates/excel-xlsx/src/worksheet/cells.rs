@@ -764,10 +764,106 @@ pub(crate) fn parse_worksheet_cells(
         }
         Ok(relationship_id)
     };
+    let parse_row_metadata = |element: &BytesStart<'_>,
+                              resolver: &NamespaceResolver,
+                              decoder: quick_xml::encoding::Decoder|
+     -> OmResult<(u32, bool)> {
+        let mut row_index = None;
+        let mut has_metadata = false;
+        for attr in element.attributes() {
+            let attr = attr.map_err(xml_error)?;
+            if unqualified_attribute_is(resolver, attr.key, b"r") {
+                if row_index.is_some() {
+                    return Err(OmError::parse(format!(
+                        "{worksheet_part_uri}: worksheet row has duplicate r attributes"
+                    )));
+                }
+                let value = attr
+                    .decode_and_unescape_value(decoder)
+                    .map_err(xml_error)?
+                    .into_owned();
+                let parsed = value.parse::<u32>().map_err(|_| {
+                    OmError::parse(format!(
+                        "{worksheet_part_uri}: invalid worksheet row index: {value}"
+                    ))
+                })?;
+                if parsed == 0 || parsed > EXCEL_MAX_ROW_INDEX {
+                    return Err(OmError::parse(format!(
+                        "{worksheet_part_uri}: worksheet row index exceeds Excel grid: {value}"
+                    )));
+                }
+                row_index = Some(parsed);
+            } else {
+                has_metadata = true;
+            }
+        }
+        let row_index = row_index.ok_or_else(|| {
+            OmError::parse(format!(
+                "{worksheet_part_uri}: worksheet row is missing an r attribute"
+            ))
+        })?;
+        Ok((row_index, has_metadata))
+    };
+    let parse_column_metadata_range = |element: &BytesStart<'_>,
+                                       resolver: &NamespaceResolver,
+                                       decoder: quick_xml::encoding::Decoder|
+     -> OmResult<Rect> {
+        let mut first = None;
+        let mut last = None;
+        for attr in element.attributes() {
+            let attr = attr.map_err(xml_error)?;
+            let target = if unqualified_attribute_is(resolver, attr.key, b"min") {
+                &mut first
+            } else if unqualified_attribute_is(resolver, attr.key, b"max") {
+                &mut last
+            } else {
+                continue;
+            };
+            if target.is_some() {
+                return Err(OmError::parse(format!(
+                    "{worksheet_part_uri}: worksheet column metadata has a duplicate range attribute"
+                )));
+            }
+            let value = attr
+                .decode_and_unescape_value(decoder)
+                .map_err(xml_error)?
+                .into_owned();
+            *target = Some(value.parse::<u32>().map_err(|_| {
+                OmError::parse(format!(
+                    "{worksheet_part_uri}: invalid worksheet column metadata range: {value}"
+                ))
+            })?);
+        }
+        let first = first.ok_or_else(|| {
+            OmError::parse(format!(
+                "{worksheet_part_uri}: worksheet column metadata is missing min"
+            ))
+        })?;
+        let last = last.ok_or_else(|| {
+            OmError::parse(format!(
+                "{worksheet_part_uri}: worksheet column metadata is missing max"
+            ))
+        })?;
+        if first == 0 || first > last || last > EXCEL_MAX_COLUMN_INDEX {
+            return Err(OmError::parse(format!(
+                "{worksheet_part_uri}: invalid worksheet column metadata range: {first}:{last}"
+            )));
+        }
+        Ok(Rect {
+            row_first: 1,
+            row_last: EXCEL_MAX_ROW_INDEX,
+            col_first: first,
+            col_last: last,
+        })
+    };
     let mut metadata_reader = NsReader::from_reader(Cursor::new(worksheet_xml));
     metadata_reader.config_mut().trim_text(false);
     let mut metadata_buffer = Vec::new();
     let mut element_depth = 0usize;
+    let mut sheet_data_depth = None;
+    let mut row_depth = None;
+    let mut current_row_metadata = None::<(u32, bool)>;
+    let mut cols_depth = None;
     let mut merge_cells_depth = None;
     let mut table_parts_depth = None;
     let mut table_parts_has_owner = false;
@@ -792,6 +888,9 @@ pub(crate) fn parse_worksheet_cells(
     let mut data_validation_formulas = Vec::new();
     let mut table_relationship_ids = Vec::new();
     let mut seen_table_relationship_ids = BTreeSet::new();
+    let mut seen_row_indices = BTreeSet::new();
+    let mut row_metadata_ranges = Vec::new();
+    let mut column_metadata_ranges = Vec::new();
     loop {
         match metadata_reader.read_resolved_event_into(&mut metadata_buffer) {
             Ok((namespace, Event::Start(element))) => {
@@ -819,7 +918,66 @@ pub(crate) fn parse_worksheet_cells(
                     spreadsheet_namespace.as_bytes(),
                     b"extLst",
                 );
-                if element_depth == 1 && is_merge_cells {
+                let is_sheet_data = resolved_element_is(
+                    &namespace,
+                    element.local_name(),
+                    spreadsheet_namespace.as_bytes(),
+                    b"sheetData",
+                );
+                let is_cols = resolved_element_is(
+                    &namespace,
+                    element.local_name(),
+                    spreadsheet_namespace.as_bytes(),
+                    b"cols",
+                );
+                if element_depth == 1 && is_sheet_data {
+                    sheet_data_depth = Some(element_depth + 1);
+                } else if element_depth == 1 && is_cols {
+                    cols_depth = Some(element_depth + 1);
+                } else if sheet_data_depth == Some(element_depth)
+                    && resolved_element_is(
+                        &namespace,
+                        element.local_name(),
+                        spreadsheet_namespace.as_bytes(),
+                        b"row",
+                    )
+                {
+                    let (row_index, has_metadata) = parse_row_metadata(
+                        &element,
+                        metadata_reader.resolver(),
+                        metadata_reader.decoder(),
+                    )?;
+                    if !seen_row_indices.insert(row_index) {
+                        return Err(OmError::parse(format!(
+                            "{worksheet_part_uri}: duplicate worksheet row index: {row_index}"
+                        )));
+                    }
+                    row_depth = Some(element_depth + 1);
+                    current_row_metadata = Some((row_index, has_metadata));
+                } else if row_depth == Some(element_depth) {
+                    if !resolved_element_is(
+                        &namespace,
+                        element.local_name(),
+                        spreadsheet_namespace.as_bytes(),
+                        b"c",
+                    ) && let Some((_, has_metadata)) = current_row_metadata.as_mut()
+                    {
+                        *has_metadata = true;
+                    }
+                } else if cols_depth == Some(element_depth)
+                    && resolved_element_is(
+                        &namespace,
+                        element.local_name(),
+                        spreadsheet_namespace.as_bytes(),
+                        b"col",
+                    )
+                {
+                    column_metadata_ranges.push(parse_column_metadata_range(
+                        &element,
+                        metadata_reader.resolver(),
+                        metadata_reader.decoder(),
+                    )?);
+                } else if element_depth == 1 && is_merge_cells {
                     merge_cells_depth = Some(element_depth + 1);
                 } else if element_depth == 1 && is_data_validations {
                     data_validations_depth = Some(element_depth + 1);
@@ -978,7 +1136,56 @@ pub(crate) fn parse_worksheet_cells(
                 element_depth += 1;
             }
             Ok((namespace, Event::Empty(element))) => {
-                if element_depth == 1
+                if sheet_data_depth == Some(element_depth)
+                    && resolved_element_is(
+                        &namespace,
+                        element.local_name(),
+                        spreadsheet_namespace.as_bytes(),
+                        b"row",
+                    )
+                {
+                    let (row_index, has_metadata) = parse_row_metadata(
+                        &element,
+                        metadata_reader.resolver(),
+                        metadata_reader.decoder(),
+                    )?;
+                    if !seen_row_indices.insert(row_index) {
+                        return Err(OmError::parse(format!(
+                            "{worksheet_part_uri}: duplicate worksheet row index: {row_index}"
+                        )));
+                    }
+                    if has_metadata {
+                        row_metadata_ranges.push(Rect {
+                            row_first: row_index,
+                            row_last: row_index,
+                            col_first: 1,
+                            col_last: EXCEL_MAX_COLUMN_INDEX,
+                        });
+                    }
+                } else if row_depth == Some(element_depth) {
+                    if !resolved_element_is(
+                        &namespace,
+                        element.local_name(),
+                        spreadsheet_namespace.as_bytes(),
+                        b"c",
+                    ) && let Some((_, has_metadata)) = current_row_metadata.as_mut()
+                    {
+                        *has_metadata = true;
+                    }
+                } else if cols_depth == Some(element_depth)
+                    && resolved_element_is(
+                        &namespace,
+                        element.local_name(),
+                        spreadsheet_namespace.as_bytes(),
+                        b"col",
+                    )
+                {
+                    column_metadata_ranges.push(parse_column_metadata_range(
+                        &element,
+                        metadata_reader.resolver(),
+                        metadata_reader.decoder(),
+                    )?);
+                } else if element_depth == 1
                     && resolved_element_is(
                         &namespace,
                         element.local_name(),
@@ -1142,6 +1349,11 @@ pub(crate) fn parse_worksheet_cells(
                     && let Some(formula) = current_data_validation_formula.as_mut()
                 {
                     formula.push_str(&text.xml_content().map_err(xml_error)?);
+                } else if row_depth == Some(element_depth)
+                    && let Some((_, has_metadata)) = current_row_metadata.as_mut()
+                    && !text.xml_content().map_err(xml_error)?.trim().is_empty()
+                {
+                    *has_metadata = true;
                 }
             }
             Ok((_, Event::CData(text))) => {
@@ -1157,6 +1369,11 @@ pub(crate) fn parse_worksheet_cells(
                     && let Some(formula) = current_data_validation_formula.as_mut()
                 {
                     formula.push_str(&text.xml_content().map_err(xml_error)?);
+                } else if row_depth == Some(element_depth)
+                    && let Some((_, has_metadata)) = current_row_metadata.as_mut()
+                    && !text.xml_content().map_err(xml_error)?.trim().is_empty()
+                {
+                    *has_metadata = true;
                 }
             }
             Ok((_, Event::GeneralRef(reference))) => {
@@ -1173,9 +1390,57 @@ pub(crate) fn parse_worksheet_cells(
                     && let Some(formula) = current_data_validation_formula.as_mut()
                 {
                     formula.push_str(&value);
+                } else if row_depth == Some(element_depth)
+                    && let Some((_, has_metadata)) = current_row_metadata.as_mut()
+                {
+                    *has_metadata = true;
                 }
             }
             Ok((namespace, Event::End(element))) => {
+                if row_depth == Some(element_depth)
+                    && resolved_element_is(
+                        &namespace,
+                        element.local_name(),
+                        spreadsheet_namespace.as_bytes(),
+                        b"row",
+                    )
+                {
+                    let (row_index, has_metadata) =
+                        current_row_metadata.take().ok_or_else(|| {
+                            OmError::parse(format!(
+                                "{worksheet_part_uri}: worksheet row metadata state is incomplete"
+                            ))
+                        })?;
+                    if has_metadata {
+                        row_metadata_ranges.push(Rect {
+                            row_first: row_index,
+                            row_last: row_index,
+                            col_first: 1,
+                            col_last: EXCEL_MAX_COLUMN_INDEX,
+                        });
+                    }
+                    row_depth = None;
+                }
+                if sheet_data_depth == Some(element_depth)
+                    && resolved_element_is(
+                        &namespace,
+                        element.local_name(),
+                        spreadsheet_namespace.as_bytes(),
+                        b"sheetData",
+                    )
+                {
+                    sheet_data_depth = None;
+                }
+                if cols_depth == Some(element_depth)
+                    && resolved_element_is(
+                        &namespace,
+                        element.local_name(),
+                        spreadsheet_namespace.as_bytes(),
+                        b"cols",
+                    )
+                {
+                    cols_depth = None;
+                }
                 if x14_formula_value_depth == Some(element_depth)
                     && resolved_element_is(
                         &namespace,
@@ -1341,7 +1606,13 @@ pub(crate) fn parse_worksheet_cells(
                 element_depth = element_depth.saturating_sub(1);
             }
             Ok((_, Event::Eof)) => break,
-            Ok(_) => {}
+            Ok(_) => {
+                if row_depth == Some(element_depth)
+                    && let Some((_, has_metadata)) = current_row_metadata.as_mut()
+                {
+                    *has_metadata = true;
+                }
+            }
             Err(error) => return Err(xml_error(error)),
         }
         metadata_buffer.clear();
@@ -1356,6 +1627,8 @@ pub(crate) fn parse_worksheet_cells(
             merged_ranges,
             data_validation_ranges,
             data_validation_formulas,
+            row_metadata_ranges,
+            column_metadata_ranges,
             table_relationship_ids,
             table_owners: Vec::new(),
         },

@@ -582,7 +582,15 @@ Wave 2 exit gate:
    workbook-wide로 거절하고, 실제 shift corridor와 교차하는 table range만 거절한다.
    reference-free table의 비교차 Insert는 save/reopen 뒤에도 table part와 owner inventory를
    보존한다. `excel-model` 120개, `excel-runtime` 777개, `excel-xlsx` 2,932개 회귀가 통과한다.
-   **다음:** `ARCH-024` raw row/column metadata owner inventory를 독립 3g단계로 닫는다.
+   `ARCH-024` raw row/column metadata owner 3g단계 완료 (2026-08-09, synthetic): direct
+   `sheetData/row`의 non-identity attribute와 non-cell opaque child를 full-row owner로,
+   direct `cols/col@min/@max`를 bounded full-column owner로 QName-aware inventory한다. foreign 및
+   nested same-local node는 무시하고 missing/malformed/out-of-grid/inverted column 범위와 duplicate
+   direct row index는 part URI가 있는 parse error로 거절한다. 실제 shift corridor와 교차하는
+   row/column owner만 stable `Unsupported`로 거절하며, 비교차 Insert는 raw XML과 typed inventory를
+   save/reopen에서 보존한다. `excel-model` 121개, `excel-runtime` 778개, `excel-xlsx` 2,934개
+   회귀가 통과한다.
+   **다음:** `ARCH-024` chart source와 drawing anchor owner를 독립 단계로 inventory한다.
 16. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
    structured error에 추가한다.
 

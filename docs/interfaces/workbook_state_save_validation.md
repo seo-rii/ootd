@@ -278,8 +278,17 @@ formula blocks structural mutation workbook-wide; a table range blocks only a sh
 intersects it. A reference-free table outside the corridor therefore remains eligible and preserves
 its part plus typed owner inventory through synthetic save/reopen. Marker/owner drift also fails
 save validation instead of falling back to an unsafe edit. Actual table range/formula retargeting,
-charts, drawings, and raw row/column metadata remain outside this command, and no desktop Excel
-Oracle claim is attached to the current behavior.
+charts, and drawings remain outside this command.
+
+Direct `sheetData/row` elements with attributes other than the identity `r`, or with direct non-cell
+opaque content, are inventoried as full-row owners. Direct `cols/col` elements become full-column
+owners from their bounded `min`/`max` attributes. The parser uses the active SpreadsheetML namespace
+and direct-parent depth, ignores foreign or nested same-local nodes, and rejects missing, malformed,
+out-of-grid, or inverted column ranges plus duplicate direct row indices with worksheet-part context.
+A shift corridor intersecting either owner fails before mutation; a non-intersecting Insert preserves
+the raw row/column XML and typed inventory through synthetic save/reopen. Typed metadata retargeting
+and formatting-inheritance semantics remain unsupported, and no desktop Excel Oracle claim is
+attached to the current behavior.
 
 ### Worksheet-data ownership map
 

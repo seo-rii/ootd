@@ -62,6 +62,8 @@ pub struct WorksheetStructuralOwners {
     pub merged_ranges: Vec<Rect>,
     pub data_validation_ranges: Vec<Rect>,
     pub data_validation_formulas: Vec<String>,
+    pub row_metadata_ranges: Vec<Rect>,
+    pub column_metadata_ranges: Vec<Rect>,
     pub table_relationship_ids: Vec<String>,
     pub table_owners: Vec<TableStructuralOwner>,
 }
@@ -601,6 +603,31 @@ impl WorkbookState {
                         sheet_id.0, table_owner.relationship_id,
                     ))
                 })?;
+            }
+            let mut row_metadata_rows = BTreeSet::new();
+            for range in &worksheet.structural_owners.row_metadata_ranges {
+                if ExcelLimits::validate_rect(*range).is_err()
+                    || range.row_first != range.row_last
+                    || range.col_first != 1
+                    || range.col_last != ExcelLimits::MAX_COLUMN_INDEX
+                    || !row_metadata_rows.insert(range.row_first)
+                {
+                    return Err(OmError::invalid_state(format!(
+                        "worksheet {} has invalid structural row metadata ownership",
+                        sheet_id.0,
+                    )));
+                }
+            }
+            for range in &worksheet.structural_owners.column_metadata_ranges {
+                if ExcelLimits::validate_rect(*range).is_err()
+                    || range.row_first != 1
+                    || range.row_last != ExcelLimits::MAX_ROW_INDEX
+                {
+                    return Err(OmError::invalid_state(format!(
+                        "worksheet {} has invalid structural column metadata ownership",
+                        sheet_id.0,
+                    )));
+                }
             }
             for (&(row, col), cell) in &worksheet.cells {
                 if cell.value.validate().is_err() {
@@ -1630,6 +1657,38 @@ impl WorkbookState {
                 table_owner.range.col_first,
                 table_owner.range.row_last,
                 table_owner.range.col_last,
+            )));
+        }
+        if let Some(row_metadata_range) = worksheet
+            .structural_owners
+            .row_metadata_ranges
+            .iter()
+            .find(|range| {
+                affected_rect.row_first <= range.row_last
+                    && range.row_first <= affected_rect.row_last
+                    && affected_rect.col_first <= range.col_last
+                    && range.col_first <= affected_rect.col_last
+            })
+        {
+            return Err(OmError::unsupported(format!(
+                "Range.{member} structural row metadata retarget is not implemented for worksheet {} row {}",
+                sheet_id.0, row_metadata_range.row_first,
+            )));
+        }
+        if let Some(column_metadata_range) = worksheet
+            .structural_owners
+            .column_metadata_ranges
+            .iter()
+            .find(|range| {
+                affected_rect.row_first <= range.row_last
+                    && range.row_first <= affected_rect.row_last
+                    && affected_rect.col_first <= range.col_last
+                    && range.col_first <= affected_rect.col_last
+            })
+        {
+            return Err(OmError::unsupported(format!(
+                "Range.{member} structural column metadata retarget is not implemented for worksheet {} columns C{}:C{}",
+                sheet_id.0, column_metadata_range.col_first, column_metadata_range.col_last,
             )));
         }
         let mut protected_keys = Vec::new();
@@ -2725,6 +2784,119 @@ mod tests {
             "Range.Insert structural table formula retarget is not implemented for worksheet 3 relationship rIdTable1 part xl/tables/table1.xml formula 1",
         );
         assert_eq!(formula_blocked, formula_before);
+    }
+
+    #[test]
+    fn structural_cell_shifts_fail_closed_on_row_and_column_metadata() {
+        let row_metadata = Rect {
+            row_first: 4,
+            row_last: 4,
+            col_first: 1,
+            col_last: ExcelLimits::MAX_COLUMN_INDEX,
+        };
+        let column_metadata = Rect {
+            row_first: 1,
+            row_last: ExcelLimits::MAX_ROW_INDEX,
+            col_first: 4,
+            col_last: 5,
+        };
+
+        let mut row_blocked = sample_state();
+        row_blocked
+            .worksheet_data_for_sheet_mut(SheetId(3))
+            .expect("worksheet data")
+            .structural_owners
+            .row_metadata_ranges = vec![row_metadata];
+        let row_before = row_blocked.clone();
+        let row_error = row_blocked
+            .shift_cells_with_change(
+                SheetId(3),
+                Rect::single_cell(1, 1),
+                CellShiftDirection::Down,
+            )
+            .expect_err("vertical shift through row metadata must fail closed");
+        assert_eq!(row_error.code, OmErrorCode::Unsupported);
+        assert_eq!(
+            row_error.message,
+            "Range.Insert structural row metadata retarget is not implemented for worksheet 3 row 4",
+        );
+        assert_eq!(row_blocked, row_before);
+
+        let mut row_allowed = sample_state();
+        row_allowed
+            .worksheet_data_for_sheet_mut(SheetId(3))
+            .expect("worksheet data")
+            .structural_owners
+            .row_metadata_ranges = vec![row_metadata];
+        assert!(
+            row_allowed
+                .shift_cells_with_change(
+                    SheetId(3),
+                    Rect::single_cell(1, 1),
+                    CellShiftDirection::Right,
+                )
+                .expect("shift outside row metadata must remain eligible"),
+        );
+        row_allowed
+            .validate_for_save()
+            .expect("row metadata owner must remain valid");
+
+        let mut column_blocked = sample_state();
+        column_blocked
+            .worksheet_data_for_sheet_mut(SheetId(3))
+            .expect("worksheet data")
+            .structural_owners
+            .column_metadata_ranges = vec![column_metadata];
+        let column_before = column_blocked.clone();
+        let column_error = column_blocked
+            .shift_cells_with_change(
+                SheetId(3),
+                Rect::single_cell(1, 1),
+                CellShiftDirection::Right,
+            )
+            .expect_err("horizontal shift through column metadata must fail closed");
+        assert_eq!(column_error.code, OmErrorCode::Unsupported);
+        assert_eq!(
+            column_error.message,
+            "Range.Insert structural column metadata retarget is not implemented for worksheet 3 columns C4:C5",
+        );
+        assert_eq!(column_blocked, column_before);
+
+        let mut column_allowed = sample_state();
+        column_allowed
+            .worksheet_data_for_sheet_mut(SheetId(3))
+            .expect("worksheet data")
+            .structural_owners
+            .column_metadata_ranges = vec![column_metadata];
+        assert!(
+            column_allowed
+                .shift_cells_with_change(
+                    SheetId(3),
+                    Rect::single_cell(1, 1),
+                    CellShiftDirection::Down,
+                )
+                .expect("shift outside column metadata must remain eligible"),
+        );
+        column_allowed
+            .validate_for_save()
+            .expect("column metadata owner must remain valid");
+
+        let mut invalid = sample_state();
+        invalid
+            .worksheet_data_for_sheet_mut(SheetId(3))
+            .expect("worksheet data")
+            .structural_owners
+            .row_metadata_ranges = vec![Rect {
+            col_last: ExcelLimits::MAX_COLUMN_INDEX - 1,
+            ..row_metadata
+        }];
+        assert_eq!(
+            invalid
+                .validate_for_save()
+                .expect_err("partial row metadata owner must fail validation")
+                .code,
+            OmErrorCode::InvalidState,
+        );
     }
 
     #[test]

@@ -1190,3 +1190,157 @@ fn range_structural_multilane_insert_commits_and_reopens() {
         "42",
     );
 }
+
+#[test]
+fn range_structural_shifts_inventory_row_and_column_metadata_owners() {
+    let mut package = OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("base package");
+    let worksheet_xml = String::from_utf8(
+        package
+            .part("xl/worksheets/sheet1.xml")
+            .expect("worksheet part")
+            .bytes
+            .clone(),
+    )
+    .expect("worksheet XML")
+    .replace(
+        r#"  <dimension ref="A1:C1"/>"#,
+        r#"  <dimension ref="A1:G4"/>
+  <cols><col min="4" max="5" width="12" customWidth="1"/></cols>"#,
+    )
+    .replace(
+        "    </row>\n  </sheetData>",
+        r#"      <c r="F1"><v>6</v></c>
+    </row>
+    <row r="4" ht="24" customHeight="1"><extLst><ext uri="urn:row"><payload preserved="true"/></ext></extLst></row>
+  </sheetData>"#,
+    );
+    package
+        .replace_part_bytes("xl/worksheets/sheet1.xml", worksheet_xml.into_bytes())
+        .expect("replace worksheet metadata fixture");
+    let input = package.to_bytes().expect("worksheet metadata bytes");
+
+    let mut allowed_runtime = ExcelRuntime::new();
+    let allowed_workbook = allowed_runtime
+        .open_workbook(OpenWorkbookSpec {
+            bytes: input.clone(),
+            format_hint: Some(FileFormat::Xlsx),
+            profile: ExcelProfile::Excel365,
+            read_only: false,
+        })
+        .expect("open non-intersecting metadata fixture");
+    let allowed_worksheet = worksheet_handle(&mut allowed_runtime, allowed_workbook);
+    let allowed_target = range_handle(&mut allowed_runtime, allowed_worksheet, "F1");
+    allowed_runtime
+        .dispatch_invoke(
+            allowed_target,
+            "Insert",
+            &[OmValue::Number(f64::from(XL_SHIFT_TO_RIGHT))],
+        )
+        .expect("non-intersecting metadata insert must remain eligible");
+    let mut saved = Vec::new();
+    allowed_runtime
+        .save_workbook_to_writer(
+            allowed_workbook,
+            SaveWorkbookSpec {
+                format: FileFormat::Xlsx,
+                profile: ExcelProfile::Excel365,
+                lossless: true,
+            },
+            &mut saved,
+        )
+        .expect("save non-intersecting metadata insert");
+    let reopened = allowed_runtime
+        .codec
+        .load(&saved, LoadOptions::default())
+        .expect("reopen non-intersecting metadata insert");
+    let reopened_sheet_id = reopened.state.worksheets()[0].id;
+    assert_eq!(
+        reopened
+            .state
+            .cell(reopened_sheet_id, 1, 7)
+            .expect("G1 after reopen")
+            .value,
+        CellValue::Number(6.0),
+    );
+    let reopened_owners = &reopened
+        .state
+        .worksheet_data_for_sheet(reopened_sheet_id)
+        .expect("reopened metadata worksheet")
+        .structural_owners;
+    assert_eq!(
+        reopened_owners.row_metadata_ranges,
+        vec![Rect {
+            row_first: 4,
+            row_last: 4,
+            col_first: 1,
+            col_last: ExcelLimits::MAX_COLUMN_INDEX,
+        }],
+    );
+    assert_eq!(
+        reopened_owners.column_metadata_ranges,
+        vec![Rect {
+            row_first: 1,
+            row_last: ExcelLimits::MAX_ROW_INDEX,
+            col_first: 4,
+            col_last: 5,
+        }],
+    );
+    let saved_package = OpcPackage::from_bytes(&saved).expect("saved metadata package");
+    let saved_worksheet_xml = String::from_utf8(
+        saved_package
+            .part("xl/worksheets/sheet1.xml")
+            .expect("saved metadata worksheet")
+            .bytes
+            .clone(),
+    )
+    .expect("saved metadata worksheet XML");
+    assert!(
+        saved_worksheet_xml
+            .contains(r#"<cols><col min="4" max="5" width="12" customWidth="1"/></cols>"#,)
+    );
+    assert!(saved_worksheet_xml.contains(
+        r#"<row r="4" ht="24" customHeight="1"><extLst><ext uri="urn:row"><payload preserved="true"/></ext></extLst></row>"#,
+    ));
+
+    for (target_address, shift, expected_message_fragments, label) in [
+        (
+            "A1",
+            XL_SHIFT_DOWN,
+            ["structural row metadata retarget", "worksheet 1", "row 4"],
+            "row metadata corridor",
+        ),
+        (
+            "A1",
+            XL_SHIFT_TO_RIGHT,
+            [
+                "structural column metadata retarget",
+                "worksheet 1",
+                "columns C4:C5",
+            ],
+            "column metadata corridor",
+        ),
+    ] {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: input.clone(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .unwrap_or_else(|error| panic!("{label}: open: {error:?}"));
+        let worksheet = worksheet_handle(&mut runtime, workbook);
+        let target = range_handle(&mut runtime, worksheet, target_address);
+
+        assert_structural_failure_is_atomic(
+            &mut runtime,
+            workbook,
+            target,
+            "Insert",
+            shift,
+            OmErrorCode::Unsupported,
+            &expected_message_fragments,
+            label,
+        );
+    }
+}

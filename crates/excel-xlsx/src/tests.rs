@@ -28,7 +28,7 @@
     };
     use office_common::{
         ActiveContentPolicy, CellError, CellMarker, CellValue, ChartId, ChartObjectId,
-        DrawingAnchor, Emu, ExcelProfile, ExternalDataKind, FormulaSource,
+        DrawingAnchor, Emu, ExcelLimits, ExcelProfile, ExternalDataKind, FormulaSource,
         LoadOptions as CommonLoadOptions, NameScope, NameValidationMode, ObjectPlacement,
         OmErrorCode, OmValue, Rect, ReferenceTarget, SaveOptions as CommonSaveOptions, SheetId,
         SheetKind, SheetScope, SheetVisibility, StyleId, TwoCellAnchor, WorkbookId, WorksheetModel,
@@ -3293,6 +3293,99 @@
             assert!(
                 error.message.contains("/xl/worksheets/sheet1.xml"),
                 "{table_parts}: {error:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn parses_qname_aware_row_and_column_metadata_owners() {
+        for spreadsheet_namespace in [
+            "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
+            "http://purl.oclc.org/ooxml/spreadsheetml/main",
+        ] {
+            let worksheet_xml = format!(
+                r#"<s:worksheet xmlns:s="{spreadsheet_namespace}" xmlns:f="urn:foreign">
+  <s:cols>
+    <s:col min="2" max="3" width="12" customWidth="1"/>
+    <f:col min="4" max="5" width="13"/>
+    <s:ext><s:col min="6" max="7" width="14"/></s:ext>
+  </s:cols>
+  <s:sheetData>
+    <s:row r="4" ht="24" customHeight="1"><s:c r="A4"><s:v>4</s:v></s:c></s:row>
+    <s:row r="5"><s:c r="A5"><s:v>5</s:v></s:c><s:extLst><s:ext uri="urn:row"/></s:extLst></s:row>
+    <s:row r="6"><s:c r="A6"><s:v>6</s:v></s:c></s:row>
+    <f:row r="7" hidden="1"/>
+  </s:sheetData>
+</s:worksheet>"#,
+            );
+
+            let parsed = parse_worksheet_cells(
+                worksheet_xml.as_bytes(),
+                &[],
+                spreadsheet_namespace,
+                "/xl/worksheets/sheet1.xml",
+            )
+            .expect("worksheet row/column metadata inventory");
+
+            assert_eq!(
+                parsed.structural_owners.row_metadata_ranges,
+                vec![
+                    Rect {
+                        row_first: 4,
+                        row_last: 4,
+                        col_first: 1,
+                        col_last: ExcelLimits::MAX_COLUMN_INDEX,
+                    },
+                    Rect {
+                        row_first: 5,
+                        row_last: 5,
+                        col_first: 1,
+                        col_last: ExcelLimits::MAX_COLUMN_INDEX,
+                    },
+                ],
+                "{spreadsheet_namespace}",
+            );
+            assert_eq!(
+                parsed.structural_owners.column_metadata_ranges,
+                vec![Rect {
+                    row_first: 1,
+                    row_last: ExcelLimits::MAX_ROW_INDEX,
+                    col_first: 2,
+                    col_last: 3,
+                }],
+                "{spreadsheet_namespace}",
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_column_metadata_owner_ranges_fail_closed() {
+        for column in [
+            r#"<col max="2"/>"#,
+            r#"<col min="1"/>"#,
+            r#"<col min="0" max="2"/>"#,
+            r#"<col min="1" max="16385"/>"#,
+            r#"<col min="5" max="4"/>"#,
+            r#"<col min="column" max="4"/>"#,
+        ] {
+            let worksheet_xml = format!(
+                r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <cols>{column}</cols><sheetData/>
+</worksheet>"#,
+            );
+
+            let error = parse_worksheet_cells(
+                worksheet_xml.as_bytes(),
+                &[],
+                "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
+                "/xl/worksheets/sheet1.xml",
+            )
+            .expect_err("invalid column metadata range must fail closed");
+
+            assert_eq!(error.code, OmErrorCode::Parse, "{column}: {error:?}");
+            assert!(
+                error.message.contains("/xl/worksheets/sheet1.xml"),
+                "{column}: {error:?}",
             );
         }
     }
