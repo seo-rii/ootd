@@ -235,6 +235,13 @@ is deliberately workbook-wide until a common reference AST can resolve owner she
 intersection safely; reference-free cell formulas and A1-family defined-name constants remain
 eligible and retain their exact payload.
 
+Loaded worksheet `mergeCells` metadata is separately parsed by expanded name into bounded `Rect`
+owners. The model compares those ranges with the exact up/down or left/right shift corridor on the
+target worksheet. An intersection returns stable `Unsupported` with sheet and range coordinates
+before spill or cell planning; a merge on another sheet or outside the corridor remains eligible,
+and an unrelated Insert preserves the merge inventory across save/reopen. Missing, out-of-grid, or
+inverted `mergeCell@ref` values fail during load instead of becoming an ambiguous owner.
+
 The command then rejects any geometric intersection between the complete corridor and a
 dynamic-array anchor, materialized owner, or spill range. This includes a spill child with no cached
 `CellData`. It snapshots only stored cells in the corridor, clears every source coordinate in a
@@ -246,10 +253,11 @@ preserves reference-free formula text and cache through synthetic save/reopen; t
 carries the complete `CellData`, including style identity.
 
 This is deliberately a cell-payload atomicity boundary, not complete Excel structural-edit parity.
-Direct A1/R1C1 cell-formula and defined-name references are fail-closed rather than retargeted.
-Tables, validation, charts, drawings, merged cells, and raw row/column metadata are not yet
-inventoried or retargeted by this command. Those owners remain part of the common reference and typed
-worksheet-metadata follow-up, and no desktop Excel Oracle claim is attached to the current behavior.
+Direct A1/R1C1 cell-formula and defined-name references plus intersecting merged-cell ranges are
+fail-closed rather than retargeted. Tables, validation, charts, drawings, and raw row/column metadata
+are not yet inventoried or retargeted by this command. Those owners remain part of the common
+reference and typed worksheet-metadata follow-up, and no desktop Excel Oracle claim is attached to
+the current behavior.
 
 ### Worksheet-data ownership map
 

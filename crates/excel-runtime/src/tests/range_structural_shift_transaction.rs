@@ -400,6 +400,121 @@ fn range_structural_shifts_fail_closed_for_reference_defined_names_atomically() 
 }
 
 #[test]
+fn range_structural_shifts_reject_intersecting_merged_cells_atomically() {
+    let mut package = OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("base package");
+    let source_xml = String::from_utf8(
+        package
+            .part("xl/worksheets/sheet1.xml")
+            .expect("source worksheet")
+            .bytes
+            .clone(),
+    )
+    .expect("worksheet utf8");
+    let merged_xml = source_xml.replace(
+        "</sheetData>",
+        "</sheetData>\n  <mergeCells count=\"1\"><mergeCell ref=\"D4:E5\"/></mergeCells>",
+    );
+    assert_ne!(merged_xml, source_xml, "merge fixture replacement");
+    package
+        .replace_part_bytes("xl/worksheets/sheet1.xml", merged_xml.into_bytes())
+        .expect("replace worksheet");
+    let input = package.to_bytes().expect("merged workbook bytes");
+
+    for (member, target_address, shift, label) in [
+        (
+            "Insert",
+            "D1:E1",
+            XL_SHIFT_DOWN,
+            "insert corridor through merged range",
+        ),
+        (
+            "Delete",
+            "D4:E4",
+            XL_SHIFT_UP,
+            "delete corridor through merged range",
+        ),
+    ] {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: input.clone(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .unwrap_or_else(|error| panic!("{label}: open: {error:?}"));
+        let worksheet = worksheet_handle(&mut runtime, workbook);
+        let target = range_handle(&mut runtime, worksheet, target_address);
+
+        assert_structural_failure_is_atomic(
+            &mut runtime,
+            workbook,
+            target,
+            member,
+            shift,
+            OmErrorCode::Unsupported,
+            &[
+                "structural merged-cell retarget",
+                "worksheet 1",
+                "R4C4:R5C5",
+            ],
+            label,
+        );
+    }
+
+    let mut runtime = ExcelRuntime::new();
+    let workbook = runtime
+        .open_workbook(OpenWorkbookSpec {
+            bytes: input,
+            format_hint: Some(FileFormat::Xlsx),
+            profile: ExcelProfile::Excel365,
+            read_only: false,
+        })
+        .expect("open non-intersecting merge fixture");
+    let worksheet = worksheet_handle(&mut runtime, workbook);
+    let target = range_handle(&mut runtime, worksheet, "A1");
+    runtime
+        .dispatch_invoke(
+            target,
+            "Insert",
+            &[OmValue::Number(f64::from(XL_SHIFT_DOWN))],
+        )
+        .expect("non-intersecting merged range must remain eligible");
+
+    let mut saved = Vec::new();
+    runtime
+        .save_workbook_to_writer(
+            workbook,
+            SaveWorkbookSpec {
+                format: FileFormat::Xlsx,
+                profile: ExcelProfile::Excel365,
+                lossless: true,
+            },
+            &mut saved,
+        )
+        .expect("save non-intersecting merged range shift");
+    let reopened = runtime
+        .codec
+        .load(&saved, LoadOptions::default())
+        .expect("reopen non-intersecting merged range shift");
+    let reopened_sheet_id = reopened.state.worksheets()[0].id;
+    assert_eq!(
+        reopened
+            .state
+            .worksheet_data_for_sheet(reopened_sheet_id)
+            .expect("reopened worksheet data")
+            .structural_owners
+            .merged_ranges,
+        vec![Rect {
+            row_first: 4,
+            row_last: 5,
+            col_first: 4,
+            col_last: 5,
+        }],
+    );
+}
+
+#[test]
 fn range_structural_multilane_insert_commits_and_reopens() {
     let mut runtime = ExcelRuntime::new();
     let workbook = open_clean_workbook(&mut runtime);

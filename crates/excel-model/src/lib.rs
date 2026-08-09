@@ -54,6 +54,12 @@ pub struct WorksheetData {
     pub dynamic_array_formulas: BTreeSet<(u32, u32)>,
     pub spill_ranges: BTreeMap<(u32, u32), Rect>,
     pub spill_owners: BTreeMap<(u32, u32), (u32, u32)>,
+    pub structural_owners: WorksheetStructuralOwners,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct WorksheetStructuralOwners {
+    pub merged_ranges: Vec<Rect>,
 }
 
 impl WorksheetData {
@@ -1448,6 +1454,26 @@ impl WorkbookState {
             },
         };
         let worksheet = self.worksheet_data_for_sheet(sheet_id)?;
+        if let Some(merged_range) = worksheet
+            .structural_owners
+            .merged_ranges
+            .iter()
+            .find(|range| {
+                affected_rect.row_first <= range.row_last
+                    && range.row_first <= affected_rect.row_last
+                    && affected_rect.col_first <= range.col_last
+                    && range.col_first <= affected_rect.col_last
+            })
+        {
+            return Err(OmError::unsupported(format!(
+                "Range.{member} structural merged-cell retarget is not implemented for worksheet {} range R{}C{}:R{}C{}",
+                sheet_id.0,
+                merged_range.row_first,
+                merged_range.col_first,
+                merged_range.row_last,
+                merged_range.col_last,
+            )));
+        }
         let mut protected_keys = Vec::new();
         for spill_range in worksheet.spill_ranges.values() {
             if affected_rect.row_first <= spill_range.row_last
@@ -1870,7 +1896,7 @@ mod tests {
     use super::{
         CellData, CellShiftDirection, ChartModel, ChartObjectModel, ChartSheetBinding,
         ChartSourceExpr, ChartType, DefinedNameTable, DrawingModel, DrawingObjectModel,
-        SeriesModel, WorkbookState, WorkbookStateParts, WorksheetData,
+        SeriesModel, WorkbookState, WorkbookStateParts, WorksheetData, WorksheetStructuralOwners,
     };
     use std::collections::{BTreeMap, BTreeSet};
 
@@ -2245,6 +2271,69 @@ mod tests {
                 .refers_to
                 .text,
             r#""A1""#,
+        );
+    }
+
+    #[test]
+    fn structural_cell_shifts_reject_only_intersecting_merged_ranges() {
+        let merged_range = Rect {
+            row_first: 4,
+            row_last: 5,
+            col_first: 4,
+            col_last: 5,
+        };
+        let mut blocked = sample_state();
+        blocked
+            .worksheet_data_for_sheet_mut(SheetId(3))
+            .expect("worksheet data")
+            .structural_owners = WorksheetStructuralOwners {
+            merged_ranges: vec![merged_range],
+        };
+        let before = blocked.clone();
+
+        let error = blocked
+            .shift_cells_with_change(
+                SheetId(3),
+                Rect {
+                    row_first: 1,
+                    row_last: 1,
+                    col_first: 4,
+                    col_last: 5,
+                },
+                CellShiftDirection::Down,
+            )
+            .expect_err("intersecting merged range must fail closed");
+
+        assert_eq!(error.code, OmErrorCode::Unsupported);
+        assert_eq!(
+            error.message,
+            "Range.Insert structural merged-cell retarget is not implemented for worksheet 3 range R4C4:R5C5",
+        );
+        assert_eq!(blocked, before);
+
+        let mut allowed = sample_state();
+        allowed
+            .worksheet_data_for_sheet_mut(SheetId(3))
+            .expect("worksheet data")
+            .structural_owners = WorksheetStructuralOwners {
+            merged_ranges: vec![merged_range],
+        };
+        assert!(
+            allowed
+                .shift_cells_with_change(
+                    SheetId(3),
+                    Rect::single_cell(1, 1),
+                    CellShiftDirection::Down,
+                )
+                .expect("non-intersecting merged range must remain eligible"),
+        );
+        assert_eq!(
+            allowed
+                .worksheet_data_for_sheet(SheetId(3))
+                .expect("worksheet data after shift")
+                .structural_owners
+                .merged_ranges,
+            vec![merged_range],
         );
     }
 

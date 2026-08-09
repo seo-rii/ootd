@@ -534,8 +534,15 @@ Wave 2 exit gate:
    workbook/dirty/session 불변을 고정하고, A1-family reference-free constant name은 기존
    structural shift와 save/reopen에서 그대로 보존된다. `excel-model` 115개와
    `excel-runtime` 772개 회귀가 통과한다.
-   **다음:** `ARCH-024` table/validation/merged-cell/raw row-column metadata owner inventory를
-   실제 model/support 표면별로 분리해 fail-closed 경계를 닫는다.
+   `ARCH-024` merged-cell owner 3a단계 완료 (2026-08-09, synthetic): worksheet
+   `mergeCells/mergeCell@ref`를 namespace URI/local-name과 direct-parent depth로 읽어 bounded
+   `Rect` inventory에 올린다. foreign/nested same-local node는 무시하고 missing/out-of-grid/
+   inverted ref는 part URI가 있는 parse error로 거절한다. Insert/Delete의 실제 shift corridor와
+   교차하는 merge만 scope/range-bearing `Unsupported`로 preflight하며 workbook/dirty/session을
+   보존한다. 비교차 merge는 Insert와 save/reopen 뒤에도 유지된다. `excel-model` 116개,
+   `excel-runtime` 773개, `excel-xlsx` 2,923개 회귀가 통과한다.
+   **다음:** `ARCH-024` table/validation/raw row-column metadata owner inventory를 실제
+   model/support 표면별로 분리해 fail-closed 경계를 닫는다.
 16. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
    structured error에 추가한다.
 

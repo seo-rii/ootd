@@ -3010,6 +3010,63 @@
     }
 
     #[test]
+    fn parses_qname_aware_merged_cell_structural_owners() {
+        let parsed = parse_worksheet_cells(
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+ xmlns:x="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+ xmlns:f="urn:foreign">
+  <sheetData/>
+  <x:mergeCells count="1"><x:mergeCell ref="$D$4:$E$5"/></x:mergeCells>
+  <extLst><ext uri="urn:test"><f:mergeCells><f:mergeCell ref="A1:XFD1048576"/></f:mergeCells></ext></extLst>
+</worksheet>"#,
+            &[],
+            "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
+            "/xl/worksheets/sheet1.xml",
+        )
+        .expect("worksheet merge inventory");
+
+        assert_eq!(
+            parsed.structural_owners.merged_ranges,
+            vec![Rect {
+                row_first: 4,
+                row_last: 5,
+                col_first: 4,
+                col_last: 5,
+            }],
+        );
+    }
+
+    #[test]
+    fn invalid_merged_cell_structural_owner_ranges_fail_closed() {
+        for merge_cell in [
+            r#"<mergeCell/>"#,
+            r#"<mergeCell ref="XFE1:XFE2"/>"#,
+            r#"<mergeCell ref="E5:D4"/>"#,
+        ] {
+            let worksheet_xml = format!(
+                r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData/><mergeCells count="1">{merge_cell}</mergeCells>
+</worksheet>"#,
+            );
+
+            let error = parse_worksheet_cells(
+                worksheet_xml.as_bytes(),
+                &[],
+                "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
+                "/xl/worksheets/sheet1.xml",
+            )
+            .expect_err("invalid merged-cell metadata must fail closed");
+
+            assert_eq!(error.code, OmErrorCode::Parse, "{merge_cell}");
+            assert!(
+                error.message.contains("/xl/worksheets/sheet1.xml"),
+                "{merge_cell}: {error:?}",
+            );
+        }
+    }
+
+    #[test]
     fn non_finite_worksheet_numbers_fail_parse_and_rewrite_boundaries() {
         for lexical in ["NaN", "inf", "-inf"] {
             let worksheet_xml = format!(

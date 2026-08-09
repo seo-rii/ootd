@@ -4,7 +4,7 @@ use super::super::{
     xml_error,
 };
 
-use excel_model::{CellData, WorksheetData};
+use excel_model::{CellData, WorksheetData, WorksheetStructuralOwners};
 use office_common::{
     CellError, CellValue, ExcelLimits, FormulaSource, OmError, OmErrorCode, OmResult, Rect, StyleId,
 };
@@ -630,11 +630,119 @@ pub(crate) fn parse_worksheet_cells(
         }
     }
 
+    let parse_merged_range =
+        |element: &BytesStart<'_>, decoder: quick_xml::encoding::Decoder| -> OmResult<Rect> {
+            let mut reference = None;
+            for attr in element.attributes() {
+                let attr = attr.map_err(xml_error)?;
+                if attr.key.as_ref() == b"ref" {
+                    reference = Some(
+                        attr.decode_and_unescape_value(decoder)
+                            .map_err(xml_error)?
+                            .into_owned(),
+                    );
+                }
+            }
+            let reference = reference.ok_or_else(|| {
+                OmError::parse(format!(
+                    "{worksheet_part_uri}: worksheet mergeCell is missing an A1 range reference"
+                ))
+            })?;
+            let normalized = reference.replace('$', "");
+            let (first, last) = normalized.split_once(':').map_or(
+                (normalized.as_str(), normalized.as_str()),
+                |(first, last)| (first, last),
+            );
+            let (row_first, col_first) = parse_cell_reference(first, None).map_err(|error| {
+                OmError::new(
+                    error.code,
+                    format!("{worksheet_part_uri}: {}", error.message),
+                )
+            })?;
+            let (row_last, col_last) = parse_cell_reference(last, None).map_err(|error| {
+                OmError::new(
+                    error.code,
+                    format!("{worksheet_part_uri}: {}", error.message),
+                )
+            })?;
+            if row_first > row_last || col_first > col_last {
+                return Err(OmError::parse(format!(
+                    "{worksheet_part_uri}: invalid merged-cell range: {reference}"
+                )));
+            }
+            Ok(Rect {
+                row_first,
+                row_last,
+                col_first,
+                col_last,
+            })
+        };
+    let mut metadata_reader = NsReader::from_reader(Cursor::new(worksheet_xml));
+    metadata_reader.config_mut().trim_text(false);
+    let mut metadata_buffer = Vec::new();
+    let mut element_depth = 0usize;
+    let mut merge_cells_depth = None;
+    let mut merged_ranges = Vec::new();
+    loop {
+        match metadata_reader.read_resolved_event_into(&mut metadata_buffer) {
+            Ok((namespace, Event::Start(element))) => {
+                let is_merge_cells = resolved_element_is(
+                    &namespace,
+                    element.local_name(),
+                    spreadsheet_namespace.as_bytes(),
+                    b"mergeCells",
+                );
+                if element_depth == 1 && is_merge_cells {
+                    merge_cells_depth = Some(element_depth + 1);
+                } else if merge_cells_depth == Some(element_depth)
+                    && resolved_element_is(
+                        &namespace,
+                        element.local_name(),
+                        spreadsheet_namespace.as_bytes(),
+                        b"mergeCell",
+                    )
+                {
+                    merged_ranges.push(parse_merged_range(&element, metadata_reader.decoder())?);
+                }
+                element_depth += 1;
+            }
+            Ok((namespace, Event::Empty(element)))
+                if merge_cells_depth == Some(element_depth)
+                    && resolved_element_is(
+                        &namespace,
+                        element.local_name(),
+                        spreadsheet_namespace.as_bytes(),
+                        b"mergeCell",
+                    ) =>
+            {
+                merged_ranges.push(parse_merged_range(&element, metadata_reader.decoder())?);
+            }
+            Ok((namespace, Event::End(element))) => {
+                if merge_cells_depth == Some(element_depth)
+                    && resolved_element_is(
+                        &namespace,
+                        element.local_name(),
+                        spreadsheet_namespace.as_bytes(),
+                        b"mergeCells",
+                    )
+                {
+                    merge_cells_depth = None;
+                }
+                element_depth = element_depth.saturating_sub(1);
+            }
+            Ok((_, Event::Eof)) => break,
+            Ok(_) => {}
+            Err(error) => return Err(xml_error(error)),
+        }
+        metadata_buffer.clear();
+    }
+
     Ok(ParsedWorksheetCells {
         cells,
         dynamic_array_formulas,
         spill_ranges,
         spill_owners,
+        structural_owners: WorksheetStructuralOwners { merged_ranges },
     })
 }
 
@@ -644,6 +752,7 @@ pub(crate) struct ParsedWorksheetCells {
     pub(crate) dynamic_array_formulas: BTreeSet<(u32, u32)>,
     pub(crate) spill_ranges: BTreeMap<(u32, u32), Rect>,
     pub(crate) spill_owners: BTreeMap<(u32, u32), (u32, u32)>,
+    pub(crate) structural_owners: WorksheetStructuralOwners,
 }
 
 pub(crate) fn rewrite_worksheet_xml(

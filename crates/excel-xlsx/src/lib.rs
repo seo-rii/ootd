@@ -1690,6 +1690,7 @@ impl XlsxCodec {
                             dynamic_array_formulas: parsed_cells.dynamic_array_formulas,
                             spill_ranges: parsed_cells.spill_ranges,
                             spill_owners: parsed_cells.spill_owners,
+                            structural_owners: parsed_cells.structural_owners,
                         },
                     );
                     worksheet_support_parts.insert(
