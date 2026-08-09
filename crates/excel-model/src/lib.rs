@@ -542,6 +542,17 @@ impl WorkbookState {
                     format!("worksheet data references unknown worksheet {}", sheet_id.0),
                 ));
             }
+            for (&(row, col), cell) in &worksheet.cells {
+                if cell.value.validate().is_err() {
+                    return Err(OmError::new(
+                        OmErrorCode::InvalidState,
+                        format!(
+                            "worksheet {} cell R{}C{} numeric value must be finite",
+                            sheet_id.0, row, col
+                        ),
+                    ));
+                }
+            }
             for &anchor in &worksheet.dynamic_array_formulas {
                 if worksheet
                     .cells
@@ -805,6 +816,7 @@ impl WorkbookState {
         cell: CellData,
     ) -> OmResult<()> {
         ExcelLimits::validate_cell(row, col)?;
+        cell.value.validate()?;
         let worksheet = self.worksheet_data_for_sheet_mut(sheet_id)?;
         worksheet.cells.insert((row, col), cell);
         worksheet.dirty = true;
@@ -1614,6 +1626,9 @@ impl WorkbookState {
         let mut updates = Vec::with_capacity(replacements.len());
         for (key, replacement) in replacements {
             ExcelLimits::validate_cell(key.0, key.1)?;
+            if let Some(cell) = &replacement {
+                cell.value.validate()?;
+            }
             if worksheet.cells.get(&key) != replacement.as_ref() {
                 updates.push((key, replacement));
             }
@@ -2043,6 +2058,52 @@ mod tests {
         sample_state()
             .validate_for_save()
             .expect("consistent workbook state");
+    }
+
+    #[test]
+    fn non_finite_cell_values_fail_model_mutation_and_save_boundaries() {
+        for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let invalid_cell = CellData {
+                value: CellValue::Number(value),
+                formula: None,
+                style_id: None,
+            };
+
+            let mut insert_state = sample_state();
+            let insert_before = insert_state.clone();
+            let insert_error = insert_state
+                .insert_cell(SheetId(3), 5, 5, invalid_cell.clone())
+                .expect_err("insert_cell must reject a non-finite number");
+            assert_eq!(insert_error.code, OmErrorCode::InvalidArgument);
+            assert_eq!(insert_state, insert_before);
+
+            let mut batch_state = sample_state();
+            let batch_before = batch_state.clone();
+            let batch_error = batch_state
+                .copy_cells_with_change(
+                    SheetId(3),
+                    BTreeMap::from([((5, 5), Some(invalid_cell.clone()))]),
+                )
+                .expect_err("cell batch must reject a non-finite number");
+            assert_eq!(batch_error.code, OmErrorCode::InvalidArgument);
+            assert_eq!(batch_state, batch_before);
+
+            let mut invalid_state = sample_state();
+            invalid_state
+                .worksheet_data
+                .get_mut(&SheetId(3))
+                .expect("worksheet data")
+                .cells
+                .insert((5, 5), invalid_cell);
+            let save_error = invalid_state
+                .validate_for_save()
+                .expect_err("save preflight must reject a non-finite number");
+            assert_eq!(save_error.code, OmErrorCode::InvalidState);
+            assert_eq!(
+                save_error.message,
+                "worksheet 3 cell R5C5 numeric value must be finite"
+            );
+        }
     }
 
     #[test]

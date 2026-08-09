@@ -13801,21 +13801,15 @@ impl ExcelRuntime {
                                                             "Range.PasteSpecial Operation requires numeric source values",
                                                         ));
                                                     };
-                                                    next_cell.value = match operation {
+                                                    let result = match operation {
                                                         XL_PASTE_SPECIAL_OPERATION_ADD => {
-                                                            CellValue::Number(
-                                                                destination_value + source_value,
-                                                            )
+                                                            destination_value + source_value
                                                         }
                                                         XL_PASTE_SPECIAL_OPERATION_SUBTRACT => {
-                                                            CellValue::Number(
-                                                                destination_value - source_value,
-                                                            )
+                                                            destination_value - source_value
                                                         }
                                                         XL_PASTE_SPECIAL_OPERATION_MULTIPLY => {
-                                                            CellValue::Number(
-                                                                destination_value * source_value,
-                                                            )
+                                                            destination_value * source_value
                                                         }
                                                         XL_PASTE_SPECIAL_OPERATION_DIVIDE => {
                                                             if source_value == 0.0 {
@@ -13825,14 +13819,18 @@ impl ExcelRuntime {
                                                                     ),
                                                                 );
                                                             }
-                                                            CellValue::Number(
-                                                                destination_value / source_value,
-                                                            )
+                                                            destination_value / source_value
                                                         }
                                                         _ => unreachable!(
                                                             "unsupported operation was rejected"
                                                         ),
                                                     };
+                                                    next_cell.value =
+                                                        CellValue::try_number(result).map_err(|_| {
+                                                            OmError::invalid_argument(
+                                                                "Range.PasteSpecial Operation result must be finite",
+                                                            )
+                                                        })?;
                                                     next_cell.formula = None;
                                                     if matches!(
                                                         paste_type,

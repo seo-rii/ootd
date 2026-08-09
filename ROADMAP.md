@@ -286,9 +286,14 @@ Active order:
    selectors that previously discarded their format meaning now return named stable `Unsupported`
    before clipboard or owner-state handling. Together with the four metadata-only selectors, the
    Copy/Cut, writable/read-only, and no-clipboard matrix preserves both workbook snapshots, dirty
-   domains, and the complete runtime session. **Active:** close `OOTD-023` non-finite cell-number
-   boundaries before resuming the queued `WorksheetData` payload closure.
-39. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
+   domains, and the complete runtime session.
+39. `OOTD-023` is complete (2026-08-09, synthetic): non-finite numbers are rejected by common
+   cell coercion, direct/batch model mutations, save preflight, worksheet parse/rewrite, and
+   `Range.PasteSpecial` arithmetic-result planning. NaN/positive/negative infinity and a late
+   multiplication-overflow regression preserve workbook, dirty, and session state before any live
+   commit. **Active:** close `ARCH-024` structural reference/raw-metadata retarget boundaries in
+   independently reviewable owner families.
+40. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
    claiming practical chart/pivot/style parity.
 
 Every numbered work unit starts with a failing regression and lands as its own reviewable commit.

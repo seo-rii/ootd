@@ -557,7 +557,15 @@ pub(crate) fn parse_worksheet_cells(
                         Some("str") => CellValue::Text(value),
                         Some("inlineStr") => CellValue::Text(inline),
                         _ if value.is_empty() => CellValue::Blank,
-                        _ => CellValue::Number(value.parse::<f64>().map_err(xml_error)?),
+                        _ => {
+                            let number = value.parse::<f64>().map_err(xml_error)?;
+                            CellValue::try_number(number).map_err(|_| {
+                                OmError::parse(format!(
+                                    "{worksheet_part_uri}: cell {} numeric value must be finite",
+                                    cell_reference(row, col)
+                                ))
+                            })?
+                        }
                     };
                     if !matches!(cell_value, CellValue::Blank)
                         || !formula.is_empty()
@@ -648,6 +656,14 @@ pub(crate) fn rewrite_worksheet_xml(
             OmErrorCode::InvalidState,
             "worksheet source xml is missing",
         ));
+    }
+    for (&(row, col), cell) in &worksheet.cells {
+        if cell.value.validate().is_err() {
+            return Err(OmError::invalid_state(format!(
+                "worksheet cell {} numeric value must be finite",
+                cell_reference(row, col)
+            )));
+        }
     }
 
     let mut row_templates = BTreeMap::<u32, Vec<(String, String)>>::new();

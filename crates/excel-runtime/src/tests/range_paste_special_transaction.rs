@@ -1,7 +1,8 @@
 use super::*;
 use crate::{
     XL_COPY, XL_CUT, XL_PASTE_COLUMN_WIDTHS, XL_PASTE_COMMENTS, XL_PASTE_SPECIAL_OPERATION_ADD,
-    XL_PASTE_SPECIAL_OPERATION_DIVIDE, XL_PASTE_VALIDATION, XL_PASTE_VALUES,
+    XL_PASTE_SPECIAL_OPERATION_DIVIDE, XL_PASTE_SPECIAL_OPERATION_MULTIPLY, XL_PASTE_VALIDATION,
+    XL_PASTE_VALUES,
 };
 
 fn open_clean_workbook(runtime: &mut ExcelRuntime) -> WorkbookHandle {
@@ -420,6 +421,75 @@ fn range_custom_paste_special_cross_workbook_late_divide_by_zero_is_atomic() {
         OmErrorCode::InvalidArgument,
         "cannot divide by zero",
         "cross-workbook late divide by zero",
+    );
+}
+
+#[test]
+fn range_non_finite_numbers_are_rejected_before_cell_commit() {
+    for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = open_clean_workbook(&mut runtime);
+        let worksheet = worksheet_handle(&mut runtime, workbook);
+        let target = range_handle(&mut runtime, worksheet, "A70");
+        let workbook_before = runtime_workbook_persistence_snapshot(&runtime, workbook);
+        let dirty_before = runtime
+            .workbook_dirty_domains(workbook)
+            .expect("dirty domains before non-finite assignment");
+        let session_before = runtime_session_mutation_snapshot(&runtime);
+
+        let error = runtime
+            .dispatch_set(target, "Value2", OmValue::Number(value), &[])
+            .expect_err("Range.Value2 must reject a non-finite number");
+
+        assert_eq!(error.code, OmErrorCode::InvalidArgument);
+        assert_eq!(error.message, "worksheet cell numeric value must be finite");
+        assert_eq!(
+            runtime_workbook_persistence_snapshot(&runtime, workbook),
+            workbook_before,
+        );
+        assert_eq!(
+            runtime
+                .workbook_dirty_domains(workbook)
+                .expect("dirty domains after non-finite assignment"),
+            dirty_before,
+        );
+        assert_eq!(runtime_session_mutation_snapshot(&runtime), session_before);
+    }
+
+    let label = "late PasteSpecial multiplication overflow";
+    let mut runtime = ExcelRuntime::new();
+    let workbook = open_clean_workbook(&mut runtime);
+    let worksheet = worksheet_handle(&mut runtime, workbook);
+    let source = range_handle(&mut runtime, worksheet, "A70:B70");
+    let destination = range_handle(&mut runtime, worksheet, "D70:E70");
+    set_row_values(
+        &mut runtime,
+        source,
+        vec![OmValue::Number(2.0), OmValue::Number(2.0)],
+        label,
+    );
+    set_row_values(
+        &mut runtime,
+        destination,
+        vec![OmValue::Number(10.0), OmValue::Number(f64::MAX)],
+        label,
+    );
+    commit_workbook_baseline(&mut runtime, workbook, label);
+
+    assert_custom_paste_failure_preserves_workbooks_and_session(
+        &mut runtime,
+        workbook,
+        workbook,
+        source,
+        destination,
+        "Copy",
+        &[
+            OmValue::Number(f64::from(XL_PASTE_VALUES)),
+            OmValue::Number(f64::from(XL_PASTE_SPECIAL_OPERATION_MULTIPLY)),
+        ],
+        OmErrorCode::InvalidArgument,
+        "Operation result must be finite",
+        label,
     );
 }
 

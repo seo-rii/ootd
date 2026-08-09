@@ -55,7 +55,7 @@ fn seed_non_finite_chart_paste_source(
                         OmValue::Number(10.0),
                         OmValue::Number(20.0),
                         OmValue::Number(30.0),
-                        OmValue::Number(f64::INFINITY),
+                        OmValue::Number(40.0),
                         OmValue::Number(50.0),
                         OmValue::Number(60.0),
                     ],
@@ -65,6 +65,26 @@ fn seed_non_finite_chart_paste_source(
             &[],
         )
         .unwrap_or_else(|error| panic!("{label}: seed source values: {error:?}"));
+    // Deliberately bypass the public finite-number boundary to fault-inject the later
+    // Series.Values validation path exercised by this transaction rollback test.
+    let (workbook, sheet_id) = match runtime
+        .runtime_object(worksheet)
+        .unwrap_or_else(|error| panic!("{label}: worksheet object: {error:?}"))
+    {
+        RuntimeObjectKind::Worksheet { workbook, sheet_id } => (workbook, sheet_id),
+        other => panic!("{label}: expected worksheet object, got {other:?}"),
+    };
+    runtime
+        .runtime_workbook_mut(workbook)
+        .unwrap_or_else(|error| panic!("{label}: runtime workbook: {error:?}"))
+        .loaded
+        .state
+        .worksheet_data_for_sheet_mut(sheet_id)
+        .unwrap_or_else(|error| panic!("{label}: worksheet data: {error:?}"))
+        .cells
+        .get_mut(&(3, 3))
+        .expect("seeded C3 source cell")
+        .value = CellValue::Number(f64::INFINITY);
     source
 }
 

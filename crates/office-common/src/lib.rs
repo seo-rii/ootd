@@ -199,6 +199,24 @@ pub enum CellValue {
     Error(CellError),
 }
 
+impl CellValue {
+    pub fn try_number(value: f64) -> OmResult<Self> {
+        if !value.is_finite() {
+            return Err(OmError::invalid_argument(
+                "worksheet cell numeric value must be finite",
+            ));
+        }
+        Ok(Self::Number(value))
+    }
+
+    pub fn validate(&self) -> OmResult<()> {
+        if let Self::Number(value) = self {
+            Self::try_number(*value)?;
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum OmValue {
     Missing,
@@ -266,7 +284,7 @@ impl TryFrom<OmValue> for CellValue {
         match value {
             OmValue::Missing | OmValue::Empty | OmValue::Null => Ok(CellValue::Blank),
             OmValue::Bool(value) => Ok(CellValue::Bool(value)),
-            OmValue::Number(value) => Ok(CellValue::Number(value)),
+            OmValue::Number(value) => CellValue::try_number(value),
             OmValue::Text(value) => Ok(CellValue::Text(value)),
             OmValue::Error(value) => Ok(CellValue::Error(value)),
             OmValue::Object(_) | OmValue::Array(_) => Err(OmError::type_mismatch(
@@ -843,6 +861,16 @@ mod tests {
         let restored = CellValue::try_from(om_value).expect("convert back to cell");
 
         assert_eq!(restored, value);
+    }
+
+    #[test]
+    fn non_finite_numbers_cannot_become_cell_values() {
+        for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let error = CellValue::try_from(OmValue::Number(value))
+                .expect_err("non-finite worksheet number must fail");
+            assert_eq!(error.code, OmErrorCode::InvalidArgument);
+            assert_eq!(error.message, "worksheet cell numeric value must be finite");
+        }
     }
 
     #[test]

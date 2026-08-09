@@ -3010,6 +3010,59 @@
     }
 
     #[test]
+    fn non_finite_worksheet_numbers_fail_parse_and_rewrite_boundaries() {
+        for lexical in ["NaN", "inf", "-inf"] {
+            let worksheet_xml = format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData><row r="1"><c r="A1"><v>{lexical}</v></c></row></sheetData>
+</worksheet>"#
+            );
+            let parse_error = parse_worksheet_cells(
+                worksheet_xml.as_bytes(),
+                &[],
+                "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
+                "/xl/worksheets/sheet1.xml",
+            )
+            .expect_err("non-finite worksheet numeric lexical must fail");
+            assert_eq!(parse_error.code, OmErrorCode::Parse, "{lexical}");
+            assert_eq!(
+                parse_error.message,
+                "/xl/worksheets/sheet1.xml: cell A1 numeric value must be finite",
+                "{lexical}",
+            );
+        }
+
+        for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let worksheet = WorksheetData {
+                cells: BTreeMap::from([(
+                    (1, 1),
+                    CellData {
+                        value: CellValue::Number(value),
+                        formula: None,
+                        style_id: None,
+                    },
+                )]),
+                source_xml: b"<worksheet/>".to_vec(),
+                dirty: true,
+                dirty_cells: BTreeSet::from([(1, 1)]),
+                ..WorksheetData::default()
+            };
+            let rewrite_error = rewrite_worksheet_xml(
+                &worksheet,
+                None,
+                "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
+            )
+            .expect_err("non-finite worksheet value must fail before serialization");
+            assert_eq!(rewrite_error.code, OmErrorCode::InvalidState);
+            assert_eq!(
+                rewrite_error.message,
+                "worksheet cell A1 numeric value must be finite"
+            );
+        }
+    }
+
+    #[test]
     fn parse_shared_strings_concatenates_rich_text_runs_and_cdata() {
         let shared_strings = parse_shared_strings(
             br#"<?xml version="1.0" encoding="UTF-8"?>

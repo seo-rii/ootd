@@ -512,8 +512,15 @@ Wave 2 exit gate:
    `xlPasteValuesAndNumberFormats`를 selector 이름이 포함된 stable `Unsupported`로 거절한다.
    다섯 selector와 기존 metadata-only 네 selector의 Copy/Cut, writable/read-only destination,
    clipboard 없음 회귀가 양쪽 workbook, dirty domain과 전체 session 불변을 고정한다.
-   `excel-runtime` 769개가 통과한다. **다음:** `OOTD-023` non-finite cell number 경계를 닫고
-   `WorksheetData` payload private 전환을 재개한다.
+   `excel-runtime` 769개가 통과한다.
+   `OOTD-023` 완료 (2026-08-09, synthetic): `CellValue::try_number`와 validation contract가
+   `NaN`/`±∞`를 거절하고, OM-to-cell coercion, direct/batch model mutation,
+   `WorkbookState::validate_for_save`, worksheet numeric lexical parse/rewrite 경계가 같은
+   invariant를 강제한다. `Range.PasteSpecial` arithmetic은 finite operands가 overflow한 결과도
+   replacement 계획 안에서 거절해 late-cell 실패가 workbook/dirty/session을 바꾸지 않는다.
+   `excel-model` 113개, `excel-runtime` 770개, `excel-xlsx` 2,921개 회귀가 통과한다.
+   **다음:** `ARCH-024` structural reference/raw-metadata retarget 경계를 owner inventory와
+   fail-closed preflight부터 단계적으로 닫는다.
 16. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
    structured error에 추가한다.
 
