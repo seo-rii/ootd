@@ -10,7 +10,9 @@ pub use name::{
     BuiltinName, DefinedName, DefinedNameId, DefinedNameKind, DefinedNameMetadata, NameKey,
     NameScope, NameValidationMode, canonicalize_excel_name,
 };
-pub use reference::{ExternalReference, RangeArea, RangeSet, ReferenceTarget};
+pub use reference::{
+    ExternalReference, RangeArea, RangeSet, ReferenceTarget, formula_contains_a1_reference,
+};
 
 pub type OmResult<T> = Result<T, OmError>;
 

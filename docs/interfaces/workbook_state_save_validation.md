@@ -227,21 +227,28 @@ compatibility gap.
 `WorkbookState::shift_cells_with_change` owns the cell-payload plan for `Range.Insert` and
 `Range.Delete`. Up/down shifts use the selected columns from the first selected row through the
 Excel row limit; left/right shifts use the selected rows from the first selected column through the
-column limit. Before diff filtering, the command rejects any geometric intersection between that
-complete corridor and a dynamic-array anchor, materialized owner, or spill range. This includes a
-spill child with no cached `CellData`. It then snapshots only stored cells in the corridor, clears
-every source coordinate in a final replacement map, and overlays Delete survivors or Insert
-targets. Every Insert target is bounds-checked before the one batch commit. Late row/column
-overflow, all four anchor/child intersections, and unmaterialized-child regressions require exact
+column limit. Before corridor planning, the command inventories formula owners across the workbook.
+Any R1C1 formula, or any A1 formula whose common lexical detector finds a bounded cell or whole-axis
+reference outside a quoted string, returns stable `Unsupported` before mutation. The check is
+deliberately workbook-wide until a common reference AST can resolve owner sheet and target
+intersection safely; reference-free formulas remain eligible to move as exact cell payloads.
+
+The command then rejects any geometric intersection between the complete corridor and a
+dynamic-array anchor, materialized owner, or spill range. This includes a spill child with no cached
+`CellData`. It snapshots only stored cells in the corridor, clears every source coordinate in a
+final replacement map, and overlays Delete survivors or Insert targets. Every Insert target is
+bounds-checked before the one batch commit. Late row/column overflow, all four anchor/child
+intersections, unmaterialized-child failures, and reference-formula preflight failures require exact
 workbook, dirty-domain, and Find/clipboard session rollback. A successful multi-lane Insert
-preserves moved formula text and cache through synthetic save/reopen; the replacement plan carries
-the complete `CellData`, including style identity.
+preserves reference-free formula text and cache through synthetic save/reopen; the replacement plan
+carries the complete `CellData`, including style identity.
 
 This is deliberately a cell-payload atomicity boundary, not complete Excel structural-edit parity.
-Formula references inside or outside the corridor, defined names, tables, validation, charts,
-drawings, merged cells, and raw row/column metadata are not retargeted by this command. Those
-owners remain part of the common reference and typed worksheet-metadata follow-up, and no desktop
-Excel Oracle claim is attached to the current behavior.
+Direct A1/R1C1 cell-formula references are fail-closed rather than retargeted. Defined names,
+tables, validation, charts, drawings, merged cells, and raw row/column metadata are not yet
+inventoried or retargeted by this command. Those owners remain part of the common reference and
+typed worksheet-metadata follow-up, and no desktop Excel Oracle claim is attached to the current
+behavior.
 
 ### Worksheet-data ownership map
 

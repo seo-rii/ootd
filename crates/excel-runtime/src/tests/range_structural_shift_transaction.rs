@@ -259,6 +259,56 @@ fn range_insert_rejects_unmaterialized_spill_intersection() {
 }
 
 #[test]
+fn range_structural_shifts_fail_closed_for_reference_formulas_atomically() {
+    for (member, target_address, shift, formula_address, formula_text, formula_cell, label) in [
+        (
+            "Insert",
+            "A1",
+            XL_SHIFT_DOWN,
+            "M50",
+            "=A2",
+            "R50C13",
+            "insert with external formula owner",
+        ),
+        (
+            "Delete",
+            "A1",
+            XL_SHIFT_TO_LEFT,
+            "M1",
+            "=A1",
+            "R1C13",
+            "delete with moved formula owner",
+        ),
+    ] {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = open_clean_workbook(&mut runtime);
+        let worksheet = worksheet_handle(&mut runtime, workbook);
+        let formula = range_handle(&mut runtime, worksheet, formula_address);
+        runtime
+            .dispatch_set(
+                formula,
+                "Formula",
+                OmValue::Text(formula_text.to_string()),
+                &[],
+            )
+            .unwrap_or_else(|error| panic!("{label}: seed formula: {error:?}"));
+        commit_workbook_baseline(&mut runtime, workbook, label);
+        let target = range_handle(&mut runtime, worksheet, target_address);
+
+        assert_structural_failure_is_atomic(
+            &mut runtime,
+            workbook,
+            target,
+            member,
+            shift,
+            OmErrorCode::Unsupported,
+            &["structural formula retarget", formula_cell],
+            label,
+        );
+    }
+}
+
+#[test]
 fn range_structural_multilane_insert_commits_and_reopens() {
     let mut runtime = ExcelRuntime::new();
     let workbook = open_clean_workbook(&mut runtime);

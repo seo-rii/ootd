@@ -291,9 +291,14 @@ Active order:
    cell coercion, direct/batch model mutations, save preflight, worksheet parse/rewrite, and
    `Range.PasteSpecial` arithmetic-result planning. NaN/positive/negative infinity and a late
    multiplication-overflow regression preserve workbook, dirty, and session state before any live
-   commit. **Active:** close `ARCH-024` structural reference/raw-metadata retarget boundaries in
-   independently reviewable owner families.
-40. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
+   commit.
+40. `ARCH-024` formula-owner stage 1 is complete (2026-08-09, synthetic): a common bounded A1
+   lexical detector skips quoted strings and non-reference tokens, while `Range.Insert`/`Delete`
+   rejects any workbook-owned A1-reference or R1C1 formula before corridor planning and live
+   mutation. Insert/Delete atomic regressions preserve workbook, dirty, and session snapshots;
+   reference-free formula payload shifts still save/reopen. **Active:** add the defined-name owner
+   inventory and fail-closed target-resolution boundary as the next independently reviewable stage.
+41. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
    claiming practical chart/pivot/style parity.
 
 Every numbered work unit starts with a failing regression and lands as its own reviewable commit.

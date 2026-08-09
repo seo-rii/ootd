@@ -4,7 +4,7 @@ use office_common::{
     CellValue, ChartId, DefinedName, DefinedNameId, DrawingId, ExcelLimits, FormulaSource,
     NameScope, NameValidationMode, OmArray, OmError, OmErrorCode, OmResult, OmValue, OpaquePart,
     RangeRef, RangeSet, Rect, ReferenceTarget, SheetId, SheetKind, SheetScope, SheetVisibility,
-    StyleId, WorkbookId, WorkbookModel, WorksheetModel,
+    StyleId, WorkbookId, WorkbookModel, WorksheetModel, formula_contains_a1_reference,
 };
 
 mod charts;
@@ -1403,6 +1403,22 @@ impl WorkbookState {
         direction: CellShiftDirection,
     ) -> OmResult<bool> {
         ExcelLimits::validate_rect(rect)?;
+        let (operation, member) = match direction {
+            CellShiftDirection::Up | CellShiftDirection::Left => ("delete", "Delete"),
+            CellShiftDirection::Down | CellShiftDirection::Right => ("insert", "Insert"),
+        };
+        for (&owner_sheet_id, owner) in &self.worksheet_data {
+            for (&(row, col), cell) in &owner.cells {
+                if let Some(formula) = &cell.formula
+                    && (formula.is_r1c1 || formula_contains_a1_reference(&formula.text))
+                {
+                    return Err(OmError::unsupported(format!(
+                        "Range.{member} structural formula retarget is not implemented for worksheet {} cell R{}C{}",
+                        owner_sheet_id.0, row, col
+                    )));
+                }
+            }
+        }
         let affected_rect = match direction {
             CellShiftDirection::Up | CellShiftDirection::Down => Rect {
                 row_first: rect.row_first,
@@ -1445,10 +1461,6 @@ impl WorkbookState {
                 protected_keys.push(child);
             }
         }
-        let operation = match direction {
-            CellShiftDirection::Up | CellShiftDirection::Left => "delete",
-            CellShiftDirection::Down | CellShiftDirection::Right => "insert",
-        };
         worksheet.ensure_spill_topology_is_not_modified(protected_keys, operation)?;
 
         let source_cells = worksheet
@@ -2103,6 +2115,46 @@ mod tests {
                 save_error.message,
                 "worksheet 3 cell R5C5 numeric value must be finite"
             );
+        }
+    }
+
+    #[test]
+    fn structural_cell_shifts_fail_closed_for_reference_formulas() {
+        for (formula_text, is_r1c1) in [("A1", false), ("R[-1]C", true)] {
+            let mut state = sample_state();
+            state
+                .worksheet_data
+                .get_mut(&SheetId(3))
+                .expect("worksheet data")
+                .cells
+                .insert(
+                    (10, 10),
+                    CellData {
+                        value: CellValue::Blank,
+                        formula: Some(FormulaSource {
+                            text: formula_text.to_string(),
+                            is_r1c1,
+                        }),
+                        style_id: None,
+                    },
+                );
+            let before = state.clone();
+
+            let error = state
+                .shift_cells_with_change(
+                    SheetId(3),
+                    Rect::single_cell(1, 1),
+                    CellShiftDirection::Down,
+                )
+                .expect_err("reference-bearing structural shift must fail closed");
+
+            assert_eq!(error.code, OmErrorCode::Unsupported, "{formula_text}");
+            assert_eq!(
+                error.message,
+                "Range.Insert structural formula retarget is not implemented for worksheet 3 cell R10C10",
+                "{formula_text}",
+            );
+            assert_eq!(state, before, "{formula_text}");
         }
     }
 

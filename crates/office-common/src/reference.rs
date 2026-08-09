@@ -5,6 +5,152 @@ use crate::{
     SheetScope, WorkbookId,
 };
 
+pub fn formula_contains_a1_reference(formula: &str) -> bool {
+    let bytes = formula.as_bytes();
+    let mut index = 0usize;
+    while index < bytes.len() {
+        if bytes[index] == b'"' {
+            index += 1;
+            while index < bytes.len() {
+                if bytes[index] == b'"' {
+                    index += 1;
+                    if index < bytes.len() && bytes[index] == b'"' {
+                        index += 1;
+                        continue;
+                    }
+                    break;
+                }
+                let ch = formula[index..]
+                    .chars()
+                    .next()
+                    .expect("valid formula character boundary");
+                index += ch.len_utf8();
+            }
+            continue;
+        }
+
+        let previous_is_boundary = formula[..index]
+            .chars()
+            .next_back()
+            .is_none_or(|ch| !ch.is_ascii_alphanumeric() && ch != '_' && ch != '.');
+        if previous_is_boundary
+            && (a1_cell_reference_end(formula, index).is_some()
+                || a1_axis_range_end(formula, index).is_some())
+        {
+            return true;
+        }
+
+        let ch = formula[index..]
+            .chars()
+            .next()
+            .expect("valid formula character boundary");
+        index += ch.len_utf8();
+    }
+    false
+}
+
+fn a1_cell_reference_end(formula: &str, start: usize) -> Option<usize> {
+    let bytes = formula.as_bytes();
+    let mut cursor = start;
+    if bytes.get(cursor) == Some(&b'$') {
+        cursor += 1;
+    }
+    let letters_start = cursor;
+    while cursor < bytes.len() && bytes[cursor].is_ascii_alphabetic() && cursor - letters_start < 3
+    {
+        cursor += 1;
+    }
+    if letters_start == cursor || bytes.get(cursor).is_some_and(u8::is_ascii_alphabetic) {
+        return None;
+    }
+    let column = formula[letters_start..cursor]
+        .bytes()
+        .try_fold(0u32, |column, byte| {
+            column
+                .checked_mul(26)?
+                .checked_add(u32::from(byte.to_ascii_uppercase() - b'A' + 1))
+        })?;
+    if column == 0 || column > ExcelLimits::MAX_COLUMN_INDEX {
+        return None;
+    }
+    if bytes.get(cursor) == Some(&b'$') {
+        cursor += 1;
+    }
+    let digits_start = cursor;
+    while cursor < bytes.len() && bytes[cursor].is_ascii_digit() {
+        cursor += 1;
+    }
+    if digits_start == cursor {
+        return None;
+    }
+    let row = formula[digits_start..cursor].parse::<u32>().ok()?;
+    if row == 0 || row > ExcelLimits::MAX_ROW_INDEX || !a1_reference_boundary(formula, cursor) {
+        return None;
+    }
+    Some(cursor)
+}
+
+fn a1_axis_range_end(formula: &str, start: usize) -> Option<usize> {
+    let bytes = formula.as_bytes();
+    for column_axis in [true, false] {
+        let parse_axis = |mut cursor: usize| -> Option<usize> {
+            if bytes.get(cursor) == Some(&b'$') {
+                cursor += 1;
+            }
+            let token_start = cursor;
+            if column_axis {
+                while cursor < bytes.len()
+                    && bytes[cursor].is_ascii_alphabetic()
+                    && cursor - token_start < 3
+                {
+                    cursor += 1;
+                }
+                if token_start == cursor || bytes.get(cursor).is_some_and(u8::is_ascii_alphabetic) {
+                    return None;
+                }
+                let column =
+                    formula[token_start..cursor]
+                        .bytes()
+                        .try_fold(0u32, |column, byte| {
+                            column
+                                .checked_mul(26)?
+                                .checked_add(u32::from(byte.to_ascii_uppercase() - b'A' + 1))
+                        })?;
+                (column > 0 && column <= ExcelLimits::MAX_COLUMN_INDEX).then_some(cursor)
+            } else {
+                while cursor < bytes.len() && bytes[cursor].is_ascii_digit() {
+                    cursor += 1;
+                }
+                if token_start == cursor {
+                    return None;
+                }
+                let row = formula[token_start..cursor].parse::<u32>().ok()?;
+                (row > 0 && row <= ExcelLimits::MAX_ROW_INDEX).then_some(cursor)
+            }
+        };
+        let Some(first_end) = parse_axis(start) else {
+            continue;
+        };
+        if bytes.get(first_end) != Some(&b':') {
+            continue;
+        }
+        let Some(second_end) = parse_axis(first_end + 1) else {
+            continue;
+        };
+        if a1_reference_boundary(formula, second_end) {
+            return Some(second_end);
+        }
+    }
+    None
+}
+
+fn a1_reference_boundary(formula: &str, index: usize) -> bool {
+    formula[index..]
+        .chars()
+        .next()
+        .is_none_or(|ch| !ch.is_ascii_alphanumeric() && ch != '_' && ch != '.' && ch != '(')
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RangeArea {
     pub scope: SheetScope,
@@ -161,7 +307,7 @@ pub enum ReferenceTarget {
 
 #[cfg(test)]
 mod tests {
-    use super::{RangeArea, RangeSet};
+    use super::{RangeArea, RangeSet, formula_contains_a1_reference};
     use crate::{ExcelLimits, OmErrorCode, RangeRef, Rect, SheetId, SheetScope, WorkbookId};
 
     #[test]
@@ -176,6 +322,32 @@ mod tests {
 
         assert_eq!(range.areas(), &[first, second]);
         assert!(range.is_multi_area());
+    }
+
+    #[test]
+    fn formula_a1_reference_detection_skips_text_and_function_names() {
+        for formula in [
+            "SUM(A1)",
+            "$A$1",
+            "'Sheet 1'!B2",
+            "A:A",
+            "$1:$3",
+            "[Book.xlsx]Sheet1!XFD1048576",
+            "A1#",
+            "A1:B2",
+        ] {
+            assert!(formula_contains_a1_reference(formula), "{formula}");
+        }
+        for formula in [
+            r#"UPPER("A1")"#,
+            "LOG10(100)",
+            "Named_Value",
+            "XFE1",
+            "A1048577",
+            "R[-1]C",
+        ] {
+            assert!(!formula_contains_a1_reference(formula), "{formula}");
+        }
     }
 
     #[test]

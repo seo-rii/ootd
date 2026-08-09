@@ -519,8 +519,16 @@ Wave 2 exit gate:
    invariant를 강제한다. `Range.PasteSpecial` arithmetic은 finite operands가 overflow한 결과도
    replacement 계획 안에서 거절해 late-cell 실패가 workbook/dirty/session을 바꾸지 않는다.
    `excel-model` 113개, `excel-runtime` 770개, `excel-xlsx` 2,921개 회귀가 통과한다.
-   **다음:** `ARCH-024` structural reference/raw-metadata retarget 경계를 owner inventory와
-   fail-closed preflight부터 단계적으로 닫는다.
+   `ARCH-024` formula-owner 1단계 완료 (2026-08-09, synthetic): common reference 계층의 bounded
+   A1 lexical detector가 quoted text와 function/name token을 건너뛰면서 cell/absolute/whole-axis
+   reference를 식별한다. structural shift command는 workbook 전체 cell formula inventory에서
+   A1 reference 또는 R1C1 family를 발견하면 corridor 계산과 live mutation 전에 stable
+   `Unsupported`로 거절한다. Insert/Delete runtime 회귀는 외부 owner와 이동 owner 모두에서
+   workbook/dirty/session snapshot 불변을 고정하고, reference-free formula payload의 기존
+   save/reopen 성공 경로도 유지한다. `office-common` 27개, `excel-model` 114개,
+   `excel-runtime` 771개 회귀가 통과한다.
+   **다음:** `ARCH-024` defined-name owner inventory와 target-resolution 전 fail-closed 경계를
+   같은 독립 작업 단위로 닫는다.
 16. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
    structured error에 추가한다.
 
