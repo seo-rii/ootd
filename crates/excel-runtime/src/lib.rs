@@ -15294,25 +15294,38 @@ impl ExcelRuntime {
                             }
                             let paste_type = *number as i32;
                             match paste_type {
-                                XL_PASTE_ALL
-                                | XL_PASTE_ALL_EXCEPT_BORDERS
+                                XL_PASTE_ALL | XL_PASTE_FORMULAS | XL_PASTE_VALUES => paste_type,
+                                XL_PASTE_ALL_EXCEPT_BORDERS
                                 | XL_PASTE_ALL_MERGING_CONDITIONAL_FORMATS
                                 | XL_PASTE_ALL_USING_SOURCE_THEME
-                                | XL_PASTE_FORMULAS
                                 | XL_PASTE_FORMULAS_AND_NUMBER_FORMATS
-                                | XL_PASTE_VALUES
-                                | XL_PASTE_VALUES_AND_NUMBER_FORMATS => paste_type,
-                                XL_PASTE_FORMATS
+                                | XL_PASTE_VALUES_AND_NUMBER_FORMATS
+                                | XL_PASTE_FORMATS
                                 | XL_PASTE_COLUMN_WIDTHS
                                 | XL_PASTE_COMMENTS
                                 | XL_PASTE_VALIDATION => {
                                     let paste_name = match paste_type {
+                                        XL_PASTE_ALL_EXCEPT_BORDERS => {
+                                            "xlPasteAllExceptBorders"
+                                        }
+                                        XL_PASTE_ALL_MERGING_CONDITIONAL_FORMATS => {
+                                            "xlPasteAllMergingConditionalFormats"
+                                        }
+                                        XL_PASTE_ALL_USING_SOURCE_THEME => {
+                                            "xlPasteAllUsingSourceTheme"
+                                        }
+                                        XL_PASTE_FORMULAS_AND_NUMBER_FORMATS => {
+                                            "xlPasteFormulasAndNumberFormats"
+                                        }
+                                        XL_PASTE_VALUES_AND_NUMBER_FORMATS => {
+                                            "xlPasteValuesAndNumberFormats"
+                                        }
                                         XL_PASTE_FORMATS => "xlPasteFormats",
                                         XL_PASTE_COLUMN_WIDTHS => "xlPasteColumnWidths",
                                         XL_PASTE_COMMENTS => "xlPasteComments",
                                         XL_PASTE_VALIDATION => "xlPasteValidation",
                                         _ => unreachable!(
-                                            "format/metadata-only chart paste match is exhaustive"
+                                            "unmodeled chart paste format match is exhaustive"
                                         ),
                                     };
                                     return Err(OmError::unsupported(format!(
@@ -15321,7 +15334,7 @@ impl ExcelRuntime {
                                 }
                                 _ => {
                                     return Err(OmError::invalid_argument(
-                                        "Chart.Paste Type supports all-like, xlPasteFormulas, xlPasteFormulasAndNumberFormats, xlPasteValues, and xlPasteValuesAndNumberFormats",
+                                        "Chart.Paste Type supports xlPasteAll, xlPasteFormulas, and xlPasteValues",
                                     ));
                                 }
                             }

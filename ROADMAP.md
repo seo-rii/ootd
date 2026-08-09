@@ -281,9 +281,14 @@ Active order:
    stable `Unsupported` before checking destination mutability or changing chart/workbook/session
    state. Same-workbook all/formulas/values and cross-workbook read-only destination regressions
    preserve both workbook snapshots, dirty domains, object registry/allocator, and the complete
-   Find/CutCopyMode/clipboard session. **Active:** close `BUG-009` partial-format semantics before
-   resuming the queued `WorksheetData` payload closure.
-38. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
+   Find/CutCopyMode/clipboard session.
+38. `BUG-009` is complete (2026-08-09, synthetic): five all-like/number-format `Chart.Paste`
+   selectors that previously discarded their format meaning now return named stable `Unsupported`
+   before clipboard or owner-state handling. Together with the four metadata-only selectors, the
+   Copy/Cut, writable/read-only, and no-clipboard matrix preserves both workbook snapshots, dirty
+   domains, and the complete runtime session. **Active:** close `OOTD-023` non-finite cell-number
+   boundaries before resuming the queued `WorksheetData` payload closure.
+39. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
    claiming practical chart/pivot/style parity.
 
 Every numbered work unit starts with a failing regression and lands as its own reviewable commit.

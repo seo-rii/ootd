@@ -1,8 +1,37 @@
 use super::*;
 use crate::{
-    XL_COPY, XL_CUT, XL_PASTE_ALL, XL_PASTE_COLUMN_WIDTHS, XL_PASTE_COMMENTS, XL_PASTE_FORMATS,
-    XL_PASTE_FORMULAS, XL_PASTE_VALIDATION, XL_PASTE_VALUES,
+    XL_COPY, XL_CUT, XL_PASTE_ALL, XL_PASTE_ALL_EXCEPT_BORDERS,
+    XL_PASTE_ALL_MERGING_CONDITIONAL_FORMATS, XL_PASTE_ALL_USING_SOURCE_THEME,
+    XL_PASTE_COLUMN_WIDTHS, XL_PASTE_COMMENTS, XL_PASTE_FORMATS, XL_PASTE_FORMULAS,
+    XL_PASTE_FORMULAS_AND_NUMBER_FORMATS, XL_PASTE_VALIDATION, XL_PASTE_VALUES,
+    XL_PASTE_VALUES_AND_NUMBER_FORMATS,
 };
+
+fn unsupported_chart_paste_types() -> [(i32, &'static str); 9] {
+    [
+        (XL_PASTE_ALL_EXCEPT_BORDERS, "xlPasteAllExceptBorders"),
+        (
+            XL_PASTE_ALL_MERGING_CONDITIONAL_FORMATS,
+            "xlPasteAllMergingConditionalFormats",
+        ),
+        (
+            XL_PASTE_ALL_USING_SOURCE_THEME,
+            "xlPasteAllUsingSourceTheme",
+        ),
+        (
+            XL_PASTE_FORMULAS_AND_NUMBER_FORMATS,
+            "xlPasteFormulasAndNumberFormats",
+        ),
+        (
+            XL_PASTE_VALUES_AND_NUMBER_FORMATS,
+            "xlPasteValuesAndNumberFormats",
+        ),
+        (XL_PASTE_FORMATS, "xlPasteFormats"),
+        (XL_PASTE_COMMENTS, "xlPasteComments"),
+        (XL_PASTE_VALIDATION, "xlPasteValidation"),
+        (XL_PASTE_COLUMN_WIDTHS, "xlPasteColumnWidths"),
+    ]
+}
 
 fn open_chart_workbook(
     runtime: &mut ExcelRuntime,
@@ -151,7 +180,7 @@ fn assert_chart_paste_failure_preserves_workbooks_and_session(
 
     let error = runtime
         .dispatch_invoke(chart, "Paste", &[OmValue::Number(f64::from(paste_type))])
-        .expect_err("metadata-only Chart.Paste should fail closed");
+        .expect_err("unmodeled-format Chart.Paste should fail closed");
 
     assert_eq!(error.code, OmErrorCode::Unsupported, "{label}: {error:?}");
     assert_eq!(
@@ -191,13 +220,8 @@ fn assert_chart_paste_failure_preserves_workbooks_and_session(
 }
 
 #[test]
-fn chart_metadata_only_paste_is_fail_closed_and_atomic() {
-    for (paste_type, paste_name) in [
-        (XL_PASTE_FORMATS, "xlPasteFormats"),
-        (XL_PASTE_COMMENTS, "xlPasteComments"),
-        (XL_PASTE_VALIDATION, "xlPasteValidation"),
-        (XL_PASTE_COLUMN_WIDTHS, "xlPasteColumnWidths"),
-    ] {
+fn chart_unmodeled_format_paste_is_fail_closed_and_atomic() {
+    for (paste_type, paste_name) in unsupported_chart_paste_types() {
         for clipboard_member in ["Copy", "Cut"] {
             let label = format!("{clipboard_member} {paste_name}");
             let mut runtime = ExcelRuntime::new();
@@ -221,13 +245,8 @@ fn chart_metadata_only_paste_is_fail_closed_and_atomic() {
 }
 
 #[test]
-fn chart_metadata_only_paste_is_stably_unsupported_for_read_only_destination() {
-    for (paste_type, paste_name) in [
-        (XL_PASTE_FORMATS, "xlPasteFormats"),
-        (XL_PASTE_COMMENTS, "xlPasteComments"),
-        (XL_PASTE_VALIDATION, "xlPasteValidation"),
-        (XL_PASTE_COLUMN_WIDTHS, "xlPasteColumnWidths"),
-    ] {
+fn chart_unmodeled_format_paste_is_stably_unsupported_for_read_only_destination() {
+    for (paste_type, paste_name) in unsupported_chart_paste_types() {
         for clipboard_member in ["Copy", "Cut"] {
             let label = format!("read-only {clipboard_member} {paste_name}");
             let mut runtime = ExcelRuntime::new();
@@ -264,13 +283,8 @@ fn chart_metadata_only_paste_is_stably_unsupported_for_read_only_destination() {
 }
 
 #[test]
-fn chart_metadata_only_paste_reports_capability_before_clipboard_state() {
-    for (paste_type, paste_name) in [
-        (XL_PASTE_FORMATS, "xlPasteFormats"),
-        (XL_PASTE_COMMENTS, "xlPasteComments"),
-        (XL_PASTE_VALIDATION, "xlPasteValidation"),
-        (XL_PASTE_COLUMN_WIDTHS, "xlPasteColumnWidths"),
-    ] {
+fn chart_unmodeled_format_paste_reports_capability_before_clipboard_state() {
+    for (paste_type, paste_name) in unsupported_chart_paste_types() {
         let mut runtime = ExcelRuntime::new();
         let (workbook, _, chart) = open_chart_workbook(&mut runtime, false);
         let workbook_before = runtime_workbook_persistence_snapshot(&runtime, workbook);
@@ -281,7 +295,7 @@ fn chart_metadata_only_paste_reports_capability_before_clipboard_state() {
 
         let error = runtime
             .dispatch_invoke(chart, "Paste", &[OmValue::Number(f64::from(paste_type))])
-            .expect_err("metadata-only Chart.Paste should report unsupported capability");
+            .expect_err("unmodeled-format Chart.Paste should report unsupported capability");
 
         assert_eq!(error.code, OmErrorCode::Unsupported, "{paste_name}");
         assert_eq!(

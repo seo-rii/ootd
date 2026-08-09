@@ -506,8 +506,14 @@ Wave 2 exit gate:
    chart mutation 전에 stable `Unsupported`로 거절하며, all/formulas/values와 same/cross-
    workbook 회귀가 source/destination persistence snapshot, dirty domain, object registry,
    Find/CutCopyMode/clipboard session을 그대로 보존한다. `excel-runtime` 769개가 통과한다.
-   **다음:** `BUG-009` format 부분 무시를 닫은 뒤 `WorksheetData` payload private 전환을
-   재개한다.
+   `BUG-009` 완료 (2026-08-09, synthetic): observable format mutation 없이 base source/value
+   동작만 실행하던 `xlPasteAllExceptBorders`, `xlPasteAllUsingSourceTheme`,
+   `xlPasteAllMergingConditionalFormats`, `xlPasteFormulasAndNumberFormats`,
+   `xlPasteValuesAndNumberFormats`를 selector 이름이 포함된 stable `Unsupported`로 거절한다.
+   다섯 selector와 기존 metadata-only 네 selector의 Copy/Cut, writable/read-only destination,
+   clipboard 없음 회귀가 양쪽 workbook, dirty domain과 전체 session 불변을 고정한다.
+   `excel-runtime` 769개가 통과한다. **다음:** `OOTD-023` non-finite cell number 경계를 닫고
+   `WorksheetData` payload private 전환을 재개한다.
 16. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
    structured error에 추가한다.
 
