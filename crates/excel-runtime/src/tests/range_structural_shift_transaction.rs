@@ -1,5 +1,6 @@
 use super::*;
 use crate::{XL_COPY, XL_SHIFT_DOWN, XL_SHIFT_TO_LEFT, XL_SHIFT_TO_RIGHT, XL_SHIFT_UP};
+use office_common::DrawingAnchor;
 
 fn open_clean_workbook(runtime: &mut ExcelRuntime) -> WorkbookHandle {
     runtime
@@ -1457,4 +1458,160 @@ fn range_structural_shifts_inventory_chart_source_owners() {
             &format!("chart source corridor {member}"),
         );
     }
+}
+
+#[test]
+fn range_structural_shifts_inventory_drawing_anchor_owners() {
+    let mut package = OpcPackage::from_bytes(&synthetic_workbook_with_embedded_chart_bytes())
+        .expect("embedded chart package");
+    let drawing_xml = String::from_utf8(
+        package
+            .part("xl/drawings/drawing1.xml")
+            .expect("drawing part")
+            .bytes
+            .clone(),
+    )
+    .expect("drawing XML")
+    .replace(
+        r#"<xdr:absoluteAnchor ar:tag="keep" xmlns:ar="urn:anchor-root">"#,
+        r#"<xdr:twoCellAnchor editAs="twoCell" ar:tag="keep" xmlns:ar="urn:anchor-root">"#,
+    )
+    .replace(
+        r#"<xdr:pos x="25400" y="38100" pg:tag="keep" xmlns:pg="urn:pos"/>"#,
+        r#"<xdr:from><xdr:col>3</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>3</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>"#,
+    )
+    .replace(
+        r#"<xdr:ext cx="1270000" cy="635000" eg:tag="keep" xmlns:eg="urn:ext"/>"#,
+        r#"<xdr:to><xdr:col>4</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>4</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>"#,
+    )
+    .replace("</xdr:absoluteAnchor>", "</xdr:twoCellAnchor>");
+    assert!(drawing_xml.contains(r#"<xdr:twoCellAnchor editAs="twoCell""#));
+    package
+        .replace_part_bytes("xl/drawings/drawing1.xml", drawing_xml.into_bytes())
+        .expect("replace drawing anchor fixture");
+    let input = package.to_bytes().expect("two-cell drawing workbook bytes");
+
+    let mut allowed_runtime = ExcelRuntime::new();
+    let allowed_workbook = allowed_runtime
+        .open_workbook(OpenWorkbookSpec {
+            bytes: input.clone(),
+            format_hint: Some(FileFormat::Xlsx),
+            profile: ExcelProfile::Excel365,
+            read_only: false,
+        })
+        .expect("open non-intersecting drawing anchor fixture");
+    let allowed_worksheet = worksheet_handle(&mut allowed_runtime, allowed_workbook);
+    set_number(&mut allowed_runtime, allowed_worksheet, "F1", 6.0);
+    let allowed_target = range_handle(&mut allowed_runtime, allowed_worksheet, "F1");
+    allowed_runtime
+        .dispatch_invoke(
+            allowed_target,
+            "Insert",
+            &[OmValue::Number(f64::from(XL_SHIFT_TO_RIGHT))],
+        )
+        .expect("non-intersecting drawing anchor insert must remain eligible");
+    let mut saved = Vec::new();
+    allowed_runtime
+        .save_workbook_to_writer(
+            allowed_workbook,
+            SaveWorkbookSpec {
+                format: FileFormat::Xlsx,
+                profile: ExcelProfile::Excel365,
+                lossless: true,
+            },
+            &mut saved,
+        )
+        .expect("save non-intersecting drawing anchor insert");
+    let reopened = allowed_runtime
+        .codec
+        .load(&saved, LoadOptions::default())
+        .expect("reopen non-intersecting drawing anchor insert");
+    let reopened_sheet_id = reopened.state.worksheets()[0].id;
+    assert_eq!(
+        reopened
+            .state
+            .cell(reopened_sheet_id, 1, 7)
+            .expect("G1 after reopen")
+            .value,
+        CellValue::Number(6.0),
+    );
+    let reopened_drawing = reopened
+        .state
+        .drawings()
+        .values()
+        .next()
+        .expect("reopened drawing");
+    let DrawingObjectModel::ChartFrame(reopened_chart_object) = &reopened_drawing.objects[0] else {
+        panic!("expected reopened chart frame");
+    };
+    let Some(DrawingAnchor::TwoCell(reopened_anchor)) = reopened_chart_object.anchor.as_ref()
+    else {
+        panic!("expected reopened two-cell anchor");
+    };
+    assert_eq!(reopened_anchor.from.row_zero_based, 3);
+    assert_eq!(reopened_anchor.from.col_zero_based, 3);
+    assert_eq!(reopened_anchor.to.row_zero_based, 4);
+    assert_eq!(reopened_anchor.to.col_zero_based, 4);
+    let saved_package = OpcPackage::from_bytes(&saved).expect("saved drawing package");
+    let saved_drawing_xml = String::from_utf8(
+        saved_package
+            .part("xl/drawings/drawing1.xml")
+            .expect("saved drawing part")
+            .bytes
+            .clone(),
+    )
+    .expect("saved drawing XML");
+    assert!(saved_drawing_xml.contains(r#"<xdr:twoCellAnchor editAs="twoCell""#));
+    assert!(saved_drawing_xml.contains("<xdr:col>3</xdr:col>"));
+    assert!(saved_drawing_xml.contains("<xdr:row>4</xdr:row>"));
+
+    for (member, shift) in [("Insert", XL_SHIFT_DOWN), ("Delete", XL_SHIFT_UP)] {
+        let mut blocked_runtime = ExcelRuntime::new();
+        let blocked_workbook = blocked_runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: input.clone(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .unwrap_or_else(|error| panic!("open intersecting drawing fixture: {error:?}"));
+        let blocked_worksheet = worksheet_handle(&mut blocked_runtime, blocked_workbook);
+        let blocked_target = range_handle(&mut blocked_runtime, blocked_worksheet, "D1:E1");
+        assert_structural_failure_is_atomic(
+            &mut blocked_runtime,
+            blocked_workbook,
+            blocked_target,
+            member,
+            shift,
+            OmErrorCode::Unsupported,
+            &[
+                "structural drawing anchor retarget",
+                "worksheet 1",
+                "range R4C4:R5C5",
+            ],
+            &format!("drawing anchor corridor {member}"),
+        );
+    }
+
+    let mut opaque_runtime = ExcelRuntime::new();
+    let opaque_workbook = opaque_runtime
+        .open_workbook(OpenWorkbookSpec {
+            bytes: synthetic_workbook_with_embedded_chart_and_raw_shape_bytes(),
+            format_hint: Some(FileFormat::Xlsx),
+            profile: ExcelProfile::Excel365,
+            read_only: false,
+        })
+        .expect("open opaque drawing anchor fixture");
+    let opaque_worksheet = worksheet_handle(&mut opaque_runtime, opaque_workbook);
+    let opaque_target = range_handle(&mut opaque_runtime, opaque_worksheet, "J20");
+    assert_structural_failure_is_atomic(
+        &mut opaque_runtime,
+        opaque_workbook,
+        opaque_target,
+        "Insert",
+        XL_SHIFT_DOWN,
+        OmErrorCode::Unsupported,
+        &["structural drawing anchor retarget", "opaque anchor"],
+        "opaque drawing anchor",
+    );
 }

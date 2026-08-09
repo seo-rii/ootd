@@ -598,7 +598,16 @@ Wave 2 exit gate:
    mutation 전에 fail-closed한다. 비교차 Insert는 chart formula와 cell 이동을 save/reopen에서
    보존하고 Insert/Delete 실패는 workbook/dirty/session snapshot을 유지한다. `excel-model` 122개,
    `excel-runtime` 779개, `excel-xlsx` 2,934개 회귀가 통과한다.
-   **다음:** `ARCH-024` drawing anchor owner를 독립 3i단계로 inventory한다.
+   `ARCH-024` drawing-anchor owner 3i단계 완료 (2026-08-10, synthetic): target worksheet를
+   host하는 drawing의 typed one-cell/two-cell marker를 checked 0-based→1-based grid range로
+   변환하고 실제 shift corridor와 교차할 때만 drawing/object/sheet/range diagnostics를 포함한
+   stable `Unsupported`로 거절한다. absolute/free-floating anchor는 cell owner가 아니므로
+   허용하고, 좌표를 모델에서 증명할 수 없는 opaque/unresolved anchor와 cell-bound absolute
+   조합은 mutation 전에 보수적으로 fail-closed한다. 비교차 Insert는 cell 이동과 two-cell
+   drawing XML/typed anchor를 save/reopen에서 보존하며 교차 Insert/Delete와 opaque owner 실패는
+   workbook/dirty/session snapshot을 유지한다. `excel-model` 123개, `excel-runtime` 780개,
+   `excel-xlsx` 2,934개 회귀가 통과한다.
+   **다음:** `OOTD-043`/`OOTD-085`의 첫 hash-pinned desktop Excel corpus와 replay gate를 확보한다.
 16. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
    structured error에 추가한다.
 

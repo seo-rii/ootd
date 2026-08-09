@@ -302,6 +302,18 @@ Find/clipboard snapshots, while a non-intersecting Insert moves its cell and pre
 chart formulas through save/reopen. Actual chart-source retargeting and desktop Excel evidence remain
 separate `OOTD-079` work.
 
+Drawing anchors complete the current structural-owner inventory. For a drawing hosted by the target
+worksheet, typed chart-frame one-cell and two-cell markers are converted from DrawingML's zero-based
+coordinates to checked one-based Excel grid rectangles. A corridor intersection fails with the
+drawing ID, object ID, worksheet, and rectangle before any cell or session mutation. An
+absolute/free-floating anchor owns no worksheet cell and remains eligible. An opaque shape/image/OLE
+anchor, a missing/unsupported chart-frame anchor, or an absolute anchor carrying a cell-bound
+placement cannot be localized safely and therefore rejects structural mutation on its host sheet.
+Synthetic runtime coverage requires two-cell Insert/Delete failures and opaque-owner failure to
+preserve workbook, dirty-domain, and Find/clipboard snapshots; a non-intersecting Insert moves its
+cell and preserves the exact drawing XML plus typed markers through save/reopen. Actual anchor
+retargeting and broader shape lifecycle remain separate `OOTD-082` work.
+
 ### Worksheet-data ownership map
 
 The `WorkbookState` worksheet-data map is private. External callers can inspect it through

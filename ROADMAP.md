@@ -336,8 +336,12 @@ Active order:
    name/x-values/values/bubble-size source and full reference is checked as a typed workbook range;
    intersecting corridors, unresolved A1/R1C1 sources, invalid ownership, and 3D ranges fail before
    mutation, while a non-intersecting Insert preserves chart formulas through save/reopen.
-   **Active:** inventory drawing-anchor owners as stage 3i.
-50. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
+50. `ARCH-024` drawing-anchor owner stage 3i is complete (2026-08-10, synthetic): typed one-cell
+   and two-cell markers become bounded worksheet ranges, intersecting corridors refuse atomically,
+   absolute/free-floating anchors remain eligible, and opaque/unresolved anchors fail closed on the
+   host sheet. A non-intersecting Insert preserves the two-cell XML and typed anchor through
+   save/reopen.
+51. Close the compatibility loop with `OOTD-043`/`OOTD-085` pinned desktop Excel evidence before
    claiming practical chart/pivot/style parity.
 
 Every numbered work unit starts with a failing regression and lands as its own reviewable commit.

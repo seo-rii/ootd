@@ -2,9 +2,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use office_common::{
     CellValue, ChartId, DefinedName, DefinedNameId, DrawingId, ExcelLimits, FormulaSource,
-    NameScope, NameValidationMode, OmArray, OmError, OmErrorCode, OmResult, OmValue, OpaquePart,
-    RangeRef, RangeSet, Rect, ReferenceTarget, SheetId, SheetKind, SheetScope, SheetVisibility,
-    StyleId, WorkbookId, WorkbookModel, WorksheetModel, formula_contains_a1_reference,
+    NameScope, NameValidationMode, ObjectPlacement, OmArray, OmError, OmErrorCode, OmResult,
+    OmValue, OpaquePart, RangeRef, RangeSet, Rect, ReferenceTarget, SheetId, SheetKind, SheetScope,
+    SheetVisibility, StyleId, WorkbookId, WorkbookModel, WorksheetModel,
+    formula_contains_a1_reference,
 };
 
 mod charts;
@@ -1696,6 +1697,143 @@ impl WorkbookState {
                 }
             }
         }
+        let drawing_marker_cell = |drawing_id: DrawingId,
+                                   object_id: u64,
+                                   marker_name: &str,
+                                   marker: &office_common::CellMarker|
+         -> OmResult<(u32, u32)> {
+            let row = marker.row_zero_based.checked_add(1).ok_or_else(|| {
+                    OmError::invalid_state(format!(
+                        "drawing {} object {object_id} {marker_name} marker row exceeds the worksheet grid",
+                        drawing_id.0,
+                    ))
+                })?;
+            let col = marker.col_zero_based.checked_add(1).ok_or_else(|| {
+                    OmError::invalid_state(format!(
+                        "drawing {} object {object_id} {marker_name} marker column exceeds the worksheet grid",
+                        drawing_id.0,
+                    ))
+                })?;
+            ExcelLimits::validate_cell(row, col).map_err(|error| {
+                OmError::invalid_state(format!(
+                    "drawing {} object {object_id} {marker_name} marker is invalid: {}",
+                    drawing_id.0, error.message,
+                ))
+            })?;
+            Ok((row, col))
+        };
+        for (&drawing_id, drawing) in &self.drawings {
+            if drawing.workbook_id != self.model.id {
+                return Err(OmError::invalid_state(format!(
+                    "drawing {} belongs to workbook {}, expected {}",
+                    drawing_id.0, drawing.workbook_id.0, self.model.id.0,
+                )));
+            }
+            if drawing.host_sheet_id != sheet_id {
+                continue;
+            }
+            for object in &drawing.objects {
+                let (object_id, anchor_rect) = match object {
+                    DrawingObjectModel::UnsupportedRaw { id, .. } => {
+                        return Err(OmError::unsupported(format!(
+                            "Range.{member} structural drawing anchor retarget is not implemented for drawing {} object {} worksheet {} opaque anchor",
+                            drawing_id.0, id.0, sheet_id.0,
+                        )));
+                    }
+                    DrawingObjectModel::ChartFrame(chart_object) => {
+                        if chart_object.workbook_id != self.model.id {
+                            return Err(OmError::invalid_state(format!(
+                                "drawing {} object {} belongs to workbook {}, expected {}",
+                                drawing_id.0,
+                                chart_object.id.0,
+                                chart_object.workbook_id.0,
+                                self.model.id.0,
+                            )));
+                        }
+                        if chart_object.host_sheet_id != sheet_id {
+                            return Err(OmError::invalid_state(format!(
+                                "drawing {} object {} belongs to worksheet {}, expected {}",
+                                drawing_id.0,
+                                chart_object.id.0,
+                                chart_object.host_sheet_id.0,
+                                sheet_id.0,
+                            )));
+                        }
+                        let anchor_rect = match chart_object.anchor.as_ref() {
+                            Some(office_common::DrawingAnchor::TwoCell(anchor)) => {
+                                let (from_row, from_col) = drawing_marker_cell(
+                                    drawing_id,
+                                    chart_object.id.0,
+                                    "from",
+                                    &anchor.from,
+                                )?;
+                                let (to_row, to_col) = drawing_marker_cell(
+                                    drawing_id,
+                                    chart_object.id.0,
+                                    "to",
+                                    &anchor.to,
+                                )?;
+                                if from_row > to_row || from_col > to_col {
+                                    return Err(OmError::invalid_state(format!(
+                                        "drawing {} object {} two-cell anchor is inverted",
+                                        drawing_id.0, chart_object.id.0,
+                                    )));
+                                }
+                                Some(Rect {
+                                    row_first: from_row,
+                                    row_last: to_row,
+                                    col_first: from_col,
+                                    col_last: to_col,
+                                })
+                            }
+                            Some(office_common::DrawingAnchor::OneCell(anchor)) => {
+                                let (row, col) = drawing_marker_cell(
+                                    drawing_id,
+                                    chart_object.id.0,
+                                    "from",
+                                    &anchor.from,
+                                )?;
+                                Some(Rect::single_cell(row, col))
+                            }
+                            Some(office_common::DrawingAnchor::Absolute(_))
+                                if chart_object.placement == ObjectPlacement::FreeFloating =>
+                            {
+                                None
+                            }
+                            Some(office_common::DrawingAnchor::Absolute(_)) => {
+                                return Err(OmError::unsupported(format!(
+                                    "Range.{member} structural drawing anchor retarget is not implemented for drawing {} object {} worksheet {} cell-bound absolute anchor",
+                                    drawing_id.0, chart_object.id.0, sheet_id.0,
+                                )));
+                            }
+                            Some(office_common::DrawingAnchor::UnsupportedRaw) | None => {
+                                return Err(OmError::unsupported(format!(
+                                    "Range.{member} structural drawing anchor retarget is not implemented for drawing {} object {} worksheet {} unresolved anchor",
+                                    drawing_id.0, chart_object.id.0, sheet_id.0,
+                                )));
+                            }
+                        };
+                        (chart_object.id.0, anchor_rect)
+                    }
+                };
+                if let Some(anchor_rect) = anchor_rect
+                    && affected_rect.row_first <= anchor_rect.row_last
+                    && anchor_rect.row_first <= affected_rect.row_last
+                    && affected_rect.col_first <= anchor_rect.col_last
+                    && anchor_rect.col_first <= affected_rect.col_last
+                {
+                    return Err(OmError::unsupported(format!(
+                        "Range.{member} structural drawing anchor retarget is not implemented for drawing {} object {object_id} worksheet {} range R{}C{}:R{}C{}",
+                        drawing_id.0,
+                        sheet_id.0,
+                        anchor_rect.row_first,
+                        anchor_rect.col_first,
+                        anchor_rect.row_last,
+                        anchor_rect.col_last,
+                    )));
+                }
+            }
+        }
         let worksheet = self.worksheet_data_for_sheet(sheet_id)?;
         if let Some(merged_range) = worksheet
             .structural_owners
@@ -2220,10 +2358,11 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     use office_common::{
-        CellValue, ChartId, ChartObjectId, DrawingId, ExcelLimits, FileFormat, FormulaSource,
-        NameScope, NameValidationMode, ObjectHandle, ObjectPlacement, OmArray, OmErrorCode,
-        OmValue, RangeRef, RangeSet, Rect, ReferenceTarget, SheetId, SheetKind, SheetScope,
-        SheetVisibility, StyleId, WorkbookId, WorkbookModel, WorksheetModel,
+        CellMarker, CellValue, ChartId, ChartObjectId, DrawingAnchor, DrawingId, DrawingObjectId,
+        Emu, ExcelLimits, FileFormat, FormulaSource, NameScope, NameValidationMode, ObjectHandle,
+        ObjectPlacement, OmArray, OmErrorCode, OmValue, OneCellAnchor, PointEmu, RangeRef,
+        RangeSet, Rect, ReferenceTarget, SheetId, SheetKind, SheetScope, SheetVisibility, SizeEmu,
+        StyleId, TwoCellAnchor, WorkbookId, WorkbookModel, WorksheetModel,
     };
 
     fn sample_state() -> WorkbookState {
@@ -2740,6 +2879,208 @@ mod tests {
                 .expect("non-intersecting chart source must remain eligible"),
         );
         assert_eq!(allowed.charts.get(&chart_id), Some(&chart_before));
+    }
+
+    #[test]
+    fn structural_cell_shifts_inventory_drawing_anchor_owners_atomically() {
+        let chart_id = ChartId(11);
+        let drawing_id = DrawingId(12);
+        let object_id = ChartObjectId(21);
+        let chart_object = |anchor, placement| ChartObjectModel {
+            id: object_id,
+            anchor_attrs: BTreeMap::new(),
+            position_attrs: BTreeMap::new(),
+            extents_attrs: BTreeMap::new(),
+            marker_attrs: Default::default(),
+            graphic_frame_attrs: BTreeMap::new(),
+            graphic_frame_transform_xml: None,
+            graphic_data_attrs: BTreeMap::new(),
+            graphic_data_child_xmls: Vec::new(),
+            chart_reference_attrs: BTreeMap::new(),
+            non_visual_frame_attrs: BTreeMap::new(),
+            graphic_attrs: BTreeMap::new(),
+            non_visual_id: Some(2),
+            non_visual_attrs: BTreeMap::new(),
+            non_visual_child_xml: None,
+            non_visual_frame_properties_xml: None,
+            client_data_attrs: BTreeMap::new(),
+            client_data_xml: None,
+            anchor_extension_xmls: Vec::new(),
+            workbook_id: WorkbookId(7),
+            host_sheet_id: SheetId(3),
+            chart_id,
+            name: "Chart 1".to_string(),
+            anchor: Some(anchor),
+            placement,
+            z_order: Some(0),
+            raw_binding: Some("xl/drawings/drawing1.xml#rIdChart1".to_string()),
+            dirty: false,
+        };
+        let install_drawing = |state: &mut WorkbookState, object| {
+            state
+                .charts
+                .insert(chart_id, chart_model(chart_id, state.model.id, Vec::new()));
+            state.drawings.insert(
+                drawing_id,
+                DrawingModel {
+                    id: drawing_id,
+                    workbook_id: state.model.id,
+                    host_sheet_id: SheetId(3),
+                    objects: vec![object],
+                    raw_part_uri: Some("xl/drawings/drawing1.xml".to_string()),
+                    dirty: false,
+                },
+            );
+        };
+        let marker = |row_zero_based, col_zero_based| CellMarker {
+            col_zero_based,
+            col_offset: Emu(0),
+            row_zero_based,
+            row_offset: Emu(0),
+        };
+        let two_cell_anchor = || {
+            DrawingAnchor::TwoCell(TwoCellAnchor {
+                from: marker(3, 3),
+                to: marker(4, 4),
+                edit_as: Some("twoCell".to_string()),
+            })
+        };
+
+        let mut blocked = sample_state();
+        install_drawing(
+            &mut blocked,
+            DrawingObjectModel::ChartFrame(chart_object(
+                two_cell_anchor(),
+                ObjectPlacement::MoveAndSize,
+            )),
+        );
+        let before = blocked.clone();
+        let error = blocked
+            .shift_cells_with_change(
+                SheetId(3),
+                Rect {
+                    row_first: 1,
+                    row_last: 1,
+                    col_first: 4,
+                    col_last: 5,
+                },
+                CellShiftDirection::Down,
+            )
+            .expect_err("intersecting two-cell drawing anchor must fail closed");
+        assert_eq!(error.code, OmErrorCode::Unsupported);
+        assert_eq!(
+            error.message,
+            "Range.Insert structural drawing anchor retarget is not implemented for drawing 12 object 21 worksheet 3 range R4C4:R5C5",
+        );
+        assert_eq!(blocked, before);
+
+        let mut one_cell = sample_state();
+        install_drawing(
+            &mut one_cell,
+            DrawingObjectModel::ChartFrame(chart_object(
+                DrawingAnchor::OneCell(OneCellAnchor {
+                    from: marker(3, 3),
+                    extents: SizeEmu {
+                        cx: Emu(914_400),
+                        cy: Emu(457_200),
+                    },
+                }),
+                ObjectPlacement::MoveOnly,
+            )),
+        );
+        let before = one_cell.clone();
+        let error = one_cell
+            .shift_cells_with_change(
+                SheetId(3),
+                Rect::single_cell(1, 4),
+                CellShiftDirection::Down,
+            )
+            .expect_err("intersecting one-cell drawing anchor must fail closed");
+        assert_eq!(error.code, OmErrorCode::Unsupported);
+        assert!(error.message.contains("worksheet 3 range R4C4:R4C4"));
+        assert_eq!(one_cell, before);
+
+        let mut opaque = sample_state();
+        opaque.drawings.insert(
+            drawing_id,
+            DrawingModel {
+                id: drawing_id,
+                workbook_id: opaque.model.id,
+                host_sheet_id: SheetId(3),
+                objects: vec![DrawingObjectModel::UnsupportedRaw {
+                    id: DrawingObjectId(22),
+                    raw_part_uri: Some("xl/drawings/drawing1.xml".to_string()),
+                    raw_anchor_xml: "<xdr:oneCellAnchor/>".to_string(),
+                    root_namespace_attrs: BTreeMap::new(),
+                    relationship_ids: Vec::new(),
+                    non_visual_id: Some(3),
+                }],
+                raw_part_uri: Some("xl/drawings/drawing1.xml".to_string()),
+                dirty: false,
+            },
+        );
+        let before = opaque.clone();
+        let error = opaque
+            .shift_cells_with_change(
+                SheetId(3),
+                Rect::single_cell(20, 10),
+                CellShiftDirection::Down,
+            )
+            .expect_err("opaque drawing anchor must fail closed");
+        assert_eq!(error.code, OmErrorCode::Unsupported);
+        assert!(
+            error
+                .message
+                .contains("drawing 12 object 22 worksheet 3 opaque anchor")
+        );
+        assert_eq!(opaque, before);
+
+        let mut allowed = sample_state();
+        install_drawing(
+            &mut allowed,
+            DrawingObjectModel::ChartFrame(chart_object(
+                two_cell_anchor(),
+                ObjectPlacement::MoveAndSize,
+            )),
+        );
+        let drawing_before = allowed.drawings.get(&drawing_id).expect("drawing").clone();
+        assert!(
+            allowed
+                .shift_cells_with_change(
+                    SheetId(3),
+                    Rect::single_cell(1, 1),
+                    CellShiftDirection::Down,
+                )
+                .expect("non-intersecting drawing anchor must remain eligible"),
+        );
+        assert_eq!(allowed.drawings.get(&drawing_id), Some(&drawing_before));
+
+        let mut absolute = sample_state();
+        install_drawing(
+            &mut absolute,
+            DrawingObjectModel::ChartFrame(chart_object(
+                DrawingAnchor::Absolute(office_common::AbsoluteAnchor {
+                    position: PointEmu {
+                        x: Emu(25_400),
+                        y: Emu(38_100),
+                    },
+                    extents: SizeEmu {
+                        cx: Emu(1_270_000),
+                        cy: Emu(635_000),
+                    },
+                }),
+                ObjectPlacement::FreeFloating,
+            )),
+        );
+        assert!(
+            absolute
+                .shift_cells_with_change(
+                    SheetId(3),
+                    Rect::single_cell(1, 1),
+                    CellShiftDirection::Down,
+                )
+                .expect("absolute drawing anchor does not own worksheet cells"),
+        );
     }
 
     #[test]
