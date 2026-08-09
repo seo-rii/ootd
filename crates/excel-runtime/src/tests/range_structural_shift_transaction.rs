@@ -712,6 +712,167 @@ fn range_structural_shifts_reject_data_validation_formula_owners_atomically() {
 }
 
 #[test]
+fn range_structural_shifts_inventory_x14_data_validation_owners() {
+    let mut package = OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("base package");
+    let source_xml = String::from_utf8(
+        package
+            .part("xl/worksheets/sheet1.xml")
+            .expect("source worksheet")
+            .bytes
+            .clone(),
+    )
+    .expect("worksheet utf8");
+    let range_xml = source_xml.replace(
+        "</worksheet>",
+        r#"  <extLst><ext uri="{CCE6A557-97BC-4B89-ADB6-D9C93CAAB3DF}"><x14:dataValidations xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main" xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main" count="1"><x14:dataValidation><x14:formula1><xm:f>1</xm:f></x14:formula1><xm:sqref>D4:E5 F8</xm:sqref></x14:dataValidation></x14:dataValidations></ext></extLst>
+</worksheet>"#,
+    );
+    assert_ne!(range_xml, source_xml, "x14 range fixture replacement");
+    package
+        .replace_part_bytes("xl/worksheets/sheet1.xml", range_xml.into_bytes())
+        .expect("replace worksheet");
+    let range_input = package.to_bytes().expect("x14 range workbook bytes");
+
+    for (member, target_address, shift, label) in [
+        (
+            "Insert",
+            "D1:E1",
+            XL_SHIFT_DOWN,
+            "insert corridor through x14 validation",
+        ),
+        (
+            "Delete",
+            "D4:E4",
+            XL_SHIFT_UP,
+            "delete corridor through x14 validation",
+        ),
+    ] {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: range_input.clone(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .unwrap_or_else(|error| panic!("{label}: open: {error:?}"));
+        let worksheet = worksheet_handle(&mut runtime, workbook);
+        let target = range_handle(&mut runtime, worksheet, target_address);
+
+        assert_structural_failure_is_atomic(
+            &mut runtime,
+            workbook,
+            target,
+            member,
+            shift,
+            OmErrorCode::Unsupported,
+            &[
+                "structural data-validation retarget",
+                "worksheet 1",
+                "R4C4:R5C5",
+            ],
+            label,
+        );
+    }
+
+    let mut runtime = ExcelRuntime::new();
+    let workbook = runtime
+        .open_workbook(OpenWorkbookSpec {
+            bytes: range_input,
+            format_hint: Some(FileFormat::Xlsx),
+            profile: ExcelProfile::Excel365,
+            read_only: false,
+        })
+        .expect("open non-intersecting x14 validation fixture");
+    let worksheet = worksheet_handle(&mut runtime, workbook);
+    let target = range_handle(&mut runtime, worksheet, "A1");
+    runtime
+        .dispatch_invoke(
+            target,
+            "Insert",
+            &[OmValue::Number(f64::from(XL_SHIFT_DOWN))],
+        )
+        .expect("non-intersecting x14 validation must remain eligible");
+    let mut saved = Vec::new();
+    runtime
+        .save_workbook_to_writer(
+            workbook,
+            SaveWorkbookSpec {
+                format: FileFormat::Xlsx,
+                profile: ExcelProfile::Excel365,
+                lossless: true,
+            },
+            &mut saved,
+        )
+        .expect("save non-intersecting x14 validation shift");
+    let reopened = runtime
+        .codec
+        .load(&saved, LoadOptions::default())
+        .expect("reopen non-intersecting x14 validation shift");
+    let reopened_sheet_id = reopened.state.worksheets()[0].id;
+    let reopened_owners = &reopened
+        .state
+        .worksheet_data_for_sheet(reopened_sheet_id)
+        .expect("reopened worksheet data")
+        .structural_owners;
+    assert_eq!(
+        reopened_owners.data_validation_ranges,
+        vec![
+            Rect {
+                row_first: 4,
+                row_last: 5,
+                col_first: 4,
+                col_last: 5,
+            },
+            Rect::single_cell(8, 6),
+        ],
+    );
+    assert_eq!(
+        reopened_owners.data_validation_formulas,
+        vec!["1".to_string()],
+    );
+
+    let mut formula_package =
+        OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("formula base package");
+    let formula_xml = source_xml.replace(
+        "</worksheet>",
+        r#"  <extLst><ext uri="{CCE6A557-97BC-4B89-ADB6-D9C93CAAB3DF}"><x14:dataValidations xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main" xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main" count="1"><x14:dataValidation type="custom"><x14:formula1><xm:f>=$A$1&gt;0</xm:f></x14:formula1><xm:sqref>D4:E5</xm:sqref></x14:dataValidation></x14:dataValidations></ext></extLst>
+</worksheet>"#,
+    );
+    formula_package
+        .replace_part_bytes("xl/worksheets/sheet1.xml", formula_xml.into_bytes())
+        .expect("replace formula worksheet");
+    let formula_input = formula_package
+        .to_bytes()
+        .expect("x14 formula workbook bytes");
+    let mut formula_runtime = ExcelRuntime::new();
+    let formula_workbook = formula_runtime
+        .open_workbook(OpenWorkbookSpec {
+            bytes: formula_input,
+            format_hint: Some(FileFormat::Xlsx),
+            profile: ExcelProfile::Excel365,
+            read_only: false,
+        })
+        .expect("open x14 formula fixture");
+    let formula_worksheet = worksheet_handle(&mut formula_runtime, formula_workbook);
+    let formula_target = range_handle(&mut formula_runtime, formula_worksheet, "A1");
+    assert_structural_failure_is_atomic(
+        &mut formula_runtime,
+        formula_workbook,
+        formula_target,
+        "Insert",
+        XL_SHIFT_DOWN,
+        OmErrorCode::Unsupported,
+        &[
+            "structural data-validation formula retarget",
+            "worksheet 1",
+            "formula 1",
+        ],
+        "x14 validation formula owner",
+    );
+}
+
+#[test]
 fn range_structural_multilane_insert_commits_and_reopens() {
     let mut runtime = ExcelRuntime::new();
     let workbook = open_clean_workbook(&mut runtime);

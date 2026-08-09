@@ -557,7 +557,16 @@ Wave 2 exit gate:
    비교차 Insert/save/reopen 경로를 유지하고, formula simple-content에 nested XML이 있으면 part
    URI가 있는 parse error로 fail-closed한다. `excel-model` 118개, `excel-runtime` 775개,
    `excel-xlsx` 2,925개 회귀가 통과한다.
-   **다음:** `ARCH-024` extension-backed validation, table, raw row-column metadata owner
+   `ARCH-024` x14 data-validation owner 3d단계 완료 (2026-08-09, synthetic): worksheet direct
+   `extLst/ext/x14:dataValidations` 경로에서 exact Office 2010 Excel namespace의 owner와
+   `xm:sqref`, `x14:formula1/formula2/xm:f`를 QName/depth-aware하게 inventory한다. multi-area
+   sqref와 text/CDATA/XML general reference를 decoding하며 foreign/nested same-local tree는
+   무시한다. empty/missing/duplicate/wrong-namespace/nested-value/out-of-grid/inverted/malformed
+   owner는 part URI가 있는 parse error로 거절한다. standard owner와 같은 교차-range 및
+   workbook-wide reference-formula preflight를 사용하고, reference-free 비교차 Insert는 x14
+   XML과 inventory를 save/reopen에서 보존한다. `excel-model` 118개, `excel-runtime` 776개,
+   `excel-xlsx` 2,927개 회귀가 통과한다.
+   **다음:** `ARCH-024` table과 raw row-column metadata owner
    inventory를 실제 model/support 표면별로 분리해 fail-closed 경계를 닫는다.
 16. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
    structured error에 추가한다.

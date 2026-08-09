@@ -258,12 +258,14 @@ data-validation ranges are fail-closed rather than retargeted. Standard Spreadsh
 `dataValidation@sqref` is inventoried as bounded, whitespace-separated multi-area rectangles;
 malformed owner ranges fail load, while a non-intersecting structural edit preserves the original
 validation XML through save/reopen. Direct standard `formula1`/`formula2` text and CDATA are also
-inventoried in source order. Any formula containing an A1-family reference fails structural mutation
-workbook-wide before corridor planning; reference-free number or string formulas retain the bounded
-non-intersecting path. Extension-backed validation, tables, charts, drawings, and raw row/column
-metadata are not yet inventoried or retargeted by this command. Those owners remain part of the
-common reference and typed worksheet-metadata follow-up, and no desktop Excel Oracle claim is
-attached to the current behavior.
+inventoried in source order. The Office 2010 extension path is bounded to a direct worksheet
+`extLst`/`ext` owner, exact x14 `dataValidations`/`dataValidation` elements, and exact xm `sqref` and
+formula `f` values; malformed or ambiguous extension owners fail load. Any standard or x14 formula
+containing an A1-family reference fails structural mutation workbook-wide before corridor planning;
+reference-free number or string formulas retain the bounded non-intersecting path. Tables, charts,
+drawings, and raw row/column metadata are not yet inventoried or retargeted by this command. Those
+owners remain part of the common reference and typed worksheet-metadata follow-up, and no desktop
+Excel Oracle claim is attached to the current behavior.
 
 ### Worksheet-data ownership map
 

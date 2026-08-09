@@ -9,13 +9,16 @@ use office_common::{
     CellError, CellValue, ExcelLimits, FormulaSource, OmError, OmErrorCode, OmResult, Rect, StyleId,
 };
 use quick_xml::escape::partial_escape;
-use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
+use quick_xml::events::{BytesEnd, BytesRef, BytesStart, BytesText, Event};
 use quick_xml::{NsReader, Writer};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Cursor, Write};
 
 const EXCEL_MAX_ROW_INDEX: u32 = ExcelLimits::MAX_ROW_INDEX;
 const EXCEL_MAX_COLUMN_INDEX: u32 = ExcelLimits::MAX_COLUMN_INDEX;
+const EXCEL_2010_SPREADSHEET_NAMESPACE: &[u8] =
+    b"http://schemas.microsoft.com/office/spreadsheetml/2009/9/main";
+const EXCEL_MAIN_NAMESPACE: &[u8] = b"http://schemas.microsoft.com/office/excel/2006/main";
 
 #[derive(Debug, Clone)]
 enum RowContentSegment {
@@ -678,6 +681,76 @@ pub(crate) fn parse_worksheet_cells(
             })?;
             parse_structural_range(&reference, "merged-cell")
         };
+    let parse_sqref_ranges = |sqref: &str, owner: &str| -> OmResult<Vec<Rect>> {
+        let ranges = sqref
+            .split_ascii_whitespace()
+            .map(|reference| parse_structural_range(reference, "data-validation"))
+            .collect::<OmResult<Vec<_>>>()?;
+        if ranges.is_empty() {
+            return Err(OmError::parse(format!(
+                "{worksheet_part_uri}: {owner} has an empty sqref range list"
+            )));
+        }
+        Ok(ranges)
+    };
+    let decode_general_ref_text = |reference: &BytesRef<'_>| -> OmResult<String> {
+        let reference = reference.decode().map_err(xml_error)?;
+        let value = if let Some(number) = reference.strip_prefix("#x") {
+            let codepoint = u32::from_str_radix(number, 16).map_err(|_| {
+                OmError::parse(format!(
+                    "{worksheet_part_uri}: invalid XML character reference: &{reference};"
+                ))
+            })?;
+            char::from_u32(codepoint)
+                .ok_or_else(|| {
+                    OmError::parse(format!(
+                        "{worksheet_part_uri}: invalid XML character reference: &{reference};"
+                    ))
+                })?
+                .to_string()
+        } else if let Some(number) = reference.strip_prefix("#X") {
+            let codepoint = u32::from_str_radix(number, 16).map_err(|_| {
+                OmError::parse(format!(
+                    "{worksheet_part_uri}: invalid XML character reference: &{reference};"
+                ))
+            })?;
+            char::from_u32(codepoint)
+                .ok_or_else(|| {
+                    OmError::parse(format!(
+                        "{worksheet_part_uri}: invalid XML character reference: &{reference};"
+                    ))
+                })?
+                .to_string()
+        } else if let Some(number) = reference.strip_prefix('#') {
+            let codepoint = number.parse::<u32>().map_err(|_| {
+                OmError::parse(format!(
+                    "{worksheet_part_uri}: invalid XML character reference: &{reference};"
+                ))
+            })?;
+            char::from_u32(codepoint)
+                .ok_or_else(|| {
+                    OmError::parse(format!(
+                        "{worksheet_part_uri}: invalid XML character reference: &{reference};"
+                    ))
+                })?
+                .to_string()
+        } else {
+            match reference.as_ref() {
+                "amp" => "&",
+                "lt" => "<",
+                "gt" => ">",
+                "quot" => "\"",
+                "apos" => "'",
+                _ => {
+                    return Err(OmError::parse(format!(
+                        "{worksheet_part_uri}: unknown XML entity reference: &{reference};"
+                    )));
+                }
+            }
+            .to_string()
+        };
+        Ok(value)
+    };
     let parse_data_validation_ranges =
         |element: &BytesStart<'_>, decoder: quick_xml::encoding::Decoder| -> OmResult<Vec<Rect>> {
             let mut sqref = None;
@@ -696,16 +769,7 @@ pub(crate) fn parse_worksheet_cells(
                     "{worksheet_part_uri}: worksheet dataValidation is missing an sqref range list"
                 ))
             })?;
-            let ranges = sqref
-                .split_ascii_whitespace()
-                .map(|reference| parse_structural_range(reference, "data-validation"))
-                .collect::<OmResult<Vec<_>>>()?;
-            if ranges.is_empty() {
-                return Err(OmError::parse(format!(
-                    "{worksheet_part_uri}: worksheet dataValidation has an empty sqref range list"
-                )));
-            }
-            Ok(ranges)
+            parse_sqref_ranges(&sqref, "worksheet dataValidation")
         };
     let mut metadata_reader = NsReader::from_reader(Cursor::new(worksheet_xml));
     metadata_reader.config_mut().trim_text(false);
@@ -716,6 +780,18 @@ pub(crate) fn parse_worksheet_cells(
     let mut data_validation_depth = None;
     let mut data_validation_formula_depth = None;
     let mut current_data_validation_formula = None;
+    let mut worksheet_ext_lst_depth = None;
+    let mut worksheet_ext_depth = None;
+    let mut x14_data_validations_depth = None;
+    let mut x14_data_validation_depth = None;
+    let mut x14_formula_wrapper_depth = None;
+    let mut x14_formula_value_depth = None;
+    let mut x14_sqref_depth = None;
+    let mut current_x14_formula = None;
+    let mut current_x14_sqref = None;
+    let mut x14_data_validations_has_owner = false;
+    let mut x14_formula_has_value = false;
+    let mut x14_data_validation_has_sqref = false;
     let mut merged_ranges = Vec::new();
     let mut data_validation_ranges = Vec::new();
     let mut data_validation_formulas = Vec::new();
@@ -734,10 +810,103 @@ pub(crate) fn parse_worksheet_cells(
                     spreadsheet_namespace.as_bytes(),
                     b"dataValidations",
                 );
+                let is_ext_lst = resolved_element_is(
+                    &namespace,
+                    element.local_name(),
+                    spreadsheet_namespace.as_bytes(),
+                    b"extLst",
+                );
                 if element_depth == 1 && is_merge_cells {
                     merge_cells_depth = Some(element_depth + 1);
                 } else if element_depth == 1 && is_data_validations {
                     data_validations_depth = Some(element_depth + 1);
+                } else if element_depth == 1 && is_ext_lst {
+                    worksheet_ext_lst_depth = Some(element_depth + 1);
+                } else if worksheet_ext_lst_depth == Some(element_depth)
+                    && resolved_element_is(
+                        &namespace,
+                        element.local_name(),
+                        spreadsheet_namespace.as_bytes(),
+                        b"ext",
+                    )
+                {
+                    worksheet_ext_depth = Some(element_depth + 1);
+                } else if worksheet_ext_depth == Some(element_depth)
+                    && resolved_element_is(
+                        &namespace,
+                        element.local_name(),
+                        EXCEL_2010_SPREADSHEET_NAMESPACE,
+                        b"dataValidations",
+                    )
+                {
+                    x14_data_validations_depth = Some(element_depth + 1);
+                    x14_data_validations_has_owner = false;
+                } else if x14_data_validations_depth == Some(element_depth)
+                    && resolved_element_is(
+                        &namespace,
+                        element.local_name(),
+                        EXCEL_2010_SPREADSHEET_NAMESPACE,
+                        b"dataValidation",
+                    )
+                {
+                    x14_data_validation_depth = Some(element_depth + 1);
+                    x14_data_validations_has_owner = true;
+                    x14_data_validation_has_sqref = false;
+                } else if x14_data_validation_depth == Some(element_depth)
+                    && (resolved_element_is(
+                        &namespace,
+                        element.local_name(),
+                        EXCEL_2010_SPREADSHEET_NAMESPACE,
+                        b"formula1",
+                    ) || resolved_element_is(
+                        &namespace,
+                        element.local_name(),
+                        EXCEL_2010_SPREADSHEET_NAMESPACE,
+                        b"formula2",
+                    ))
+                {
+                    x14_formula_wrapper_depth = Some(element_depth + 1);
+                    x14_formula_has_value = false;
+                } else if x14_formula_wrapper_depth == Some(element_depth)
+                    && resolved_element_is(
+                        &namespace,
+                        element.local_name(),
+                        EXCEL_MAIN_NAMESPACE,
+                        b"f",
+                    )
+                {
+                    if x14_formula_has_value {
+                        return Err(OmError::parse(format!(
+                            "{worksheet_part_uri}: worksheet x14:dataValidation formula has duplicate xm:f values"
+                        )));
+                    }
+                    x14_formula_value_depth = Some(element_depth + 1);
+                    current_x14_formula = Some(String::new());
+                } else if x14_data_validation_depth == Some(element_depth)
+                    && resolved_element_is(
+                        &namespace,
+                        element.local_name(),
+                        EXCEL_MAIN_NAMESPACE,
+                        b"sqref",
+                    )
+                {
+                    if x14_data_validation_has_sqref {
+                        return Err(OmError::parse(format!(
+                            "{worksheet_part_uri}: worksheet x14:dataValidation has duplicate xm:sqref values"
+                        )));
+                    }
+                    x14_sqref_depth = Some(element_depth + 1);
+                    current_x14_sqref = Some(String::new());
+                } else if x14_formula_value_depth == Some(element_depth)
+                    || x14_sqref_depth == Some(element_depth)
+                {
+                    return Err(OmError::parse(format!(
+                        "{worksheet_part_uri}: worksheet x14:dataValidation value contains nested XML"
+                    )));
+                } else if x14_formula_wrapper_depth == Some(element_depth) {
+                    return Err(OmError::parse(format!(
+                        "{worksheet_part_uri}: worksheet x14:dataValidation formula contains a non-xm:f child"
+                    )));
                 } else if merge_cells_depth == Some(element_depth)
                     && resolved_element_is(
                         &namespace,
@@ -783,7 +952,86 @@ pub(crate) fn parse_worksheet_cells(
                 element_depth += 1;
             }
             Ok((namespace, Event::Empty(element))) => {
-                if merge_cells_depth == Some(element_depth)
+                if worksheet_ext_depth == Some(element_depth)
+                    && resolved_element_is(
+                        &namespace,
+                        element.local_name(),
+                        EXCEL_2010_SPREADSHEET_NAMESPACE,
+                        b"dataValidations",
+                    )
+                {
+                    return Err(OmError::parse(format!(
+                        "{worksheet_part_uri}: worksheet x14:dataValidations has no dataValidation owners"
+                    )));
+                } else if x14_data_validations_depth == Some(element_depth)
+                    && resolved_element_is(
+                        &namespace,
+                        element.local_name(),
+                        EXCEL_2010_SPREADSHEET_NAMESPACE,
+                        b"dataValidation",
+                    )
+                {
+                    return Err(OmError::parse(format!(
+                        "{worksheet_part_uri}: worksheet x14:dataValidation is missing an xm:sqref range list"
+                    )));
+                } else if x14_data_validation_depth == Some(element_depth)
+                    && (resolved_element_is(
+                        &namespace,
+                        element.local_name(),
+                        EXCEL_2010_SPREADSHEET_NAMESPACE,
+                        b"formula1",
+                    ) || resolved_element_is(
+                        &namespace,
+                        element.local_name(),
+                        EXCEL_2010_SPREADSHEET_NAMESPACE,
+                        b"formula2",
+                    ))
+                {
+                    return Err(OmError::parse(format!(
+                        "{worksheet_part_uri}: worksheet x14:dataValidation formula is missing an xm:f value"
+                    )));
+                } else if x14_formula_wrapper_depth == Some(element_depth)
+                    && resolved_element_is(
+                        &namespace,
+                        element.local_name(),
+                        EXCEL_MAIN_NAMESPACE,
+                        b"f",
+                    )
+                {
+                    if x14_formula_has_value {
+                        return Err(OmError::parse(format!(
+                            "{worksheet_part_uri}: worksheet x14:dataValidation formula has duplicate xm:f values"
+                        )));
+                    }
+                    data_validation_formulas.push(String::new());
+                    x14_formula_has_value = true;
+                } else if x14_data_validation_depth == Some(element_depth)
+                    && resolved_element_is(
+                        &namespace,
+                        element.local_name(),
+                        EXCEL_MAIN_NAMESPACE,
+                        b"sqref",
+                    )
+                {
+                    if x14_data_validation_has_sqref {
+                        return Err(OmError::parse(format!(
+                            "{worksheet_part_uri}: worksheet x14:dataValidation has duplicate xm:sqref values"
+                        )));
+                    }
+                    return Err(OmError::parse(format!(
+                        "{worksheet_part_uri}: worksheet x14:dataValidation has an empty sqref range list"
+                    )));
+                } else if x14_formula_value_depth == Some(element_depth)
+                    || x14_sqref_depth == Some(element_depth)
+                {
+                    return Err(OmError::parse(format!(
+                        "{worksheet_part_uri}: worksheet x14:dataValidation value contains nested XML"
+                    )));
+                } else if x14_formula_wrapper_depth == Some(element_depth) {
+                    return Err(OmError::parse(format!(
+                        "{worksheet_part_uri}: worksheet x14:dataValidation formula contains a non-xm:f child"
+                    )));
+                } else if merge_cells_depth == Some(element_depth)
                     && resolved_element_is(
                         &namespace,
                         element.local_name(),
@@ -825,20 +1073,151 @@ pub(crate) fn parse_worksheet_cells(
                 }
             }
             Ok((_, Event::Text(text))) => {
-                if data_validation_formula_depth == Some(element_depth)
+                if x14_formula_value_depth == Some(element_depth)
+                    && let Some(formula) = current_x14_formula.as_mut()
+                {
+                    formula.push_str(&text.xml_content().map_err(xml_error)?);
+                } else if x14_sqref_depth == Some(element_depth)
+                    && let Some(sqref) = current_x14_sqref.as_mut()
+                {
+                    sqref.push_str(&text.xml_content().map_err(xml_error)?);
+                } else if data_validation_formula_depth == Some(element_depth)
                     && let Some(formula) = current_data_validation_formula.as_mut()
                 {
                     formula.push_str(&text.xml_content().map_err(xml_error)?);
                 }
             }
             Ok((_, Event::CData(text))) => {
-                if data_validation_formula_depth == Some(element_depth)
+                if x14_formula_value_depth == Some(element_depth)
+                    && let Some(formula) = current_x14_formula.as_mut()
+                {
+                    formula.push_str(&text.xml_content().map_err(xml_error)?);
+                } else if x14_sqref_depth == Some(element_depth)
+                    && let Some(sqref) = current_x14_sqref.as_mut()
+                {
+                    sqref.push_str(&text.xml_content().map_err(xml_error)?);
+                } else if data_validation_formula_depth == Some(element_depth)
                     && let Some(formula) = current_data_validation_formula.as_mut()
                 {
                     formula.push_str(&text.xml_content().map_err(xml_error)?);
                 }
             }
+            Ok((_, Event::GeneralRef(reference))) => {
+                let value = decode_general_ref_text(&reference)?;
+                if x14_formula_value_depth == Some(element_depth)
+                    && let Some(formula) = current_x14_formula.as_mut()
+                {
+                    formula.push_str(&value);
+                } else if x14_sqref_depth == Some(element_depth)
+                    && let Some(sqref) = current_x14_sqref.as_mut()
+                {
+                    sqref.push_str(&value);
+                } else if data_validation_formula_depth == Some(element_depth)
+                    && let Some(formula) = current_data_validation_formula.as_mut()
+                {
+                    formula.push_str(&value);
+                }
+            }
             Ok((namespace, Event::End(element))) => {
+                if x14_formula_value_depth == Some(element_depth)
+                    && resolved_element_is(
+                        &namespace,
+                        element.local_name(),
+                        EXCEL_MAIN_NAMESPACE,
+                        b"f",
+                    )
+                {
+                    data_validation_formulas.push(current_x14_formula.take().unwrap_or_default());
+                    x14_formula_value_depth = None;
+                    x14_formula_has_value = true;
+                }
+                if x14_sqref_depth == Some(element_depth)
+                    && resolved_element_is(
+                        &namespace,
+                        element.local_name(),
+                        EXCEL_MAIN_NAMESPACE,
+                        b"sqref",
+                    )
+                {
+                    let sqref = current_x14_sqref.take().unwrap_or_default();
+                    data_validation_ranges
+                        .extend(parse_sqref_ranges(&sqref, "worksheet x14:dataValidation")?);
+                    x14_sqref_depth = None;
+                    x14_data_validation_has_sqref = true;
+                }
+                if x14_formula_wrapper_depth == Some(element_depth)
+                    && (resolved_element_is(
+                        &namespace,
+                        element.local_name(),
+                        EXCEL_2010_SPREADSHEET_NAMESPACE,
+                        b"formula1",
+                    ) || resolved_element_is(
+                        &namespace,
+                        element.local_name(),
+                        EXCEL_2010_SPREADSHEET_NAMESPACE,
+                        b"formula2",
+                    ))
+                {
+                    if !x14_formula_has_value {
+                        return Err(OmError::parse(format!(
+                            "{worksheet_part_uri}: worksheet x14:dataValidation formula is missing an xm:f value"
+                        )));
+                    }
+                    x14_formula_wrapper_depth = None;
+                    x14_formula_has_value = false;
+                }
+                if x14_data_validation_depth == Some(element_depth)
+                    && resolved_element_is(
+                        &namespace,
+                        element.local_name(),
+                        EXCEL_2010_SPREADSHEET_NAMESPACE,
+                        b"dataValidation",
+                    )
+                {
+                    if !x14_data_validation_has_sqref {
+                        return Err(OmError::parse(format!(
+                            "{worksheet_part_uri}: worksheet x14:dataValidation is missing an xm:sqref range list"
+                        )));
+                    }
+                    x14_data_validation_depth = None;
+                    x14_data_validation_has_sqref = false;
+                }
+                if x14_data_validations_depth == Some(element_depth)
+                    && resolved_element_is(
+                        &namespace,
+                        element.local_name(),
+                        EXCEL_2010_SPREADSHEET_NAMESPACE,
+                        b"dataValidations",
+                    )
+                {
+                    if !x14_data_validations_has_owner {
+                        return Err(OmError::parse(format!(
+                            "{worksheet_part_uri}: worksheet x14:dataValidations has no dataValidation owners"
+                        )));
+                    }
+                    x14_data_validations_depth = None;
+                    x14_data_validations_has_owner = false;
+                }
+                if worksheet_ext_depth == Some(element_depth)
+                    && resolved_element_is(
+                        &namespace,
+                        element.local_name(),
+                        spreadsheet_namespace.as_bytes(),
+                        b"ext",
+                    )
+                {
+                    worksheet_ext_depth = None;
+                }
+                if worksheet_ext_lst_depth == Some(element_depth)
+                    && resolved_element_is(
+                        &namespace,
+                        element.local_name(),
+                        spreadsheet_namespace.as_bytes(),
+                        b"extLst",
+                    )
+                {
+                    worksheet_ext_lst_depth = None;
+                }
                 if data_validation_formula_depth == Some(element_depth)
                     && (resolved_element_is(
                         &namespace,

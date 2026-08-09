@@ -3136,6 +3136,91 @@
     }
 
     #[test]
+    fn parses_qname_aware_x14_data_validation_structural_owners() {
+        let parsed = parse_worksheet_cells(
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+ xmlns:s="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+ xmlns:dv="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"
+ xmlns:m="http://schemas.microsoft.com/office/excel/2006/main"
+ xmlns:f="urn:foreign">
+  <sheetData/>
+  <s:extLst><s:ext uri="{CCE6A557-97BC-4B89-ADB6-D9C93CAAB3DF}">
+    <dv:dataValidations count="1"><dv:dataValidation type="whole">
+      <dv:formula1><m:f>1</m:f></dv:formula1>
+      <dv:formula2><m:f>=$A$&#49;&gt;0</m:f></dv:formula2>
+      <m:sqref>$D&#52;:$E$5 F8</m:sqref>
+    </dv:dataValidation></dv:dataValidations>
+    <f:wrapper><dv:dataValidations><dv:dataValidation><m:sqref>XFE1:XFE2</m:sqref></dv:dataValidation></dv:dataValidations></f:wrapper>
+  </s:ext></s:extLst>
+</worksheet>"#,
+            &[],
+            "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
+            "/xl/worksheets/sheet1.xml",
+        )
+        .expect("worksheet x14 data-validation inventory");
+
+        assert_eq!(
+            parsed.structural_owners.data_validation_ranges,
+            vec![
+                Rect {
+                    row_first: 4,
+                    row_last: 5,
+                    col_first: 4,
+                    col_last: 5,
+                },
+                Rect::single_cell(8, 6),
+            ],
+        );
+        assert_eq!(
+            parsed.structural_owners.data_validation_formulas,
+            vec!["1".to_string(), "=$A$1>0".to_string()],
+        );
+    }
+
+    #[test]
+    fn invalid_x14_data_validation_structural_owner_metadata_fails_closed() {
+        for data_validations in [
+            r#"<x14:dataValidations/>"#,
+            r#"<x14:dataValidations></x14:dataValidations>"#,
+            r#"<x14:dataValidations><x14:dataValidation/></x14:dataValidations>"#,
+            r#"<x14:dataValidations><x14:dataValidation></x14:dataValidation></x14:dataValidations>"#,
+            r#"<x14:dataValidations><x14:dataValidation><xm:sqref/></x14:dataValidation></x14:dataValidations>"#,
+            r#"<x14:dataValidations><x14:dataValidation><xm:sqref>XFE1:XFE2</xm:sqref></x14:dataValidation></x14:dataValidations>"#,
+            r#"<x14:dataValidations><x14:dataValidation><xm:sqref>E5:D4</xm:sqref></x14:dataValidation></x14:dataValidations>"#,
+            r#"<x14:dataValidations><x14:dataValidation><xm:sqref>D4 invalid</xm:sqref></x14:dataValidation></x14:dataValidations>"#,
+            r#"<x14:dataValidations><x14:dataValidation><x14:formula1/><xm:sqref>D4</xm:sqref></x14:dataValidation></x14:dataValidations>"#,
+            r#"<x14:dataValidations><x14:dataValidation><x14:formula1><xm:f><nested>A1</nested></xm:f></x14:formula1><xm:sqref>D4</xm:sqref></x14:dataValidation></x14:dataValidations>"#,
+            r#"<x14:dataValidations><x14:dataValidation><f:sqref>D4</f:sqref></x14:dataValidation></x14:dataValidations>"#,
+            r#"<x14:dataValidations><x14:dataValidation><xm:sqref>D4</xm:sqref><xm:sqref>E5</xm:sqref></x14:dataValidation></x14:dataValidations>"#,
+            r#"<x14:dataValidations><x14:dataValidation><x14:formula1><xm:f>1</xm:f><xm:f>2</xm:f></x14:formula1><xm:sqref>D4</xm:sqref></x14:dataValidation></x14:dataValidations>"#,
+        ] {
+            let worksheet_xml = format!(
+                r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+ xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"
+ xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main"
+ xmlns:f="urn:foreign">
+  <sheetData/><extLst><ext uri="{{CCE6A557-97BC-4B89-ADB6-D9C93CAAB3DF}}">{data_validations}</ext></extLst>
+</worksheet>"#,
+            );
+
+            let error = parse_worksheet_cells(
+                worksheet_xml.as_bytes(),
+                &[],
+                "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
+                "/xl/worksheets/sheet1.xml",
+            )
+            .expect_err("invalid x14 data-validation metadata must fail closed");
+
+            assert_eq!(error.code, OmErrorCode::Parse, "{data_validations}");
+            assert!(
+                error.message.contains("/xl/worksheets/sheet1.xml"),
+                "{data_validations}: {error:?}",
+            );
+        }
+    }
+
+    #[test]
     fn non_finite_worksheet_numbers_fail_parse_and_rewrite_boundaries() {
         for lexical in ["NaN", "inf", "-inf"] {
             let worksheet_xml = format!(
