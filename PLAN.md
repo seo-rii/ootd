@@ -626,8 +626,15 @@ Wave 2 exit gate:
    누락·중복·cross-run 조합 및 tampered observation을 거절한 뒤 suite 순서와 canonical
    `observations/<case-id>/oracle.json` 경로를 가진 complete in-memory `RunBundle`로 조립한다.
    `excel-oracle` 26개 테스트가 통과한다. 실제 Excel observation은 아직 없다.
-   **다음:** assembled bundle을 fresh run root에 원자적으로 저장하는 artifact writer와 suite
-   capture command를 추가한 뒤 pinned Windows/Excel host에서 독립 run 두 개를 수집한다.
+   `OOTD-043`/`OOTD-085` atomic run materialization 기반 4단계 완료 (2026-08-10, synthetic):
+   existing destination과 symlink parent를 거절하고 complete coverage/canonical path/hash/size/
+   engine/typed observation을 재검증한 뒤 unique sibling temp root에 create-new·flush·sync한다.
+   observation을 먼저, manifest를 마지막에 쓰고 destination 재검사 후 한 번의 directory rename으로
+   공개한다. 실패 시 temp root를 정리하고 기존 destination은 보존한다. publish/reload, existing
+   sentinel, tampered-before-output regression을 포함한 `excel-oracle` 28개 테스트가 통과한다.
+   실제 Excel observation은 아직 없다.
+   **다음:** suite manifest를 순회해 Windows watchdog를 case별로 실행하고 fragment를 assemble/
+   materialize하는 bounded capture command를 추가한 뒤 pinned host에서 독립 run 두 개를 수집한다.
 16. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
    structured error에 추가한다.
 

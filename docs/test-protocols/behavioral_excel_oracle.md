@@ -43,6 +43,13 @@ ID, profile, and engine fingerprint; it rejects missing or duplicate case record
 observation bytes before ordering records by the suite. Completed observations receive canonical
 `observations/<case-id>/oracle.json` paths in the assembled in-memory bundle.
 
+`write_run_bundle` refuses an existing destination or symlinked parent, revalidates complete suite
+coverage plus every canonical observation path, hash, size, engine, and typed case before creating
+output, and materializes into a unique sibling temporary directory. Observation files are
+create-new, flushed, and synced first; the manifest is written last. A final destination recheck
+precedes one directory rename, and any pre-publication error removes the temporary root, so callers
+never receive a partially populated run root.
+
 ## Excel Execution
 
 One runner process owns and records every Excel Application it activates. The host must have no
@@ -61,9 +68,9 @@ timestamps.
 
 ## Current Verification Boundary
 
-Rust contract, manifest, bounded filesystem/fragment loader, deterministic suite-run assembler,
-repeated-capture gate, comparator, report bridge, `ExcelRuntime` adapter, .NET contract
-normalization, and fake-backed runner lifecycle tests execute in this repository. The COM session
-and watchdog compile on Linux but require a real Windows Excel host for execution. No real Excel
-observation or 20-case required corpus is pinned as of 2026-08-10, so no behavior is yet
+Rust contract, manifest, bounded filesystem/fragment loader, deterministic suite-run assembler and
+atomic publisher, repeated-capture gate, comparator, report bridge, `ExcelRuntime` adapter, .NET
+contract normalization, and fake-backed runner lifecycle tests execute in this repository. The COM
+session and watchdog compile on Linux but require a real Windows Excel host for execution. No real
+Excel observation or 20-case required corpus is pinned as of 2026-08-10, so no behavior is yet
 Oracle-verified.

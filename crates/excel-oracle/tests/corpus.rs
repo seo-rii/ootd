@@ -496,6 +496,80 @@ fn rejects_missing_duplicate_and_cross_run_fragments() {
     assert!(error.contains("fragment runId did not match the assembled run"));
 }
 
+#[test]
+fn atomically_materializes_and_reloads_assembled_run_bundles() {
+    let fixture = CorpusFixture::create();
+    let second_fragment_root = fixture.add_second_case_fragment();
+    let suite = PinnedSuiteArtifacts::load(&fixture.corpus_root).expect("load expanded suite");
+    let first = suite
+        .load_run_fragment(&fixture.run_root)
+        .expect("load first fragment");
+    let second = suite
+        .load_run_fragment(&second_fragment_root)
+        .expect("load second fragment");
+    let assembled = suite
+        .assemble_run_fragments(&[first, second])
+        .expect("assemble run");
+    let output_root = fixture.root.join("published-run");
+
+    let receipt = suite
+        .write_run_bundle(&assembled, &output_root)
+        .expect("materialize assembled run");
+    assert_eq!(receipt.root, output_root);
+    assert_eq!(
+        receipt.manifest_path,
+        output_root.join("manifest/run_manifest.json"),
+    );
+    assert_eq!(receipt.observation_paths.len(), 2);
+    assert_eq!(
+        suite.load_run(&output_root).expect("reload published run"),
+        assembled,
+    );
+}
+
+#[test]
+fn refuses_existing_destinations_and_tampered_bundles_without_partial_output() {
+    let fixture = CorpusFixture::create();
+    let suite = PinnedSuiteArtifacts::load(&fixture.corpus_root).expect("load suite");
+    let assembled = suite
+        .load_run(&fixture.run_root)
+        .expect("load complete run");
+
+    let existing_root = fixture.root.join("existing-run");
+    fs::create_dir(&existing_root).expect("create existing output root");
+    let sentinel = existing_root.join("sentinel.txt");
+    fs::write(&sentinel, b"keep").expect("write sentinel");
+    let error = suite
+        .write_run_bundle(&assembled, &existing_root)
+        .expect_err("existing output root must fail")
+        .to_string();
+    assert!(error.contains("run output root must not already exist"));
+    assert_eq!(fs::read(&sentinel).expect("read sentinel"), b"keep");
+
+    let mut tampered = assembled;
+    tampered
+        .observations
+        .get_mut("application.name")
+        .expect("observation")
+        .push(b' ');
+    let rejected_root = fixture.root.join("rejected-run");
+    let error = suite
+        .write_run_bundle(&tampered, &rejected_root)
+        .expect_err("tampered bundle must fail before publication")
+        .to_string();
+    assert!(error.contains("observation for case application.name exact-byte sha256"));
+    assert!(!rejected_root.exists());
+    assert!(
+        fs::read_dir(&fixture.root)
+            .expect("list fixture root")
+            .all(|entry| !entry
+                .expect("fixture entry")
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".rejected-run.ootd-tmp-")),
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn rejects_symlinked_case_artifacts() {

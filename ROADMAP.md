@@ -353,7 +353,11 @@ Active order:
    synthetic): validated case-subset fragments sharing one exact run/profile/engine are assembled
    in suite order with canonical observation paths; missing, duplicate, cross-run, and tampered
    fragments fail closed.
-54. **Active:** atomically persist the assembled bundle and expose a suite capture command, then
+54. `OOTD-043`/`OOTD-085` atomic materialization foundation stage 4 is complete (2026-08-10,
+   synthetic): a fresh sibling temporary root receives create-new/synced observations and the
+   manifest before one directory rename; existing destinations and tampered bundles leave no
+   partial output.
+55. **Active:** expose a bounded suite capture command around the Windows case watchdog, then
    collect two independent runs on the pinned desktop Excel host.
 
 Every numbered work unit starts with a failing regression and lands as its own reviewable commit.

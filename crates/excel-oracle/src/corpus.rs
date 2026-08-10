@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::{
     CaseSpec, ComparisonPolicy, EngineIdentity, EngineKind, OracleContractError,
@@ -15,6 +17,7 @@ const MAX_MANIFEST_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_CASE_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_OBSERVATION_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_INPUT_BYTES: u64 = 512 * 1024 * 1024;
+static TEMP_DIRECTORY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PinnedSuiteArtifacts {
@@ -28,6 +31,13 @@ pub struct RepeatedExcelRunEvidence {
     pub engine: EngineIdentity,
     pub run_ids: [String; 2],
     pub verified_case_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WrittenRunArtifacts {
+    pub root: PathBuf,
+    pub manifest_path: PathBuf,
+    pub observation_paths: BTreeMap<String, PathBuf>,
 }
 
 impl PinnedSuiteArtifacts {
@@ -202,6 +212,178 @@ impl PinnedSuiteArtifacts {
         };
         bundle.validate(&self.manifest)?;
         Ok(bundle)
+    }
+
+    pub fn write_run_bundle(
+        &self,
+        bundle: &RunBundle,
+        output_root: impl AsRef<Path>,
+    ) -> Result<WrittenRunArtifacts, OracleContractError> {
+        let output_root = output_root.as_ref();
+        match fs::symlink_metadata(output_root) {
+            Ok(_) => {
+                return Err(OracleContractError::new(
+                    "run output root must not already exist",
+                ));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(OracleContractError::new(format!(
+                    "failed to inspect run output root: {error}"
+                )));
+            }
+        }
+        let output_name = output_root
+            .file_name()
+            .and_then(|name| name.to_str())
+            .filter(|name| !name.is_empty())
+            .ok_or_else(|| {
+                OracleContractError::new("run output root must have a Unicode file name")
+            })?;
+        let output_parent = output_root
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        let parent_metadata = fs::symlink_metadata(output_parent).map_err(|error| {
+            OracleContractError::new(format!("failed to inspect run output parent: {error}"))
+        })?;
+        if parent_metadata.file_type().is_symlink() {
+            return Err(OracleContractError::new(
+                "run output parent must not be a symbolic link",
+            ));
+        }
+        if !parent_metadata.is_dir() {
+            return Err(OracleContractError::new(
+                "run output parent must be a directory",
+            ));
+        }
+
+        bundle.validate(&self.manifest)?;
+        let manifest_json = bundle.manifest.to_json_pretty(&self.manifest)?;
+        let manifest_bytes = manifest_json.as_bytes();
+        if u64::try_from(manifest_bytes.len()).unwrap_or(u64::MAX) > MAX_MANIFEST_BYTES {
+            return Err(OracleContractError::new(format!(
+                "run manifest exceeded the {MAX_MANIFEST_BYTES}-byte limit"
+            )));
+        }
+        let mut observation_artifacts = Vec::new();
+        for record in &bundle.manifest.cases {
+            if record.status != RunCaseStatus::Completed {
+                continue;
+            }
+            let expected_path = format!("observations/{}/oracle.json", record.case_id);
+            let observation_path = record
+                .observation_path
+                .as_deref()
+                .expect("validated completed observation path");
+            if observation_path != expected_path {
+                return Err(OracleContractError::new(format!(
+                    "run observation path for case {} must be {expected_path}",
+                    record.case_id,
+                )));
+            }
+            validate_portable_artifact_path(observation_path, "run observation path")?;
+            let bytes = bundle
+                .observations
+                .get(&record.case_id)
+                .expect("validated run observation coverage");
+            if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > MAX_OBSERVATION_BYTES {
+                return Err(OracleContractError::new(format!(
+                    "run observation for case {} exceeded the {MAX_OBSERVATION_BYTES}-byte limit",
+                    record.case_id,
+                )));
+            }
+            let case = self.load_case(&record.case_id)?;
+            record.load_observation(&case, &bundle.manifest.engine, bytes)?;
+            observation_artifacts.push((record.case_id.clone(), expected_path, bytes));
+        }
+
+        let mut temporary_root = None;
+        for _ in 0..128 {
+            let sequence = TEMP_DIRECTORY_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+            let candidate = output_parent.join(format!(
+                ".{output_name}.ootd-tmp-{}-{sequence}",
+                std::process::id(),
+            ));
+            match fs::create_dir(&candidate) {
+                Ok(()) => {
+                    temporary_root = Some(candidate);
+                    break;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(error) => {
+                    return Err(OracleContractError::new(format!(
+                        "failed to create temporary run root: {error}"
+                    )));
+                }
+            }
+        }
+        let temporary_root = temporary_root.ok_or_else(|| {
+            OracleContractError::new("failed to allocate a unique temporary run root")
+        })?;
+        let mut receipt_observations = BTreeMap::new();
+        let materialization = (|| {
+            let write_artifact = |path: &Path,
+                                  bytes: &[u8],
+                                  label: &str|
+             -> Result<(), OracleContractError> {
+                let parent = path.parent().expect("artifact path parent");
+                fs::create_dir_all(parent).map_err(|error| {
+                    OracleContractError::new(format!("failed to create {label} directory: {error}"))
+                })?;
+                let mut file = OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(path)
+                    .map_err(|error| {
+                        OracleContractError::new(format!("failed to create {label}: {error}"))
+                    })?;
+                file.write_all(bytes).map_err(|error| {
+                    OracleContractError::new(format!("failed to write {label}: {error}"))
+                })?;
+                file.sync_all().map_err(|error| {
+                    OracleContractError::new(format!("failed to sync {label}: {error}"))
+                })
+            };
+
+            for (case_id, relative, bytes) in &observation_artifacts {
+                let temporary_path = temporary_root.join(relative);
+                write_artifact(&temporary_path, bytes, "run observation")?;
+                receipt_observations.insert(case_id.clone(), output_root.join(relative));
+            }
+            let temporary_manifest = temporary_root.join(RUN_MANIFEST_PATH);
+            write_artifact(&temporary_manifest, manifest_bytes, "run manifest")?;
+            match fs::symlink_metadata(output_root) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Ok(_) => {
+                    return Err(OracleContractError::new(
+                        "run output root appeared before atomic publication",
+                    ));
+                }
+                Err(error) => {
+                    return Err(OracleContractError::new(format!(
+                        "failed to recheck run output root: {error}"
+                    )));
+                }
+            }
+            fs::rename(&temporary_root, output_root).map_err(|error| {
+                OracleContractError::new(format!("failed to publish run output root: {error}"))
+            })
+        })();
+        if let Err(error) = materialization {
+            if let Err(cleanup_error) = fs::remove_dir_all(&temporary_root) {
+                return Err(OracleContractError::new(format!(
+                    "{error}; failed to clean temporary run root: {cleanup_error}"
+                )));
+            }
+            return Err(error);
+        }
+
+        Ok(WrittenRunArtifacts {
+            root: output_root.to_path_buf(),
+            manifest_path: output_root.join(RUN_MANIFEST_PATH),
+            observation_paths: receipt_observations,
+        })
     }
 
     pub fn verify_repeated_excel_runs(

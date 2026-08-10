@@ -11,6 +11,7 @@ mod runtime;
 
 pub use corpus::{
     PinnedSuiteArtifacts, RUN_MANIFEST_PATH, RepeatedExcelRunEvidence, SUITE_MANIFEST_PATH,
+    WrittenRunArtifacts,
 };
 pub use report::{RunBundle, build_behavioral_differential_report};
 pub use runtime::{RuntimeCaseOutput, run_runtime_case};
