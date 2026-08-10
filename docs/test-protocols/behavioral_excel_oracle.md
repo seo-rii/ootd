@@ -29,6 +29,13 @@ symlink, rejects non-regular artifacts and non-portable Windows aliases, and val
 case, input, and observation bytes before replay. JSON case/manifest artifacts are capped at 16 MiB,
 observations at 64 MiB, and individual workbook inputs at 512 MiB.
 
+`verify_repeated_excel_runs` promotes only completed observations from two independently named run
+manifests whose exact engine fingerprint matches the suite's pinned desktop Excel profile. Every
+`mustMatch` case must complete in both runs; failed cases, status drift, reused run IDs (including
+ASCII case aliases), and canonical typed-value drift reject the evidence. The repeated comparison
+is exact by default while still ignoring native diagnostic message text in the same way as the
+Excel-to-OOTD comparator.
+
 ## Excel Execution
 
 One runner process owns and records every Excel Application it activates. The host must have no
@@ -47,8 +54,8 @@ timestamps.
 
 ## Current Verification Boundary
 
-Rust contract, manifest, bounded filesystem loader, comparator, report bridge, `ExcelRuntime`
-adapter, .NET contract normalization, and fake-backed runner lifecycle tests execute in this
-repository. The COM session and watchdog compile on Linux but require a real Windows Excel host for
-execution. No real Excel observation or 20-case required corpus is pinned as of 2026-08-10, so no
-behavior is yet Oracle-verified.
+Rust contract, manifest, bounded filesystem loader, repeated-capture gate, comparator, report
+bridge, `ExcelRuntime` adapter, .NET contract normalization, and fake-backed runner lifecycle tests
+execute in this repository. The COM session and watchdog compile on Linux but require a real
+Windows Excel host for execution. No real Excel observation or 20-case required corpus is pinned as
+of 2026-08-10, so no behavior is yet Oracle-verified.

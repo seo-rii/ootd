@@ -145,6 +145,44 @@ impl CorpusFixture {
             observation_bytes,
         }
     }
+
+    fn copy_run(&self, directory: &str, run_id: &str, probe_value: &str) -> PathBuf {
+        let suite = PinnedSuiteArtifacts::load(&self.corpus_root).expect("load fixture suite");
+        let source_manifest_path = self.run_root.join("manifest/run_manifest.json");
+        let source_manifest = fs::read_to_string(source_manifest_path).expect("read source run");
+        let mut manifest = RunManifest::from_json_str(&suite.manifest, &source_manifest)
+            .expect("parse source run");
+        manifest.run_id = run_id.to_string();
+
+        let mut observation: ObservationDocument =
+            serde_json::from_slice(&self.observation_bytes).expect("parse source observation");
+        let ObservationResult::Value(ObservedValue::Text(value)) =
+            &mut observation.probes[0].result
+        else {
+            panic!("expected text probe");
+        };
+        *value = probe_value.to_string();
+        let observation_bytes =
+            serde_json::to_vec_pretty(&observation).expect("serialize copied observation");
+        manifest.cases[0].observation_sha256 = Some(sha256_hex(&observation_bytes));
+
+        let run_root = self.root.join(directory);
+        let observation_path = run_root.join("observations/application.name/oracle.json");
+        let manifest_path = run_root.join("manifest/run_manifest.json");
+        fs::create_dir_all(observation_path.parent().expect("observation parent"))
+            .expect("create copied observation directory");
+        fs::create_dir_all(manifest_path.parent().expect("manifest parent"))
+            .expect("create copied manifest directory");
+        fs::write(observation_path, observation_bytes).expect("write copied observation");
+        fs::write(
+            manifest_path,
+            manifest
+                .to_json_pretty(&suite.manifest)
+                .expect("serialize copied run"),
+        )
+        .expect("write copied run");
+        run_root
+    }
 }
 
 impl Drop for CorpusFixture {
@@ -211,6 +249,74 @@ fn rejects_tampered_input_and_observation_bytes_before_replay() {
         .expect_err("tampered observation must fail")
         .to_string();
     assert!(error.contains("observation for case application.name exact-byte sha256"));
+}
+
+#[test]
+fn accepts_only_distinct_matching_repeated_excel_runs() {
+    let fixture = CorpusFixture::create();
+    let matching_root = fixture.copy_run("run-b", "excel-win-en-us-20260810-b", "Microsoft Excel");
+    let suite = PinnedSuiteArtifacts::load(&fixture.corpus_root).expect("load pinned suite");
+    let first = suite.load_run(&fixture.run_root).expect("load first run");
+    let matching = suite.load_run(&matching_root).expect("load matching run");
+
+    let evidence = suite
+        .verify_repeated_excel_runs(&first, &matching)
+        .expect("matching independent runs");
+    assert_eq!(
+        evidence.run_ids,
+        [
+            "excel-win-en-us-20260810-a".to_string(),
+            "excel-win-en-us-20260810-b".to_string(),
+        ],
+    );
+    assert_eq!(
+        evidence.verified_case_ids,
+        vec!["application.name".to_string()],
+    );
+    assert_eq!(evidence.engine, engine(EngineKind::Excel));
+
+    let reused_id_root = fixture.copy_run(
+        "run-reused",
+        "excel-win-en-us-20260810-a",
+        "Microsoft Excel",
+    );
+    let reused_id = suite.load_run(&reused_id_root).expect("load reused-id run");
+    let error = suite
+        .verify_repeated_excel_runs(&first, &reused_id)
+        .expect_err("reused run id must not count as independent evidence")
+        .to_string();
+    assert!(error.contains("repeated Excel runs must use distinct run ids"));
+
+    let drifted_root =
+        fixture.copy_run("run-drifted", "excel-win-en-us-20260810-c", "Drifted Excel");
+    let drifted = suite.load_run(&drifted_root).expect("load drifted run");
+    let error = suite
+        .verify_repeated_excel_runs(&first, &drifted)
+        .expect_err("typed observation drift must fail")
+        .to_string();
+    assert!(error.contains(
+        "repeated Excel runs diverged for case application.name at probes.application-name.value"
+    ));
+
+    let mut incomplete = matching.clone();
+    incomplete.manifest.cases[0].status = RunCaseStatus::Unsupported;
+    incomplete.manifest.cases[0].observation_path = None;
+    incomplete.manifest.cases[0].observation_sha256 = None;
+    incomplete.manifest.cases[0].message = Some("capture was unsupported".to_string());
+    incomplete.observations.clear();
+    let error = suite
+        .verify_repeated_excel_runs(&first, &incomplete)
+        .expect_err("incomplete must-match case must fail")
+        .to_string();
+    assert!(error.contains("mustMatch case application.name did not complete"));
+
+    let mut non_excel = matching;
+    non_excel.manifest.engine.kind = EngineKind::Ootd;
+    let error = suite
+        .verify_repeated_excel_runs(&first, &non_excel)
+        .expect_err("non-Excel run must fail")
+        .to_string();
+    assert!(error.contains("repeated evidence requires two desktop Excel runs"));
 }
 
 #[cfg(unix)]

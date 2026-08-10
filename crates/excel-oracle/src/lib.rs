@@ -9,7 +9,9 @@ mod corpus;
 mod report;
 mod runtime;
 
-pub use corpus::{PinnedSuiteArtifacts, RUN_MANIFEST_PATH, SUITE_MANIFEST_PATH};
+pub use corpus::{
+    PinnedSuiteArtifacts, RUN_MANIFEST_PATH, RepeatedExcelRunEvidence, SUITE_MANIFEST_PATH,
+};
 pub use report::{RunBundle, build_behavioral_differential_report};
 pub use runtime::{RuntimeCaseOutput, run_runtime_case};
 
@@ -1124,13 +1126,7 @@ pub fn compare_observations(
     runtime: &ObservationDocument,
     policy: ComparisonPolicy,
 ) -> Result<ObservationComparison, OracleContractError> {
-    if !policy.number_tolerance.is_finite() || policy.number_tolerance < 0.0 {
-        return Err(OracleContractError::new(
-            "comparison number tolerance must be finite and non-negative",
-        ));
-    }
-    oracle.validate_for_case(case)?;
-    runtime.validate_for_case(case)?;
+    validate_comparison_inputs(case, oracle, runtime, policy)?;
     if oracle.engine.kind != EngineKind::Excel {
         return Err(OracleContractError::new(
             "oracle observation must use the Excel engine kind",
@@ -1141,22 +1137,64 @@ pub fn compare_observations(
             "runtime observation must use the OOTD engine kind",
         ));
     }
+    Ok(compare_typed_observation_values(
+        case, oracle, runtime, policy,
+    ))
+}
 
+pub(crate) fn compare_repeated_excel_observations(
+    case: &CaseSpec,
+    first: &ObservationDocument,
+    second: &ObservationDocument,
+    policy: ComparisonPolicy,
+) -> Result<ObservationComparison, OracleContractError> {
+    validate_comparison_inputs(case, first, second, policy)?;
+    if first.engine.kind != EngineKind::Excel || second.engine.kind != EngineKind::Excel {
+        return Err(OracleContractError::new(
+            "repeated observations must both use the Excel engine kind",
+        ));
+    }
+    Ok(compare_typed_observation_values(
+        case, first, second, policy,
+    ))
+}
+
+fn validate_comparison_inputs(
+    case: &CaseSpec,
+    expected: &ObservationDocument,
+    actual: &ObservationDocument,
+    policy: ComparisonPolicy,
+) -> Result<(), OracleContractError> {
+    if !policy.number_tolerance.is_finite() || policy.number_tolerance < 0.0 {
+        return Err(OracleContractError::new(
+            "comparison number tolerance must be finite and non-negative",
+        ));
+    }
+    expected.validate_for_case(case)?;
+    actual.validate_for_case(case)
+}
+
+fn compare_typed_observation_values(
+    case: &CaseSpec,
+    expected: &ObservationDocument,
+    actual: &ObservationDocument,
+    policy: ComparisonPolicy,
+) -> ObservationComparison {
     let mut mismatches = Vec::new();
-    compare_operation_results(oracle, runtime, policy, &mut mismatches);
-    compare_probe_results(oracle, runtime, policy, &mut mismatches);
-    if oracle.save_reopen != runtime.save_reopen {
+    compare_operation_results(expected, actual, policy, &mut mismatches);
+    compare_probe_results(expected, actual, policy, &mut mismatches);
+    if expected.save_reopen != actual.save_reopen {
         mismatches.push(ObservationMismatch {
             path: "saveReopen".to_string(),
-            expected: format!("{:?}", oracle.save_reopen),
-            actual: format!("{:?}", runtime.save_reopen),
+            expected: format!("{:?}", expected.save_reopen),
+            actual: format!("{:?}", actual.save_reopen),
         });
     }
 
-    Ok(ObservationComparison {
+    ObservationComparison {
         case_id: case.id.clone(),
         mismatches,
-    })
+    }
 }
 
 fn compare_operation_results(

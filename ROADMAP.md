@@ -345,8 +345,12 @@ Active order:
    filesystem loader resolves the fixed suite/run manifests, refuses symlinked, non-regular,
    oversized, or non-portable artifacts, and checks exact case/input/observation hashes before
    replay. No desktop Excel observation is claimed.
-52. **Active:** require two independent complete runs from the same pinned Excel fingerprint and
-   reject typed observation drift before accepting the first desktop corpus.
+52. `OOTD-043`/`OOTD-085` repeated-capture foundation stage 2 is complete (2026-08-10,
+   synthetic): two case-insensitively distinct run IDs, the suite's exact Excel fingerprint,
+   complete required cases, stable statuses, and exact canonical typed observations are required
+   before an evidence receipt is returned.
+53. **Active:** assemble per-case Windows runner artifacts into a suite-wide complete run, then
+   collect two independent runs on the pinned desktop Excel host.
 
 Every numbered work unit starts with a failing regression and lands as its own reviewable commit.
 The complete `OOTD-001`~`OOTD-086` ordering, regression inventory, and compatibility completion

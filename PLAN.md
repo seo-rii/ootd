@@ -613,8 +613,15 @@ Wave 2 exit gate:
    non-regular file, Windows portable-path alias와 크기 초과를 fail-closed하고 suite/case/input/
    observation metadata 및 exact SHA-256을 replay 전에 검증한다. 변조와 symlink regression을
    포함한 `excel-oracle` 23개 테스트가 통과한다. 실제 Excel observation은 아직 없다.
-   **다음:** 동일한 pinned Excel profile에서 독립 실행한 두 run의 required completeness와 typed
-   observation 일치를 검증하는 repeated-capture gate를 추가한다.
+   `OOTD-043`/`OOTD-085` repeated-capture 기반 2단계 완료 (2026-08-10, synthetic): suite의 exact
+   desktop Excel engine fingerprint에 묶인 두 run이 case-insensitive하게 distinct한 ID를 갖고,
+   양쪽 모든 `mustMatch` case가 완료되며 canonical typed observation이 exact comparison에서
+   일치할 때만 `RepeatedExcelRunEvidence`를 반환한다. status drift, failed/incomplete required case,
+   reused run ID, non-Excel engine과 첫 mismatch path를 fail-closed한다. 기존 Excel↔OOTD 비교와
+   공유하는 typed payload comparator는 engine-kind entry contract를 분리했다. `excel-oracle` 24개
+   테스트가 통과한다. 실제 Excel observation은 아직 없다.
+   **다음:** per-case Windows runner artifact를 suite-wide complete run으로 조립·검증하는 capture
+   orchestration을 추가한 뒤 pinned Windows/Excel host에서 독립 run 두 개를 수집한다.
 16. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
    structured error에 추가한다.
 

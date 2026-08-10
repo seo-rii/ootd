@@ -14,7 +14,7 @@ pub struct RunBundle {
 }
 
 impl RunBundle {
-    fn validate(&self, suite: &OracleSuiteManifest) -> Result<(), OracleContractError> {
+    pub(crate) fn validate(&self, suite: &OracleSuiteManifest) -> Result<(), OracleContractError> {
         self.manifest.validate_for_suite(suite)?;
         let expected = self
             .manifest

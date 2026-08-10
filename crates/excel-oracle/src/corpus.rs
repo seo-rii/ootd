@@ -3,7 +3,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::{
-    CaseSpec, OracleContractError, OracleSuiteManifest, RunBundle, RunCaseStatus, RunManifest,
+    CaseSpec, ComparisonPolicy, EngineIdentity, EngineKind, OracleContractError,
+    OracleSuiteManifest, RunBundle, RunCaseStatus, RunManifest,
+    compare_repeated_excel_observations,
 };
 
 pub const SUITE_MANIFEST_PATH: &str = "manifest/suite_manifest.json";
@@ -19,6 +21,13 @@ pub struct PinnedSuiteArtifacts {
     pub manifest: OracleSuiteManifest,
     pub cases: BTreeMap<String, Vec<u8>>,
     pub inputs: BTreeMap<String, Vec<u8>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepeatedExcelRunEvidence {
+    pub engine: EngineIdentity,
+    pub run_ids: [String; 2],
+    pub verified_case_ids: Vec<String>,
 }
 
 impl PinnedSuiteArtifacts {
@@ -87,6 +96,114 @@ impl PinnedSuiteArtifacts {
         Ok(RunBundle {
             manifest,
             observations,
+        })
+    }
+
+    pub fn verify_repeated_excel_runs(
+        &self,
+        first: &RunBundle,
+        second: &RunBundle,
+    ) -> Result<RepeatedExcelRunEvidence, OracleContractError> {
+        first.validate(&self.manifest)?;
+        second.validate(&self.manifest)?;
+        first
+            .manifest
+            .validate_required_completeness(&self.manifest)?;
+        second
+            .manifest
+            .validate_required_completeness(&self.manifest)?;
+        if first.manifest.engine.kind != EngineKind::Excel
+            || second.manifest.engine.kind != EngineKind::Excel
+        {
+            return Err(OracleContractError::new(
+                "repeated evidence requires two desktop Excel runs",
+            ));
+        }
+        if first
+            .manifest
+            .run_id
+            .eq_ignore_ascii_case(&second.manifest.run_id)
+        {
+            return Err(OracleContractError::new(
+                "repeated Excel runs must use distinct run ids",
+            ));
+        }
+
+        let mut verified_case_ids = Vec::new();
+        for artifact in &self.manifest.cases {
+            let case = self.load_case(&artifact.case_id)?;
+            let first_record = first
+                .manifest
+                .cases
+                .iter()
+                .find(|record| record.case_id == artifact.case_id)
+                .expect("validated first run coverage");
+            let second_record = second
+                .manifest
+                .cases
+                .iter()
+                .find(|record| record.case_id == artifact.case_id)
+                .expect("validated second run coverage");
+            if first_record.status != second_record.status {
+                return Err(OracleContractError::new(format!(
+                    "repeated Excel run status diverged for case {}",
+                    artifact.case_id,
+                )));
+            }
+            match first_record.status {
+                RunCaseStatus::Completed => {
+                    let first_observation = first_record.load_observation(
+                        &case,
+                        &first.manifest.engine,
+                        first
+                            .observations
+                            .get(&artifact.case_id)
+                            .expect("validated first observation coverage"),
+                    )?;
+                    let second_observation = second_record.load_observation(
+                        &case,
+                        &second.manifest.engine,
+                        second
+                            .observations
+                            .get(&artifact.case_id)
+                            .expect("validated second observation coverage"),
+                    )?;
+                    let comparison = compare_repeated_excel_observations(
+                        &case,
+                        &first_observation,
+                        &second_observation,
+                        ComparisonPolicy::default(),
+                    )?;
+                    if let Some(mismatch) = comparison.mismatches.first() {
+                        return Err(OracleContractError::new(format!(
+                            "repeated Excel runs diverged for case {} at {}",
+                            artifact.case_id, mismatch.path,
+                        )));
+                    }
+                    verified_case_ids.push(artifact.case_id.clone());
+                }
+                RunCaseStatus::Failed => {
+                    return Err(OracleContractError::new(format!(
+                        "failed case {} cannot become repeated Excel evidence",
+                        artifact.case_id,
+                    )));
+                }
+                RunCaseStatus::Unsupported | RunCaseStatus::Skipped => {}
+            }
+        }
+        if verified_case_ids.is_empty() {
+            return Err(OracleContractError::new(
+                "repeated Excel runs did not complete any cases",
+            ));
+        }
+
+        Ok(RepeatedExcelRunEvidence {
+            engine: first.manifest.engine.clone(),
+            run_ids: [
+                first.manifest.run_id.clone(),
+                second.manifest.run_id.clone(),
+            ],
+            verified_case_ids,
         })
     }
 
