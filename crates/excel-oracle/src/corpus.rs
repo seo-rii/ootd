@@ -65,13 +65,33 @@ impl PinnedSuiteArtifacts {
     }
 
     pub fn load_run(&self, root: impl AsRef<Path>) -> Result<RunBundle, OracleContractError> {
-        let root = validate_artifact_root(root.as_ref(), "run artifact root")?;
+        self.load_run_artifacts(root.as_ref(), RunCoverage::Exact)
+    }
+
+    pub fn load_run_fragment(
+        &self,
+        root: impl AsRef<Path>,
+    ) -> Result<RunBundle, OracleContractError> {
+        self.load_run_artifacts(root.as_ref(), RunCoverage::Fragment)
+    }
+
+    fn load_run_artifacts(
+        &self,
+        root: &Path,
+        coverage: RunCoverage,
+    ) -> Result<RunBundle, OracleContractError> {
+        let root = validate_artifact_root(root, "run artifact root")?;
         let manifest_bytes =
             read_regular_artifact(&root, RUN_MANIFEST_PATH, "run manifest", MAX_MANIFEST_BYTES)?;
         let manifest_json = std::str::from_utf8(&manifest_bytes).map_err(|error| {
             OracleContractError::new(format!("run manifest was not UTF-8: {error}"))
         })?;
-        let manifest = RunManifest::from_json_str(&self.manifest, manifest_json)?;
+        let manifest = match coverage {
+            RunCoverage::Exact => RunManifest::from_json_str(&self.manifest, manifest_json)?,
+            RunCoverage::Fragment => {
+                RunManifest::from_fragment_json_str(&self.manifest, manifest_json)?
+            }
+        };
 
         let mut observations = BTreeMap::new();
         for record in &manifest.cases {
@@ -93,10 +113,95 @@ impl PinnedSuiteArtifacts {
             observations.insert(record.case_id.clone(), observation_bytes);
         }
 
-        Ok(RunBundle {
+        let bundle = RunBundle {
             manifest,
             observations,
-        })
+        };
+        match coverage {
+            RunCoverage::Exact => bundle.validate(&self.manifest)?,
+            RunCoverage::Fragment => bundle.validate_fragment(&self.manifest)?,
+        }
+        Ok(bundle)
+    }
+
+    pub fn assemble_run_fragments(
+        &self,
+        fragments: &[RunBundle],
+    ) -> Result<RunBundle, OracleContractError> {
+        let first = fragments.first().ok_or_else(|| {
+            OracleContractError::new("run assembly requires at least one fragment")
+        })?;
+        first.validate_fragment(&self.manifest)?;
+        let schema_version = first.manifest.schema_version;
+        let run_id = first.manifest.run_id.clone();
+        let profile_id = first.manifest.profile_id.clone();
+        let engine = first.manifest.engine.clone();
+        let mut records = BTreeMap::new();
+        let mut observations = BTreeMap::new();
+
+        for fragment in fragments {
+            fragment.validate_fragment(&self.manifest)?;
+            if fragment.manifest.run_id != run_id {
+                return Err(OracleContractError::new(
+                    "fragment runId did not match the assembled run",
+                ));
+            }
+            if fragment.manifest.profile_id != profile_id {
+                return Err(OracleContractError::new(
+                    "fragment profileId did not match the assembled run",
+                ));
+            }
+            if fragment.manifest.engine != engine {
+                return Err(OracleContractError::new(
+                    "fragment engine fingerprint did not match the assembled run",
+                ));
+            }
+            for source_record in &fragment.manifest.cases {
+                if records.contains_key(&source_record.case_id) {
+                    return Err(OracleContractError::new(format!(
+                        "duplicate fragment record for case {}",
+                        source_record.case_id,
+                    )));
+                }
+                let mut record = source_record.clone();
+                if record.status == RunCaseStatus::Completed {
+                    let bytes = fragment
+                        .observations
+                        .get(&record.case_id)
+                        .expect("validated fragment observation coverage");
+                    let case = self.load_case(&record.case_id)?;
+                    source_record.load_observation(&case, &fragment.manifest.engine, bytes)?;
+                    record.observation_path =
+                        Some(format!("observations/{}/oracle.json", record.case_id,));
+                    observations.insert(record.case_id.clone(), bytes.clone());
+                }
+                records.insert(record.case_id.clone(), record);
+            }
+        }
+        if records.len() != self.manifest.cases.len() {
+            return Err(OracleContractError::new(
+                "assembled run records must exactly cover the suite cases",
+            ));
+        }
+
+        let mut ordered_records = Vec::with_capacity(self.manifest.cases.len());
+        for expected in &self.manifest.cases {
+            ordered_records.push(records.remove(&expected.case_id).ok_or_else(|| {
+                OracleContractError::new("assembled run records must exactly cover the suite cases")
+            })?);
+        }
+        let bundle = RunBundle {
+            manifest: RunManifest {
+                schema_version,
+                run_id,
+                profile_id,
+                engine,
+                cases: ordered_records,
+            },
+            observations,
+        };
+        bundle.validate(&self.manifest)?;
+        Ok(bundle)
     }
 
     pub fn verify_repeated_excel_runs(
@@ -213,6 +318,12 @@ impl PinnedSuiteArtifacts {
         })?;
         self.manifest.load_case(case_id, bytes)
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RunCoverage {
+    Exact,
+    Fragment,
 }
 
 fn validate_artifact_root(root: &Path, label: &str) -> Result<PathBuf, OracleContractError> {

@@ -349,7 +349,11 @@ Active order:
    synthetic): two case-insensitively distinct run IDs, the suite's exact Excel fingerprint,
    complete required cases, stable statuses, and exact canonical typed observations are required
    before an evidence receipt is returned.
-53. **Active:** assemble per-case Windows runner artifacts into a suite-wide complete run, then
+53. `OOTD-043`/`OOTD-085` suite-run assembly foundation stage 3 is complete (2026-08-10,
+   synthetic): validated case-subset fragments sharing one exact run/profile/engine are assembled
+   in suite order with canonical observation paths; missing, duplicate, cross-run, and tampered
+   fragments fail closed.
+54. **Active:** atomically persist the assembled bundle and expose a suite capture command, then
    collect two independent runs on the pinned desktop Excel host.
 
 Every numbered work unit starts with a failing regression and lands as its own reviewable commit.

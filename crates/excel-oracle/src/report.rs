@@ -16,6 +16,18 @@ pub struct RunBundle {
 impl RunBundle {
     pub(crate) fn validate(&self, suite: &OracleSuiteManifest) -> Result<(), OracleContractError> {
         self.manifest.validate_for_suite(suite)?;
+        self.validate_observation_coverage()
+    }
+
+    pub(crate) fn validate_fragment(
+        &self,
+        suite: &OracleSuiteManifest,
+    ) -> Result<(), OracleContractError> {
+        self.manifest.validate_fragment_for_suite(suite)?;
+        self.validate_observation_coverage()
+    }
+
+    fn validate_observation_coverage(&self) -> Result<(), OracleContractError> {
         let expected = self
             .manifest
             .cases

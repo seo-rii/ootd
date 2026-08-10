@@ -620,8 +620,14 @@ Wave 2 exit gate:
    reused run ID, non-Excel engine과 첫 mismatch path를 fail-closed한다. 기존 Excel↔OOTD 비교와
    공유하는 typed payload comparator는 engine-kind entry contract를 분리했다. `excel-oracle` 24개
    테스트가 통과한다. 실제 Excel observation은 아직 없다.
-   **다음:** per-case Windows runner artifact를 suite-wide complete run으로 조립·검증하는 capture
-   orchestration을 추가한 뒤 pinned Windows/Excel host에서 독립 run 두 개를 수집한다.
+   `OOTD-043`/`OOTD-085` suite-run assembly 기반 3단계 완료 (2026-08-10, synthetic): Windows
+   watchdog가 case별로 만든 non-empty suite subset manifest/observation을 full-run과 동일한
+   metadata/hash/typed contract로 읽는다. 동일 exact run ID/profile/engine fragment만 허용하고,
+   누락·중복·cross-run 조합 및 tampered observation을 거절한 뒤 suite 순서와 canonical
+   `observations/<case-id>/oracle.json` 경로를 가진 complete in-memory `RunBundle`로 조립한다.
+   `excel-oracle` 26개 테스트가 통과한다. 실제 Excel observation은 아직 없다.
+   **다음:** assembled bundle을 fresh run root에 원자적으로 저장하는 artifact writer와 suite
+   capture command를 추가한 뒤 pinned Windows/Excel host에서 독립 run 두 개를 수집한다.
 16. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
    structured error에 추가한다.
 

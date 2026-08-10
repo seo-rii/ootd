@@ -924,6 +924,32 @@ impl RunManifest {
         &self,
         suite: &OracleSuiteManifest,
     ) -> Result<(), OracleContractError> {
+        self.validate_subset_for_suite(suite)?;
+        if self.cases.len() != suite.cases.len() {
+            return Err(OracleContractError::new(
+                "run records must exactly cover the suite cases",
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn validate_fragment_for_suite(
+        &self,
+        suite: &OracleSuiteManifest,
+    ) -> Result<(), OracleContractError> {
+        self.validate_subset_for_suite(suite)?;
+        if self.cases.is_empty() {
+            return Err(OracleContractError::new(
+                "run fragment cases must not be empty",
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_subset_for_suite(
+        &self,
+        suite: &OracleSuiteManifest,
+    ) -> Result<(), OracleContractError> {
         suite.validate()?;
         if self.schema_version != ORACLE_SCHEMA_VERSION {
             return Err(OracleContractError::new(format!(
@@ -960,24 +986,20 @@ impl RunManifest {
                     record.case_id
                 )));
             }
-        }
-        if self.cases.len() != suite.cases.len() {
-            return Err(OracleContractError::new(
-                "run records must exactly cover the suite cases",
-            ));
-        }
-        for expected in &suite.cases {
-            let actual = self
+            let expected = suite
                 .cases
                 .iter()
-                .find(|record| record.case_id == expected.case_id)
+                .find(|expected| expected.case_id == record.case_id)
                 .ok_or_else(|| {
-                    OracleContractError::new("run records must exactly cover the suite cases")
+                    OracleContractError::new(format!(
+                        "run case {} was not declared by the suite",
+                        record.case_id,
+                    ))
                 })?;
-            if actual.case_version != expected.case_version
-                || actual.tier != expected.tier
-                || actual.case_sha256 != expected.sha256
-                || actual.input_sha256 != expected.input_sha256
+            if record.case_version != expected.case_version
+                || record.tier != expected.tier
+                || record.case_sha256 != expected.sha256
+                || record.input_sha256 != expected.input_sha256
             {
                 return Err(OracleContractError::new(format!(
                     "run metadata for case {} did not match the suite",
@@ -1021,6 +1043,16 @@ impl RunManifest {
         Ok(value)
     }
 
+    pub fn from_fragment_json_str(
+        suite: &OracleSuiteManifest,
+        input: &str,
+    ) -> Result<Self, OracleContractError> {
+        let value: Self = serde_json::from_str(input)
+            .map_err(|error| OracleContractError::new(format!("invalid run JSON: {error}")))?;
+        value.validate_fragment_for_suite(suite)?;
+        Ok(value)
+    }
+
     pub fn to_json_pretty(
         &self,
         suite: &OracleSuiteManifest,
@@ -1028,6 +1060,16 @@ impl RunManifest {
         self.validate_for_suite(suite)?;
         serde_json::to_string_pretty(self)
             .map_err(|error| OracleContractError::new(format!("failed to serialize run: {error}")))
+    }
+
+    pub fn to_fragment_json_pretty(
+        &self,
+        suite: &OracleSuiteManifest,
+    ) -> Result<String, OracleContractError> {
+        self.validate_fragment_for_suite(suite)?;
+        serde_json::to_string_pretty(self).map_err(|error| {
+            OracleContractError::new(format!("failed to serialize run fragment: {error}"))
+        })
     }
 }
 

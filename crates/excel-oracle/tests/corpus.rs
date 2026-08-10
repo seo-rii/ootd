@@ -183,6 +183,99 @@ impl CorpusFixture {
         .expect("write copied run");
         run_root
     }
+
+    fn add_second_case_fragment(&self) -> PathBuf {
+        let suite_path = self.corpus_root.join("manifest/suite_manifest.json");
+        let suite_json = fs::read_to_string(&suite_path).expect("read source suite");
+        let mut suite =
+            OracleSuiteManifest::from_json_str(&suite_json).expect("parse source suite");
+        let first_artifact = suite.cases[0].clone();
+        let first_case_bytes = fs::read(self.corpus_root.join(&first_artifact.path))
+            .expect("read first case artifact");
+        let first_case = suite
+            .load_case(&first_artifact.case_id, &first_case_bytes)
+            .expect("load first case");
+        let first_run_json = fs::read_to_string(self.run_root.join("manifest/run_manifest.json"))
+            .expect("read first fragment manifest");
+        let first_run =
+            RunManifest::from_json_str(&suite, &first_run_json).expect("parse first fragment");
+
+        let second_input_bytes = b"second pinned workbook bytes".to_vec();
+        let second_input_relative = "inputs/application-version.xlsx";
+        fs::write(
+            self.corpus_root.join(second_input_relative),
+            &second_input_bytes,
+        )
+        .expect("write second input");
+        let mut second_case = first_case;
+        second_case.id = "application.version".to_string();
+        second_case.input.path = second_input_relative.to_string();
+        second_case.input.sha256 = sha256_hex(&second_input_bytes);
+        second_case.probes[0].id = "application-version".to_string();
+        second_case.probes[0].member = "Version".to_string();
+        let second_case_bytes = second_case
+            .to_json_pretty()
+            .expect("serialize second case")
+            .into_bytes();
+        let second_case_relative = "cases/application.version.json";
+        fs::write(
+            self.corpus_root.join(second_case_relative),
+            &second_case_bytes,
+        )
+        .expect("write second case");
+        suite.cases.push(CaseArtifactRef {
+            case_id: second_case.id.clone(),
+            case_version: second_case.version,
+            tier: second_case.tier,
+            path: second_case_relative.to_string(),
+            sha256: sha256_hex(&second_case_bytes),
+            input_sha256: second_case.input.sha256.clone(),
+        });
+        fs::write(
+            &suite_path,
+            suite.to_json_pretty().expect("serialize expanded suite"),
+        )
+        .expect("write expanded suite");
+
+        let mut second_observation: ObservationDocument =
+            serde_json::from_slice(&self.observation_bytes).expect("parse first observation");
+        second_observation.case_id = second_case.id.clone();
+        second_observation.probes[0].id = second_case.probes[0].id.clone();
+        second_observation.probes[0].result =
+            ObservationResult::Value(ObservedValue::Text("16.0".to_string()));
+        let second_observation_bytes =
+            serde_json::to_vec_pretty(&second_observation).expect("serialize second observation");
+        let mut second_run = first_run;
+        second_run.cases[0].case_id = second_case.id;
+        second_run.cases[0].case_version = second_case.version;
+        second_run.cases[0].tier = second_case.tier;
+        second_run.cases[0].case_sha256 = sha256_hex(&second_case_bytes);
+        second_run.cases[0].input_sha256 = second_case.input.sha256;
+        second_run.cases[0].observation_path = Some("observations/oracle.json".to_string());
+        second_run.cases[0].observation_sha256 = Some(sha256_hex(&second_observation_bytes));
+
+        let fragment_root = self.root.join("run-fragment-b");
+        let observation_path = fragment_root.join("observations/oracle.json");
+        let manifest_path = fragment_root.join("manifest/run_manifest.json");
+        fs::create_dir_all(
+            observation_path
+                .parent()
+                .expect("fragment observation parent"),
+        )
+        .expect("create fragment observation directory");
+        fs::create_dir_all(manifest_path.parent().expect("fragment manifest parent"))
+            .expect("create fragment manifest directory");
+        fs::write(observation_path, second_observation_bytes)
+            .expect("write second fragment observation");
+        fs::write(
+            manifest_path,
+            second_run
+                .to_fragment_json_pretty(&suite)
+                .expect("serialize second fragment manifest"),
+        )
+        .expect("write second fragment manifest");
+        fragment_root
+    }
 }
 
 impl Drop for CorpusFixture {
@@ -317,6 +410,90 @@ fn accepts_only_distinct_matching_repeated_excel_runs() {
         .expect_err("non-Excel run must fail")
         .to_string();
     assert!(error.contains("repeated evidence requires two desktop Excel runs"));
+}
+
+#[test]
+fn assembles_complete_suite_runs_from_case_fragments() {
+    let fixture = CorpusFixture::create();
+    let second_fragment_root = fixture.add_second_case_fragment();
+    let suite = PinnedSuiteArtifacts::load(&fixture.corpus_root).expect("load expanded suite");
+    let first = suite
+        .load_run_fragment(&fixture.run_root)
+        .expect("load first case fragment");
+    let second = suite
+        .load_run_fragment(&second_fragment_root)
+        .expect("load second case fragment");
+
+    let assembled = suite
+        .assemble_run_fragments(&[first, second])
+        .expect("assemble complete suite run");
+    assert_eq!(
+        assembled
+            .manifest
+            .cases
+            .iter()
+            .map(|record| record.case_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["application.name", "application.version"],
+    );
+    assert_eq!(
+        assembled.manifest.cases[0].observation_path.as_deref(),
+        Some("observations/application.name/oracle.json"),
+    );
+    assert_eq!(
+        assembled.manifest.cases[1].observation_path.as_deref(),
+        Some("observations/application.version/oracle.json"),
+    );
+    assembled
+        .manifest
+        .validate_required_completeness(&suite.manifest)
+        .expect("assembled required completeness");
+    assert_eq!(assembled.observations.len(), 2);
+}
+
+#[test]
+fn rejects_missing_duplicate_and_cross_run_fragments() {
+    let fixture = CorpusFixture::create();
+    let second_fragment_root = fixture.add_second_case_fragment();
+    let suite = PinnedSuiteArtifacts::load(&fixture.corpus_root).expect("load expanded suite");
+    let first = suite
+        .load_run_fragment(&fixture.run_root)
+        .expect("load first case fragment");
+    let second = suite
+        .load_run_fragment(&second_fragment_root)
+        .expect("load second case fragment");
+
+    let error = suite
+        .assemble_run_fragments(std::slice::from_ref(&first))
+        .expect_err("missing fragment must fail")
+        .to_string();
+    assert!(error.contains("assembled run records must exactly cover the suite cases"));
+
+    let error = suite
+        .assemble_run_fragments(&[first.clone(), first.clone(), second.clone()])
+        .expect_err("duplicate fragment must fail")
+        .to_string();
+    assert!(error.contains("duplicate fragment record for case application.name"));
+
+    let mut tampered = second.clone();
+    tampered
+        .observations
+        .get_mut("application.version")
+        .expect("second observation")
+        .push(b' ');
+    let error = suite
+        .assemble_run_fragments(&[first.clone(), tampered])
+        .expect_err("tampered fragment observation must fail")
+        .to_string();
+    assert!(error.contains("observation for case application.version exact-byte sha256"));
+
+    let mut cross_run = second;
+    cross_run.manifest.run_id = "excel-win-en-us-20260810-other".to_string();
+    let error = suite
+        .assemble_run_fragments(&[first, cross_run])
+        .expect_err("cross-run fragment must fail")
+        .to_string();
+    assert!(error.contains("fragment runId did not match the assembled run"));
 }
 
 #[cfg(unix)]

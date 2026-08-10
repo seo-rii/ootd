@@ -36,6 +36,13 @@ ASCII case aliases), and canonical typed-value drift reject the evidence. The re
 is exact by default while still ignoring native diagnostic message text in the same way as the
 Excel-to-OOTD comparator.
 
+The Windows watchdog still emits one run root per case. `load_run_fragment` accepts a non-empty,
+suite-declared subset while applying the same manifest, hash, engine, path, and typed-observation
+checks as a complete run. `assemble_run_fragments` requires every fragment to share one exact run
+ID, profile, and engine fingerprint; it rejects missing or duplicate case records and revalidates
+observation bytes before ordering records by the suite. Completed observations receive canonical
+`observations/<case-id>/oracle.json` paths in the assembled in-memory bundle.
+
 ## Excel Execution
 
 One runner process owns and records every Excel Application it activates. The host must have no
@@ -54,8 +61,9 @@ timestamps.
 
 ## Current Verification Boundary
 
-Rust contract, manifest, bounded filesystem loader, repeated-capture gate, comparator, report
-bridge, `ExcelRuntime` adapter, .NET contract normalization, and fake-backed runner lifecycle tests
-execute in this repository. The COM session and watchdog compile on Linux but require a real
-Windows Excel host for execution. No real Excel observation or 20-case required corpus is pinned as
-of 2026-08-10, so no behavior is yet Oracle-verified.
+Rust contract, manifest, bounded filesystem/fragment loader, deterministic suite-run assembler,
+repeated-capture gate, comparator, report bridge, `ExcelRuntime` adapter, .NET contract
+normalization, and fake-backed runner lifecycle tests execute in this repository. The COM session
+and watchdog compile on Linux but require a real Windows Excel host for execution. No real Excel
+observation or 20-case required corpus is pinned as of 2026-08-10, so no behavior is yet
+Oracle-verified.
