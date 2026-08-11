@@ -622,6 +622,56 @@ fn cli_assembles_and_atomically_materializes_suite_fragments() {
 }
 
 #[test]
+fn cli_emits_capture_plan_only_for_exact_validated_suite_artifacts() {
+    let fixture = CorpusFixture::create();
+    let output = run_oracle(
+        &[
+            "capture-plan",
+            "--suite-root",
+            fixture.corpus_root.to_str().expect("suite root UTF-8"),
+        ],
+        &fixture.root,
+    );
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let plan: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("capture plan JSON");
+    assert_eq!(plan["schemaVersion"], 1);
+    assert_eq!(plan["suiteId"], "excel-win-en-us-smoke");
+    assert_eq!(plan["profileId"], "excel-win-en-us");
+    assert_eq!(plan["expectedEngine"]["kind"], "excel");
+    assert_eq!(plan["expectedEngine"]["channel"], "Current");
+    assert_eq!(plan["caseCount"], 1);
+    assert_eq!(plan["cases"][0]["caseId"], "application.name");
+    assert_eq!(plan["cases"][0]["casePath"], "cases/application.name.json",);
+    assert_eq!(
+        plan["cases"][0]["inputPath"],
+        "inputs/application-name.xlsx",
+    );
+
+    fs::write(&fixture.input_path, b"tampered input").expect("tamper input");
+    let rejected = run_oracle(
+        &[
+            "capture-plan",
+            "--suite-root",
+            fixture.corpus_root.to_str().expect("suite root UTF-8"),
+        ],
+        &fixture.root,
+    );
+    assert_eq!(rejected.status.code(), Some(1));
+    assert!(rejected.stdout.is_empty());
+    assert!(
+        String::from_utf8(rejected.stderr)
+            .expect("stderr UTF-8")
+            .contains("input for case application.name exact-byte sha256 did not match the suite"),
+    );
+}
+
+#[test]
 fn cli_rejects_incomplete_fragment_coverage_without_output() {
     let fixture = CorpusFixture::create();
     let _second_fragment_root = fixture.add_second_case_fragment();

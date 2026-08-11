@@ -640,9 +640,14 @@ Wave 2 exit gate:
    exit 2/1로 구분하며 성공 시 run ID, case/observation 수와 canonical artifact 경로를 JSON receipt로
    반환한다. complete two-case publish/reload, incomplete coverage no-output와 missing-value process
    regression을 포함한 `excel-oracle` 31개 테스트가 통과한다. 실제 Excel observation은 아직 없다.
-   **다음:** suite manifest를 순회해 Windows watchdog를 case별로 실행하고 생성된 fragment root를
-   이 assembly command에 전달하는 bounded Windows capture command를 추가한 뒤 pinned host에서
-   독립 run 두 개를 수집한다.
+   `OOTD-043`/`OOTD-085` capture-plan preflight 기반 6단계 완료 (2026-08-11, synthetic):
+   `excel-oracle capture-plan`이 suite manifest 계약과 모든 case/input의 bounded path/type/size 및
+   exact SHA-256을 검증한 뒤에만 suite 순서, 상대 case/input 경로, 고정 hash와 expected Excel
+   profile을 JSON으로 반환한다. 변조 input은 plan stdout 없이 exit 1로 거부한다. process regression을
+   포함한 `excel-oracle` 32개 테스트가 통과한다. 실제 Excel observation은 아직 없다.
+   **다음:** 이 preflight plan을 소비해 Windows watchdog를 case별로 실행하고 생성된 fragment root를
+   assembly command에 전달하는 bounded Windows capture command를 추가한 뒤 pinned host에서 독립
+   run 두 개를 수집한다.
 16. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
    structured error에 추가한다.
 

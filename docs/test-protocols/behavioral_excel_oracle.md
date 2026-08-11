@@ -53,12 +53,19 @@ never receive a partially populated run root.
 The cross-platform assembly command exposes that same contract without weakening it:
 
 ```text
+cargo run -p excel-oracle -- capture-plan --suite-root PATH
+
 cargo run -p excel-oracle -- assemble-run \
   --suite-root PATH \
   --fragment-root PATH \
   --fragment-root PATH \
   --output-root FRESH_PATH
 ```
+
+`capture-plan` validates the suite manifest contract and exact-hash-validates every case and input
+before emitting suite-ordered relative case/input paths, artifact hashes, and the expected Excel
+profile. It emits no plan when any artifact is missing, unsafe, oversized, or changed. A Windows
+suite launcher consumes this preflight output before starting any case watchdog.
 
 It accepts at most 4,096 fragment roots, emits a deterministic JSON receipt on success, returns exit
 code 2 for command-line contract errors and exit code 1 for artifact validation or publication
@@ -83,10 +90,10 @@ timestamps.
 
 ## Current Verification Boundary
 
-Rust contract, manifest, bounded filesystem/fragment loader, deterministic suite-run assembler,
-atomic publisher and assembly CLI, repeated-capture gate, comparator, report bridge, `ExcelRuntime`
-adapter, .NET contract normalization, and fake-backed runner lifecycle tests execute in this
-repository. The assembly CLI consumes completed fragments but does not yet iterate the Windows
-watchdog. The COM session and watchdog compile on Linux but require a real Windows Excel host for
-execution. No real Excel observation or 20-case required corpus is pinned as of 2026-08-11, so no
-behavior is yet Oracle-verified.
+Rust contract, manifest, bounded filesystem/fragment loader, exact suite capture-plan preflight,
+deterministic suite-run assembler, atomic publisher and assembly CLI, repeated-capture gate,
+comparator, report bridge, `ExcelRuntime` adapter, .NET contract normalization, and fake-backed
+runner lifecycle tests execute in this repository. The preflight and assembly commands do not yet
+iterate the Windows watchdog. The COM session and watchdog compile on Linux but require a real
+Windows Excel host for execution. No real Excel observation or 20-case required corpus is pinned as
+of 2026-08-11, so no behavior is yet Oracle-verified.

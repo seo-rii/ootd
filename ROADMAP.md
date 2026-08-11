@@ -361,9 +361,13 @@ Active order:
    synthetic): `excel-oracle assemble-run` connects bounded fragment loading, complete-suite
    assembly, fresh-root atomic publication and a deterministic JSON receipt behind one command;
    incomplete coverage fails without output.
-56. **Active:** expose a bounded Windows suite capture command that iterates the case watchdog and
-   feeds its fragments to the assembly CLI, then collect two independent runs on the pinned desktop
-   Excel host.
+56. `OOTD-043`/`OOTD-085` capture-plan preflight foundation stage 6 is complete (2026-08-11,
+   synthetic): `excel-oracle capture-plan` validates the suite contract and every pinned case/input
+   byte before emitting suite-ordered relative paths, hashes, and the expected Excel profile;
+   tampered input produces no plan.
+57. **Active:** expose a bounded Windows suite capture command that consumes the preflight, iterates
+   the case watchdog and feeds its fragments to the assembly CLI, then collect two independent runs
+   on the pinned desktop Excel host.
 
 Every numbered work unit starts with a failing regression and lands as its own reviewable commit.
 The complete `OOTD-001`~`OOTD-086` ordering, regression inventory, and compatibility completion
