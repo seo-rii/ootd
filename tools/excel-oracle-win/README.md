@@ -34,6 +34,27 @@ hard timeout, and only force-stops Excel PIDs whose process id and start time we
 runner, including a separate normal-open verification process. A forced termination is an
 infrastructure failure, never a semantic pass.
 
+Run every case in a pinned suite and publish one complete run root:
+
+```powershell
+pwsh ./scripts/run-suite.ps1 `
+  -RunnerPath ./src/ExcelOracle.Win/bin/Release/net10.0/ExcelOracle.Win.exe `
+  -OracleCliPath ../../target/release/excel-oracle.exe `
+  -RunId excel-win-en-us-20260811-a `
+  -SuiteRoot C:/ootd/oracle/corpus `
+  -CaptureRoot C:/ootd/oracle/captures/excel-win-en-us-20260811-a `
+  -OutputRoot C:/ootd/oracle/runs/excel-win-en-us-20260811-a `
+  -TimeoutSeconds 300
+```
+
+Build `excel-oracle.exe` with `cargo build -p excel-oracle --release` on the Windows host first.
+`CaptureRoot` and `OutputRoot` must both be absent, and the output parent must already exist. The
+suite launcher runs `capture-plan` before creating capture output, copies each exact-hash-verified
+case/input into a private capture directory, invokes the case watchdog in a fresh PowerShell child,
+and calls `assemble-run` only after every case succeeds. `CaptureRoot` retains the plan, verified
+copies, per-case fragments/logs, assembly receipt, and suite status. `OutputRoot` appears only as a
+complete atomically published run bundle.
+
 ## Safety Boundary
 
 - Run only SHA-256-pinned corpus inputs on an offline, disposable Windows profile.

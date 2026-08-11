@@ -645,9 +645,16 @@ Wave 2 exit gate:
    exact SHA-256을 검증한 뒤에만 suite 순서, 상대 case/input 경로, 고정 hash와 expected Excel
    profile을 JSON으로 반환한다. 변조 input은 plan stdout 없이 exit 1로 거부한다. process regression을
    포함한 `excel-oracle` 32개 테스트가 통과한다. 실제 Excel observation은 아직 없다.
-   **다음:** 이 preflight plan을 소비해 Windows watchdog를 case별로 실행하고 생성된 fragment root를
-   assembly command에 전달하는 bounded Windows capture command를 추가한 뒤 pinned host에서 독립
-   run 두 개를 수집한다.
+   `OOTD-043`/`OOTD-085` Windows suite orchestration 기반 7단계 완료 (2026-08-11,
+   source-contract): `run-suite.ps1`이 preflight 성공 전에는 capture root를 만들지 않고, 각
+   case/input source와 private verified copy의 SHA-256을 다시 확인한 뒤 child PowerShell에서 기존
+   case watchdog를 순서대로 실행한다. 하나라도 non-zero이면 final output 없이 중단하고 diagnostic
+   capture plan/fragment/status를 남긴다. 모든 case 성공 뒤에만 반복 fragment 인수로 atomic assembly를
+   실행하고 JSON receipt/status를 기록한다. 4개 source-contract 회귀를 포함한 Python 계약 13개가
+   통과한다. 현재 Linux host에는 PowerShell/.NET이 없어 script parse/runtime 및 Excel COM 실행은
+   검증하지 못했다.
+   **다음:** pinned Windows Excel host에서 wrapper를 실행해 서로 다른 run ID의 독립 run 두 개를
+   수집하고 repeated-capture gate를 통과시킨다.
 16. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
    structured error에 추가한다.
 

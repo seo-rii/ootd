@@ -80,6 +80,13 @@ The runner configures automation security and manual calculation before opening 
 workbook copy, executes every operation, records OM errors without aborting later probes, and then
 closes Excel even after failure.
 
+`tools/excel-oracle-win/scripts/run-suite.ps1` consumes the exact `capture-plan`, makes a second
+SHA-256 check while copying every case/input into a private capture root, and launches each bounded
+case watchdog in its own PowerShell process. A non-zero case exit aborts the suite and leaves only
+diagnostic capture artifacts. Only all-successful fragments reach `assemble-run`; the final run root
+therefore remains absent on case or assembly failure. The wrapper retains an atomic suite status and
+assembly receipt outside the published run root.
+
 Save cases are reopened in a new Excel session with `CorruptLoad=xlNormalLoad`. A successful normal
 open is recorded as `repairDetected=false`; failure, crash, or timeout records an unknown repair
 state and cannot pass a required case. The runner never retries with `xlRepairFile`.
@@ -92,8 +99,9 @@ timestamps.
 
 Rust contract, manifest, bounded filesystem/fragment loader, exact suite capture-plan preflight,
 deterministic suite-run assembler, atomic publisher and assembly CLI, repeated-capture gate,
-comparator, report bridge, `ExcelRuntime` adapter, .NET contract normalization, and fake-backed
-runner lifecycle tests execute in this repository. The preflight and assembly commands do not yet
-iterate the Windows watchdog. The COM session and watchdog compile on Linux but require a real
+comparator, report bridge, `ExcelRuntime` adapter, .NET contract normalization, fake-backed runner
+lifecycle tests, and source-contract tests for the Windows suite wrapper execute in this repository.
+The suite wrapper is implemented but PowerShell/.NET are unavailable on the current Linux host, so
+it has not yet been parsed or executed on Windows. The COM session and watchdog require a real
 Windows Excel host for execution. No real Excel observation or 20-case required corpus is pinned as
 of 2026-08-11, so no behavior is yet Oracle-verified.

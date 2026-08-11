@@ -365,9 +365,12 @@ Active order:
    synthetic): `excel-oracle capture-plan` validates the suite contract and every pinned case/input
    byte before emitting suite-ordered relative paths, hashes, and the expected Excel profile;
    tampered input produces no plan.
-57. **Active:** expose a bounded Windows suite capture command that consumes the preflight, iterates
-   the case watchdog and feeds its fragments to the assembly CLI, then collect two independent runs
-   on the pinned desktop Excel host.
+57. `OOTD-043`/`OOTD-085` Windows suite orchestration foundation stage 7 is complete (2026-08-11,
+   source-contract): `run-suite.ps1` consumes the exact preflight, rehashes private case/input copies,
+   runs each watchdog in a child PowerShell process, aborts without final output on any case failure,
+   and assembles only complete fragment sets. Windows parsing/execution remains unverified locally.
+58. **Active:** execute the suite wrapper twice with distinct run IDs on the pinned desktop Excel
+   host, pass the repeated-capture gate, and commit the first required corpus.
 
 Every numbered work unit starts with a failing regression and lands as its own reviewable commit.
 The complete `OOTD-001`~`OOTD-086` ordering, regression inventory, and compatibility completion
