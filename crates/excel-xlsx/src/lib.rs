@@ -6384,7 +6384,7 @@ fn chart_series_from_summary(
                         (point.value.clone(), CellValue::Number(number))
                     } else if let Some(error) = chart_number_literal_error(&point.value) {
                         (
-                            format_cell_error(error).to_string(),
+                            format_cell_error(&error).to_string(),
                             CellValue::Error(error),
                         )
                     } else {
@@ -6457,8 +6457,8 @@ fn chart_series_from_summary(
                         continue;
                     }
                     if let Some(error) = chart_number_literal_error(point_value) {
+                        raw_values.push(format_cell_error(&error).to_string());
                         values.push(OmValue::Error(error));
-                        raw_values.push(format_cell_error(error).to_string());
                         continue;
                     }
                     values.push(OmValue::Text(point_value.to_string()));

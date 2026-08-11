@@ -96,7 +96,7 @@ fn formula_eval_error_from_cell_error(error: CellError) -> FormulaEvalError {
         CellError::Connect => FormulaEvalError::Connect,
         CellError::Python => FormulaEvalError::Python,
         CellError::Timeout => FormulaEvalError::Timeout,
-        CellError::Unknown => FormulaEvalError::Unknown,
+        CellError::Unknown | CellError::UnknownLexical(_) => FormulaEvalError::Unknown,
         CellError::Value => FormulaEvalError::Value,
     }
 }
@@ -5532,31 +5532,13 @@ pub(super) fn render_range_text_value(value: &OmValue) -> String {
         OmValue::Bool(false) => "FALSE".to_string(),
         OmValue::Number(number) => number.to_string(),
         OmValue::Text(text) => text.clone(),
-        OmValue::Error(error) => formula_cell_error_text(*error).to_string(),
+        OmValue::Error(error) => formula_cell_error_text(error).to_string(),
         OmValue::Object(_) | OmValue::Array(_) => String::new(),
     }
 }
 
-pub(super) fn formula_cell_error_text(error: CellError) -> &'static str {
-    match error {
-        CellError::Null => "#NULL!",
-        CellError::Div0 => "#DIV/0!",
-        CellError::Value => "#VALUE!",
-        CellError::Ref => "#REF!",
-        CellError::Name => "#NAME?",
-        CellError::Num => "#NUM!",
-        CellError::NA => "#N/A",
-        CellError::GettingData => "#GETTING_DATA",
-        CellError::Spill => "#SPILL!",
-        CellError::Calc => "#CALC!",
-        CellError::Field => "#FIELD!",
-        CellError::Blocked => "#BLOCKED!",
-        CellError::Busy => "#BUSY!",
-        CellError::Connect => "#CONNECT!",
-        CellError::Python => "#PYTHON!",
-        CellError::Timeout => "#TIMEOUT!",
-        CellError::Unknown => "#UNKNOWN!",
-    }
+pub(super) fn formula_cell_error_text(error: &CellError) -> &str {
+    error.as_lexical_str()
 }
 
 pub(super) fn format_formula_string_literal(value: &str) -> String {
@@ -9267,7 +9249,9 @@ impl<'a> FormulaEvaluator<'a> {
                     CellValue::Number(number) => Ok(*number),
                     CellValue::Bool(value) => Ok(if *value { 1.0 } else { 0.0 }),
                     CellValue::Text(_) => Err(FormulaEvalError::Value),
-                    CellValue::Error(error) => Err(formula_eval_error_from_cell_error(*error)),
+                    CellValue::Error(error) => {
+                        Err(formula_eval_error_from_cell_error(error.clone()))
+                    }
                 })
                 .unwrap_or(Ok(0.0)),
             Err(error) => Err(error),
@@ -9306,10 +9290,10 @@ impl<'a> FormulaEvaluator<'a> {
                         .get(&sheet_id)
                         .and_then(|worksheet| worksheet.cells.get(&(row, col)))
                     {
-                        match cell.value {
-                            CellValue::Number(number) => values.push(number),
+                        match &cell.value {
+                            CellValue::Number(number) => values.push(*number),
                             CellValue::Error(error) => {
-                                return Err(formula_eval_error_from_cell_error(error));
+                                return Err(formula_eval_error_from_cell_error(error.clone()));
                             }
                             CellValue::Blank | CellValue::Bool(_) | CellValue::Text(_) => {}
                         }
@@ -9404,10 +9388,10 @@ impl<'a> FormulaEvaluator<'a> {
                         .get(&sheet_id)
                         .and_then(|worksheet| worksheet.cells.get(&(row, col)))
                     {
-                        match cell.value {
-                            CellValue::Number(number) => values.push(number),
+                        match &cell.value {
+                            CellValue::Number(number) => values.push(*number),
                             CellValue::Error(error) => {
-                                return Err(formula_eval_error_from_cell_error(error));
+                                return Err(formula_eval_error_from_cell_error(error.clone()));
                             }
                             CellValue::Blank | CellValue::Bool(_) | CellValue::Text(_) => {}
                         }

@@ -4061,7 +4061,9 @@
         );
         assert_eq!(
             cells.get(&(4, 2)).expect("B4").value,
-            CellValue::Error(CellError::Unknown)
+            CellValue::Error(CellError::UnknownLexical(
+                "#NOT-A-REAL-ERROR!".to_string()
+            ))
         );
     }
 
@@ -4078,7 +4080,85 @@
         assert_eq!(super::parse_cell_error("#TIMEOUT!"), CellError::Timeout);
         assert_eq!(
             super::parse_cell_error("#NOT-A-REAL-ERROR!"),
-            CellError::Unknown
+            CellError::UnknownLexical("#NOT-A-REAL-ERROR!".to_string())
+        );
+    }
+
+    #[test]
+    fn unknown_cell_error_lexical_round_trips_exactly() {
+        let error = super::parse_cell_error("#VENDOR-FUTURE!");
+
+        assert_eq!(
+            error,
+            CellError::UnknownLexical("#VENDOR-FUTURE!".to_string())
+        );
+        assert_eq!(super::format_cell_error(&error), "#VENDOR-FUTURE!");
+    }
+
+    #[test]
+    fn dirty_unknown_error_cell_round_trips_exact_lexical() {
+        let codec = XlsxCodec;
+        let mut package =
+            OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("synthetic package");
+        package
+            .replace_part_bytes(
+                "xl/worksheets/sheet1.xml",
+                br#"<?xml version="1.0" encoding="UTF-8"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData><row r="1"><c r="A1" t="e"><v>#VENDOR-FUTURE!</v></c></row></sheetData>
+</worksheet>"#
+                    .to_vec(),
+            )
+            .expect("replace worksheet part");
+        let mut loaded = codec
+            .load(
+                &package.to_bytes().expect("fixture bytes"),
+                CommonLoadOptions::default(),
+            )
+            .expect("load workbook");
+
+        let worksheet = loaded
+            .state
+            .worksheet_data_for_sheet_mut(SheetId(1))
+            .expect("worksheet data");
+        assert_eq!(
+            worksheet.cells.get(&(1, 1)).expect("A1").value,
+            CellValue::Error(CellError::UnknownLexical(
+                "#VENDOR-FUTURE!".to_string()
+            ))
+        );
+        worksheet.dirty = true;
+        worksheet.dirty_cells.insert((1, 1));
+
+        let saved = codec
+            .save(&loaded, CommonSaveOptions::default())
+            .expect("save dirty unknown error cell");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_sheet = std::str::from_utf8(
+            &saved_package
+                .part("xl/worksheets/sheet1.xml")
+                .expect("saved worksheet part")
+                .bytes,
+        )
+        .expect("worksheet utf-8");
+
+        assert!(saved_sheet.contains("<v>#VENDOR-FUTURE!</v>"));
+        assert!(!saved_sheet.contains("<v>#UNKNOWN!</v>"));
+        let reopened = codec
+            .load(&saved, CommonLoadOptions::default())
+            .expect("reopen saved workbook");
+        assert_eq!(
+            reopened
+                .state
+                .worksheet_data_for_sheet(SheetId(1))
+                .expect("reopened worksheet")
+                .cells
+                .get(&(1, 1))
+                .expect("reopened A1")
+                .value,
+            CellValue::Error(CellError::UnknownLexical(
+                "#VENDOR-FUTURE!".to_string()
+            ))
         );
     }
 
@@ -4105,7 +4185,7 @@
         ];
 
         for (error, text) in cases {
-            assert_eq!(super::format_cell_error(error), text);
+            assert_eq!(super::format_cell_error(&error), text);
         }
     }
 

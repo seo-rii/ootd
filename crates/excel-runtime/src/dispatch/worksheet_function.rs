@@ -69,7 +69,7 @@ impl ExcelRuntime {
                 Ok(value.to_string())
             }
             OmValue::Text(value) => Ok(format_formula_string_literal(value)),
-            OmValue::Error(value) => Ok(formula_cell_error_text(*value).to_string()),
+            OmValue::Error(value) => Ok(formula_cell_error_text(value).to_string()),
             OmValue::Object(handle) => match self.runtime_object(*handle)? {
                 RuntimeObjectKind::Range {
                     workbook, range, ..

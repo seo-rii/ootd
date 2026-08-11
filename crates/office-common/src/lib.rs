@@ -170,7 +170,7 @@ pub enum FileFormat {
     StrictXlsx,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CellError {
     Null,
     Div0,
@@ -189,6 +189,55 @@ pub enum CellError {
     Python,
     Timeout,
     Unknown,
+    UnknownLexical(String),
+}
+
+impl CellError {
+    pub fn from_lexical(value: &str) -> Self {
+        match value {
+            "#NULL!" => Self::Null,
+            "#DIV/0!" => Self::Div0,
+            "#VALUE!" => Self::Value,
+            "#REF!" => Self::Ref,
+            "#NAME?" => Self::Name,
+            "#NUM!" => Self::Num,
+            "#N/A" => Self::NA,
+            "#GETTING_DATA" => Self::GettingData,
+            "#SPILL!" => Self::Spill,
+            "#CALC!" => Self::Calc,
+            "#FIELD!" => Self::Field,
+            "#BLOCKED!" => Self::Blocked,
+            "#BUSY!" => Self::Busy,
+            "#CONNECT!" => Self::Connect,
+            "#PYTHON!" => Self::Python,
+            "#TIMEOUT!" => Self::Timeout,
+            "#UNKNOWN!" => Self::Unknown,
+            _ => Self::UnknownLexical(value.to_string()),
+        }
+    }
+
+    pub fn as_lexical_str(&self) -> &str {
+        match self {
+            Self::Null => "#NULL!",
+            Self::Div0 => "#DIV/0!",
+            Self::Value => "#VALUE!",
+            Self::Ref => "#REF!",
+            Self::Name => "#NAME?",
+            Self::Num => "#NUM!",
+            Self::NA => "#N/A",
+            Self::GettingData => "#GETTING_DATA",
+            Self::Spill => "#SPILL!",
+            Self::Calc => "#CALC!",
+            Self::Field => "#FIELD!",
+            Self::Blocked => "#BLOCKED!",
+            Self::Busy => "#BUSY!",
+            Self::Connect => "#CONNECT!",
+            Self::Python => "#PYTHON!",
+            Self::Timeout => "#TIMEOUT!",
+            Self::Unknown => "#UNKNOWN!",
+            Self::UnknownLexical(value) => value,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

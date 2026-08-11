@@ -369,8 +369,14 @@ Active order:
    source-contract): `run-suite.ps1` consumes the exact preflight, rehashes private case/input copies,
    runs each watchdog in a child PowerShell process, aborts without final output on any case failure,
    and assembles only complete fragment sets. Windows parsing/execution remains unverified locally.
-58. **Active:** execute the suite wrapper twice with distinct run IDs on the pinned desktop Excel
-   host, pass the repeated-capture gate, and commit the first required corpus.
+58. `OOTD-024` is complete (2026-08-11, synthetic): canonical `#UNKNOWN!` remains a stable typed
+   error while every other unrecognized worksheet error owns its exact lexical token. Dirty-cell
+   save/reopen, formula/chart rendering, calculation digests, and Oracle observations preserve that
+   token instead of rewriting it as `#UNKNOWN!`.
+59. **Pending external:** execute the suite wrapper twice with distinct run IDs on the pinned
+   desktop Excel host, pass the repeated-capture gate, and commit the first required corpus.
+60. **Active local:** implement raw-preserving typed load/dirty-save/reopen support for ISO 8601
+   date cells (`OOTD-025`).
 
 Every numbered work unit starts with a failing regression and lands as its own reviewable commit.
 The complete `OOTD-001`~`OOTD-086` ordering, regression inventory, and compatibility completion

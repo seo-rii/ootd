@@ -5909,7 +5909,7 @@ impl ExcelRuntime {
                                             Ok(format!("\"{}\"", text.replace('"', "\"\"")))
                                         }
                                         OmValue::Error(error) => {
-                                            Ok(formula_cell_error_text(*error).to_string())
+                                            Ok(formula_cell_error_text(error).to_string())
                                         }
                                         OmValue::Object(_) | OmValue::Array(_) => {
                                             Err(OmError::type_mismatch(format!(
@@ -12563,7 +12563,7 @@ impl ExcelRuntime {
                                     CellValue::Blank => 4,
                                 }
                             };
-                            let error_rank = |error: CellError| -> i32 {
+                            let error_rank = |error: &CellError| -> i32 {
                                 match error {
                                     CellError::Null => 0,
                                     CellError::Div0 => 1,
@@ -12581,7 +12581,7 @@ impl ExcelRuntime {
                                     CellError::Connect => 13,
                                     CellError::Python => 14,
                                     CellError::Timeout => 15,
-                                    CellError::Unknown => 16,
+                                    CellError::Unknown | CellError::UnknownLexical(_) => 16,
                                 }
                             };
                             let numeric_sort_value = |value: &CellValue| -> Option<f64> {
@@ -12626,7 +12626,7 @@ impl ExcelRuntime {
                                 }
                                 (CellValue::Bool(left), CellValue::Bool(right)) => left.cmp(right),
                                 (CellValue::Error(left), CellValue::Error(right)) => {
-                                    error_rank(*left).cmp(&error_rank(*right))
+                                    error_rank(left).cmp(&error_rank(right))
                                 }
                                 _ => {
                                     let adjusted_rank = |value: &CellValue| -> i32 {
@@ -27706,7 +27706,7 @@ impl ExcelRuntime {
             OmValue::Text(text) => Ok(text.clone()),
             OmValue::Bool(value) => Ok(if *value { "TRUE" } else { "FALSE" }.to_string()),
             OmValue::Number(number) => Ok(format_find_number(*number)),
-            OmValue::Error(error) => Ok(formula_cell_error_text(*error).to_string()),
+            OmValue::Error(error) => Ok(formula_cell_error_text(error).to_string()),
             OmValue::Object(_) | OmValue::Array(_) => Err(OmError::type_mismatch(format!(
                 "{label} expects a scalar value"
             ))),
@@ -29118,7 +29118,7 @@ fn find_cell_value_text(value: &CellValue) -> String {
         CellValue::Bool(false) => "FALSE".to_string(),
         CellValue::Number(number) => format_find_number(*number),
         CellValue::Text(text) => text.clone(),
-        CellValue::Error(error) => formula_cell_error_text(*error).to_string(),
+        CellValue::Error(error) => formula_cell_error_text(error).to_string(),
     }
 }
 
@@ -32234,7 +32234,7 @@ fn om_value_text(value: &OmValue) -> Option<String> {
         OmValue::Bool(false) => Some("FALSE".to_string()),
         OmValue::Number(number) => Some(format_find_number(*number)),
         OmValue::Text(text) => Some(text.clone()),
-        OmValue::Error(error) => Some(formula_cell_error_text(*error).to_string()),
+        OmValue::Error(error) => Some(formula_cell_error_text(error).to_string()),
         OmValue::Object(_) | OmValue::Array(_) => None,
     }
 }

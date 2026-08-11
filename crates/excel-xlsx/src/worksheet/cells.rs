@@ -2533,7 +2533,7 @@ pub(crate) fn rewrite_worksheet_xml(
                             wrote_inline_string = true;
                         }
                         CellValue::Error(error) => {
-                            let value = format_cell_error(*error);
+                            let value = format_cell_error(error);
                             writer
                                 .write_event(Event::Start(BytesStart::new(value_name.as_str())))
                                 .map_err(xml_error)?;
@@ -2644,7 +2644,7 @@ pub(crate) fn rewrite_worksheet_xml(
                         .map_err(xml_error)?;
                 }
                 CellValue::Error(error) => {
-                    let value = format_cell_error(*error);
+                    let value = format_cell_error(error);
                     writer
                         .write_event(Event::Start(BytesStart::new(value_name.as_str())))
                         .map_err(xml_error)?;
@@ -3136,45 +3136,9 @@ pub(crate) fn cell_reference(row: u32, col: u32) -> String {
 }
 
 pub(crate) fn parse_cell_error(value: &str) -> CellError {
-    match value {
-        "#NULL!" => CellError::Null,
-        "#DIV/0!" => CellError::Div0,
-        "#VALUE!" => CellError::Value,
-        "#REF!" => CellError::Ref,
-        "#NAME?" => CellError::Name,
-        "#NUM!" => CellError::Num,
-        "#N/A" => CellError::NA,
-        "#GETTING_DATA" => CellError::GettingData,
-        "#SPILL!" => CellError::Spill,
-        "#CALC!" => CellError::Calc,
-        "#FIELD!" => CellError::Field,
-        "#BLOCKED!" => CellError::Blocked,
-        "#BUSY!" => CellError::Busy,
-        "#CONNECT!" => CellError::Connect,
-        "#PYTHON!" => CellError::Python,
-        "#TIMEOUT!" => CellError::Timeout,
-        _ => CellError::Unknown,
-    }
+    CellError::from_lexical(value)
 }
 
-pub(crate) fn format_cell_error(value: CellError) -> &'static str {
-    match value {
-        CellError::Null => "#NULL!",
-        CellError::Div0 => "#DIV/0!",
-        CellError::Value => "#VALUE!",
-        CellError::Ref => "#REF!",
-        CellError::Name => "#NAME?",
-        CellError::Num => "#NUM!",
-        CellError::NA => "#N/A",
-        CellError::GettingData => "#GETTING_DATA",
-        CellError::Spill => "#SPILL!",
-        CellError::Calc => "#CALC!",
-        CellError::Field => "#FIELD!",
-        CellError::Blocked => "#BLOCKED!",
-        CellError::Busy => "#BUSY!",
-        CellError::Connect => "#CONNECT!",
-        CellError::Python => "#PYTHON!",
-        CellError::Timeout => "#TIMEOUT!",
-        CellError::Unknown => "#UNKNOWN!",
-    }
+pub(crate) fn format_cell_error(value: &CellError) -> &str {
+    value.as_lexical_str()
 }

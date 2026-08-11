@@ -653,8 +653,15 @@ Wave 2 exit gate:
    실행하고 JSON receipt/status를 기록한다. 4개 source-contract 회귀를 포함한 Python 계약 13개가
    통과한다. 현재 Linux host에는 PowerShell/.NET이 없어 script parse/runtime 및 Excel COM 실행은
    검증하지 못했다.
-   **다음:** pinned Windows Excel host에서 wrapper를 실행해 서로 다른 run ID의 독립 run 두 개를
-   수집하고 repeated-capture gate를 통과시킨다.
+   `OOTD-024` 완료 (2026-08-11, synthetic): canonical `#UNKNOWN!`과 source에서 읽은 알 수 없는
+   오류 lexical을 구분하는 `CellError::UnknownLexical(String)`을 추가하고 known/unknown error
+   token의 parse/render contract를 common value model에 통합했다. worksheet dirty rewrite,
+   formula/chart text rendering, calculation input digest와 Oracle observation이 같은 exact lexical을
+   사용하며, 알 수 없는 `t="e"` 셀을 강제 dirty-save/reopen해 원문을 보존하는 회귀를 고정했다.
+   `excel-xlsx` 2,936개와 `excel-oracle` 33개 회귀가 통과한다.
+   **외부 gate:** pinned Windows Excel host에서 wrapper를 실행해 서로 다른 run ID의 독립 run 두
+   개를 수집하고 repeated-capture gate를 통과시킨다.
+   **다음 로컬:** `OOTD-025` ISO 8601 date cell `t="d"`의 raw-preserving typed round-trip.
 16. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
    structured error에 추가한다.
 
@@ -668,9 +675,8 @@ Wave 3 exit gate:
 
 ### Audit Wave 4 — Cell, Formula And Calculation Fidelity
 
-1. `OOTD-023` + `OOTD-024` + `OOTD-025` + `OOTD-026` + `OOTD-066`: finite number, exact
-   error lexical, ISO date, rich and phonetic text, blank/missing/formula-cache fidelity model을
-   구현한다.
+1. `OOTD-023` + `OOTD-024` 완료. 이어서 `OOTD-025` + `OOTD-026` + `OOTD-066`: ISO date,
+   rich and phonetic text, blank/missing/formula-cache fidelity model을 구현한다.
 2. `OOTD-027` + `OOTD-028` + `OOTD-067`: normal/shared/legacy-array/data-table/dynamic-array
    formula group model과 group-level mutation preflight를 구현한다.
 3. `OOTD-038` + `OOTD-039` + `OOTD-047`: clock, timezone, locale, date system, RNG와 runtime

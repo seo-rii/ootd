@@ -16,7 +16,7 @@ pub struct CalculationCell {
 }
 
 /// A formula cell that completed evaluation with an Excel error value.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CalculationCellError {
     pub cell: CalculationCell,
     pub error: CellError,
@@ -98,7 +98,10 @@ pub(super) fn calculation_input_digest(state: &WorkbookState) -> [u8; 32] {
                     update_bytes(&mut digest, value.as_bytes());
                 }
                 CellValue::Bool(value) => digest.update([3, u8::from(*value)]),
-                CellValue::Error(value) => digest.update([4, *value as u8]),
+                CellValue::Error(value) => {
+                    digest.update([4]);
+                    update_bytes(&mut digest, value.as_lexical_str().as_bytes());
+                }
             }
             if let Some(formula) = &cell.formula {
                 digest.update([1, u8::from(formula.is_r1c1)]);
@@ -383,7 +386,7 @@ impl ExcelRuntime {
                         if let Some(CellValue::Error(error)) = result.values.first() {
                             report.errors.push(CalculationCellError {
                                 cell: calculation_cell,
-                                error: *error,
+                                error: error.clone(),
                             });
                         } else {
                             report.evaluated.push(calculation_cell);
@@ -408,7 +411,7 @@ impl ExcelRuntime {
                         if let Some(CellValue::Error(cell_error)) = error.into_cell_value() {
                             report.errors.push(CalculationCellError {
                                 cell: calculation_cell,
-                                error: cell_error,
+                                error: cell_error.clone(),
                             });
                             dynamic_updates.push((
                                 (row, col),
@@ -529,7 +532,7 @@ impl ExcelRuntime {
                     Ok(CellValue::Error(error)) => {
                         report.errors.push(CalculationCellError {
                             cell: calculation_cell,
-                            error,
+                            error: error.clone(),
                         });
                         scalar_updates.push(((row, col), CellValue::Error(error)));
                     }
@@ -548,7 +551,7 @@ impl ExcelRuntime {
                         if let Some(CellValue::Error(cell_error)) = error.into_cell_value() {
                             report.errors.push(CalculationCellError {
                                 cell: calculation_cell,
-                                error: cell_error,
+                                error: cell_error.clone(),
                             });
                             scalar_updates.push(((row, col), CellValue::Error(cell_error)));
                         }

@@ -89,7 +89,7 @@ fn find_cell_value_text(value: &CellValue) -> String {
         CellValue::Bool(false) => "FALSE".to_string(),
         CellValue::Number(number) => format_find_number(*number),
         CellValue::Text(text) => text.clone(),
-        CellValue::Error(error) => formula_cell_error_text(*error).to_string(),
+        CellValue::Error(error) => formula_cell_error_text(error).to_string(),
     }
 }
 
@@ -871,7 +871,7 @@ fn om_value_text(value: &OmValue) -> Option<String> {
         OmValue::Bool(false) => Some("FALSE".to_string()),
         OmValue::Number(number) => Some(format_find_number(*number)),
         OmValue::Text(text) => Some(text.clone()),
-        OmValue::Error(error) => Some(formula_cell_error_text(*error).to_string()),
+        OmValue::Error(error) => Some(formula_cell_error_text(error).to_string()),
         OmValue::Object(_) | OmValue::Array(_) => None,
     }
 }
@@ -11336,24 +11336,6 @@ fn chart_group_index_for_series_raw_index(chart: &ChartModel, raw_index: u32) ->
     Ok(group_index)
 }
 
-fn formula_cell_error_text(error: CellError) -> &'static str {
-    match error {
-        CellError::Null => "#NULL!",
-        CellError::Div0 => "#DIV/0!",
-        CellError::Value => "#VALUE!",
-        CellError::Ref => "#REF!",
-        CellError::Name => "#NAME?",
-        CellError::Num => "#NUM!",
-        CellError::NA => "#N/A",
-        CellError::GettingData => "#GETTING_DATA",
-        CellError::Spill => "#SPILL!",
-        CellError::Calc => "#CALC!",
-        CellError::Field => "#FIELD!",
-        CellError::Blocked => "#BLOCKED!",
-        CellError::Busy => "#BUSY!",
-        CellError::Connect => "#CONNECT!",
-        CellError::Python => "#PYTHON!",
-        CellError::Timeout => "#TIMEOUT!",
-        CellError::Unknown => "#UNKNOWN!",
-    }
+fn formula_cell_error_text(error: &CellError) -> &str {
+    error.as_lexical_str()
 }

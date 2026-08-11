@@ -349,27 +349,27 @@ fn observe_om_error(error: OmError) -> ObservedError {
 }
 
 fn observe_cell_error(error: CellError) -> ObservedCellError {
-    let (code, cv_err) = match error {
-        CellError::Null => ("#NULL!", 2000),
-        CellError::Div0 => ("#DIV/0!", 2007),
-        CellError::Value => ("#VALUE!", 2015),
-        CellError::Ref => ("#REF!", 2023),
-        CellError::Name => ("#NAME?", 2029),
-        CellError::Num => ("#NUM!", 2036),
-        CellError::NA => ("#N/A", 2042),
-        CellError::GettingData => ("#GETTING_DATA", 2043),
-        CellError::Spill => ("#SPILL!", 2045),
-        CellError::Connect => ("#CONNECT!", 2046),
-        CellError::Blocked => ("#BLOCKED!", 2047),
-        CellError::Unknown => ("#UNKNOWN!", 2048),
-        CellError::Field => ("#FIELD!", 2049),
-        CellError::Calc => ("#CALC!", 2050),
-        CellError::Busy => ("#BUSY!", 2051),
-        CellError::Python => ("#PYTHON!", 2052),
-        CellError::Timeout => ("#TIMEOUT!", 2053),
+    let cv_err = match &error {
+        CellError::Null => 2000,
+        CellError::Div0 => 2007,
+        CellError::Value => 2015,
+        CellError::Ref => 2023,
+        CellError::Name => 2029,
+        CellError::Num => 2036,
+        CellError::NA => 2042,
+        CellError::GettingData => 2043,
+        CellError::Spill => 2045,
+        CellError::Connect => 2046,
+        CellError::Blocked => 2047,
+        CellError::Unknown | CellError::UnknownLexical(_) => 2048,
+        CellError::Field => 2049,
+        CellError::Calc => 2050,
+        CellError::Busy => 2051,
+        CellError::Python => 2052,
+        CellError::Timeout => 2053,
     };
     ObservedCellError {
-        code: code.to_string(),
+        code: error.as_lexical_str().to_string(),
         cv_err,
     }
 }
@@ -399,4 +399,17 @@ fn cell_error_from_cv_err(cv_err: u16) -> CellError {
 
 fn runtime_harness_error(context: &str, error: OmError) -> OracleContractError {
     OracleContractError::new(format!("runtime harness failed to {context}: {error}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unknown_cell_error_observation_keeps_exact_lexical() {
+        let observed = observe_cell_error(CellError::UnknownLexical("#VENDOR-FUTURE!".to_string()));
+
+        assert_eq!(observed.code, "#VENDOR-FUTURE!");
+        assert_eq!(observed.cv_err, 2048);
+    }
 }
