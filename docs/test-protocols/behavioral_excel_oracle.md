@@ -50,6 +50,21 @@ create-new, flushed, and synced first; the manifest is written last. A final des
 precedes one directory rename, and any pre-publication error removes the temporary root, so callers
 never receive a partially populated run root.
 
+The cross-platform assembly command exposes that same contract without weakening it:
+
+```text
+cargo run -p excel-oracle -- assemble-run \
+  --suite-root PATH \
+  --fragment-root PATH \
+  --fragment-root PATH \
+  --output-root FRESH_PATH
+```
+
+It accepts at most 4,096 fragment roots, emits a deterministic JSON receipt on success, returns exit
+code 2 for command-line contract errors and exit code 1 for artifact validation or publication
+errors. It does not launch Excel or the Windows watchdog; every fragment must already exist and the
+set must exactly cover the pinned suite before the fresh output root is created.
+
 ## Excel Execution
 
 One runner process owns and records every Excel Application it activates. The host must have no
@@ -68,9 +83,10 @@ timestamps.
 
 ## Current Verification Boundary
 
-Rust contract, manifest, bounded filesystem/fragment loader, deterministic suite-run assembler and
-atomic publisher, repeated-capture gate, comparator, report bridge, `ExcelRuntime` adapter, .NET
-contract normalization, and fake-backed runner lifecycle tests execute in this repository. The COM
-session and watchdog compile on Linux but require a real Windows Excel host for execution. No real
-Excel observation or 20-case required corpus is pinned as of 2026-08-10, so no behavior is yet
-Oracle-verified.
+Rust contract, manifest, bounded filesystem/fragment loader, deterministic suite-run assembler,
+atomic publisher and assembly CLI, repeated-capture gate, comparator, report bridge, `ExcelRuntime`
+adapter, .NET contract normalization, and fake-backed runner lifecycle tests execute in this
+repository. The assembly CLI consumes completed fragments but does not yet iterate the Windows
+watchdog. The COM session and watchdog compile on Linux but require a real Windows Excel host for
+execution. No real Excel observation or 20-case required corpus is pinned as of 2026-08-11, so no
+behavior is yet Oracle-verified.

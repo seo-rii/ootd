@@ -633,8 +633,16 @@ Wave 2 exit gate:
    공개한다. 실패 시 temp root를 정리하고 기존 destination은 보존한다. publish/reload, existing
    sentinel, tampered-before-output regression을 포함한 `excel-oracle` 28개 테스트가 통과한다.
    실제 Excel observation은 아직 없다.
-   **다음:** suite manifest를 순회해 Windows watchdog를 case별로 실행하고 fragment를 assemble/
-   materialize하는 bounded capture command를 추가한 뒤 pinned host에서 독립 run 두 개를 수집한다.
+   `OOTD-043`/`OOTD-085` fragment assembly CLI 기반 5단계 완료 (2026-08-11, synthetic):
+   `excel-oracle assemble-run`이 suite root, 반복 fragment root와 fresh output root를 명시적으로
+   받아 기존 bounded loader/assembler/atomic publisher를 하나의 cross-platform command로 연결한다.
+   최대 fragment 수를 4,096개로 제한하고 command-line 계약 오류와 artifact 검증/공개 오류를
+   exit 2/1로 구분하며 성공 시 run ID, case/observation 수와 canonical artifact 경로를 JSON receipt로
+   반환한다. complete two-case publish/reload, incomplete coverage no-output와 missing-value process
+   regression을 포함한 `excel-oracle` 31개 테스트가 통과한다. 실제 Excel observation은 아직 없다.
+   **다음:** suite manifest를 순회해 Windows watchdog를 case별로 실행하고 생성된 fragment root를
+   이 assembly command에 전달하는 bounded Windows capture command를 추가한 뒤 pinned host에서
+   독립 run 두 개를 수집한다.
 16. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
    structured error에 추가한다.
 

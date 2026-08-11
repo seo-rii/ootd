@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::PathBuf;
+use std::process::Command;
 
 use excel_oracle::{
     CaseArtifactRef, CaseInput, CaseOperation, CaseProbe, CaseProvenance, CaseSpec, CaseTier,
@@ -299,6 +300,14 @@ fn engine(kind: EngineKind) -> EngineIdentity {
     }
 }
 
+fn run_oracle(args: &[&str], current_dir: &std::path::Path) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_excel-oracle"))
+        .args(args)
+        .current_dir(current_dir)
+        .output()
+        .expect("run excel-oracle")
+}
+
 #[test]
 fn loads_exact_byte_suite_input_and_run_artifacts_from_disk() {
     let fixture = CorpusFixture::create();
@@ -567,6 +576,88 @@ fn refuses_existing_destinations_and_tampered_bundles_without_partial_output() {
                 .file_name()
                 .to_string_lossy()
                 .starts_with(".rejected-run.ootd-tmp-")),
+    );
+}
+
+#[test]
+fn cli_assembles_and_atomically_materializes_suite_fragments() {
+    let fixture = CorpusFixture::create();
+    let second_fragment_root = fixture.add_second_case_fragment();
+    let output_root = fixture.root.join("cli-published-run");
+    let output = run_oracle(
+        &[
+            "assemble-run",
+            "--suite-root",
+            fixture.corpus_root.to_str().expect("suite root UTF-8"),
+            "--fragment-root",
+            fixture.run_root.to_str().expect("first fragment UTF-8"),
+            "--fragment-root",
+            second_fragment_root
+                .to_str()
+                .expect("second fragment UTF-8"),
+            "--output-root",
+            output_root.to_str().expect("output root UTF-8"),
+        ],
+        &fixture.root,
+    );
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let receipt: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("CLI receipt JSON");
+    assert_eq!(receipt["runId"], "excel-win-en-us-20260810-a");
+    assert_eq!(receipt["caseCount"], 2);
+    assert_eq!(receipt["completedObservationCount"], 2);
+    assert_eq!(
+        receipt["outputRoot"],
+        output_root.to_str().expect("output root UTF-8"),
+    );
+    let suite = PinnedSuiteArtifacts::load(&fixture.corpus_root).expect("reload suite");
+    let run = suite.load_run(&output_root).expect("reload CLI output");
+    assert_eq!(run.manifest.cases.len(), 2);
+    assert_eq!(run.observations.len(), 2);
+}
+
+#[test]
+fn cli_rejects_incomplete_fragment_coverage_without_output() {
+    let fixture = CorpusFixture::create();
+    let _second_fragment_root = fixture.add_second_case_fragment();
+    let output_root = fixture.root.join("cli-rejected-run");
+    let output = run_oracle(
+        &[
+            "assemble-run",
+            "--suite-root",
+            fixture.corpus_root.to_str().expect("suite root UTF-8"),
+            "--fragment-root",
+            fixture.run_root.to_str().expect("first fragment UTF-8"),
+            "--output-root",
+            output_root.to_str().expect("output root UTF-8"),
+        ],
+        &fixture.root,
+    );
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        String::from_utf8(output.stderr)
+            .expect("stderr UTF-8")
+            .contains("assembled run records must exactly cover the suite cases"),
+    );
+    assert!(!output_root.exists());
+}
+
+#[test]
+fn cli_requires_each_assemble_run_argument() {
+    let fixture = CorpusFixture::create();
+    let output = run_oracle(&["assemble-run", "--suite-root"], &fixture.root);
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        String::from_utf8(output.stderr)
+            .expect("stderr UTF-8")
+            .contains("missing value for --suite-root"),
     );
 }
 

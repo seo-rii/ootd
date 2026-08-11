@@ -357,8 +357,13 @@ Active order:
    synthetic): a fresh sibling temporary root receives create-new/synced observations and the
    manifest before one directory rename; existing destinations and tampered bundles leave no
    partial output.
-55. **Active:** expose a bounded suite capture command around the Windows case watchdog, then
-   collect two independent runs on the pinned desktop Excel host.
+55. `OOTD-043`/`OOTD-085` fragment assembly CLI foundation stage 5 is complete (2026-08-11,
+   synthetic): `excel-oracle assemble-run` connects bounded fragment loading, complete-suite
+   assembly, fresh-root atomic publication and a deterministic JSON receipt behind one command;
+   incomplete coverage fails without output.
+56. **Active:** expose a bounded Windows suite capture command that iterates the case watchdog and
+   feeds its fragments to the assembly CLI, then collect two independent runs on the pinned desktop
+   Excel host.
 
 Every numbered work unit starts with a failing regression and lands as its own reviewable commit.
 The complete `OOTD-001`~`OOTD-086` ordering, regression inventory, and compatibility completion
