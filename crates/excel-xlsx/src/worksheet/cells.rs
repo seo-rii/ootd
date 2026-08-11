@@ -14,7 +14,8 @@ use super::super::{
 
 use excel_model::{CellData, WorksheetData, WorksheetStructuralOwners};
 use office_common::{
-    CellError, CellValue, ExcelLimits, FormulaSource, OmError, OmErrorCode, OmResult, Rect, StyleId,
+    CellError, CellValue, ExcelLimits, FormulaSource, IsoDateTime, OmError, OmErrorCode, OmResult,
+    Rect, StyleId,
 };
 use quick_xml::escape::partial_escape;
 use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
@@ -580,6 +581,15 @@ pub(crate) fn parse_worksheet_cells(
                     let cell_value = match cell_type.as_deref() {
                         Some("b") => CellValue::Bool(value == "1"),
                         Some("e") => CellValue::Error(parse_cell_error(value.as_str())),
+                        Some("d") => CellValue::IsoDateTime(
+                            IsoDateTime::parse(value.as_str()).map_err(|error| {
+                                OmError::parse(format!(
+                                    "{worksheet_part_uri}: cell {} {}",
+                                    cell_reference(row, col),
+                                    error.message
+                                ))
+                            })?,
+                        ),
                         Some("s") => {
                             let index = value.parse::<usize>().map_err(xml_error)?;
                             CellValue::Text(shared_strings.get(index).cloned().ok_or_else(
@@ -2338,6 +2348,7 @@ pub(crate) fn rewrite_worksheet_xml(
                 CellValue::Bool(_) => Some("b"),
                 CellValue::Text(_) => Some("str"),
                 CellValue::Error(_) => Some("e"),
+                CellValue::IsoDateTime(_) => Some("d"),
                 _ => None,
             }
         } else {
@@ -2345,6 +2356,7 @@ pub(crate) fn rewrite_worksheet_xml(
                 CellValue::Bool(_) => Some("b"),
                 CellValue::Text(_) => Some("inlineStr"),
                 CellValue::Error(_) => Some("e"),
+                CellValue::IsoDateTime(_) => Some("d"),
                 _ => None,
             }
         };
@@ -2547,6 +2559,20 @@ pub(crate) fn rewrite_worksheet_xml(
                                 .map_err(xml_error)?;
                             wrote_value = true;
                         }
+                        CellValue::IsoDateTime(value) => {
+                            writer
+                                .write_event(Event::Start(BytesStart::new(value_name.as_str())))
+                                .map_err(xml_error)?;
+                            writer
+                                .write_event(Event::Text(BytesText::from_escaped(partial_escape(
+                                    value.as_str(),
+                                ))))
+                                .map_err(xml_error)?;
+                            writer
+                                .write_event(Event::End(BytesEnd::new(value_name.as_str())))
+                                .map_err(xml_error)?;
+                            wrote_value = true;
+                        }
                     },
                     CellContentSegment::InlineString => {
                         if let CellValue::Text(value) = &cell.value
@@ -2650,6 +2676,19 @@ pub(crate) fn rewrite_worksheet_xml(
                         .map_err(xml_error)?;
                     writer
                         .write_event(Event::Text(BytesText::from_escaped(partial_escape(value))))
+                        .map_err(xml_error)?;
+                    writer
+                        .write_event(Event::End(BytesEnd::new(value_name.as_str())))
+                        .map_err(xml_error)?;
+                }
+                CellValue::IsoDateTime(value) => {
+                    writer
+                        .write_event(Event::Start(BytesStart::new(value_name.as_str())))
+                        .map_err(xml_error)?;
+                    writer
+                        .write_event(Event::Text(BytesText::from_escaped(partial_escape(
+                            value.as_str(),
+                        ))))
                         .map_err(xml_error)?;
                     writer
                         .write_event(Event::End(BytesEnd::new(value_name.as_str())))

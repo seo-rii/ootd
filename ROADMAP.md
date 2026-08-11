@@ -375,8 +375,11 @@ Active order:
    token instead of rewriting it as `#UNKNOWN!`.
 59. **Pending external:** execute the suite wrapper twice with distinct run IDs on the pinned
    desktop Excel host, pass the repeated-capture gate, and commit the first required corpus.
-60. **Active local:** implement raw-preserving typed load/dirty-save/reopen support for ISO 8601
-   date cells (`OOTD-025`).
+60. `OOTD-025` is complete (2026-08-11, synthetic): validated ISO date/date-time values retain
+   their exact fractional-second and timezone lexical through dirty save/reopen, invalid values fail
+   with part/cell context, and serial conversion requires explicit 1900/1904 plus offset policies.
+61. **Active local:** preserve rich-text formatting runs, phonetic runs, whitespace semantics, and
+   exact raw representation for shared and inline strings (`OOTD-026`).
 
 Every numbered work unit starts with a failing regression and lands as its own reviewable commit.
 The complete `OOTD-001`~`OOTD-086` ordering, regression inventory, and compatibility completion

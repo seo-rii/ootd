@@ -12557,7 +12557,7 @@ impl ExcelRuntime {
                             let value_rank = |value: &CellValue| -> i32 {
                                 match value {
                                     CellValue::Number(_) => 0,
-                                    CellValue::Text(_) => 1,
+                                    CellValue::Text(_) | CellValue::IsoDateTime(_) => 1,
                                     CellValue::Bool(_) => 2,
                                     CellValue::Error(_) => 3,
                                     CellValue::Blank => 4,
@@ -12622,6 +12622,27 @@ impl ExcelRuntime {
                                         left.cmp(right)
                                     } else {
                                         left.to_lowercase().cmp(&right.to_lowercase())
+                                    }
+                                }
+                                (
+                                    CellValue::IsoDateTime(left),
+                                    CellValue::IsoDateTime(right),
+                                ) => left.cmp(right),
+                                (CellValue::Text(left), CellValue::IsoDateTime(right)) => {
+                                    if match_case {
+                                        left.as_str().cmp(right.as_str())
+                                    } else {
+                                        left.to_lowercase()
+                                            .cmp(&right.as_str().to_lowercase())
+                                    }
+                                }
+                                (CellValue::IsoDateTime(left), CellValue::Text(right)) => {
+                                    if match_case {
+                                        left.as_str().cmp(right.as_str())
+                                    } else {
+                                        left.as_str()
+                                            .to_lowercase()
+                                            .cmp(&right.to_lowercase())
                                     }
                                 }
                                 (CellValue::Bool(left), CellValue::Bool(right)) => left.cmp(right),
@@ -29119,6 +29140,7 @@ fn find_cell_value_text(value: &CellValue) -> String {
         CellValue::Number(number) => format_find_number(*number),
         CellValue::Text(text) => text.clone(),
         CellValue::Error(error) => formula_cell_error_text(error).to_string(),
+        CellValue::IsoDateTime(value) => value.as_str().to_string(),
     }
 }
 

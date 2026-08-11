@@ -5236,7 +5236,10 @@ impl FormulaCriteria {
                 CellValue::Bool(actual) => {
                     operator.evaluate(if *actual { 1.0 } else { 0.0 }, *expected)
                 }
-                CellValue::Blank | CellValue::Text(_) | CellValue::Error(_) => false,
+                CellValue::Blank
+                | CellValue::Text(_)
+                | CellValue::Error(_)
+                | CellValue::IsoDateTime(_) => false,
             },
             FormulaCriteria::Text { operator, pattern } => match cell_value {
                 CellValue::Text(actual) => match operator {
@@ -5245,6 +5248,15 @@ impl FormulaCriteria {
                     }
                     FormulaComparisonOperator::NotEqual => {
                         !formula_wildcard_matches(pattern, actual, true)
+                    }
+                    _ => false,
+                },
+                CellValue::IsoDateTime(actual) => match operator {
+                    FormulaComparisonOperator::Equal => {
+                        formula_wildcard_matches(pattern, actual.as_str(), true)
+                    }
+                    FormulaComparisonOperator::NotEqual => {
+                        !formula_wildcard_matches(pattern, actual.as_str(), true)
                     }
                     _ => false,
                 },
@@ -5485,6 +5497,7 @@ fn formula_value_probe_from_cell_value(value: CellValue) -> FormulaValueProbe {
         CellValue::Error(error) => {
             FormulaValueProbe::Error(formula_eval_error_from_cell_error(error))
         }
+        CellValue::IsoDateTime(value) => FormulaValueProbe::Text(value.into_string()),
     }
 }
 
@@ -9237,7 +9250,7 @@ impl<'a> FormulaEvaluator<'a> {
             Ok(CellValue::Blank) => Ok(0.0),
             Ok(CellValue::Number(number)) => Ok(number),
             Ok(CellValue::Bool(value)) => Ok(if value { 1.0 } else { 0.0 }),
-            Ok(CellValue::Text(_)) => Err(FormulaEvalError::Value),
+            Ok(CellValue::Text(_) | CellValue::IsoDateTime(_)) => Err(FormulaEvalError::Value),
             Ok(CellValue::Error(error)) => Err(formula_eval_error_from_cell_error(error)),
             Err(FormulaEvalError::Unsupported) => self
                 .state
@@ -9248,7 +9261,7 @@ impl<'a> FormulaEvaluator<'a> {
                     CellValue::Blank => Ok(0.0),
                     CellValue::Number(number) => Ok(*number),
                     CellValue::Bool(value) => Ok(if *value { 1.0 } else { 0.0 }),
-                    CellValue::Text(_) => Err(FormulaEvalError::Value),
+                    CellValue::Text(_) | CellValue::IsoDateTime(_) => Err(FormulaEvalError::Value),
                     CellValue::Error(error) => {
                         Err(formula_eval_error_from_cell_error(error.clone()))
                     }
@@ -9282,7 +9295,12 @@ impl<'a> FormulaEvaluator<'a> {
                 Ok(CellValue::Error(error)) => {
                     return Err(formula_eval_error_from_cell_error(error));
                 }
-                Ok(CellValue::Blank | CellValue::Bool(_) | CellValue::Text(_)) => {}
+                Ok(
+                    CellValue::Blank
+                    | CellValue::Bool(_)
+                    | CellValue::Text(_)
+                    | CellValue::IsoDateTime(_),
+                ) => {}
                 Err(FormulaEvalError::Unsupported) => {
                     if let Some(cell) = self
                         .state
@@ -9295,7 +9313,10 @@ impl<'a> FormulaEvaluator<'a> {
                             CellValue::Error(error) => {
                                 return Err(formula_eval_error_from_cell_error(error.clone()));
                             }
-                            CellValue::Blank | CellValue::Bool(_) | CellValue::Text(_) => {}
+                            CellValue::Blank
+                            | CellValue::Bool(_)
+                            | CellValue::Text(_)
+                            | CellValue::IsoDateTime(_) => {}
                         }
                     }
                 }
@@ -9380,7 +9401,12 @@ impl<'a> FormulaEvaluator<'a> {
                 Ok(CellValue::Error(error)) => {
                     return Err(formula_eval_error_from_cell_error(error));
                 }
-                Ok(CellValue::Blank | CellValue::Bool(_) | CellValue::Text(_)) => {}
+                Ok(
+                    CellValue::Blank
+                    | CellValue::Bool(_)
+                    | CellValue::Text(_)
+                    | CellValue::IsoDateTime(_),
+                ) => {}
                 Err(FormulaEvalError::Unsupported) => {
                     if let Some(cell) = self
                         .state
@@ -9393,7 +9419,10 @@ impl<'a> FormulaEvaluator<'a> {
                             CellValue::Error(error) => {
                                 return Err(formula_eval_error_from_cell_error(error.clone()));
                             }
-                            CellValue::Blank | CellValue::Bool(_) | CellValue::Text(_) => {}
+                            CellValue::Blank
+                            | CellValue::Bool(_)
+                            | CellValue::Text(_)
+                            | CellValue::IsoDateTime(_) => {}
                         }
                     }
                 }
@@ -9615,7 +9644,10 @@ impl<'a> FormulaEvaluator<'a> {
                     CellValue::Error(error) => {
                         return Err(formula_eval_error_from_cell_error(error));
                     }
-                    CellValue::Blank | CellValue::Bool(_) | CellValue::Text(_) => {}
+                    CellValue::Blank
+                    | CellValue::Bool(_)
+                    | CellValue::Text(_)
+                    | CellValue::IsoDateTime(_) => {}
                 }
             }
         }
@@ -9715,7 +9747,10 @@ impl<'a> FormulaEvaluator<'a> {
                     CellValue::Error(error) => {
                         return Err(formula_eval_error_from_cell_error(error));
                     }
-                    CellValue::Blank | CellValue::Bool(_) | CellValue::Text(_) => {}
+                    CellValue::Blank
+                    | CellValue::Bool(_)
+                    | CellValue::Text(_)
+                    | CellValue::IsoDateTime(_) => {}
                 }
             }
         }
@@ -9780,7 +9815,10 @@ impl<'a> FormulaEvaluator<'a> {
                     CellValue::Error(error) => {
                         return Err(formula_eval_error_from_cell_error(error));
                     }
-                    CellValue::Blank | CellValue::Bool(_) | CellValue::Text(_) => {}
+                    CellValue::Blank
+                    | CellValue::Bool(_)
+                    | CellValue::Text(_)
+                    | CellValue::IsoDateTime(_) => {}
                 }
             }
         }
@@ -9997,7 +10035,7 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                     CellValue::Blank => Ok(false),
                     CellValue::Bool(value) => Ok(value),
                     CellValue::Number(value) => Ok(value != 0.0),
-                    CellValue::Text(_) => Err(FormulaEvalError::Value),
+                    CellValue::Text(_) | CellValue::IsoDateTime(_) => Err(FormulaEvalError::Value),
                     CellValue::Error(error) => Err(formula_eval_error_from_cell_error(error)),
                 }
             };
@@ -11467,7 +11505,9 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                                 CellValue::Error(error) => {
                                     return Err(formula_eval_error_from_cell_error(error));
                                 }
-                                CellValue::Bool(_) | CellValue::Text(_) => {
+                                CellValue::Bool(_)
+                                | CellValue::Text(_)
+                                | CellValue::IsoDateTime(_) => {
                                     return Err(FormulaEvalError::Value);
                                 }
                             }
@@ -11644,7 +11684,10 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                                 CellValue::Error(error) => {
                                     return Err(formula_eval_error_from_cell_error(error));
                                 }
-                                CellValue::Blank | CellValue::Bool(_) | CellValue::Text(_) => {
+                                CellValue::Blank
+                                | CellValue::Bool(_)
+                                | CellValue::Text(_)
+                                | CellValue::IsoDateTime(_) => {
                                     return Err(FormulaEvalError::Value);
                                 }
                             }
@@ -11709,7 +11752,10 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                                 CellValue::Error(error) => {
                                     return Err(formula_eval_error_from_cell_error(error));
                                 }
-                                CellValue::Blank | CellValue::Bool(_) | CellValue::Text(_) => {
+                                CellValue::Blank
+                                | CellValue::Bool(_)
+                                | CellValue::Text(_)
+                                | CellValue::IsoDateTime(_) => {
                                     return Err(FormulaEvalError::Value);
                                 }
                             };
@@ -11813,7 +11859,10 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                                 CellValue::Error(error) => {
                                     return Err(formula_eval_error_from_cell_error(error));
                                 }
-                                CellValue::Blank | CellValue::Bool(_) | CellValue::Text(_) => {
+                                CellValue::Blank
+                                | CellValue::Bool(_)
+                                | CellValue::Text(_)
+                                | CellValue::IsoDateTime(_) => {
                                     return Err(FormulaEvalError::Value);
                                 }
                             }
@@ -11878,7 +11927,10 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                                 CellValue::Error(error) => {
                                     return Err(formula_eval_error_from_cell_error(error));
                                 }
-                                CellValue::Blank | CellValue::Bool(_) | CellValue::Text(_) => {
+                                CellValue::Blank
+                                | CellValue::Bool(_)
+                                | CellValue::Text(_)
+                                | CellValue::IsoDateTime(_) => {
                                     return Err(FormulaEvalError::Value);
                                 }
                             };
@@ -12020,7 +12072,10 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                                 CellValue::Error(error) => {
                                     return Err(formula_eval_error_from_cell_error(error));
                                 }
-                                CellValue::Blank | CellValue::Bool(_) | CellValue::Text(_) => {}
+                                CellValue::Blank
+                                | CellValue::Bool(_)
+                                | CellValue::Text(_)
+                                | CellValue::IsoDateTime(_) => {}
                             }
                         }
                     }
@@ -12126,7 +12181,10 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                                 CellValue::Error(error) => {
                                     return Err(formula_eval_error_from_cell_error(error));
                                 }
-                                CellValue::Blank | CellValue::Bool(_) | CellValue::Text(_) => {}
+                                CellValue::Blank
+                                | CellValue::Bool(_)
+                                | CellValue::Text(_)
+                                | CellValue::IsoDateTime(_) => {}
                             }
                         }
                     }
@@ -12507,7 +12565,10 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                                     CellValue::Error(error) => {
                                         return Err(formula_eval_error_from_cell_error(error));
                                     }
-                                    CellValue::Blank | CellValue::Bool(_) | CellValue::Text(_) => {
+                                    CellValue::Blank
+                                    | CellValue::Bool(_)
+                                    | CellValue::Text(_)
+                                    | CellValue::IsoDateTime(_) => {
                                         values.push(0.0);
                                     }
                                 }
@@ -14400,6 +14461,7 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                             .cell_value_or_blank(target_sheet_id, row, col)?
                         {
                             CellValue::Text(value) => output.push_str(value.as_str()),
+                            CellValue::IsoDateTime(value) => output.push_str(value.as_str()),
                             CellValue::Error(error) => {
                                 return Err(formula_eval_error_from_cell_error(error));
                             }
@@ -17475,7 +17537,10 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                     match value {
                         CellValue::Blank => "b",
                         CellValue::Text(_) => "l",
-                        CellValue::Bool(_) | CellValue::Number(_) | CellValue::Error(_) => "v",
+                        CellValue::Bool(_)
+                        | CellValue::Number(_)
+                        | CellValue::Error(_)
+                        | CellValue::IsoDateTime(_) => "v",
                     }
                     .to_string(),
                 ))
@@ -18644,7 +18709,7 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                     CellValue::Blank => Ok(false),
                     CellValue::Bool(value) => Ok(value),
                     CellValue::Number(value) => Ok(value != 0.0),
-                    CellValue::Text(_) => Err(FormulaEvalError::Value),
+                    CellValue::Text(_) | CellValue::IsoDateTime(_) => Err(FormulaEvalError::Value),
                     CellValue::Error(error) => Err(formula_eval_error_from_cell_error(error)),
                 }
             };
@@ -19553,6 +19618,9 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                             FormulaCriteria::from_numeric_value(if value { 1.0 } else { 0.0 })
                         }
                         CellValue::Text(value) => FormulaCriteria::from_string_literal(value),
+                        CellValue::IsoDateTime(value) => {
+                            FormulaCriteria::from_string_literal(value.into_string())
+                        }
                         CellValue::Error(error) => {
                             return Err(formula_eval_error_from_cell_error(error));
                         }
@@ -19614,21 +19682,30 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                     CellValue::Error(error) => {
                         return Err(formula_eval_error_from_cell_error(error));
                     }
-                    CellValue::Bool(_) | CellValue::Number(_) | CellValue::Text(_) => counta += 1,
+                    CellValue::Bool(_)
+                    | CellValue::Number(_)
+                    | CellValue::Text(_)
+                    | CellValue::IsoDateTime(_) => counta += 1,
                 },
                 "DCOUNT" => match field_value {
                     CellValue::Number(_) => counta += 1,
                     CellValue::Error(error) => {
                         return Err(formula_eval_error_from_cell_error(error));
                     }
-                    CellValue::Blank | CellValue::Bool(_) | CellValue::Text(_) => {}
+                    CellValue::Blank
+                    | CellValue::Bool(_)
+                    | CellValue::Text(_)
+                    | CellValue::IsoDateTime(_) => {}
                 },
                 _ => match field_value {
                     CellValue::Number(value) => numeric_values.push(value),
                     CellValue::Error(error) => {
                         return Err(formula_eval_error_from_cell_error(error));
                     }
-                    CellValue::Blank | CellValue::Bool(_) | CellValue::Text(_) => {}
+                    CellValue::Blank
+                    | CellValue::Bool(_)
+                    | CellValue::Text(_)
+                    | CellValue::IsoDateTime(_) => {}
                 },
             }
         }
@@ -20011,7 +20088,8 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                                     CellValue::Blank => {}
                                     CellValue::Bool(_)
                                     | CellValue::Number(_)
-                                    | CellValue::Text(_) => counta += 1,
+                                    | CellValue::Text(_)
+                                    | CellValue::IsoDateTime(_) => counta += 1,
                                 }
                             }
                         }
@@ -20442,7 +20520,7 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                             CellValue::Blank => {}
                             CellValue::Bool(value) => values.push(if value { 1.0 } else { 0.0 }),
                             CellValue::Number(value) => values.push(value),
-                            CellValue::Text(_) => values.push(0.0),
+                            CellValue::Text(_) | CellValue::IsoDateTime(_) => values.push(0.0),
                             CellValue::Error(error) => {
                                 return Err(formula_eval_error_from_cell_error(error));
                             }

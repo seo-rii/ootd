@@ -240,6 +240,256 @@ impl CellError {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ExcelDateSystem {
+    Date1900,
+    Date1904,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum IsoDateTimeOffsetPolicy {
+    PreserveWallClock,
+    NormalizeToUtc,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct IsoDateTime {
+    lexical: String,
+    year: u16,
+    month: u8,
+    day: u8,
+    hour: u8,
+    minute: u8,
+    second: u8,
+    fractional_second: String,
+    offset_minutes: Option<i16>,
+}
+
+impl IsoDateTime {
+    pub fn parse(value: impl Into<String>) -> OmResult<Self> {
+        let value = value.into();
+        let invalid = || {
+            OmError::invalid_argument(format!(
+                "invalid ISO 8601 worksheet date/time lexical: {value}"
+            ))
+        };
+        if value.is_empty() || value.len() > 64 || !value.is_ascii() || value.trim() != value {
+            return Err(invalid());
+        }
+
+        let parse_two_digits = |bytes: &[u8]| -> Option<u32> {
+            if bytes.len() != 2 || !bytes.iter().all(u8::is_ascii_digit) {
+                return None;
+            }
+            Some(u32::from(bytes[0] - b'0') * 10 + u32::from(bytes[1] - b'0'))
+        };
+        let mut core_end = value.len();
+        let mut offset_minutes = None;
+        if value.ends_with('Z') {
+            core_end -= 1;
+            offset_minutes = Some(0);
+        } else if let Some(offset_index) = value
+            .as_bytes()
+            .iter()
+            .enumerate()
+            .skip(10)
+            .find_map(|(index, byte)| matches!(byte, b'+' | b'-').then_some(index))
+        {
+            let offset = &value.as_bytes()[offset_index..];
+            if offset.len() != 6 || offset[3] != b':' {
+                return Err(invalid());
+            }
+            let Some(offset_hour) = parse_two_digits(&offset[1..3]) else {
+                return Err(invalid());
+            };
+            let Some(offset_minute) = parse_two_digits(&offset[4..6]) else {
+                return Err(invalid());
+            };
+            if offset_hour > 14 || offset_minute > 59 || (offset_hour == 14 && offset_minute != 0) {
+                return Err(invalid());
+            }
+            let offset = i16::try_from(offset_hour * 60 + offset_minute).map_err(|_| invalid())?;
+            offset_minutes = Some(if value.as_bytes()[offset_index] == b'-' {
+                -offset
+            } else {
+                offset
+            });
+            core_end = offset_index;
+        }
+
+        let core = &value[..core_end];
+        let (date, time) = match core.split_once('T') {
+            Some((date, time)) if !time.is_empty() && !time.contains('T') => (date, Some(time)),
+            Some(_) => return Err(invalid()),
+            None => (core, None),
+        };
+        let date_bytes = date.as_bytes();
+        if date_bytes.len() != 10
+            || date_bytes[4] != b'-'
+            || date_bytes[7] != b'-'
+            || !date_bytes[..4].iter().all(u8::is_ascii_digit)
+        {
+            return Err(invalid());
+        }
+        let year = date_bytes[..4]
+            .iter()
+            .fold(0_u32, |year, digit| year * 10 + u32::from(*digit - b'0'));
+        let Some(month) = parse_two_digits(&date_bytes[5..7]) else {
+            return Err(invalid());
+        };
+        let Some(day) = parse_two_digits(&date_bytes[8..10]) else {
+            return Err(invalid());
+        };
+        let leap_year =
+            year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400));
+        let days_in_month = match month {
+            1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+            4 | 6 | 9 | 11 => 30,
+            2 if leap_year => 29,
+            2 => 28,
+            _ => return Err(invalid()),
+        };
+        if year == 0 || day == 0 || day > days_in_month {
+            return Err(invalid());
+        }
+
+        let mut hour = 0;
+        let mut minute = 0;
+        let mut second = 0;
+        let mut fractional_second = String::new();
+        if let Some(time) = time {
+            let time_bytes = time.as_bytes();
+            if time_bytes.len() < 8 || time_bytes[2] != b':' || time_bytes[5] != b':' {
+                return Err(invalid());
+            }
+            let Some(parsed_hour) = parse_two_digits(&time_bytes[..2]) else {
+                return Err(invalid());
+            };
+            let Some(parsed_minute) = parse_two_digits(&time_bytes[3..5]) else {
+                return Err(invalid());
+            };
+            let Some(parsed_second) = parse_two_digits(&time_bytes[6..8]) else {
+                return Err(invalid());
+            };
+            if parsed_hour > 23 || parsed_minute > 59 || parsed_second > 59 {
+                return Err(invalid());
+            }
+            if time_bytes.len() > 8
+                && (time_bytes[8] != b'.'
+                    || time_bytes.len() == 9
+                    || !time_bytes[9..].iter().all(u8::is_ascii_digit))
+            {
+                return Err(invalid());
+            }
+            hour = u8::try_from(parsed_hour).map_err(|_| invalid())?;
+            minute = u8::try_from(parsed_minute).map_err(|_| invalid())?;
+            second = u8::try_from(parsed_second).map_err(|_| invalid())?;
+            if time_bytes.len() > 8 {
+                fractional_second = time[9..].to_string();
+            }
+        }
+
+        let year = u16::try_from(year).map_err(|_| invalid())?;
+        let month = u8::try_from(month).map_err(|_| invalid())?;
+        let day = u8::try_from(day).map_err(|_| invalid())?;
+        Ok(Self {
+            lexical: value,
+            year,
+            month,
+            day,
+            hour,
+            minute,
+            second,
+            fractional_second,
+            offset_minutes,
+        })
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.lexical
+    }
+
+    pub fn into_string(self) -> String {
+        self.lexical
+    }
+
+    /// Converts the ISO value to an Excel serial only under explicit workbook and offset policies.
+    /// ISO lexical parsing is locale-independent; no locale-specific coercion is performed here.
+    pub fn to_excel_serial(
+        &self,
+        date_system: ExcelDateSystem,
+        offset_policy: IsoDateTimeOffsetPolicy,
+    ) -> f64 {
+        let absolute_day = |year: i64, month: i64, day: i64| {
+            let prior_year = year - 1;
+            let days_before_year =
+                365 * prior_year + prior_year / 4 - prior_year / 100 + prior_year / 400;
+            let leap_year = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+            let days_before_month = match month {
+                1 => 0,
+                2 => 31,
+                3 => 59,
+                4 => 90,
+                5 => 120,
+                6 => 151,
+                7 => 181,
+                8 => 212,
+                9 => 243,
+                10 => 273,
+                11 => 304,
+                12 => 334,
+                _ => unreachable!("validated ISO month"),
+            } + i64::from(leap_year && month > 2);
+            days_before_year + days_before_month + day - 1
+        };
+        let year = i64::from(self.year);
+        let month = i64::from(self.month);
+        let day = i64::from(self.day);
+        let date_day = absolute_day(year, month, day);
+        let mut serial_day = match date_system {
+            ExcelDateSystem::Date1900 => {
+                let mut serial = date_day - absolute_day(1899, 12, 31);
+                if (year, month, day) >= (1900, 3, 1) {
+                    serial += 1;
+                }
+                serial
+            }
+            ExcelDateSystem::Date1904 => date_day - absolute_day(1904, 1, 1),
+        } as f64;
+        let fractional_second = if self.fractional_second.is_empty() {
+            0.0
+        } else {
+            format!("0.{}", self.fractional_second)
+                .parse::<f64>()
+                .expect("validated ISO fractional second")
+        };
+        let seconds = f64::from(self.hour) * 3_600.0
+            + f64::from(self.minute) * 60.0
+            + f64::from(self.second)
+            + fractional_second;
+        serial_day += seconds / 86_400.0;
+        if offset_policy == IsoDateTimeOffsetPolicy::NormalizeToUtc {
+            serial_day -= f64::from(self.offset_minutes.unwrap_or(0)) / 1_440.0;
+        }
+        serial_day
+    }
+}
+
+impl TryFrom<String> for IsoDateTime {
+    type Error = OmError;
+
+    fn try_from(value: String) -> OmResult<Self> {
+        Self::parse(value)
+    }
+}
+
+impl From<IsoDateTime> for String {
+    fn from(value: IsoDateTime) -> Self {
+        value.into_string()
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub enum CellValue {
     #[default]
@@ -248,6 +498,7 @@ pub enum CellValue {
     Number(f64),
     Text(String),
     Error(CellError),
+    IsoDateTime(IsoDateTime),
 }
 
 impl CellValue {
@@ -324,6 +575,7 @@ impl From<CellValue> for OmValue {
             CellValue::Number(value) => OmValue::Number(value),
             CellValue::Text(value) => OmValue::Text(value),
             CellValue::Error(value) => OmValue::Error(value),
+            CellValue::IsoDateTime(value) => OmValue::Text(value.into_string()),
         }
     }
 }
@@ -877,9 +1129,10 @@ impl OmError {
 #[cfg(test)]
 mod tests {
     use super::{
-        ActiveContentPolicy, CellValue, Emu, ExcelProfile, ExternalDataAccessReport,
-        ExternalDataInventory, ExternalDataPolicy, LoadOptions, ObjectHandle, OmArray, OmErrorCode,
-        OmValue, Points, RangeRef, Rect, SaveOptions, SheetId, SheetScope, WorkbookId,
+        ActiveContentPolicy, CellValue, Emu, ExcelDateSystem, ExcelProfile,
+        ExternalDataAccessReport, ExternalDataInventory, ExternalDataPolicy, IsoDateTime,
+        IsoDateTimeOffsetPolicy, LoadOptions, ObjectHandle, OmArray, OmErrorCode, OmValue, Points,
+        RangeRef, Rect, SaveOptions, SheetId, SheetScope, WorkbookId,
     };
 
     #[test]
@@ -922,6 +1175,86 @@ mod tests {
             assert_eq!(error.code, OmErrorCode::InvalidArgument);
             assert_eq!(error.message, "worksheet cell numeric value must be finite");
         }
+    }
+
+    #[test]
+    fn iso_date_time_preserves_valid_date_time_and_offset_lexicals() {
+        for lexical in [
+            "2024-02-29",
+            "2026-08-11Z",
+            "2026-08-11+09:00",
+            "2026-08-11T12:34:56",
+            "2026-08-11T12:34:56.1200Z",
+            "2026-08-11T12:34:56.1200-09:30",
+        ] {
+            let value = IsoDateTime::parse(lexical).expect("valid ISO date/time");
+            assert_eq!(value.as_str(), lexical);
+        }
+    }
+
+    #[test]
+    fn iso_date_time_rejects_invalid_calendar_time_and_offset_lexicals() {
+        for lexical in [
+            "",
+            "0000-01-01",
+            "2023-02-29",
+            "2024-13-01",
+            "2024-04-31",
+            "2024-01-01T24:00:00",
+            "2024-01-01T12:60:00",
+            "2024-01-01T12:00:60",
+            "2024-01-01T12:00",
+            "2024-01-01T12:00:00.",
+            "2024-01-01T12:00:00+14:01",
+            " 2024-01-01",
+        ] {
+            let error = IsoDateTime::parse(lexical).expect_err("invalid ISO date/time must fail");
+            assert_eq!(error.code, OmErrorCode::InvalidArgument, "{lexical}");
+        }
+    }
+
+    #[test]
+    fn iso_date_time_cell_projects_to_raw_text_without_serial_conversion() {
+        let lexical = "2026-08-11T12:34:56+09:00";
+        let value = CellValue::IsoDateTime(IsoDateTime::parse(lexical).expect("valid date/time"));
+
+        assert_eq!(OmValue::from(value), OmValue::Text(lexical.to_string()));
+    }
+
+    #[test]
+    fn iso_date_time_serial_conversion_requires_date_system_and_offset_policy() {
+        let serial_1900 = |lexical: &str| {
+            IsoDateTime::parse(lexical)
+                .expect("valid date/time")
+                .to_excel_serial(
+                    ExcelDateSystem::Date1900,
+                    IsoDateTimeOffsetPolicy::PreserveWallClock,
+                )
+        };
+        assert_eq!(serial_1900("1900-01-01"), 1.0);
+        assert_eq!(serial_1900("1900-02-28"), 59.0);
+        assert_eq!(serial_1900("1900-03-01"), 61.0);
+        assert_eq!(
+            serial_1900("2026-08-11T12:00:00"),
+            serial_1900("2026-08-11") + 0.5
+        );
+
+        let offset =
+            IsoDateTime::parse("1904-01-01T00:00:00+09:00").expect("valid offset date/time");
+        assert_eq!(
+            offset.to_excel_serial(
+                ExcelDateSystem::Date1904,
+                IsoDateTimeOffsetPolicy::PreserveWallClock,
+            ),
+            0.0
+        );
+        assert_eq!(
+            offset.to_excel_serial(
+                ExcelDateSystem::Date1904,
+                IsoDateTimeOffsetPolicy::NormalizeToUtc,
+            ),
+            -0.375
+        );
     }
 
     #[test]

@@ -659,9 +659,16 @@ Wave 2 exit gate:
    formula/chart text rendering, calculation input digest와 Oracle observation이 같은 exact lexical을
    사용하며, 알 수 없는 `t="e"` 셀을 강제 dirty-save/reopen해 원문을 보존하는 회귀를 고정했다.
    `excel-xlsx` 2,936개와 `excel-oracle` 33개 회귀가 통과한다.
+   `OOTD-025` 완료 (2026-08-11, synthetic): worksheet `t="d"` 값을 검증된
+   `IsoDateTime` typed value로 읽고 date/date-time, fractional second와 timezone offset의 exact
+   lexical을 dirty-save/reopen에서도 보존한다. 잘못된 calendar/time/offset은 part URI와 cell
+   coordinate를 포함해 fail-closed하며, locale coercion은 수행하지 않는다. Excel serial 변환은
+   호출자가 1900/1904 date system과 wall-clock 보존/UTC normalization 정책을 모두 명시하는
+   API로만 제공한다. Rust 1.88 compile, `office-common` 31개와 `excel-xlsx` 2,938개를 포함한
+   workspace 전체 회귀가 통과한다.
    **외부 gate:** pinned Windows Excel host에서 wrapper를 실행해 서로 다른 run ID의 독립 run 두
    개를 수집하고 repeated-capture gate를 통과시킨다.
-   **다음 로컬:** `OOTD-025` ISO 8601 date cell `t="d"`의 raw-preserving typed round-trip.
+   **다음 로컬:** `OOTD-026` rich text와 phonetic run의 exact preservation model.
 16. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
    structured error에 추가한다.
 
@@ -675,8 +682,8 @@ Wave 3 exit gate:
 
 ### Audit Wave 4 — Cell, Formula And Calculation Fidelity
 
-1. `OOTD-023` + `OOTD-024` 완료. 이어서 `OOTD-025` + `OOTD-026` + `OOTD-066`: ISO date,
-   rich and phonetic text, blank/missing/formula-cache fidelity model을 구현한다.
+1. `OOTD-023` + `OOTD-024` + `OOTD-025` 완료. 이어서 `OOTD-026` + `OOTD-066`: rich and
+   phonetic text, blank/missing/formula-cache fidelity model을 구현한다.
 2. `OOTD-027` + `OOTD-028` + `OOTD-067`: normal/shared/legacy-array/data-table/dynamic-array
    formula group model과 group-level mutation preflight를 구현한다.
 3. `OOTD-038` + `OOTD-039` + `OOTD-047`: clock, timezone, locale, date system, RNG와 runtime

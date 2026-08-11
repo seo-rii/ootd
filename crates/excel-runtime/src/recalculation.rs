@@ -102,6 +102,10 @@ pub(super) fn calculation_input_digest(state: &WorkbookState) -> [u8; 32] {
                     digest.update([4]);
                     update_bytes(&mut digest, value.as_lexical_str().as_bytes());
                 }
+                CellValue::IsoDateTime(value) => {
+                    digest.update([5]);
+                    update_bytes(&mut digest, value.as_str().as_bytes());
+                }
             }
             if let Some(formula) = &cell.formula {
                 digest.update([1, u8::from(formula.is_r1c1)]);

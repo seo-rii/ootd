@@ -28,7 +28,7 @@
     };
     use office_common::{
         ActiveContentPolicy, CellError, CellMarker, CellValue, ChartId, ChartObjectId,
-        DrawingAnchor, Emu, ExcelLimits, ExcelProfile, ExternalDataKind, FormulaSource,
+        DrawingAnchor, Emu, ExcelLimits, ExcelProfile, ExternalDataKind, FormulaSource, IsoDateTime,
         LoadOptions as CommonLoadOptions, NameScope, NameValidationMode, ObjectPlacement,
         OmErrorCode, OmValue, Rect, ReferenceTarget, SaveOptions as CommonSaveOptions, SheetId,
         SheetKind, SheetScope, SheetVisibility, StyleId, TwoCellAnchor, WorkbookId, WorksheetModel,
@@ -4160,6 +4160,105 @@
                 "#VENDOR-FUTURE!".to_string()
             ))
         );
+    }
+
+    #[test]
+    fn iso_date_cells_round_trip_exact_lexical_through_dirty_save() {
+        let codec = XlsxCodec;
+        let mut package =
+            OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("synthetic package");
+        package
+            .replace_part_bytes(
+                "xl/worksheets/sheet1.xml",
+                br#"<?xml version="1.0" encoding="UTF-8"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r="1">
+      <c r="A1" t="d"><v>2026-08-11</v></c>
+      <c r="B1" t="d"><v>2026-08-11T12:34:56.1200+09:00</v></c>
+    </row>
+  </sheetData>
+</worksheet>"#
+                    .to_vec(),
+            )
+            .expect("replace worksheet part");
+        let mut loaded = codec
+            .load(
+                &package.to_bytes().expect("fixture bytes"),
+                CommonLoadOptions::default(),
+            )
+            .expect("load ISO date cells");
+
+        let worksheet = loaded
+            .state
+            .worksheet_data_for_sheet_mut(SheetId(1))
+            .expect("worksheet data");
+        assert_eq!(
+            worksheet.cells.get(&(1, 1)).expect("A1").value,
+            CellValue::IsoDateTime(IsoDateTime::parse("2026-08-11").expect("valid date"))
+        );
+        assert_eq!(
+            worksheet.cells.get(&(1, 2)).expect("B1").value,
+            CellValue::IsoDateTime(
+                IsoDateTime::parse("2026-08-11T12:34:56.1200+09:00")
+                    .expect("valid date-time"),
+            )
+        );
+        worksheet.dirty = true;
+        worksheet.dirty_cells.extend([(1, 1), (1, 2)]);
+
+        let saved = codec
+            .save(&loaded, CommonSaveOptions::default())
+            .expect("save dirty ISO date cells");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_sheet = std::str::from_utf8(
+            &saved_package
+                .part("xl/worksheets/sheet1.xml")
+                .expect("saved worksheet part")
+                .bytes,
+        )
+        .expect("worksheet utf-8");
+
+        assert!(saved_sheet.contains(r#"<c r="A1" t="d"><v>2026-08-11</v></c>"#));
+        assert!(saved_sheet.contains(
+            r#"<c r="B1" t="d"><v>2026-08-11T12:34:56.1200+09:00</v></c>"#
+        ));
+        let reopened = codec
+            .load(&saved, CommonLoadOptions::default())
+            .expect("reopen ISO date cells");
+        assert_eq!(
+            reopened
+                .state
+                .worksheet_data_for_sheet(SheetId(1))
+                .expect("reopened worksheet")
+                .cells
+                .get(&(1, 2))
+                .expect("reopened B1")
+                .value,
+            CellValue::IsoDateTime(
+                IsoDateTime::parse("2026-08-11T12:34:56.1200+09:00")
+                    .expect("valid date-time"),
+            )
+        );
+    }
+
+    #[test]
+    fn invalid_iso_date_cell_reports_part_and_coordinate() {
+        let error = parse_worksheet_cells(
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData><row r="7"><c r="C7" t="d"><v>2023-02-29</v></c></row></sheetData>
+</worksheet>"#,
+            &[],
+            "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
+            "/xl/worksheets/sheet1.xml",
+        )
+        .expect_err("invalid ISO date cell must fail closed");
+
+        assert_eq!(error.code, OmErrorCode::Parse);
+        assert!(error.message.contains("/xl/worksheets/sheet1.xml"));
+        assert!(error.message.contains("cell C7"));
+        assert!(error.message.contains("2023-02-29"));
     }
 
     #[test]
