@@ -106,6 +106,11 @@ pub(super) fn calculation_input_digest(state: &WorkbookState) -> [u8; 32] {
                     digest.update([5]);
                     update_bytes(&mut digest, value.as_str().as_bytes());
                 }
+                CellValue::RichText(value) => {
+                    digest.update([6]);
+                    update_bytes(&mut digest, value.as_str().as_bytes());
+                    update_bytes(&mut digest, value.phonetic_text().as_bytes());
+                }
             }
             if let Some(formula) = &cell.formula {
                 digest.update([1, u8::from(formula.is_r1c1)]);

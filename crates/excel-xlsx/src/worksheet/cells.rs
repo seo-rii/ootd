@@ -5,6 +5,7 @@ use super::super::{
         TRANSITIONAL_OFFICE_DOCUMENT_RELATIONSHIPS_NAMESPACE,
     },
     io_error,
+    shared_strings::parse_preserved_text_item,
     xml::{
         decode_general_reference, expanded_name_is, namespaced_attribute_is, qualified_name_like,
         resolved_element_is, unqualified_attribute_is,
@@ -15,7 +16,7 @@ use super::super::{
 use excel_model::{CellData, WorksheetData, WorksheetStructuralOwners};
 use office_common::{
     CellError, CellValue, ExcelLimits, FormulaSource, IsoDateTime, OmError, OmErrorCode, OmResult,
-    Rect, StyleId,
+    Rect, RichTextSource, RichTextValue, StyleId,
 };
 use quick_xml::escape::partial_escape;
 use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
@@ -42,6 +43,19 @@ enum CellContentSegment {
     Formula,
     Value,
     InlineString,
+}
+
+struct CurrentInlineStringItem {
+    item_start: usize,
+    inner_start: Option<usize>,
+    preserve_raw_hint: bool,
+    root_attributes: Vec<(String, String)>,
+    namespace_declarations: Vec<(String, String)>,
+}
+
+struct PendingInlineStringItem {
+    item: CurrentInlineStringItem,
+    inner_end: Option<usize>,
 }
 
 pub(crate) fn collect_support_part_dimension_coords(
@@ -214,7 +228,7 @@ pub(crate) fn parse_bounded_a1_rect(
 
 pub(crate) fn parse_worksheet_cells(
     worksheet_xml: &[u8],
-    shared_strings: &[String],
+    shared_strings: &[CellValue],
     spreadsheet_namespace: &str,
     worksheet_part_uri: &str,
 ) -> OmResult<ParsedWorksheetCells> {
@@ -227,6 +241,8 @@ pub(crate) fn parse_worksheet_cells(
     let mut seen_cells = BTreeSet::new();
     let mut current_row = None;
     let mut current_field = None;
+    let mut current_inline_item = None::<CurrentInlineStringItem>;
+    let mut pending_inline_item = None::<PendingInlineStringItem>;
     let mut current_cell: Option<(
         u32,
         u32,
@@ -234,11 +250,47 @@ pub(crate) fn parse_worksheet_cells(
         Option<StyleId>,
         String,
         String,
-        String,
+        Option<CellValue>,
         Option<Rect>,
     )> = None;
 
     loop {
+        let event_start = reader.buffer_position() as usize;
+        if let Some(item) = current_inline_item.as_mut()
+            && item.inner_start.is_none()
+        {
+            item.inner_start = Some(event_start);
+        }
+        if let Some(pending) = pending_inline_item.take() {
+            let raw_item_xml = worksheet_xml[pending.item.item_start..event_start].to_vec();
+            let (inner_start, inner_end) = match pending.inner_end {
+                Some(inner_end) => (
+                    pending.item.inner_start.ok_or_else(|| {
+                        OmError::parse(format!(
+                            "{worksheet_part_uri}: inline string start tag is incomplete"
+                        ))
+                    })? - pending.item.item_start,
+                    inner_end - pending.item.item_start,
+                ),
+                None => (raw_item_xml.len(), raw_item_xml.len()),
+            };
+            let parsed = parse_preserved_text_item(
+                raw_item_xml,
+                inner_start,
+                inner_end,
+                pending.item.root_attributes,
+                pending.item.namespace_declarations,
+                pending.item.preserve_raw_hint,
+                RichTextSource::InlineString,
+                spreadsheet_namespace,
+            )?;
+            let cell = current_cell.as_mut().ok_or_else(|| {
+                OmError::parse(format!(
+                    "{worksheet_part_uri}: inline string is not contained by a worksheet cell"
+                ))
+            })?;
+            cell.6 = Some(parsed);
+        }
         match reader.read_resolved_event_into(&mut buffer) {
             Ok((namespace, Event::Start(element)))
                 if resolved_element_is(
@@ -347,7 +399,7 @@ pub(crate) fn parse_worksheet_cells(
                     style_id,
                     String::new(),
                     String::new(),
-                    String::new(),
+                    None,
                     None,
                 ));
             }
@@ -514,14 +566,141 @@ pub(crate) fn parse_worksheet_cells(
                     &namespace,
                     element.local_name(),
                     spreadsheet_namespace.as_bytes(),
-                    b"t",
+                    b"is",
                 ) =>
             {
-                if let Some((_, _, cell_type, _, _, _, _, _)) = &current_cell {
-                    if cell_type.as_deref() == Some("inlineStr") {
-                        current_field = Some("inline");
+                if current_inline_item.is_some() || pending_inline_item.is_some() {
+                    return Err(OmError::parse(format!(
+                        "{worksheet_part_uri}: inline string items cannot be nested"
+                    )));
+                }
+                if current_cell
+                    .as_ref()
+                    .is_none_or(|cell| cell.2.as_deref() != Some("inlineStr"))
+                {
+                    return Err(OmError::parse(format!(
+                        "{worksheet_part_uri}: inline string item is not owned by an inlineStr cell"
+                    )));
+                }
+                let mut root_attributes = Vec::new();
+                let mut preserve_raw_hint = false;
+                for attribute in element.attributes() {
+                    let attribute = attribute.map_err(xml_error)?;
+                    let name = String::from_utf8_lossy(attribute.key.as_ref()).into_owned();
+                    let value = attribute
+                        .decode_and_unescape_value(reader.decoder())
+                        .map_err(xml_error)?
+                        .into_owned();
+                    if name == "xmlns" || name.starts_with("xmlns:") {
+                        preserve_raw_hint = true;
+                    } else {
+                        root_attributes.push((name, value));
                     }
                 }
+                let namespace_declarations = reader
+                    .resolver()
+                    .bindings()
+                    .map(|(prefix, namespace)| {
+                        let name = match prefix {
+                            quick_xml::name::PrefixDeclaration::Default => "xmlns".to_string(),
+                            quick_xml::name::PrefixDeclaration::Named(prefix) => {
+                                format!("xmlns:{}", String::from_utf8_lossy(prefix))
+                            }
+                        };
+                        (
+                            name,
+                            String::from_utf8_lossy(namespace.as_ref()).into_owned(),
+                        )
+                    })
+                    .collect();
+                current_inline_item = Some(CurrentInlineStringItem {
+                    item_start: event_start,
+                    inner_start: None,
+                    preserve_raw_hint: preserve_raw_hint || !root_attributes.is_empty(),
+                    root_attributes,
+                    namespace_declarations,
+                });
+            }
+            Ok((namespace, Event::Empty(element)))
+                if resolved_element_is(
+                    &namespace,
+                    element.local_name(),
+                    spreadsheet_namespace.as_bytes(),
+                    b"is",
+                ) =>
+            {
+                if current_inline_item.is_some() || pending_inline_item.is_some() {
+                    return Err(OmError::parse(format!(
+                        "{worksheet_part_uri}: inline string items cannot be nested"
+                    )));
+                }
+                if current_cell
+                    .as_ref()
+                    .is_none_or(|cell| cell.2.as_deref() != Some("inlineStr"))
+                {
+                    return Err(OmError::parse(format!(
+                        "{worksheet_part_uri}: inline string item is not owned by an inlineStr cell"
+                    )));
+                }
+                let mut root_attributes = Vec::new();
+                let mut preserve_raw_hint = false;
+                for attribute in element.attributes() {
+                    let attribute = attribute.map_err(xml_error)?;
+                    let name = String::from_utf8_lossy(attribute.key.as_ref()).into_owned();
+                    let value = attribute
+                        .decode_and_unescape_value(reader.decoder())
+                        .map_err(xml_error)?
+                        .into_owned();
+                    if name == "xmlns" || name.starts_with("xmlns:") {
+                        preserve_raw_hint = true;
+                    } else {
+                        root_attributes.push((name, value));
+                    }
+                }
+                let namespace_declarations = reader
+                    .resolver()
+                    .bindings()
+                    .map(|(prefix, namespace)| {
+                        let name = match prefix {
+                            quick_xml::name::PrefixDeclaration::Default => "xmlns".to_string(),
+                            quick_xml::name::PrefixDeclaration::Named(prefix) => {
+                                format!("xmlns:{}", String::from_utf8_lossy(prefix))
+                            }
+                        };
+                        (
+                            name,
+                            String::from_utf8_lossy(namespace.as_ref()).into_owned(),
+                        )
+                    })
+                    .collect();
+                pending_inline_item = Some(PendingInlineStringItem {
+                    item: CurrentInlineStringItem {
+                        item_start: event_start,
+                        inner_start: None,
+                        preserve_raw_hint: preserve_raw_hint || !root_attributes.is_empty(),
+                        root_attributes,
+                        namespace_declarations,
+                    },
+                    inner_end: None,
+                });
+            }
+            Ok((namespace, Event::End(element)))
+                if resolved_element_is(
+                    &namespace,
+                    element.local_name(),
+                    spreadsheet_namespace.as_bytes(),
+                    b"is",
+                ) =>
+            {
+                let item = current_inline_item.take().ok_or_else(|| {
+                    OmError::parse(format!(
+                        "{worksheet_part_uri}: inline string end tag has no start tag"
+                    ))
+                })?;
+                pending_inline_item = Some(PendingInlineStringItem {
+                    item,
+                    inner_end: Some(event_start),
+                });
             }
             Ok((namespace, Event::End(element)))
                 if resolved_element_is(
@@ -534,11 +713,6 @@ pub(crate) fn parse_worksheet_cells(
                     element.local_name(),
                     spreadsheet_namespace.as_bytes(),
                     b"v",
-                ) || resolved_element_is(
-                    &namespace,
-                    element.local_name(),
-                    spreadsheet_namespace.as_bytes(),
-                    b"t",
                 ) =>
             {
                 current_field = None;
@@ -549,7 +723,6 @@ pub(crate) fn parse_worksheet_cells(
                         match field {
                             "formula" => cell.4.push_str(&text.xml_content().map_err(xml_error)?),
                             "value" => cell.5.push_str(&text.xml_content().map_err(xml_error)?),
-                            "inline" => cell.6.push_str(&text.xml_content().map_err(xml_error)?),
                             _ => {}
                         }
                     }
@@ -561,7 +734,6 @@ pub(crate) fn parse_worksheet_cells(
                         match field {
                             "formula" => cell.4.push_str(&text.xml_content().map_err(xml_error)?),
                             "value" => cell.5.push_str(&text.xml_content().map_err(xml_error)?),
-                            "inline" => cell.6.push_str(&text.xml_content().map_err(xml_error)?),
                             _ => {}
                         }
                     }
@@ -592,17 +764,17 @@ pub(crate) fn parse_worksheet_cells(
                         ),
                         Some("s") => {
                             let index = value.parse::<usize>().map_err(xml_error)?;
-                            CellValue::Text(shared_strings.get(index).cloned().ok_or_else(
-                                || {
-                                    OmError::new(
-                                        OmErrorCode::Parse,
-                                        format!("shared string index out of range: {index}"),
-                                    )
-                                },
-                            )?)
+                            shared_strings.get(index).cloned().ok_or_else(|| {
+                                OmError::new(
+                                    OmErrorCode::Parse,
+                                    format!("shared string index out of range: {index}"),
+                                )
+                            })?
                         }
                         Some("str") => CellValue::Text(value),
-                        Some("inlineStr") => CellValue::Text(inline),
+                        Some("inlineStr") => {
+                            inline.unwrap_or_else(|| CellValue::Text(String::new()))
+                        }
                         _ if value.is_empty() => CellValue::Blank,
                         _ => {
                             let number = value.parse::<f64>().map_err(xml_error)?;
@@ -2343,12 +2515,18 @@ pub(crate) fn rewrite_worksheet_xml(
         let inline_string_name = qualified_name_like(element_name_reference, "is");
         let text_name = qualified_name_like(element_name_reference, "t");
         let style = cell.style_id.map(|style_id| style_id.0.to_string());
+        if cell.formula.is_some() && matches!(cell.value, CellValue::RichText(_)) {
+            return Err(OmError::invalid_state(format!(
+                "worksheet cell {reference} cannot use rich text as a formula cache"
+            )));
+        }
         let cell_type = if cell.formula.is_some() {
             match cell.value {
                 CellValue::Bool(_) => Some("b"),
                 CellValue::Text(_) => Some("str"),
                 CellValue::Error(_) => Some("e"),
                 CellValue::IsoDateTime(_) => Some("d"),
+                CellValue::RichText(_) => None,
                 _ => None,
             }
         } else {
@@ -2357,6 +2535,7 @@ pub(crate) fn rewrite_worksheet_xml(
                 CellValue::Text(_) => Some("inlineStr"),
                 CellValue::Error(_) => Some("e"),
                 CellValue::IsoDateTime(_) => Some("d"),
+                CellValue::RichText(_) => Some("inlineStr"),
                 _ => None,
             }
         };
@@ -2461,6 +2640,73 @@ pub(crate) fn rewrite_worksheet_xml(
                     .map_err(xml_error)?;
                 Ok(())
             };
+        let write_rich_text_inline = |writer: &mut Writer<Cursor<Vec<u8>>>,
+                                      value: &RichTextValue,
+                                      original_inline_xml: Option<&[u8]>|
+         -> OmResult<()> {
+            if value.spreadsheet_namespace() != spreadsheet_namespace {
+                return Err(OmError::invalid_state(format!(
+                    "worksheet cell {reference} rich-text dialect does not match the target workbook"
+                )));
+            }
+            if value.source() == RichTextSource::InlineString
+                && original_inline_xml == Some(value.raw_item_xml())
+            {
+                writer
+                    .get_mut()
+                    .write_all(value.raw_item_xml())
+                    .map_err(io_error)?;
+                return Ok(());
+            }
+
+            let default_namespace = value
+                .namespace_declarations()
+                .iter()
+                .find_map(|(name, namespace)| (name == "xmlns").then_some(namespace.as_str()));
+            let inline_name = if default_namespace
+                .is_some_and(|namespace| namespace != spreadsheet_namespace)
+            {
+                let prefix = value
+                    .namespace_declarations()
+                    .iter()
+                    .find_map(|(name, namespace)| {
+                        (namespace == spreadsheet_namespace)
+                            .then(|| name.strip_prefix("xmlns:"))
+                            .flatten()
+                    })
+                    .ok_or_else(|| {
+                        OmError::invalid_state(format!(
+                            "worksheet cell {reference} rich text has no prefix for its SpreadsheetML namespace"
+                        ))
+                    })?;
+                format!("{prefix}:is")
+            } else {
+                "is".to_string()
+            };
+            let mut inline_tag = BytesStart::new(inline_name.as_str());
+            if default_namespace.is_none() {
+                inline_tag.push_attribute(("xmlns", spreadsheet_namespace));
+            }
+            for (name, namespace) in value.namespace_declarations() {
+                if name != "xmlns:xml" {
+                    inline_tag.push_attribute((name.as_str(), namespace.as_str()));
+                }
+            }
+            for (name, attribute_value) in value.root_attributes() {
+                inline_tag.push_attribute((name.as_str(), attribute_value.as_str()));
+            }
+            writer
+                .write_event(Event::Start(inline_tag))
+                .map_err(xml_error)?;
+            writer
+                .get_mut()
+                .write_all(value.raw_inner_xml())
+                .map_err(io_error)?;
+            writer
+                .write_event(Event::End(BytesEnd::new(inline_name.as_str())))
+                .map_err(xml_error)?;
+            Ok(())
+        };
 
         let mut wrote_formula = false;
         let mut wrote_value = false;
@@ -2573,6 +2819,10 @@ pub(crate) fn rewrite_worksheet_xml(
                                 .map_err(xml_error)?;
                             wrote_value = true;
                         }
+                        CellValue::RichText(value) => {
+                            write_rich_text_inline(writer, value, None)?;
+                            wrote_inline_string = true;
+                        }
                     },
                     CellContentSegment::InlineString => {
                         if let CellValue::Text(value) = &cell.value
@@ -2597,6 +2847,11 @@ pub(crate) fn rewrite_worksheet_xml(
                             writer
                                 .write_event(Event::End(BytesEnd::new(inline_string_name.as_str())))
                                 .map_err(xml_error)?;
+                            wrote_inline_string = true;
+                        } else if let CellValue::RichText(value) = &cell.value
+                            && cell.formula.is_none()
+                        {
+                            write_rich_text_inline(writer, value, Some(raw_bytes.as_slice()))?;
                             wrote_inline_string = true;
                         }
                     }
@@ -2693,6 +2948,9 @@ pub(crate) fn rewrite_worksheet_xml(
                     writer
                         .write_event(Event::End(BytesEnd::new(value_name.as_str())))
                         .map_err(xml_error)?;
+                }
+                CellValue::RichText(value) => {
+                    write_rich_text_inline(writer, value, None)?;
                 }
             }
         }

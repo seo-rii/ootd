@@ -91,6 +91,7 @@ fn find_cell_value_text(value: &CellValue) -> String {
         CellValue::Text(text) => text.clone(),
         CellValue::Error(error) => formula_cell_error_text(error).to_string(),
         CellValue::IsoDateTime(value) => value.as_str().to_string(),
+        CellValue::RichText(value) => value.as_str().to_string(),
     }
 }
 

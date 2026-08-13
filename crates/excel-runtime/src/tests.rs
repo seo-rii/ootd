@@ -25518,6 +25518,84 @@
     }
 
     #[test]
+    fn calculate_projects_rich_text_display_and_phonetic_channels() {
+        let mut package =
+            OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("base rich text package");
+        package
+            .replace_part_bytes(
+                "xl/sharedStrings.xml",
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <si><r><rPr><b/></rPr><t>東京</t></r><rPh sb="0" eb="2"><t>とうきょう</t></rPh><phoneticPr fontId="1"/></si>
+</sst>"#
+                    .as_bytes()
+                    .to_vec(),
+            )
+            .expect("replace rich shared strings");
+        package
+            .replace_part_bytes(
+                "xl/worksheets/sheet1.xml",
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <dimension ref="A1:F1"/>
+  <sheetData><row r="1">
+    <c r="A1" t="s"><v>0</v></c>
+    <c r="B1" t="inlineStr"><is><r><rPr><i/></rPr><t>大阪</t></r><rPh sb="0" eb="2"><t>おおさか</t></rPh><phoneticPr fontId="2"/></is></c>
+    <c r="C1" t="str"><f>PHONETIC(A1)</f><v>stale</v></c>
+    <c r="D1" t="str"><f>PHONETIC(B1)</f><v>stale</v></c>
+    <c r="E1" t="str"><f>CONCAT(A1,"/",B1)</f><v>stale</v></c>
+    <c r="F1" t="str"><f>CELL("type",A1)</f><v>stale</v></c>
+  </row></sheetData>
+</worksheet>"#
+                    .as_bytes()
+                    .to_vec(),
+            )
+            .expect("replace rich text worksheet");
+
+        let mut runtime = ExcelRuntime::new();
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: package.to_bytes().expect("rich text package bytes"),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open rich text workbook");
+        let active_sheet = expect_object_handle(
+            runtime
+                .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+                .expect("ActiveSheet"),
+        );
+        let row = expect_object_handle(
+            runtime
+                .dispatch_invoke(active_sheet, "Range", &[OmValue::Text("A1:F1".to_string())])
+                .expect("Range(A1:F1)"),
+        );
+
+        runtime
+            .dispatch_invoke(runtime.root_application(), "Calculate", &[])
+            .expect("Application.Calculate rich text formulas");
+
+        let OmValue::Array(values) = runtime
+            .dispatch_get(row, "Value2", &[])
+            .expect("rich text values after Calculate")
+        else {
+            panic!("expected rich text row array");
+        };
+        assert_eq!(
+            values.values,
+            vec![
+                OmValue::Text("東京".to_string()),
+                OmValue::Text("大阪".to_string()),
+                OmValue::Text("とうきょう".to_string()),
+                OmValue::Text("おおさか".to_string()),
+                OmValue::Text("東京/大阪".to_string()),
+                OmValue::Text("l".to_string()),
+            ]
+        );
+    }
+
+    #[test]
     fn application_calculate_updates_xlookup_and_xmatch_formulas() {
         let mut runtime = ExcelRuntime::new();
         runtime

@@ -30,8 +30,9 @@
         ActiveContentPolicy, CellError, CellMarker, CellValue, ChartId, ChartObjectId,
         DrawingAnchor, Emu, ExcelLimits, ExcelProfile, ExternalDataKind, FormulaSource, IsoDateTime,
         LoadOptions as CommonLoadOptions, NameScope, NameValidationMode, ObjectPlacement,
-        OmErrorCode, OmValue, Rect, ReferenceTarget, SaveOptions as CommonSaveOptions, SheetId,
-        SheetKind, SheetScope, SheetVisibility, StyleId, TwoCellAnchor, WorkbookId, WorksheetModel,
+        OmErrorCode, OmValue, Rect, ReferenceTarget, RichTextSource, SaveOptions as CommonSaveOptions,
+        SheetId, SheetKind, SheetScope, SheetVisibility, StyleId, TwoCellAnchor, WorkbookId,
+        WorksheetModel,
     };
     use office_opc::{CompressionMethod, OpcPart};
 
@@ -2084,13 +2085,25 @@
             .state
             .worksheet_data_for_sheet(SheetId(1))
             .expect("prefixed worksheet data");
-        assert_eq!(
-            source_sheet.cells.get(&(1, 1)).expect("A1").value,
-            CellValue::Text("prefixed shared".to_string())
+        let a1_rich = match &source_sheet.cells.get(&(1, 1)).expect("A1").value {
+            CellValue::RichText(value) => value,
+            other => panic!("expected preserved shared-string XML, got {other:?}"),
+        };
+        assert_eq!(a1_rich.as_str(), "prefixed shared");
+        assert!(
+            std::str::from_utf8(a1_rich.raw_item_xml())
+                .expect("A1 rich text UTF-8")
+                .contains("<foreign:t xmlns:foreign=\"urn:ootd:foreign\">poison</foreign:t>")
         );
-        assert_eq!(
-            source_sheet.cells.get(&(1, 2)).expect("B1").value,
-            CellValue::Text("prefixed inline".to_string())
+        let b1_rich = match &source_sheet.cells.get(&(1, 2)).expect("B1").value {
+            CellValue::RichText(value) => value,
+            other => panic!("expected preserved inline-string XML, got {other:?}"),
+        };
+        assert_eq!(b1_rich.as_str(), "prefixed inline");
+        assert!(
+            std::str::from_utf8(b1_rich.raw_item_xml())
+                .expect("B1 rich text UTF-8")
+                .contains("<foreign:t xmlns:foreign=\"urn:ootd:foreign\">poison</foreign:t>")
         );
 
         let clean_saved = codec
@@ -2193,9 +2206,15 @@
             reopened_sheet.cells.get(&(1, 1)).expect("A1").value,
             CellValue::Number(5.0)
         );
-        assert_eq!(
-            reopened_sheet.cells.get(&(1, 2)).expect("B1").value,
-            CellValue::Text("prefixed inline".to_string())
+        let reopened_b1 = match &reopened_sheet.cells.get(&(1, 2)).expect("B1").value {
+            CellValue::RichText(value) => value,
+            other => panic!("expected reopened preserved inline-string XML, got {other:?}"),
+        };
+        assert_eq!(reopened_b1.as_str(), "prefixed inline");
+        assert!(
+            std::str::from_utf8(reopened_b1.raw_item_xml())
+                .expect("reopened B1 rich text UTF-8")
+                .contains("<foreign:t xmlns:foreign=\"urn:ootd:foreign\">poison</foreign:t>")
         );
         assert_eq!(
             reopened_sheet.cells.get(&(2, 2)).expect("B2").value,
@@ -3680,10 +3699,240 @@
         )
         .expect("shared strings");
 
+        assert_eq!(shared_strings.len(), 2);
         assert_eq!(
-            shared_strings,
-            vec!["alphabeta".to_string(), " gamma ".to_string()]
+            OmValue::from(shared_strings[0].clone()),
+            OmValue::Text("alphabeta".to_string())
         );
+        assert_eq!(
+            OmValue::from(shared_strings[1].clone()),
+            OmValue::Text(" gamma ".to_string())
+        );
+        assert!(matches!(shared_strings[0], CellValue::RichText(_)));
+        assert!(matches!(shared_strings[1], CellValue::RichText(_)));
+    }
+
+    #[test]
+    fn parse_shared_strings_separates_display_phonetic_and_raw_xml() {
+        let shared_strings = parse_shared_strings(
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<s:sst xmlns:s="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <s:si><s:r><s:rPr><s:b/></s:rPr><s:t xml:space="preserve"> alpha </s:t></s:r><s:r><s:t>beta</s:t></s:r><s:rPh sb="0" eb="5"><s:t>phonetic</s:t></s:rPh><s:phoneticPr fontId="1"/></s:si>
+</s:sst>"#,
+            "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
+        )
+        .expect("shared strings");
+
+        let rich = match &shared_strings[0] {
+            CellValue::RichText(value) => value,
+            other => panic!("expected preserved rich text, got {other:?}"),
+        };
+        assert_eq!(rich.as_str(), " alpha beta");
+        assert_eq!(rich.phonetic_text(), "phonetic");
+        assert_eq!(rich.source(), RichTextSource::SharedString);
+        assert!(
+            std::str::from_utf8(rich.raw_item_xml())
+                .expect("rich XML utf-8")
+                .contains("<s:rPr><s:b/></s:rPr>")
+        );
+        assert!(
+            std::str::from_utf8(rich.raw_inner_xml())
+                .expect("rich inner XML utf-8")
+                .contains("<s:rPh sb=\"0\" eb=\"5\">")
+        );
+    }
+
+    #[test]
+    fn parse_shared_strings_preserves_entities_comments_and_processing_instructions() {
+        let shared_strings = parse_shared_strings(
+            br#"<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <si><t>A&amp;&#66;</t><!--keep--><?ootd keep?></si>
+</sst>"#,
+            "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
+        )
+        .expect("shared strings with preserved lexical markup");
+
+        let rich = match &shared_strings[0] {
+            CellValue::RichText(value) => value,
+            other => panic!("expected preserved rich text, got {other:?}"),
+        };
+        assert_eq!(rich.as_str(), "A&B");
+        assert_eq!(rich.phonetic_text(), "");
+        assert_eq!(
+            std::str::from_utf8(rich.raw_inner_xml()).expect("rich inner XML utf-8"),
+            "<t>A&amp;&#66;</t><!--keep--><?ootd keep?>"
+        );
+    }
+
+    #[test]
+    fn rich_shared_and_inline_strings_preserve_runs_and_phonetics_on_dirty_save() {
+        let codec = XlsxCodec;
+        let mut package =
+            OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("synthetic package");
+        let shared_strings_xml = br#"<?xml version="1.0" encoding="UTF-8"?>
+<s:sst xmlns:s="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <s:si><s:r><s:rPr><s:b/></s:rPr><s:t xml:space="preserve"> alpha </s:t></s:r><s:r><s:t>beta</s:t></s:r><s:rPh sb="0" eb="5"><s:t>phonetic</s:t></s:rPh><s:phoneticPr fontId="1"/></s:si>
+</s:sst>"#;
+        package
+            .replace_part_bytes("xl/sharedStrings.xml", shared_strings_xml.to_vec())
+            .expect("replace shared strings");
+        package
+            .replace_part_bytes(
+                "xl/worksheets/sheet1.xml",
+                br#"<?xml version="1.0" encoding="UTF-8"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData><row r="1">
+    <c r="A1" t="s"><v>0</v></c>
+    <c r="B1" t="inlineStr"><is><r><rPr><i/></rPr><t xml:space="preserve"> inline </t></r><rPh sb="0" eb="6"><t>kana</t></rPh><phoneticPr fontId="2"/></is></c>
+  </row></sheetData>
+</worksheet>"#
+                    .to_vec(),
+            )
+            .expect("replace worksheet");
+        let mut loaded = codec
+            .load(
+                &package.to_bytes().expect("fixture bytes"),
+                CommonLoadOptions::default(),
+            )
+            .expect("load rich text cells");
+
+        let worksheet = loaded
+            .state
+            .worksheet_data_for_sheet_mut(SheetId(1))
+            .expect("worksheet data");
+        let shared = match &worksheet.cells.get(&(1, 1)).expect("A1").value {
+            CellValue::RichText(value) => value,
+            other => panic!("expected shared rich text, got {other:?}"),
+        };
+        assert_eq!(shared.as_str(), " alpha beta");
+        assert_eq!(shared.phonetic_text(), "phonetic");
+        let inline = match &worksheet.cells.get(&(1, 2)).expect("B1").value {
+            CellValue::RichText(value) => value,
+            other => panic!("expected inline rich text, got {other:?}"),
+        };
+        assert_eq!(inline.as_str(), " inline ");
+        assert_eq!(inline.phonetic_text(), "kana");
+        worksheet.dirty = true;
+        worksheet.dirty_cells.extend([(1, 1), (1, 2)]);
+
+        let saved = codec
+            .save(&loaded, CommonSaveOptions::default())
+            .expect("save dirty rich text cells");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        assert_eq!(
+            saved_package
+                .part("xl/sharedStrings.xml")
+                .expect("saved shared strings")
+                .bytes,
+            shared_strings_xml
+        );
+        let saved_sheet = std::str::from_utf8(
+            &saved_package
+                .part("xl/worksheets/sheet1.xml")
+                .expect("saved worksheet")
+                .bytes,
+        )
+        .expect("saved worksheet utf-8");
+        assert!(saved_sheet.contains("<s:rPr><s:b/></s:rPr>"));
+        assert!(saved_sheet.contains("<s:rPh sb=\"0\" eb=\"5\"><s:t>phonetic</s:t></s:rPh>"));
+        assert!(saved_sheet.contains("<rPr><i/></rPr>"));
+        assert!(saved_sheet.contains("<rPh sb=\"0\" eb=\"6\"><t>kana</t></rPh>"));
+        assert!(!saved_sheet.contains(" alpha betaphonetic"));
+
+        let reopened = codec
+            .load(&saved, CommonLoadOptions::default())
+            .expect("reopen rich text cells");
+        let worksheet = reopened
+            .state
+            .worksheet_data_for_sheet(SheetId(1))
+            .expect("reopened worksheet");
+        for (coordinates, display, phonetic) in [
+            ((1, 1), " alpha beta", "phonetic"),
+            ((1, 2), " inline ", "kana"),
+        ] {
+            let rich = match &worksheet.cells.get(&coordinates).expect("reopened cell").value {
+                CellValue::RichText(value) => value,
+                other => panic!("expected reopened rich text, got {other:?}"),
+            };
+            assert_eq!(rich.as_str(), display);
+            assert_eq!(rich.phonetic_text(), phonetic);
+        }
+    }
+
+    #[test]
+    fn shared_rich_text_preserves_item_default_namespace_when_materialized_inline() {
+        let spreadsheet_namespace =
+            "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+        let codec = XlsxCodec;
+        let mut package =
+            OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("synthetic package");
+        package
+            .replace_part_bytes(
+                "xl/sharedStrings.xml",
+                format!(
+                    r#"<s:sst xmlns:s="{spreadsheet_namespace}"><s:si xmlns="urn:vendor"><s:r><s:t>display</s:t></s:r><meta owner="vendor"/></s:si></s:sst>"#
+                )
+                .into_bytes(),
+            )
+            .expect("replace shared strings");
+        package
+            .replace_part_bytes(
+                "xl/worksheets/sheet1.xml",
+                format!(
+                    r#"<worksheet xmlns="{spreadsheet_namespace}"><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c></row></sheetData></worksheet>"#
+                )
+                .into_bytes(),
+            )
+            .expect("replace worksheet");
+        let mut loaded = codec
+            .load(
+                &package.to_bytes().expect("fixture bytes"),
+                CommonLoadOptions::default(),
+            )
+            .expect("load namespace-sensitive rich text");
+        let worksheet = loaded
+            .state
+            .worksheet_data_for_sheet_mut(SheetId(1))
+            .expect("worksheet data");
+        worksheet.dirty = true;
+        worksheet.dirty_cells.insert((1, 1));
+
+        let saved = codec
+            .save(&loaded, CommonSaveOptions::default())
+            .expect("save namespace-sensitive rich text");
+        let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let saved_sheet = std::str::from_utf8(
+            &saved_package
+                .part("xl/worksheets/sheet1.xml")
+                .expect("saved worksheet")
+                .bytes,
+        )
+        .expect("saved worksheet utf-8");
+        assert!(saved_sheet.contains(&format!(
+            r#"<s:is xmlns:s="{spreadsheet_namespace}" xmlns="urn:vendor">"#
+        )));
+        assert!(saved_sheet.contains(r#"<meta owner="vendor"/>"#));
+
+        let reopened = codec
+            .load(&saved, CommonLoadOptions::default())
+            .expect("reopen namespace-sensitive rich text");
+        let rich = match &reopened
+            .state
+            .worksheet_data_for_sheet(SheetId(1))
+            .expect("reopened worksheet")
+            .cells
+            .get(&(1, 1))
+            .expect("A1")
+            .value
+        {
+            CellValue::RichText(value) => value,
+            other => panic!("expected reopened rich text, got {other:?}"),
+        };
+        assert_eq!(rich.as_str(), "display");
+        assert!(rich.namespace_declarations().contains(&(
+            "xmlns".to_string(),
+            "urn:vendor".to_string()
+        )));
     }
 
     #[test]
@@ -3991,7 +4240,7 @@
     </row>
   </sheetData>
 </worksheet>"#,
-            &["only".to_string()],
+            &[CellValue::Text("only".to_string())],
             "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
             "/xl/worksheets/sheet1.xml",
         )

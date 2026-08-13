@@ -1,6 +1,10 @@
 use std::error::Error;
 use std::fmt::{Display, Formatter};
+use std::io::{Cursor, Write};
+use std::sync::Arc;
 
+use quick_xml::events::{BytesEnd, BytesStart, Event};
+use quick_xml::{NsReader, Writer};
 use serde::{Deserialize, Serialize};
 
 mod name;
@@ -490,6 +494,713 @@ impl From<IsoDateTime> for String {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RichTextSource {
+    SharedString,
+    InlineString,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum RichTextTarget {
+    Display,
+    Phonetic,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct PreservedRichTextOoxml {
+    raw_item_xml: Vec<u8>,
+    inner_start: usize,
+    inner_end: usize,
+    root_attributes: Vec<(String, String)>,
+    namespace_declarations: Vec<(String, String)>,
+}
+
+#[derive(Deserialize)]
+struct PreservedRichTextOoxmlWire {
+    raw_item_xml: Vec<u8>,
+    inner_start: usize,
+    inner_end: usize,
+    root_attributes: Vec<(String, String)>,
+    namespace_declarations: Vec<(String, String)>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RichTextValue {
+    display_text: String,
+    phonetic_text: String,
+    source: RichTextSource,
+    spreadsheet_namespace: String,
+    #[serde(skip)]
+    requires_raw_preservation: bool,
+    preserved_xml: Arc<PreservedRichTextOoxml>,
+}
+
+#[derive(Deserialize)]
+struct RichTextValueWire {
+    display_text: String,
+    phonetic_text: String,
+    source: RichTextSource,
+    spreadsheet_namespace: String,
+    preserved_xml: PreservedRichTextOoxmlWire,
+}
+
+impl<'de> Deserialize<'de> for RichTextValue {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let wire = RichTextValueWire::deserialize(deserializer)?;
+        let parsed = Self::try_from_preserved_ooxml(
+            wire.preserved_xml.raw_item_xml,
+            wire.preserved_xml.inner_start,
+            wire.preserved_xml.inner_end,
+            wire.preserved_xml.root_attributes,
+            wire.preserved_xml.namespace_declarations,
+            wire.source,
+            wire.spreadsheet_namespace,
+        )
+        .map_err(<D::Error as serde::de::Error>::custom)?;
+        if parsed.display_text != wire.display_text || parsed.phonetic_text != wire.phonetic_text {
+            return Err(<D::Error as serde::de::Error>::custom(
+                "preserved rich-text projection does not match its OOXML payload",
+            ));
+        }
+        Ok(parsed)
+    }
+}
+
+impl RichTextValue {
+    pub fn try_from_preserved_ooxml(
+        raw_item_xml: Vec<u8>,
+        inner_start: usize,
+        inner_end: usize,
+        root_attributes: Vec<(String, String)>,
+        namespace_declarations: Vec<(String, String)>,
+        source: RichTextSource,
+        spreadsheet_namespace: String,
+    ) -> OmResult<Self> {
+        let invalid = |reason: &str| {
+            OmError::invalid_argument(format!(
+                "invalid preserved rich-text OOXML metadata: {reason}"
+            ))
+        };
+        let ncname_is_valid = |name: &str| {
+            let is_start = |character: char| {
+                character == '_'
+                    || character.is_ascii_alphabetic()
+                    || matches!(
+                        character,
+                        '\u{00c0}'..='\u{00d6}'
+                            | '\u{00d8}'..='\u{00f6}'
+                            | '\u{00f8}'..='\u{02ff}'
+                            | '\u{0370}'..='\u{037d}'
+                            | '\u{037f}'..='\u{1fff}'
+                            | '\u{200c}'..='\u{200d}'
+                            | '\u{2070}'..='\u{218f}'
+                            | '\u{2c00}'..='\u{2fef}'
+                            | '\u{3001}'..='\u{d7ff}'
+                            | '\u{f900}'..='\u{fdcf}'
+                            | '\u{fdf0}'..='\u{fffd}'
+                            | '\u{10000}'..='\u{effff}'
+                    )
+            };
+            let mut characters = name.chars();
+            characters.next().is_some_and(is_start)
+                && characters.all(|character| {
+                    is_start(character)
+                        || character.is_ascii_digit()
+                        || matches!(
+                            character,
+                            '-' | '.'
+                                | '\u{00b7}'
+                                | '\u{0300}'..='\u{036f}'
+                                | '\u{203f}'..='\u{2040}'
+                        )
+                })
+        };
+        let qname_is_valid = |name: &str| {
+            if let Some((prefix, local_name)) = name.split_once(':') {
+                !local_name.contains(':') && ncname_is_valid(prefix) && ncname_is_valid(local_name)
+            } else {
+                ncname_is_valid(name)
+            }
+        };
+        let xml_character_is_valid = |character: char| {
+            matches!(
+                character,
+                '\u{0009}' | '\u{000a}' | '\u{000d}' | '\u{0020}'..='\u{d7ff}'
+                    | '\u{e000}'..='\u{fffd}'
+                    | '\u{10000}'..='\u{10ffff}'
+            )
+        };
+        let invalid_root_attribute =
+            root_attributes
+                .iter()
+                .enumerate()
+                .any(|(index, (name, value))| {
+                    name.is_empty()
+                        || !qname_is_valid(name)
+                        || !value.chars().all(xml_character_is_valid)
+                        || name == "xmlns"
+                        || name.starts_with("xmlns:")
+                        || root_attributes[..index]
+                            .iter()
+                            .any(|(previous, _)| previous == name)
+                });
+        let invalid_namespace =
+            namespace_declarations
+                .iter()
+                .enumerate()
+                .any(|(index, (name, namespace))| {
+                    let invalid_binding = if !namespace.chars().all(xml_character_is_valid) {
+                        true
+                    } else if name == "xmlns" {
+                        namespace == "http://www.w3.org/XML/1998/namespace"
+                            || namespace == "http://www.w3.org/2000/xmlns/"
+                    } else if let Some(prefix) = name.strip_prefix("xmlns:") {
+                        !ncname_is_valid(prefix)
+                            || prefix == "xmlns"
+                            || namespace.is_empty()
+                            || (prefix == "xml"
+                                && namespace != "http://www.w3.org/XML/1998/namespace")
+                            || (prefix != "xml"
+                                && namespace == "http://www.w3.org/XML/1998/namespace")
+                            || namespace == "http://www.w3.org/2000/xmlns/"
+                    } else {
+                        true
+                    };
+                    invalid_binding
+                        || namespace_declarations[..index]
+                            .iter()
+                            .any(|(previous, _)| previous == name)
+                });
+        if raw_item_xml.is_empty()
+            || inner_start > inner_end
+            || inner_end > raw_item_xml.len()
+            || invalid_root_attribute
+            || invalid_namespace
+            || spreadsheet_namespace.is_empty()
+            || !spreadsheet_namespace.chars().all(xml_character_is_valid)
+        {
+            return Err(invalid("invalid bounds, names, or namespace"));
+        }
+
+        let mut wrapper_writer = Writer::new(Cursor::new(Vec::new()));
+        let mut wrapper = BytesStart::new("ootd-rich-text-root");
+        for (name, value) in &namespace_declarations {
+            wrapper.push_attribute((name.as_str(), value.as_str()));
+        }
+        wrapper_writer
+            .write_event(Event::Start(wrapper))
+            .map_err(|error| invalid(&error.to_string()))?;
+        let wrapped_item_start = usize::try_from(wrapper_writer.get_mut().position())
+            .map_err(|_| invalid("wrapper offset exceeds the platform limit"))?;
+        wrapper_writer
+            .get_mut()
+            .write_all(&raw_item_xml)
+            .map_err(|error| invalid(&error.to_string()))?;
+        wrapper_writer
+            .write_event(Event::End(BytesEnd::new("ootd-rich-text-root")))
+            .map_err(|error| invalid(&error.to_string()))?;
+        let wrapped_xml = wrapper_writer.into_inner().into_inner();
+        let wrapped_item_end = wrapped_item_start
+            .checked_add(raw_item_xml.len())
+            .ok_or_else(|| invalid("wrapped item offset overflow"))?;
+
+        let item_local_name = match source {
+            RichTextSource::SharedString => b"si".as_slice(),
+            RichTextSource::InlineString => b"is".as_slice(),
+        };
+        let expected_namespace = spreadsheet_namespace.as_bytes();
+        let mut reader = NsReader::from_reader(Cursor::new(wrapped_xml));
+        reader.config_mut().trim_text(false);
+        let mut buffer = Vec::new();
+        let mut item_depth = None::<usize>;
+        let mut phonetic_depth = None::<usize>;
+        let mut text_target = None::<(usize, RichTextTarget)>;
+        let mut text_element_count = 0usize;
+        let mut display_text = String::new();
+        let mut phonetic_text = String::new();
+        let mut saw_item = false;
+        let mut closed_item = false;
+        let mut requires_raw_preservation = false;
+
+        loop {
+            let event_start = reader.buffer_position() as usize;
+            let decoder = reader.decoder();
+            let event = match reader.read_resolved_event_into(&mut buffer) {
+                Ok((namespace, event)) => {
+                    let namespace = match namespace {
+                        quick_xml::name::ResolveResult::Bound(namespace) => {
+                            Some(namespace.as_ref().to_vec())
+                        }
+                        quick_xml::name::ResolveResult::Unbound => None,
+                        quick_xml::name::ResolveResult::Unknown(prefix) => {
+                            return Err(invalid(&format!(
+                                "undeclared element prefix {}",
+                                String::from_utf8_lossy(&prefix)
+                            )));
+                        }
+                    };
+                    Ok((namespace, event))
+                }
+                Err(error) => Err(error),
+            };
+            let event_end = reader.buffer_position() as usize;
+
+            match event {
+                Ok((namespace, Event::Start(element)))
+                    if item_depth.is_none()
+                        && element.local_name().as_ref() == item_local_name
+                        && namespace.as_deref() == Some(expected_namespace) =>
+                {
+                    if saw_item || event_start != wrapped_item_start {
+                        return Err(invalid("payload must contain exactly one item element"));
+                    }
+                    let item_qname = element.name();
+                    let item_name = std::str::from_utf8(item_qname.as_ref())
+                        .map_err(|error| invalid(&error.to_string()))?;
+                    if !qname_is_valid(item_name) {
+                        return Err(invalid("source item has an invalid QName"));
+                    }
+                    let mut actual_root_attributes = Vec::new();
+                    let mut actual_namespace_declarations = Vec::new();
+                    for attribute in element.attributes() {
+                        let attribute = attribute.map_err(|error| invalid(&error.to_string()))?;
+                        let name = std::str::from_utf8(attribute.key.as_ref())
+                            .map_err(|error| invalid(&error.to_string()))?
+                            .to_string();
+                        if !qname_is_valid(&name) {
+                            return Err(invalid("source item attribute has an invalid QName"));
+                        }
+                        let value = attribute
+                            .decode_and_unescape_value(decoder)
+                            .map_err(|error| invalid(&error.to_string()))?
+                            .into_owned();
+                        if !value.chars().all(xml_character_is_valid) {
+                            return Err(invalid(
+                                "source item attribute has an invalid XML character",
+                            ));
+                        }
+                        if name == "xmlns" || name.starts_with("xmlns:") {
+                            actual_namespace_declarations.push((name, value));
+                        } else {
+                            if let quick_xml::name::ResolveResult::Unknown(prefix) =
+                                reader.resolver().resolve_attribute(attribute.key).0
+                            {
+                                return Err(invalid(&format!(
+                                    "undeclared attribute prefix {}",
+                                    String::from_utf8_lossy(&prefix)
+                                )));
+                            }
+                            actual_root_attributes.push((name, value));
+                        }
+                    }
+                    if actual_root_attributes != root_attributes
+                        || actual_namespace_declarations
+                            .iter()
+                            .any(|declaration| !namespace_declarations.contains(declaration))
+                    {
+                        return Err(invalid("root metadata does not match the raw item"));
+                    }
+                    let actual_inner_start = event_end
+                        .checked_sub(wrapped_item_start)
+                        .ok_or_else(|| invalid("item start precedes its wrapper offset"))?;
+                    if inner_start != actual_inner_start {
+                        return Err(invalid("inner start is not an XML token boundary"));
+                    }
+                    requires_raw_preservation = !actual_root_attributes.is_empty()
+                        || !actual_namespace_declarations.is_empty();
+                    saw_item = true;
+                    item_depth = Some(1);
+                }
+                Ok((namespace, Event::Empty(element)))
+                    if item_depth.is_none()
+                        && element.local_name().as_ref() == item_local_name
+                        && namespace.as_deref() == Some(expected_namespace) =>
+                {
+                    if saw_item
+                        || event_start != wrapped_item_start
+                        || event_end != wrapped_item_end
+                        || inner_start != raw_item_xml.len()
+                        || inner_end != raw_item_xml.len()
+                    {
+                        return Err(invalid("empty payload item has invalid boundaries"));
+                    }
+                    let item_qname = element.name();
+                    let item_name = std::str::from_utf8(item_qname.as_ref())
+                        .map_err(|error| invalid(&error.to_string()))?;
+                    if !qname_is_valid(item_name) {
+                        return Err(invalid("source item has an invalid QName"));
+                    }
+                    let mut actual_root_attributes = Vec::new();
+                    let mut actual_namespace_declarations = Vec::new();
+                    for attribute in element.attributes() {
+                        let attribute = attribute.map_err(|error| invalid(&error.to_string()))?;
+                        let name = std::str::from_utf8(attribute.key.as_ref())
+                            .map_err(|error| invalid(&error.to_string()))?
+                            .to_string();
+                        if !qname_is_valid(&name) {
+                            return Err(invalid("source item attribute has an invalid QName"));
+                        }
+                        let value = attribute
+                            .decode_and_unescape_value(decoder)
+                            .map_err(|error| invalid(&error.to_string()))?
+                            .into_owned();
+                        if !value.chars().all(xml_character_is_valid) {
+                            return Err(invalid(
+                                "source item attribute has an invalid XML character",
+                            ));
+                        }
+                        if name == "xmlns" || name.starts_with("xmlns:") {
+                            actual_namespace_declarations.push((name, value));
+                        } else {
+                            if let quick_xml::name::ResolveResult::Unknown(prefix) =
+                                reader.resolver().resolve_attribute(attribute.key).0
+                            {
+                                return Err(invalid(&format!(
+                                    "undeclared attribute prefix {}",
+                                    String::from_utf8_lossy(&prefix)
+                                )));
+                            }
+                            actual_root_attributes.push((name, value));
+                        }
+                    }
+                    if actual_root_attributes != root_attributes
+                        || actual_namespace_declarations
+                            .iter()
+                            .any(|declaration| !namespace_declarations.contains(declaration))
+                    {
+                        return Err(invalid("root metadata does not match the raw item"));
+                    }
+                    requires_raw_preservation = !actual_root_attributes.is_empty()
+                        || !actual_namespace_declarations.is_empty();
+                    saw_item = true;
+                    closed_item = true;
+                }
+                Ok((namespace, Event::Start(element))) if item_depth.is_some() => {
+                    let depth = item_depth
+                        .expect("checked rich-text item depth")
+                        .checked_add(1)
+                        .ok_or_else(|| invalid("item nesting depth overflow"))?;
+                    item_depth = Some(depth);
+                    let element_qname = element.name();
+                    let element_name = std::str::from_utf8(element_qname.as_ref())
+                        .map_err(|error| invalid(&error.to_string()))?;
+                    if !qname_is_valid(element_name) {
+                        return Err(invalid("rich-text child has an invalid QName"));
+                    }
+                    let mut has_attributes = false;
+                    for attribute in element.attributes() {
+                        let attribute = attribute.map_err(|error| invalid(&error.to_string()))?;
+                        let attribute_name = std::str::from_utf8(attribute.key.as_ref())
+                            .map_err(|error| invalid(&error.to_string()))?;
+                        if !qname_is_valid(attribute_name) {
+                            return Err(invalid("rich-text attribute has an invalid QName"));
+                        }
+                        let attribute_value = attribute
+                            .decode_and_unescape_value(decoder)
+                            .map_err(|error| invalid(&error.to_string()))?;
+                        if !attribute_value.chars().all(xml_character_is_valid) {
+                            return Err(invalid(
+                                "rich-text attribute has an invalid XML character",
+                            ));
+                        }
+                        if attribute.key.as_namespace_binding().is_none()
+                            && let quick_xml::name::ResolveResult::Unknown(prefix) =
+                                reader.resolver().resolve_attribute(attribute.key).0
+                        {
+                            return Err(invalid(&format!(
+                                "undeclared attribute prefix {}",
+                                String::from_utf8_lossy(&prefix)
+                            )));
+                        }
+                        has_attributes = true;
+                    }
+                    let is_spreadsheet_element = namespace.as_deref() == Some(expected_namespace);
+                    let local_name = element.local_name();
+                    if is_spreadsheet_element && local_name.as_ref() == b"rPh" {
+                        phonetic_depth = Some(depth);
+                        requires_raw_preservation = true;
+                    } else if is_spreadsheet_element && local_name.as_ref() == b"t" {
+                        text_element_count = text_element_count
+                            .checked_add(1)
+                            .ok_or_else(|| invalid("text element count overflow"))?;
+                        if has_attributes {
+                            requires_raw_preservation = true;
+                        }
+                        if text_element_count > 1 {
+                            requires_raw_preservation = true;
+                        }
+                        text_target = Some((
+                            depth,
+                            if phonetic_depth.is_some() {
+                                RichTextTarget::Phonetic
+                            } else {
+                                RichTextTarget::Display
+                            },
+                        ));
+                    } else {
+                        requires_raw_preservation = true;
+                    }
+                }
+                Ok((namespace, Event::Empty(element))) if item_depth.is_some() => {
+                    let element_qname = element.name();
+                    let element_name = std::str::from_utf8(element_qname.as_ref())
+                        .map_err(|error| invalid(&error.to_string()))?;
+                    if !qname_is_valid(element_name) {
+                        return Err(invalid("rich-text child has an invalid QName"));
+                    }
+                    let mut has_attributes = false;
+                    for attribute in element.attributes() {
+                        let attribute = attribute.map_err(|error| invalid(&error.to_string()))?;
+                        let attribute_name = std::str::from_utf8(attribute.key.as_ref())
+                            .map_err(|error| invalid(&error.to_string()))?;
+                        if !qname_is_valid(attribute_name) {
+                            return Err(invalid("rich-text attribute has an invalid QName"));
+                        }
+                        let attribute_value = attribute
+                            .decode_and_unescape_value(decoder)
+                            .map_err(|error| invalid(&error.to_string()))?;
+                        if !attribute_value.chars().all(xml_character_is_valid) {
+                            return Err(invalid(
+                                "rich-text attribute has an invalid XML character",
+                            ));
+                        }
+                        if attribute.key.as_namespace_binding().is_none()
+                            && let quick_xml::name::ResolveResult::Unknown(prefix) =
+                                reader.resolver().resolve_attribute(attribute.key).0
+                        {
+                            return Err(invalid(&format!(
+                                "undeclared attribute prefix {}",
+                                String::from_utf8_lossy(&prefix)
+                            )));
+                        }
+                        has_attributes = true;
+                    }
+                    let is_plain_empty_text = namespace.as_deref() == Some(expected_namespace)
+                        && element.local_name().as_ref() == b"t"
+                        && !has_attributes
+                        && text_element_count == 0;
+                    if is_plain_empty_text {
+                        text_element_count = 1;
+                    } else {
+                        requires_raw_preservation = true;
+                    }
+                }
+                Ok((_, Event::Text(text))) if item_depth.is_some() => {
+                    if let Some((target_depth, target)) = text_target
+                        && Some(target_depth) == item_depth
+                    {
+                        let text = text
+                            .xml_content()
+                            .map_err(|error| invalid(&error.to_string()))?;
+                        if !text.chars().all(xml_character_is_valid) {
+                            return Err(invalid("rich text has an invalid XML character"));
+                        }
+                        match target {
+                            RichTextTarget::Display => display_text.push_str(&text),
+                            RichTextTarget::Phonetic => phonetic_text.push_str(&text),
+                        }
+                    } else {
+                        let text = text
+                            .xml_content()
+                            .map_err(|error| invalid(&error.to_string()))?;
+                        if !text.chars().all(xml_character_is_valid) {
+                            return Err(invalid("rich text has an invalid XML character"));
+                        }
+                        if text.chars().any(|character| !character.is_whitespace()) {
+                            requires_raw_preservation = true;
+                        }
+                    }
+                }
+                Ok((_, Event::CData(text))) if item_depth.is_some() => {
+                    requires_raw_preservation = true;
+                    let text = text
+                        .xml_content()
+                        .map_err(|error| invalid(&error.to_string()))?;
+                    if !text.chars().all(xml_character_is_valid) {
+                        return Err(invalid("rich text has an invalid XML character"));
+                    }
+                    if let Some((target_depth, target)) = text_target
+                        && Some(target_depth) == item_depth
+                    {
+                        match target {
+                            RichTextTarget::Display => display_text.push_str(&text),
+                            RichTextTarget::Phonetic => phonetic_text.push_str(&text),
+                        }
+                    }
+                }
+                Ok((_, Event::GeneralRef(reference))) if item_depth.is_some() => {
+                    requires_raw_preservation = true;
+                    let reference = reference
+                        .decode()
+                        .map_err(|error| invalid(&error.to_string()))?;
+                    let text = if let Some(number) = reference.strip_prefix("#x") {
+                        u32::from_str_radix(number, 16)
+                            .ok()
+                            .and_then(char::from_u32)
+                            .filter(|character| xml_character_is_valid(*character))
+                            .map(String::from)
+                    } else if let Some(number) = reference.strip_prefix("#X") {
+                        u32::from_str_radix(number, 16)
+                            .ok()
+                            .and_then(char::from_u32)
+                            .filter(|character| xml_character_is_valid(*character))
+                            .map(String::from)
+                    } else if let Some(number) = reference.strip_prefix('#') {
+                        number
+                            .parse::<u32>()
+                            .ok()
+                            .and_then(char::from_u32)
+                            .filter(|character| xml_character_is_valid(*character))
+                            .map(String::from)
+                    } else {
+                        match reference.as_ref() {
+                            "amp" => Some("&".to_string()),
+                            "lt" => Some("<".to_string()),
+                            "gt" => Some(">".to_string()),
+                            "quot" => Some("\"".to_string()),
+                            "apos" => Some("'".to_string()),
+                            _ => None,
+                        }
+                    }
+                    .ok_or_else(|| invalid("unknown or invalid XML entity reference"))?;
+                    if let Some((target_depth, target)) = text_target
+                        && Some(target_depth) == item_depth
+                    {
+                        match target {
+                            RichTextTarget::Display => display_text.push_str(&text),
+                            RichTextTarget::Phonetic => phonetic_text.push_str(&text),
+                        }
+                    }
+                }
+                Ok((_, Event::Comment(_) | Event::PI(_))) if item_depth.is_some() => {
+                    requires_raw_preservation = true;
+                }
+                Ok((_, Event::Decl(_) | Event::DocType(_))) if item_depth.is_some() => {
+                    return Err(invalid(
+                        "declarations are not valid inside a rich-text item",
+                    ));
+                }
+                Ok((namespace, Event::End(element))) if item_depth.is_some() => {
+                    let depth = item_depth.expect("checked rich-text item depth");
+                    let is_spreadsheet_element = namespace.as_deref() == Some(expected_namespace);
+                    let local_name = element.local_name();
+                    if depth == 1
+                        && is_spreadsheet_element
+                        && local_name.as_ref() == item_local_name
+                    {
+                        let actual_inner_end = event_start
+                            .checked_sub(wrapped_item_start)
+                            .ok_or_else(|| invalid("item end precedes its wrapper offset"))?;
+                        if inner_end != actual_inner_end || event_end != wrapped_item_end {
+                            return Err(invalid("inner end is not an XML token boundary"));
+                        }
+                        item_depth = None;
+                        closed_item = true;
+                    } else {
+                        if text_target.is_some_and(|(target_depth, _)| target_depth == depth)
+                            && is_spreadsheet_element
+                            && local_name.as_ref() == b"t"
+                        {
+                            text_target = None;
+                        }
+                        if phonetic_depth == Some(depth)
+                            && is_spreadsheet_element
+                            && local_name.as_ref() == b"rPh"
+                        {
+                            phonetic_depth = None;
+                        }
+                        item_depth = Some(
+                            depth
+                                .checked_sub(1)
+                                .ok_or_else(|| invalid("item nesting underflow"))?,
+                        );
+                    }
+                }
+                Ok((_, Event::Eof)) => break,
+                Ok(_) => {}
+                Err(error) => return Err(invalid(&error.to_string())),
+            }
+            buffer.clear();
+        }
+
+        if !saw_item || !closed_item || item_depth.is_some() {
+            return Err(invalid("payload does not contain one complete source item"));
+        }
+
+        Ok(Self {
+            display_text,
+            phonetic_text,
+            source,
+            spreadsheet_namespace,
+            requires_raw_preservation,
+            preserved_xml: Arc::new(PreservedRichTextOoxml {
+                raw_item_xml,
+                inner_start,
+                inner_end,
+                root_attributes,
+                namespace_declarations,
+            }),
+        })
+    }
+
+    fn validate_preserved_ooxml(&self) -> OmResult<()> {
+        if self.spreadsheet_namespace.is_empty()
+            || self.preserved_xml.raw_item_xml.is_empty()
+            || self.preserved_xml.inner_start > self.preserved_xml.inner_end
+            || self.preserved_xml.inner_end > self.preserved_xml.raw_item_xml.len()
+        {
+            return Err(OmError::invalid_argument(
+                "invalid preserved rich-text OOXML metadata",
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.display_text
+    }
+
+    pub fn phonetic_text(&self) -> &str {
+        &self.phonetic_text
+    }
+
+    pub fn source(&self) -> RichTextSource {
+        self.source
+    }
+
+    pub fn spreadsheet_namespace(&self) -> &str {
+        &self.spreadsheet_namespace
+    }
+
+    pub fn requires_raw_preservation(&self) -> bool {
+        self.requires_raw_preservation
+    }
+
+    pub fn raw_item_xml(&self) -> &[u8] {
+        &self.preserved_xml.raw_item_xml
+    }
+
+    pub fn raw_inner_xml(&self) -> &[u8] {
+        &self.preserved_xml.raw_item_xml
+            [self.preserved_xml.inner_start..self.preserved_xml.inner_end]
+    }
+
+    pub fn root_attributes(&self) -> &[(String, String)] {
+        &self.preserved_xml.root_attributes
+    }
+
+    pub fn namespace_declarations(&self) -> &[(String, String)] {
+        &self.preserved_xml.namespace_declarations
+    }
+
+    pub fn into_string(self) -> String {
+        self.display_text
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub enum CellValue {
     #[default]
@@ -499,9 +1210,19 @@ pub enum CellValue {
     Text(String),
     Error(CellError),
     IsoDateTime(IsoDateTime),
+    RichText(RichTextValue),
 }
 
 impl CellValue {
+    pub fn as_text(&self) -> Option<&str> {
+        match self {
+            Self::Text(value) => Some(value),
+            Self::IsoDateTime(value) => Some(value.as_str()),
+            Self::RichText(value) => Some(value.as_str()),
+            Self::Blank | Self::Bool(_) | Self::Number(_) | Self::Error(_) => None,
+        }
+    }
+
     pub fn try_number(value: f64) -> OmResult<Self> {
         if !value.is_finite() {
             return Err(OmError::invalid_argument(
@@ -512,8 +1233,13 @@ impl CellValue {
     }
 
     pub fn validate(&self) -> OmResult<()> {
-        if let Self::Number(value) = self {
-            Self::try_number(*value)?;
+        match self {
+            Self::Number(value) => {
+                Self::try_number(*value)?;
+            }
+            Self::RichText(value) => value.validate_preserved_ooxml()?,
+            Self::Blank | Self::Bool(_) | Self::Text(_) | Self::Error(_) | Self::IsoDateTime(_) => {
+            }
         }
         Ok(())
     }
@@ -576,6 +1302,7 @@ impl From<CellValue> for OmValue {
             CellValue::Text(value) => OmValue::Text(value),
             CellValue::Error(value) => OmValue::Error(value),
             CellValue::IsoDateTime(value) => OmValue::Text(value.into_string()),
+            CellValue::RichText(value) => OmValue::Text(value.into_string()),
         }
     }
 }
@@ -1132,7 +1859,8 @@ mod tests {
         ActiveContentPolicy, CellValue, Emu, ExcelDateSystem, ExcelProfile,
         ExternalDataAccessReport, ExternalDataInventory, ExternalDataPolicy, IsoDateTime,
         IsoDateTimeOffsetPolicy, LoadOptions, ObjectHandle, OmArray, OmErrorCode, OmValue, Points,
-        RangeRef, Rect, SaveOptions, SheetId, SheetScope, WorkbookId,
+        RangeRef, Rect, RichTextSource, RichTextValue, SaveOptions, SheetId, SheetScope,
+        WorkbookId,
     };
 
     #[test]
@@ -1255,6 +1983,243 @@ mod tests {
             ),
             -0.375
         );
+    }
+
+    #[test]
+    fn rich_text_projects_display_text_and_shares_preserved_xml_on_clone() {
+        let spreadsheet_namespace = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+        let raw_xml = b"<si><r><t>display</t></r><rPh><t>phonetic</t></rPh></si>".to_vec();
+        let value = RichTextValue::try_from_preserved_ooxml(
+            raw_xml.clone(),
+            4,
+            raw_xml.len() - 5,
+            Vec::new(),
+            vec![("xmlns".to_string(), spreadsheet_namespace.to_string())],
+            RichTextSource::SharedString,
+            spreadsheet_namespace.to_string(),
+        )
+        .expect("valid preserved rich-text XML");
+        let cloned = value.clone();
+
+        assert_eq!(value.as_str(), "display");
+        assert_eq!(value.phonetic_text(), "phonetic");
+        assert_eq!(value.source(), RichTextSource::SharedString);
+        assert_eq!(value.spreadsheet_namespace(), spreadsheet_namespace);
+        assert!(value.requires_raw_preservation());
+        assert_eq!(value.raw_item_xml(), raw_xml);
+        assert_eq!(value.raw_inner_xml(), &raw_xml[4..raw_xml.len() - 5]);
+        assert_eq!(
+            OmValue::from(CellValue::RichText(value.clone())),
+            OmValue::Text("display".to_string())
+        );
+        assert!(std::ptr::eq(
+            value.raw_item_xml().as_ptr(),
+            cloned.raw_item_xml().as_ptr()
+        ));
+    }
+
+    #[test]
+    fn rich_text_rejects_invalid_preserved_xml_bounds() {
+        let error = RichTextValue::try_from_preserved_ooxml(
+            b"<is><t>display</t></is>".to_vec(),
+            10,
+            5,
+            Vec::new(),
+            Vec::new(),
+            RichTextSource::InlineString,
+            "http://schemas.openxmlformats.org/spreadsheetml/2006/main".to_string(),
+        )
+        .expect_err("reversed rich-text bounds must fail");
+
+        assert_eq!(error.code, OmErrorCode::InvalidArgument);
+    }
+
+    #[test]
+    fn rich_text_deserialization_rejects_invalid_preserved_xml_bounds() {
+        let spreadsheet_namespace = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+        let raw_xml = b"<is><t>display</t></is>".to_vec();
+        let value = RichTextValue::try_from_preserved_ooxml(
+            raw_xml.clone(),
+            4,
+            raw_xml.len() - 5,
+            Vec::new(),
+            vec![("xmlns".to_string(), spreadsheet_namespace.to_string())],
+            RichTextSource::InlineString,
+            spreadsheet_namespace.to_string(),
+        )
+        .expect("valid preserved rich-text XML");
+        let mut serialized = serde_json::to_value(value).expect("serialize rich text");
+        serialized["preserved_xml"]["inner_end"] = serde_json::json!(usize::MAX);
+
+        let error = serde_json::from_value::<RichTextValue>(serialized)
+            .expect_err("invalid serialized rich-text bounds must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("invalid preserved rich-text OOXML metadata")
+        );
+    }
+
+    #[test]
+    fn rich_text_deserialization_rejects_projection_drift() {
+        let spreadsheet_namespace = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+        let raw_xml = b"<si><r><t>display</t></r><rPh><t>phonetic</t></rPh></si>".to_vec();
+        let value = RichTextValue::try_from_preserved_ooxml(
+            raw_xml.clone(),
+            4,
+            raw_xml.len() - 5,
+            Vec::new(),
+            vec![("xmlns".to_string(), spreadsheet_namespace.to_string())],
+            RichTextSource::SharedString,
+            spreadsheet_namespace.to_string(),
+        )
+        .expect("valid preserved rich-text XML");
+        let mut serialized = serde_json::to_value(value).expect("serialize rich text");
+        serialized["display_text"] = serde_json::json!("forged");
+
+        let error = serde_json::from_value::<RichTextValue>(serialized)
+            .expect_err("projection drift must fail deserialization");
+        assert!(
+            error
+                .to_string()
+                .contains("preserved rich-text projection does not match its OOXML payload")
+        );
+    }
+
+    #[test]
+    fn rich_text_rejects_non_token_inner_bounds_and_root_metadata_drift() {
+        let spreadsheet_namespace = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+        let raw_xml = b"<si data-owner=\"source\"><t>display</t></si>".to_vec();
+        let error = RichTextValue::try_from_preserved_ooxml(
+            raw_xml.clone(),
+            5,
+            raw_xml.len() - 5,
+            vec![("data-owner".to_string(), "source".to_string())],
+            vec![("xmlns".to_string(), spreadsheet_namespace.to_string())],
+            RichTextSource::SharedString,
+            spreadsheet_namespace.to_string(),
+        )
+        .expect_err("non-token inner bound must fail");
+        assert_eq!(error.code, OmErrorCode::InvalidArgument);
+
+        let error = RichTextValue::try_from_preserved_ooxml(
+            raw_xml.clone(),
+            raw_xml
+                .iter()
+                .position(|byte| *byte == b'>')
+                .expect("start-tag end")
+                + 1,
+            raw_xml.len() - 5,
+            vec![("data-owner".to_string(), "forged".to_string())],
+            vec![("xmlns".to_string(), spreadsheet_namespace.to_string())],
+            RichTextSource::SharedString,
+            spreadsheet_namespace.to_string(),
+        )
+        .expect_err("root metadata drift must fail");
+        assert_eq!(error.code, OmErrorCode::InvalidArgument);
+
+        let error = RichTextValue::try_from_preserved_ooxml(
+            raw_xml.clone(),
+            raw_xml
+                .iter()
+                .position(|byte| *byte == b'>')
+                .expect("start-tag end")
+                + 1,
+            raw_xml.len() - 5,
+            vec![("bad name".to_string(), "source".to_string())],
+            vec![("xmlns".to_string(), spreadsheet_namespace.to_string())],
+            RichTextSource::SharedString,
+            spreadsheet_namespace.to_string(),
+        )
+        .expect_err("invalid attribute QName must fail before raw splice");
+        assert_eq!(error.code, OmErrorCode::InvalidArgument);
+    }
+
+    #[test]
+    fn rich_text_rejects_source_mismatch_and_markup_outside_the_item() {
+        let spreadsheet_namespace = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+        let raw_xml = b"<si><t>display</t></si>".to_vec();
+        let error = RichTextValue::try_from_preserved_ooxml(
+            raw_xml.clone(),
+            4,
+            raw_xml.len() - 5,
+            Vec::new(),
+            vec![("xmlns".to_string(), spreadsheet_namespace.to_string())],
+            RichTextSource::InlineString,
+            spreadsheet_namespace.to_string(),
+        )
+        .expect_err("source item mismatch must fail");
+        assert_eq!(error.code, OmErrorCode::InvalidArgument);
+
+        let raw_xml = b"<si><t>display</t></si><!--outside-->".to_vec();
+        let error = RichTextValue::try_from_preserved_ooxml(
+            raw_xml.clone(),
+            4,
+            b"<si><t>display</t>".len(),
+            Vec::new(),
+            vec![("xmlns".to_string(), spreadsheet_namespace.to_string())],
+            RichTextSource::SharedString,
+            spreadsheet_namespace.to_string(),
+        )
+        .expect_err("markup outside the source item must fail");
+        assert_eq!(error.code, OmErrorCode::InvalidArgument);
+    }
+
+    #[test]
+    fn rich_text_rejects_undeclared_element_and_attribute_prefixes() {
+        let spreadsheet_namespace = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+        let raw_xml = b"<si bad:owner=\"x\"><t>display</t></si>".to_vec();
+        let error = RichTextValue::try_from_preserved_ooxml(
+            raw_xml.clone(),
+            raw_xml
+                .iter()
+                .position(|byte| *byte == b'>')
+                .expect("start-tag end")
+                + 1,
+            raw_xml.len() - 5,
+            vec![("bad:owner".to_string(), "x".to_string())],
+            vec![("xmlns".to_string(), spreadsheet_namespace.to_string())],
+            RichTextSource::SharedString,
+            spreadsheet_namespace.to_string(),
+        )
+        .expect_err("undeclared root attribute prefix must fail");
+        assert_eq!(error.code, OmErrorCode::InvalidArgument);
+
+        let raw_xml = b"<si><t>display</t><bad:meta/></si>".to_vec();
+        let error = RichTextValue::try_from_preserved_ooxml(
+            raw_xml.clone(),
+            4,
+            raw_xml.len() - 5,
+            Vec::new(),
+            vec![("xmlns".to_string(), spreadsheet_namespace.to_string())],
+            RichTextSource::SharedString,
+            spreadsheet_namespace.to_string(),
+        )
+        .expect_err("undeclared child element prefix must fail");
+        assert_eq!(error.code, OmErrorCode::InvalidArgument);
+    }
+
+    #[test]
+    fn rich_text_rejects_invalid_child_qnames_and_entity_references() {
+        let spreadsheet_namespace = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+        for raw_xml in [
+            b"<si><1bad/></si>".as_slice(),
+            b"<si><meta>&future;</meta></si>".as_slice(),
+            b"<si><t>&#0;</t></si>".as_slice(),
+        ] {
+            let raw_xml = raw_xml.to_vec();
+            let error = RichTextValue::try_from_preserved_ooxml(
+                raw_xml.clone(),
+                4,
+                raw_xml.len() - 5,
+                Vec::new(),
+                vec![("xmlns".to_string(), spreadsheet_namespace.to_string())],
+                RichTextSource::SharedString,
+                spreadsheet_namespace.to_string(),
+            )
+            .expect_err("invalid raw rich-text markup must fail");
+            assert_eq!(error.code, OmErrorCode::InvalidArgument);
+        }
     }
 
     #[test]

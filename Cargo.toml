@@ -32,5 +32,5 @@ publish = false
 
 [workspace.dependencies]
 quick-xml = "0.39.2"
-serde = { version = "1", features = ["derive"] }
+serde = { version = "1", features = ["derive", "rc"] }
 zip = "8.4.0"

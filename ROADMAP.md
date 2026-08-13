@@ -378,8 +378,12 @@ Active order:
 60. `OOTD-025` is complete (2026-08-11, synthetic): validated ISO date/date-time values retain
    their exact fractional-second and timezone lexical through dirty save/reopen, invalid values fail
    with part/cell context, and serial conversion requires explicit 1900/1904 plus offset policies.
-61. **Active local:** preserve rich-text formatting runs, phonetic runs, whitespace semantics, and
-   exact raw representation for shared and inline strings (`OOTD-026`).
+61. `OOTD-026` is complete (2026-08-14, synthetic): shared and inline rich strings keep separate
+   display/phonetic channels plus exact formatting runs, whitespace, foreign subtrees, and namespace
+   context; shared payload clones are reference-counted, dirty save/reopen preserves the structure,
+   and runtime text projection plus `PHONETIC` use the appropriate channel.
+62. **Active local:** complete the blank-versus-missing, formula-cache, and remaining typed lexical
+   load/edit/save fidelity matrix (`OOTD-066`).
 
 Every numbered work unit starts with a failing regression and lands as its own reviewable commit.
 The complete `OOTD-001`~`OOTD-086` ordering, regression inventory, and compatibility completion

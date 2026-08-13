@@ -449,7 +449,9 @@ dependencies = [
 name = "office-common"
 version = "0.1.0"
 dependencies = [
+ "quick-xml",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

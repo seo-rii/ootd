@@ -666,9 +666,19 @@ Wave 2 exit gate:
    호출자가 1900/1904 date system과 wall-clock 보존/UTC normalization 정책을 모두 명시하는
    API로만 제공한다. Rust 1.88 compile, `office-common` 31개와 `excel-xlsx` 2,938개를 포함한
    workspace 전체 회귀가 통과한다.
+   `OOTD-026` 완료 (2026-08-14, synthetic): shared/inline string의 표시 문자열과 phonetic
+   문자열을 분리하고, formatting run, `xml:space`, `rPh`/`phoneticPr`, foreign subtree와
+   namespace context를 검증된 exact raw OOXML sidecar에 보존한다. public builder와 serde 입력은
+   source QName, token boundary, root metadata 및 display/phonetic projection을 raw payload에서
+   다시 검증해 불일치 상태를 거부한다. 같은 shared-string을 참조하는 cell은 raw payload를
+   `Arc`로 공유하며, dirty rewrite는 item-level default namespace 의미까지 유지하는 inline
+   string으로 materialize하고 기존 inline rich text는 원문을 재사용한다. 일반 runtime
+   값·검색·정렬·차트·수식 coercion은 표시 문자열을 사용하고 `PHONETIC`만 보존된 phonetic
+   channel을 사용한다. Rust 1.88 workspace compile, `office-common` 39개, `excel-runtime` 781개,
+   `excel-xlsx` 2,942개와 `excel-oracle` 33개를 포함한 workspace 전체 회귀가 통과한다.
    **외부 gate:** pinned Windows Excel host에서 wrapper를 실행해 서로 다른 run ID의 독립 run 두
    개를 수집하고 repeated-capture gate를 통과시킨다.
-   **다음 로컬:** `OOTD-026` rich text와 phonetic run의 exact preservation model.
+   **다음 로컬:** `OOTD-066` blank/missing/formula-cache lexical fidelity matrix.
 16. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
    structured error에 추가한다.
 
@@ -682,8 +692,8 @@ Wave 3 exit gate:
 
 ### Audit Wave 4 — Cell, Formula And Calculation Fidelity
 
-1. `OOTD-023` + `OOTD-024` + `OOTD-025` 완료. 이어서 `OOTD-026` + `OOTD-066`: rich and
-   phonetic text, blank/missing/formula-cache fidelity model을 구현한다.
+1. `OOTD-023` + `OOTD-024` + `OOTD-025` + `OOTD-026` 완료. 이어서 `OOTD-066`의
+   blank/missing/formula-cache fidelity model과 cell-type load/edit/save matrix를 구현한다.
 2. `OOTD-027` + `OOTD-028` + `OOTD-067`: normal/shared/legacy-array/data-table/dynamic-array
    formula group model과 group-level mutation preflight를 구현한다.
 3. `OOTD-038` + `OOTD-039` + `OOTD-047`: clock, timezone, locale, date system, RNG와 runtime

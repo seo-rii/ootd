@@ -12557,7 +12557,9 @@ impl ExcelRuntime {
                             let value_rank = |value: &CellValue| -> i32 {
                                 match value {
                                     CellValue::Number(_) => 0,
-                                    CellValue::Text(_) | CellValue::IsoDateTime(_) => 1,
+                                    CellValue::Text(_)
+                                    | CellValue::IsoDateTime(_)
+                                    | CellValue::RichText(_) => 1,
                                     CellValue::Bool(_) => 2,
                                     CellValue::Error(_) => 3,
                                     CellValue::Blank => 4,
@@ -12592,6 +12594,11 @@ impl ExcelRuntime {
                                     {
                                         text.trim().parse::<f64>().ok()
                                     }
+                                    CellValue::RichText(text)
+                                        if data_option == XL_SORT_TEXT_AS_NUMBERS =>
+                                    {
+                                        text.as_str().trim().parse::<f64>().ok()
+                                    }
                                     _ => None,
                                 }
                             };
@@ -12613,51 +12620,35 @@ impl ExcelRuntime {
                                     (None, None) => {}
                                 }
                             }
-                            let mut ordering = match (left_value, right_value) {
-                                (CellValue::Number(left), CellValue::Number(right)) => {
-                                    left.partial_cmp(right).unwrap_or(Ordering::Equal)
+                            let mut ordering = if let (Some(left), Some(right)) =
+                                (left_value.as_text(), right_value.as_text())
+                            {
+                                if match_case {
+                                    left.cmp(right)
+                                } else {
+                                    left.to_lowercase().cmp(&right.to_lowercase())
                                 }
-                                (CellValue::Text(left), CellValue::Text(right)) => {
-                                    if match_case {
+                            } else {
+                                match (left_value, right_value) {
+                                    (CellValue::Number(left), CellValue::Number(right)) => {
+                                        left.partial_cmp(right).unwrap_or(Ordering::Equal)
+                                    }
+                                    (CellValue::Bool(left), CellValue::Bool(right)) => {
                                         left.cmp(right)
-                                    } else {
-                                        left.to_lowercase().cmp(&right.to_lowercase())
                                     }
-                                }
-                                (
-                                    CellValue::IsoDateTime(left),
-                                    CellValue::IsoDateTime(right),
-                                ) => left.cmp(right),
-                                (CellValue::Text(left), CellValue::IsoDateTime(right)) => {
-                                    if match_case {
-                                        left.as_str().cmp(right.as_str())
-                                    } else {
-                                        left.to_lowercase()
-                                            .cmp(&right.as_str().to_lowercase())
+                                    (CellValue::Error(left), CellValue::Error(right)) => {
+                                        error_rank(left).cmp(&error_rank(right))
                                     }
-                                }
-                                (CellValue::IsoDateTime(left), CellValue::Text(right)) => {
-                                    if match_case {
-                                        left.as_str().cmp(right.as_str())
-                                    } else {
-                                        left.as_str()
-                                            .to_lowercase()
-                                            .cmp(&right.to_lowercase())
+                                    _ => {
+                                        let adjusted_rank = |value: &CellValue| -> i32 {
+                                            if numeric_sort_value(value).is_some() {
+                                                0
+                                            } else {
+                                                value_rank(value)
+                                            }
+                                        };
+                                        adjusted_rank(left_value).cmp(&adjusted_rank(right_value))
                                     }
-                                }
-                                (CellValue::Bool(left), CellValue::Bool(right)) => left.cmp(right),
-                                (CellValue::Error(left), CellValue::Error(right)) => {
-                                    error_rank(left).cmp(&error_rank(right))
-                                }
-                                _ => {
-                                    let adjusted_rank = |value: &CellValue| -> i32 {
-                                        if numeric_sort_value(value).is_some() {
-                                            0
-                                        } else {
-                                            value_rank(value)
-                                        }
-                                    };
-                                    adjusted_rank(left_value).cmp(&adjusted_rank(right_value))
                                 }
                             };
                             if order == XL_SORT_DESCENDING {
@@ -12668,6 +12659,7 @@ impl ExcelRuntime {
                         let cell_contains_text = |row: u32, col: u32| -> bool {
                             source_cells.get(&(row, col)).is_some_and(|cell| {
                                 matches!(&cell.value, CellValue::Text(text) if !text.trim().is_empty())
+                                    || matches!(&cell.value, CellValue::RichText(text) if !text.as_str().trim().is_empty())
                             })
                         };
                         let cell_contains_non_text_data = |row: u32, col: u32| -> bool {
@@ -29141,6 +29133,7 @@ fn find_cell_value_text(value: &CellValue) -> String {
         CellValue::Text(text) => text.clone(),
         CellValue::Error(error) => formula_cell_error_text(error).to_string(),
         CellValue::IsoDateTime(value) => value.as_str().to_string(),
+        CellValue::RichText(value) => value.as_str().to_string(),
     }
 }
 
