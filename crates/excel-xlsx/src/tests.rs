@@ -36,6 +36,8 @@
     };
     use office_opc::{CompressionMethod, OpcPart};
 
+    mod cell_value_fidelity;
+
     mod encrypted_ooxml_fixture {
         include!(concat!(
             env!("CARGO_MANIFEST_DIR"),

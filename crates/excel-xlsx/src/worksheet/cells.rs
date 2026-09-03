@@ -728,6 +728,18 @@ pub(crate) fn parse_worksheet_cells(
                     }
                 }
             }
+            Ok((_, Event::GeneralRef(reference))) => {
+                if let Some(field) = current_field
+                    && let Some(cell) = current_cell.as_mut()
+                {
+                    let value = decode_general_reference(&reference, worksheet_part_uri)?;
+                    match field {
+                        "formula" => cell.4.push_str(&value),
+                        "value" => cell.5.push_str(&value),
+                        _ => {}
+                    }
+                }
+            }
             Ok((_, Event::CData(text))) => {
                 if let Some(field) = current_field {
                     if let Some(cell) = current_cell.as_mut() {
