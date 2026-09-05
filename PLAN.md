@@ -676,9 +676,25 @@ Wave 2 exit gate:
    값·검색·정렬·차트·수식 coercion은 표시 문자열을 사용하고 `PHONETIC`만 보존된 phonetic
    channel을 사용한다. Rust 1.88 workspace compile, `office-common` 39개, `excel-runtime` 781개,
    `excel-xlsx` 2,942개와 `excel-oracle` 33개를 포함한 workspace 전체 회귀가 통과한다.
+   entity reference 수정 (2026-09-03, synthetic): quick-xml이 `&amp;`/`&lt;`/character
+   reference를 별도 GeneralRef event로 내보내는데 worksheet cell parser가 Text/CDATA만 처리해
+   `<f>A1&amp;"x"</f>`가 `A1"x"`로 로드되고 dirty rewrite가 손상된 수식/값을 저장했다. 공용
+   decoder로 reference를 해석하고 알 수 없는 entity는 fail-closed하며 load/dirty-save/reopen
+   회귀를 `cell_value_fidelity` module로 고정했다.
+   `OOTD-066` 완료 (2026-09-05, synthetic): worksheet cell의 value channel을 `v` element 존재
+   여부로 모델링해 `<c/>`와 `<c></c>` 두 형태가 동일하게 동작한다. `t`만 있고 값이 없는 cell은
+   Blank(스타일이 없으면 materialize하지 않음), `v` 없는 formula cell은 uncomputed cache,
+   `t="str"`의 빈 `v`만 빈 문자열이다. 알 수 없는 `t`, 중복 또는 inlineStr 내부의 `v`, 빈
+   b/d/e/n/s lexical, XSD 4형식 이외의 boolean, finite xsd:double 문법 밖의 숫자, 잘못된 shared
+   index는 part/cell context와 함께 fail-closed한다. boolean/numeric canonical lexical과 빈
+   error lexical validation을 `office-common`에 두고 model preflight와 rewriter가 공유한다.
+   26개 cell channel의 load/no-op/unrelated-edit/touched-rewrite/reopen matrix를 고정했다.
+   `office-common` 43개, `excel-xlsx` 2,952개를 포함한 workspace 전체 회귀가
+   통과한다. 계약은 `docs/interfaces/worksheet_cell_values.md`.
    **외부 gate:** pinned Windows Excel host에서 wrapper를 실행해 서로 다른 run ID의 독립 run 두
    개를 수집하고 repeated-capture gate를 통과시킨다.
-   **다음 로컬:** `OOTD-066` blank/missing/formula-cache lexical fidelity matrix.
+   **다음 로컬:** `OOTD-027`/`OOTD-028`/`OOTD-067` formula group model과 group-level mutation
+   preflight.
 16. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
    structured error에 추가한다.
 
@@ -692,8 +708,8 @@ Wave 3 exit gate:
 
 ### Audit Wave 4 — Cell, Formula And Calculation Fidelity
 
-1. `OOTD-023` + `OOTD-024` + `OOTD-025` + `OOTD-026` 완료. 이어서 `OOTD-066`의
-   blank/missing/formula-cache fidelity model과 cell-type load/edit/save matrix를 구현한다.
+1. `OOTD-023` + `OOTD-024` + `OOTD-025` + `OOTD-026` + `OOTD-066` 완료: cell type별
+   blank/missing/formula-cache fidelity model과 load/edit/save matrix가 고정되었다.
 2. `OOTD-027` + `OOTD-028` + `OOTD-067`: normal/shared/legacy-array/data-table/dynamic-array
    formula group model과 group-level mutation preflight를 구현한다.
 3. `OOTD-038` + `OOTD-039` + `OOTD-047`: clock, timezone, locale, date system, RNG와 runtime

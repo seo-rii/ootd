@@ -249,7 +249,7 @@ pub(crate) fn parse_worksheet_cells(
         Option<String>,
         Option<StyleId>,
         String,
-        String,
+        Option<String>,
         Option<CellValue>,
         Option<Rect>,
     )> = None;
@@ -364,6 +364,7 @@ pub(crate) fn parse_worksheet_cells(
                         format!("{worksheet_part_uri}: worksheet cell is missing an A1 reference"),
                     )
                 })?;
+                validate_cell_type(cell_type.as_deref(), worksheet_part_uri, reference.as_str())?;
                 let (row, col) =
                     parse_cell_reference(reference.as_str(), current_row).map_err(|error| {
                         OmError::new(
@@ -398,7 +399,7 @@ pub(crate) fn parse_worksheet_cells(
                     cell_type,
                     style_id,
                     String::new(),
-                    String::new(),
+                    None,
                     None,
                     None,
                 ));
@@ -412,6 +413,7 @@ pub(crate) fn parse_worksheet_cells(
                 ) =>
             {
                 let mut reference = None;
+                let mut cell_type = None;
                 let mut style_index = None;
                 for attr in element.attributes() {
                     let attr = attr.map_err(xml_error)?;
@@ -421,6 +423,8 @@ pub(crate) fn parse_worksheet_cells(
                         .into_owned();
                     if unqualified_attribute_is(reader.resolver(), attr.key, b"r") {
                         reference = Some(value);
+                    } else if unqualified_attribute_is(reader.resolver(), attr.key, b"t") {
+                        cell_type = Some(value);
                     } else if unqualified_attribute_is(reader.resolver(), attr.key, b"s") {
                         style_index = Some(value);
                     }
@@ -431,6 +435,7 @@ pub(crate) fn parse_worksheet_cells(
                         format!("{worksheet_part_uri}: worksheet cell is missing an A1 reference"),
                     )
                 })?;
+                validate_cell_type(cell_type.as_deref(), worksheet_part_uri, reference.as_str())?;
                 let (row, col) =
                     parse_cell_reference(reference.as_str(), current_row).map_err(|error| {
                         OmError::new(
@@ -552,14 +557,31 @@ pub(crate) fn parse_worksheet_cells(
                 current_field = Some("formula");
             }
             Ok((namespace, Event::Start(element)))
-                if resolved_element_is(
-                    &namespace,
-                    element.local_name(),
-                    spreadsheet_namespace.as_bytes(),
-                    b"v",
-                ) =>
+                if current_inline_item.is_none()
+                    && resolved_element_is(
+                        &namespace,
+                        element.local_name(),
+                        spreadsheet_namespace.as_bytes(),
+                        b"v",
+                    ) =>
             {
+                if let Some(cell) = current_cell.as_mut() {
+                    begin_cell_value_element(cell.0, cell.1, &mut cell.5, worksheet_part_uri)?;
+                }
                 current_field = Some("value");
+            }
+            Ok((namespace, Event::Empty(element)))
+                if current_inline_item.is_none()
+                    && resolved_element_is(
+                        &namespace,
+                        element.local_name(),
+                        spreadsheet_namespace.as_bytes(),
+                        b"v",
+                    ) =>
+            {
+                if let Some(cell) = current_cell.as_mut() {
+                    begin_cell_value_element(cell.0, cell.1, &mut cell.5, worksheet_part_uri)?;
+                }
             }
             Ok((namespace, Event::Start(element)))
                 if resolved_element_is(
@@ -722,7 +744,10 @@ pub(crate) fn parse_worksheet_cells(
                     if let Some(cell) = current_cell.as_mut() {
                         match field {
                             "formula" => cell.4.push_str(&text.xml_content().map_err(xml_error)?),
-                            "value" => cell.5.push_str(&text.xml_content().map_err(xml_error)?),
+                            "value" => cell
+                                .5
+                                .get_or_insert_with(String::new)
+                                .push_str(&text.xml_content().map_err(xml_error)?),
                             _ => {}
                         }
                     }
@@ -735,7 +760,7 @@ pub(crate) fn parse_worksheet_cells(
                     let value = decode_general_reference(&reference, worksheet_part_uri)?;
                     match field {
                         "formula" => cell.4.push_str(&value),
-                        "value" => cell.5.push_str(&value),
+                        "value" => cell.5.get_or_insert_with(String::new).push_str(&value),
                         _ => {}
                     }
                 }
@@ -745,7 +770,10 @@ pub(crate) fn parse_worksheet_cells(
                     if let Some(cell) = current_cell.as_mut() {
                         match field {
                             "formula" => cell.4.push_str(&text.xml_content().map_err(xml_error)?),
-                            "value" => cell.5.push_str(&text.xml_content().map_err(xml_error)?),
+                            "value" => cell
+                                .5
+                                .get_or_insert_with(String::new)
+                                .push_str(&text.xml_content().map_err(xml_error)?),
                             _ => {}
                         }
                     }
@@ -762,42 +790,15 @@ pub(crate) fn parse_worksheet_cells(
                 if let Some((row, col, cell_type, style_id, formula, value, inline, spill_range)) =
                     current_cell.take()
                 {
-                    let cell_value = match cell_type.as_deref() {
-                        Some("b") => CellValue::Bool(value == "1"),
-                        Some("e") => CellValue::Error(parse_cell_error(value.as_str())),
-                        Some("d") => CellValue::IsoDateTime(
-                            IsoDateTime::parse(value.as_str()).map_err(|error| {
-                                OmError::parse(format!(
-                                    "{worksheet_part_uri}: cell {} {}",
-                                    cell_reference(row, col),
-                                    error.message
-                                ))
-                            })?,
-                        ),
-                        Some("s") => {
-                            let index = value.parse::<usize>().map_err(xml_error)?;
-                            shared_strings.get(index).cloned().ok_or_else(|| {
-                                OmError::new(
-                                    OmErrorCode::Parse,
-                                    format!("shared string index out of range: {index}"),
-                                )
-                            })?
-                        }
-                        Some("str") => CellValue::Text(value),
-                        Some("inlineStr") => {
-                            inline.unwrap_or_else(|| CellValue::Text(String::new()))
-                        }
-                        _ if value.is_empty() => CellValue::Blank,
-                        _ => {
-                            let number = value.parse::<f64>().map_err(xml_error)?;
-                            CellValue::try_number(number).map_err(|_| {
-                                OmError::parse(format!(
-                                    "{worksheet_part_uri}: cell {} numeric value must be finite",
-                                    cell_reference(row, col)
-                                ))
-                            })?
-                        }
-                    };
+                    let cell_value = resolve_cell_value(
+                        cell_type.as_deref(),
+                        value,
+                        inline,
+                        shared_strings,
+                        worksheet_part_uri,
+                        row,
+                        col,
+                    )?;
                     if !matches!(cell_value, CellValue::Blank)
                         || !formula.is_empty()
                         || style_id.is_some()
@@ -1850,9 +1851,9 @@ pub(crate) fn rewrite_worksheet_xml(
         ));
     }
     for (&(row, col), cell) in &worksheet.cells {
-        if cell.value.validate().is_err() {
+        if let Some(detail) = cell.value.validation_detail() {
             return Err(OmError::invalid_state(format!(
-                "worksheet cell {} numeric value must be finite",
+                "worksheet cell {} {detail}",
                 cell_reference(row, col)
             )));
         }
@@ -2743,7 +2744,7 @@ pub(crate) fn rewrite_worksheet_xml(
                                 .map_err(xml_error)?;
                             writer
                                 .write_event(Event::Text(BytesText::from_escaped(partial_escape(
-                                    if *value { "1" } else { "0" },
+                                    CellValue::boolean_lexical(*value),
                                 ))))
                                 .map_err(xml_error)?;
                             writer
@@ -2752,7 +2753,7 @@ pub(crate) fn rewrite_worksheet_xml(
                             wrote_value = true;
                         }
                         CellValue::Number(value) => {
-                            let value_string = value.to_string();
+                            let value_string = CellValue::number_lexical(*value);
                             writer
                                 .write_event(Event::Start(BytesStart::new(value_name.as_str())))
                                 .map_err(xml_error)?;
@@ -2883,7 +2884,7 @@ pub(crate) fn rewrite_worksheet_xml(
                         .map_err(xml_error)?;
                     writer
                         .write_event(Event::Text(BytesText::from_escaped(partial_escape(
-                            if *value { "1" } else { "0" },
+                            CellValue::boolean_lexical(*value),
                         ))))
                         .map_err(xml_error)?;
                     writer
@@ -2891,7 +2892,7 @@ pub(crate) fn rewrite_worksheet_xml(
                         .map_err(xml_error)?;
                 }
                 CellValue::Number(value) => {
-                    let value_string = value.to_string();
+                    let value_string = CellValue::number_lexical(*value);
                     writer
                         .write_event(Event::Start(BytesStart::new(value_name.as_str())))
                         .map_err(xml_error)?;
@@ -3442,6 +3443,110 @@ pub(crate) fn cell_reference(row: u32, col: u32) -> String {
         col_index = (col_index - 1) / 26;
     }
     format!("{label}{row}")
+}
+
+const KNOWN_CELL_TYPES: [&str; 7] = ["b", "d", "e", "inlineStr", "n", "s", "str"];
+
+fn validate_cell_type(
+    cell_type: Option<&str>,
+    worksheet_part_uri: &str,
+    reference: &str,
+) -> OmResult<()> {
+    match cell_type {
+        None => Ok(()),
+        Some(cell_type) if KNOWN_CELL_TYPES.contains(&cell_type) => Ok(()),
+        Some(cell_type) => Err(OmError::parse(format!(
+            "{worksheet_part_uri}: cell {reference} has unknown cell type: {cell_type}"
+        ))),
+    }
+}
+
+fn begin_cell_value_element(
+    row: u32,
+    col: u32,
+    value: &mut Option<String>,
+    worksheet_part_uri: &str,
+) -> OmResult<()> {
+    if value.is_some() {
+        return Err(OmError::parse(format!(
+            "{worksheet_part_uri}: cell {} declares more than one value element",
+            cell_reference(row, col)
+        )));
+    }
+    *value = Some(String::new());
+    Ok(())
+}
+
+/// Maps one parsed `c` element onto the typed value channel.
+///
+/// A cell without a `v`/`is` child has no value regardless of its `t` attribute. A present `v`
+/// element is interpreted by the declared type, every lexical failure carries worksheet-part and
+/// cell context, and `str` is the only type whose empty lexical is itself a value.
+fn resolve_cell_value(
+    cell_type: Option<&str>,
+    value: Option<String>,
+    inline: Option<CellValue>,
+    shared_strings: &[CellValue],
+    worksheet_part_uri: &str,
+    row: u32,
+    col: u32,
+) -> OmResult<CellValue> {
+    let context = || format!("{worksheet_part_uri}: cell {}", cell_reference(row, col));
+    if cell_type == Some("inlineStr") {
+        if value.is_some() {
+            return Err(OmError::parse(format!(
+                "{} is an inline string cell but declares a value element",
+                context()
+            )));
+        }
+        return Ok(inline.unwrap_or(CellValue::Blank));
+    }
+    let Some(lexical) = value else {
+        return Ok(CellValue::Blank);
+    };
+    if lexical.is_empty() && cell_type != Some("str") {
+        return Err(OmError::parse(format!(
+            "{} has an empty value lexical for cell type {}",
+            context(),
+            cell_type.unwrap_or("n")
+        )));
+    }
+    match cell_type {
+        Some("b") => CellValue::parse_boolean_lexical(&lexical)
+            .map(CellValue::Bool)
+            .ok_or_else(|| {
+                OmError::parse(format!(
+                    "{} has invalid boolean value lexical: {lexical}",
+                    context()
+                ))
+            }),
+        Some("e") => Ok(CellValue::Error(parse_cell_error(&lexical))),
+        Some("d") => IsoDateTime::parse(&lexical)
+            .map(CellValue::IsoDateTime)
+            .map_err(|error| OmError::parse(format!("{} {}", context(), error.message))),
+        Some("s") => {
+            let index = lexical.parse::<usize>().map_err(|_| {
+                OmError::parse(format!(
+                    "{} has invalid shared string index: {lexical}",
+                    context()
+                ))
+            })?;
+            shared_strings.get(index).cloned().ok_or_else(|| {
+                OmError::parse(format!(
+                    "{} shared string index out of range: {index}",
+                    context()
+                ))
+            })
+        }
+        Some("str") => Ok(CellValue::Text(lexical)),
+        None | Some("n") => CellValue::parse_number_lexical(&lexical)
+            .map(CellValue::Number)
+            .map_err(|error| OmError::parse(format!("{} {}", context(), error.message))),
+        Some(other) => Err(OmError::parse(format!(
+            "{} has unknown cell type: {other}",
+            context()
+        ))),
+    }
 }
 
 pub(crate) fn parse_cell_error(value: &str) -> CellError {

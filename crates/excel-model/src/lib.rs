@@ -631,13 +631,10 @@ impl WorkbookState {
                 }
             }
             for (&(row, col), cell) in &worksheet.cells {
-                if cell.value.validate().is_err() {
+                if let Some(detail) = cell.value.validation_detail() {
                     return Err(OmError::new(
                         OmErrorCode::InvalidState,
-                        format!(
-                            "worksheet {} cell R{}C{} numeric value must be finite",
-                            sheet_id.0, row, col
-                        ),
+                        format!("worksheet {} cell R{}C{} {detail}", sheet_id.0, row, col),
                     ));
                 }
             }

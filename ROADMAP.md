@@ -382,8 +382,15 @@ Active order:
    display/phonetic channels plus exact formatting runs, whitespace, foreign subtrees, and namespace
    context; shared payload clones are reference-counted, dirty save/reopen preserves the structure,
    and runtime text projection plus `PHONETIC` use the appropriate channel.
-62. **Active local:** complete the blank-versus-missing, formula-cache, and remaining typed lexical
-   load/edit/save fidelity matrix (`OOTD-066`).
+62. `OOTD-066` is complete (2026-09-05, synthetic): worksheet cell load distinguishes a missing
+   value element from a present one in both cell element forms, treats a formula cell without `v`
+   as an uncomputed cache, fails closed on unknown `t`, duplicate or misplaced `v`, and empty or
+   invalid boolean/numeric/shared-index/error lexicals, and resolves XML entity references in
+   `f`/`v` text instead of dropping them. Rewrites share one canonical boolean/numeric lexical
+   contract, and a 26-cell load/no-op/unrelated-edit/touched-rewrite/reopen matrix pins every
+   supported value channel. The contract is `docs/interfaces/worksheet_cell_values.md`.
+63. **Active local:** normal/shared/legacy-array/data-table/dynamic-array formula group model and
+   group-level mutation preflight (`OOTD-027`/`OOTD-028`/`OOTD-067`).
 
 Every numbered work unit starts with a failing regression and lands as its own reviewable commit.
 The complete `OOTD-001`~`OOTD-086` ordering, regression inventory, and compatibility completion

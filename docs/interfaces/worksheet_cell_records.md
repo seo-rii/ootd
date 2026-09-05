@@ -41,7 +41,8 @@ the bounded first-stage contract in `worksheet_a1_cell_references.md`. Common ra
 whole-row/column references, sheet qualification, and consumer grammar migration remain
 OOTD-018/OOTD-048. Central model limits and range cardinality are defined in
 `excel_grid_limits.md`. Full worksheet parent/content-model ordering and Markup Compatibility
-remain OOTD-049/OOTD-061.
+remain OOTD-049/OOTD-061. The cell value channel (blank versus missing, typed lexicals, entity
+resolution, and formula-cache presence) is defined in `worksheet_cell_values.md`.
 
 The current evidence is synthetic. Desktop Excel open/save/reopen observations remain required
 before this behavior is marked Oracle-verified.

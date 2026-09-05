@@ -1232,16 +1232,72 @@ impl CellValue {
         Ok(Self::Number(value))
     }
 
+    /// Parses a SpreadsheetML `t="b"` value lexical.
+    ///
+    /// Excel writes `0`/`1`. The remaining XSD boolean lexicals `true`/`false` denote the same
+    /// typed value and are accepted on load; every other lexical, including an empty one, is
+    /// invalid.
+    pub fn parse_boolean_lexical(lexical: &str) -> Option<bool> {
+        match lexical {
+            "1" | "true" => Some(true),
+            "0" | "false" => Some(false),
+            _ => None,
+        }
+    }
+
+    /// The canonical boolean lexical written by Excel and by every OOTD cell rewrite.
+    pub fn boolean_lexical(value: bool) -> &'static str {
+        if value { "1" } else { "0" }
+    }
+
+    /// Parses a SpreadsheetML numeric cell value lexical.
+    ///
+    /// The accepted grammar is the finite `xsd:double` lexical space without surrounding
+    /// whitespace. Empty, padded, non-decimal, and non-finite lexicals are rejected.
+    pub fn parse_number_lexical(lexical: &str) -> OmResult<f64> {
+        if lexical.is_empty() {
+            return Err(OmError::invalid_argument("numeric value lexical is empty"));
+        }
+        let value = lexical.parse::<f64>().map_err(|_| {
+            OmError::invalid_argument(format!("invalid numeric value lexical: {lexical}"))
+        })?;
+        if !value.is_finite() {
+            return Err(OmError::invalid_argument("numeric value must be finite"));
+        }
+        Ok(value)
+    }
+
+    /// The canonical numeric lexical written by every OOTD cell rewrite: the shortest decimal
+    /// form that parses back to the identical binary64 value.
+    pub fn number_lexical(value: f64) -> String {
+        value.to_string()
+    }
+
     pub fn validate(&self) -> OmResult<()> {
         match self {
             Self::Number(value) => {
                 Self::try_number(*value)?;
+            }
+            Self::Error(CellError::UnknownLexical(lexical)) if lexical.is_empty() => {
+                return Err(OmError::invalid_argument(
+                    "worksheet cell error lexical must not be empty",
+                ));
             }
             Self::RichText(value) => value.validate_preserved_ooxml()?,
             Self::Blank | Self::Bool(_) | Self::Text(_) | Self::Error(_) | Self::IsoDateTime(_) => {
             }
         }
         Ok(())
+    }
+
+    /// Returns the `validate` failure without its generic `worksheet cell` prefix so callers can
+    /// attach their own worksheet and cell context.
+    pub fn validation_detail(&self) -> Option<String> {
+        let error = self.validate().err()?;
+        Some(match error.message.strip_prefix("worksheet cell ") {
+            Some(detail) => detail.to_owned(),
+            None => error.message,
+        })
     }
 }
 
@@ -1856,12 +1912,136 @@ impl OmError {
 #[cfg(test)]
 mod tests {
     use super::{
-        ActiveContentPolicy, CellValue, Emu, ExcelDateSystem, ExcelProfile,
+        ActiveContentPolicy, CellError, CellValue, Emu, ExcelDateSystem, ExcelProfile,
         ExternalDataAccessReport, ExternalDataInventory, ExternalDataPolicy, IsoDateTime,
         IsoDateTimeOffsetPolicy, LoadOptions, ObjectHandle, OmArray, OmErrorCode, OmValue, Points,
         RangeRef, Rect, RichTextSource, RichTextValue, SaveOptions, SheetId, SheetScope,
         WorkbookId,
     };
+
+    #[test]
+    fn boolean_lexicals_accept_xsd_forms_and_write_excel_canonical_form() {
+        assert_eq!(CellValue::parse_boolean_lexical("1"), Some(true));
+        assert_eq!(CellValue::parse_boolean_lexical("true"), Some(true));
+        assert_eq!(CellValue::parse_boolean_lexical("0"), Some(false));
+        assert_eq!(CellValue::parse_boolean_lexical("false"), Some(false));
+        for invalid in ["", "TRUE", "False", "2", "-1", " 1", "yes"] {
+            assert_eq!(
+                CellValue::parse_boolean_lexical(invalid),
+                None,
+                "boolean lexical {invalid:?} must be rejected"
+            );
+        }
+        assert_eq!(CellValue::boolean_lexical(true), "1");
+        assert_eq!(CellValue::boolean_lexical(false), "0");
+    }
+
+    #[test]
+    fn number_lexicals_use_finite_xsd_double_grammar() {
+        for (lexical, expected) in [
+            ("42", 42.0),
+            ("-1.5", -1.5),
+            (".5", 0.5),
+            ("5.", 5.0),
+            ("+3", 3.0),
+            ("1e5", 100_000.0),
+            ("1E+20", 1e20),
+            ("2.5e-3", 0.0025),
+        ] {
+            assert_eq!(
+                CellValue::parse_number_lexical(lexical).expect("valid numeric lexical"),
+                expected,
+                "lexical {lexical:?}"
+            );
+        }
+        let empty = CellValue::parse_number_lexical("").expect_err("empty lexical must fail");
+        assert_eq!(empty.code, OmErrorCode::InvalidArgument);
+        assert_eq!(empty.message, "numeric value lexical is empty");
+        for invalid in [" 1", "1 ", "1,5", "0x10", "1e", "e5", "abc", "1_000", "--1"] {
+            let error = CellValue::parse_number_lexical(invalid)
+                .expect_err("non-decimal numeric lexical must be rejected");
+            assert_eq!(
+                error.code,
+                OmErrorCode::InvalidArgument,
+                "lexical {invalid:?}"
+            );
+            assert_eq!(
+                error.message,
+                format!("invalid numeric value lexical: {invalid}"),
+                "lexical {invalid:?}"
+            );
+        }
+        for non_finite in ["inf", "INF", "-Infinity", "NaN", "nan"] {
+            let error = CellValue::parse_number_lexical(non_finite)
+                .expect_err("non-finite numeric lexical must be rejected");
+            assert_eq!(
+                error.code,
+                OmErrorCode::InvalidArgument,
+                "lexical {non_finite:?}"
+            );
+            assert_eq!(
+                error.message, "numeric value must be finite",
+                "lexical {non_finite:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn number_lexical_round_trips_binary64_exactly() {
+        for value in [
+            0.0,
+            -0.0,
+            0.1 + 0.2,
+            1.0 / 3.0,
+            1e20,
+            1e-7,
+            1e300,
+            5e-324,
+            f64::MAX,
+            f64::MIN_POSITIVE,
+            123_456_789_012_345_680.0,
+            -98765.4321,
+        ] {
+            let lexical = CellValue::number_lexical(value);
+            let reparsed = CellValue::parse_number_lexical(&lexical)
+                .unwrap_or_else(|error| panic!("lexical {lexical:?} must reparse: {error:?}"));
+            assert_eq!(
+                reparsed.to_bits(),
+                value.to_bits(),
+                "value {value:e} must survive its canonical lexical {lexical:?}"
+            );
+        }
+        assert_eq!(CellValue::number_lexical(1e20), "100000000000000000000");
+        assert_eq!(CellValue::number_lexical(0.5), "0.5");
+        assert_eq!(CellValue::number_lexical(-0.0), "-0");
+    }
+
+    #[test]
+    fn validate_rejects_empty_unknown_error_lexical() {
+        let error = CellValue::Error(CellError::UnknownLexical(String::new()))
+            .validate()
+            .expect_err("empty unknown error lexical must fail validation");
+        assert_eq!(error.code, OmErrorCode::InvalidArgument);
+        assert_eq!(
+            error.message,
+            "worksheet cell error lexical must not be empty"
+        );
+        assert_eq!(
+            CellValue::Error(CellError::UnknownLexical(String::new())).validation_detail(),
+            Some("error lexical must not be empty".to_string())
+        );
+        assert_eq!(
+            CellValue::Number(f64::NAN).validation_detail(),
+            Some("numeric value must be finite".to_string())
+        );
+        assert_eq!(
+            CellValue::Error(CellError::UnknownLexical("#VENDOR!".to_string())).validation_detail(),
+            None
+        );
+        CellValue::Error(CellError::UnknownLexical("#VENDOR!".to_string()))
+            .validate()
+            .expect("non-empty unknown error lexical remains valid");
+    }
 
     #[test]
     fn om_array_rejects_invalid_dimensions() {

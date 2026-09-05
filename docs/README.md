@@ -20,6 +20,7 @@ Some detailed implementation notes currently remain in Korean because they were 
 - [Workbook.SaveAs capability contract](interfaces/workbook_save_as.md): supported defaults and fail-closed optional arguments.
 - [Workbooks.Open capability contract](interfaces/workbooks_open.md): read-only behavior, offline link policy, and fail-closed optional arguments.
 - [XLSX codec option contract](interfaces/xlsx_codec_options.md): supported profile/preservation modes and fail-closed alternatives.
+- [Worksheet cell value channel policy](interfaces/worksheet_cell_values.md): blank versus missing cells, typed value lexicals, entity resolution, and formula-cache presence.
 - [Unsupported execution method contract](interfaces/unsupported_execution_methods.md): refresh, spelling, fixed-format export, and print methods without configured backends.
 - [Encrypted OOXML capability contract](interfaces/encrypted_ooxml.md): bounded CFB detection, dedicated open error, and remaining encryption scope.
 - [OPC digital signature policy](interfaces/digital_signatures.md): artifact inventory and fail-closed package rewrite behavior.
