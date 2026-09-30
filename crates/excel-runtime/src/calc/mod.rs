@@ -8032,7 +8032,11 @@ pub(super) struct CalcContext {
     now_serial: Option<f64>,
     date_system: DateSystem,
     random_state: std::cell::Cell<u64>,
+    cell_results: std::cell::RefCell<CalcCellResults>,
 }
+
+type CalcCellResults = std::collections::BTreeMap<(SheetId, u32, u32), CalcCellResult>;
+type CalcCellResult = Result<CellValue, FormulaEvalError>;
 
 impl CalcContext {
     pub(super) fn new(environment: &RuntimeEnvironment, date1904: bool, random_state: u64) -> Self {
@@ -8047,7 +8051,26 @@ impl CalcContext {
                 DateSystem::Excel1900
             },
             random_state: std::cell::Cell::new(random_state),
+            cell_results: std::cell::RefCell::new(CalcCellResults::new()),
         }
+    }
+
+    /// Discards memoized formula results after the cycle changes cell values they may read, such
+    /// as newly committed spill ranges.
+    pub(super) fn forget_cell_results(&self) {
+        self.cell_results.borrow_mut().clear();
+    }
+
+    fn cell_result(&self, key: (SheetId, u32, u32)) -> Option<CalcCellResult> {
+        self.cell_results.borrow().get(&key).cloned()
+    }
+
+    fn remember_cell_result(&self, key: (SheetId, u32, u32), result: &CalcCellResult) {
+        self.cell_results.borrow_mut().insert(key, result.clone());
+    }
+
+    fn forget_cell_result(&self, key: (SheetId, u32, u32)) {
+        self.cell_results.borrow_mut().remove(&key);
     }
 
     pub(super) fn date_system(&self) -> DateSystem {
@@ -9208,7 +9231,136 @@ impl<'a> FormulaEvaluator<'a> {
         row: u32,
         col: u32,
     ) -> Result<CellValue, FormulaEvalError> {
+        self.evaluate_precedents_in_dependency_order(sheet_id, row, col);
         self.evaluate_cell(sheet_id, row, col)
+    }
+
+    /// The formula text of a cell in A1 form, or `None` for a value cell.
+    fn cell_formula_a1_text(&self, key: (SheetId, u32, u32)) -> Option<String> {
+        let (sheet_id, row, col) = key;
+        let formula = self
+            .state
+            .worksheet_data()
+            .get(&sheet_id)?
+            .cells
+            .get(&(row, col))?
+            .formula
+            .as_ref()?;
+        Some(if formula.is_r1c1 {
+            convert_formula_r1c1_to_a1(&formula.text, row, col)
+        } else {
+            formula.text.clone()
+        })
+    }
+
+    /// Formula cells a formula references lexically, through A1, 3D, and defined-name references.
+    /// Function-call names and string literals are skipped; references computed at run time
+    /// (`INDIRECT`, `OFFSET`) are resolved by ordinary evaluation instead.
+    fn lexical_formula_precedents(&mut self, key: (SheetId, u32, u32)) -> Vec<(SheetId, u32, u32)> {
+        let Some(formula_text) = self.cell_formula_a1_text(key) else {
+            return Vec::new();
+        };
+        let (sheet_id, row, col) = key;
+        let mut areas = Vec::new();
+        {
+            let mut parser = FormulaParser::new(&formula_text, self, sheet_id, Some((row, col)));
+            let mut previous = None::<char>;
+            while let Some(ch) = parser.input[parser.index..].chars().next() {
+                if ch == '"' {
+                    parser.index += 1;
+                    while let Some(inner) = parser.input[parser.index..].chars().next() {
+                        parser.index += inner.len_utf8();
+                        if inner == '"' {
+                            if parser.input[parser.index..].starts_with('"') {
+                                parser.index += 1;
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+                    previous = Some('"');
+                    continue;
+                }
+                let at_boundary = previous.is_none_or(|previous| {
+                    !previous.is_alphanumeric() && !matches!(previous, '_' | '.' | '$')
+                });
+                if at_boundary
+                    && let Ok(Some((reference, next_index))) = parser.try_parse_reference_set()
+                    && next_index > parser.index
+                    && !parser.input[next_index..].trim_start().starts_with('(')
+                {
+                    areas.extend(reference.areas);
+                    previous = parser.input[..next_index].chars().next_back();
+                    parser.index = next_index;
+                    continue;
+                }
+                previous = Some(ch);
+                parser.index += ch.len_utf8();
+            }
+        }
+        let mut precedents = Vec::new();
+        for (area_sheet_id, rect) in areas {
+            let Some(worksheet) = self.state.worksheet_data().get(&area_sheet_id) else {
+                continue;
+            };
+            for ((cell_row, cell_col), cell) in worksheet
+                .cells
+                .range((rect.row_first, rect.col_first)..=(rect.row_last, rect.col_last))
+            {
+                if (rect.col_first..=rect.col_last).contains(cell_col) && cell.formula.is_some() {
+                    precedents.push((area_sheet_id, *cell_row, *cell_col));
+                }
+            }
+        }
+        precedents
+    }
+
+    /// Evaluates the formula precedents of a cell before the cell itself, walking the lexical
+    /// dependency graph with an explicit stack. Every precedent result is memoized in the
+    /// calculation context, so evaluating the cell afterwards never recurses through a long
+    /// chain.
+    ///
+    /// A lexical back edge does not prove a cycle, because reference-only arguments such as
+    /// `AREAS(A1:B2)` or `ROWS(A1:A2)` never read the referenced values. The back-edge target
+    /// therefore reads as provisionally circular only while the rest of its cycle is evaluated,
+    /// exactly as recursive evaluation would observe it through its visiting guard, and the
+    /// target itself is evaluated normally once its precedents are known.
+    fn evaluate_precedents_in_dependency_order(&mut self, sheet_id: SheetId, row: u32, col: u32) {
+        let root = (sheet_id, row, col);
+        let mut path_members = BTreeSet::<(SheetId, u32, u32)>::new();
+        let mut provisional = BTreeSet::<(SheetId, u32, u32)>::new();
+        let mut finished = BTreeSet::<(SheetId, u32, u32)>::new();
+        let mut stack = vec![(root, false)];
+        while let Some((key, expanded)) = stack.pop() {
+            if expanded {
+                path_members.remove(&key);
+                finished.insert(key);
+                if provisional.remove(&key) {
+                    self.context.forget_cell_result(key);
+                }
+                if key != root && self.context.cell_result(key).is_none() {
+                    let _ = self.evaluate_cell(key.0, key.1, key.2);
+                }
+                continue;
+            }
+            if finished.contains(&key) || self.context.cell_result(key).is_some() {
+                continue;
+            }
+            if path_members.contains(&key) {
+                if provisional.insert(key) {
+                    self.context
+                        .remember_cell_result(key, &Err(FormulaEvalError::Circular));
+                }
+                continue;
+            }
+            path_members.insert(key);
+            stack.push((key, true));
+            for precedent in self.lexical_formula_precedents(key).into_iter().rev() {
+                if !finished.contains(&precedent) && self.context.cell_result(precedent).is_none() {
+                    stack.push((precedent, false));
+                }
+            }
+        }
     }
 
     pub(super) fn evaluate_dynamic_array_formula_cell_result(
@@ -9217,6 +9369,12 @@ impl<'a> FormulaEvaluator<'a> {
         row: u32,
         col: u32,
     ) -> Result<FormulaArrayResult, FormulaEvalError> {
+        self.evaluate_precedents_in_dependency_order(sheet_id, row, col);
+        if let Some(Err(FormulaEvalError::Circular)) =
+            self.context.cell_result((sheet_id, row, col))
+        {
+            return Err(FormulaEvalError::Circular);
+        }
         let formula = self
             .state
             .worksheet_data()
@@ -9278,6 +9436,11 @@ impl<'a> FormulaEvaluator<'a> {
         let Some(formula) = cell.formula.as_ref() else {
             return Ok(cell.value.clone());
         };
+        // Each formula cell is evaluated once per calculation cycle, so every dependent observes
+        // the same result (including volatile draws) and shared precedents are not re-evaluated.
+        if let Some(result) = self.context.cell_result((sheet_id, row, col)) {
+            return result;
+        }
         if !self.visiting.insert((sheet_id, row, col)) {
             return Err(FormulaEvalError::Circular);
         }
@@ -9288,6 +9451,8 @@ impl<'a> FormulaEvaluator<'a> {
         };
         let result = self.evaluate_formula_text(sheet_id, &formula_text, Some((row, col)));
         self.visiting.remove(&(sheet_id, row, col));
+        self.context
+            .remember_cell_result((sheet_id, row, col), &result);
         result
     }
 

@@ -214,3 +214,99 @@ fn runtime_environment_date_functions_use_the_workbook_date_system() {
         OmValue::from(CellValue::Error(CellError::Num))
     );
 }
+
+#[test]
+fn calculation_evaluates_each_formula_cell_once_per_cycle() {
+    let (mut runtime, _, sheet) = open_runtime(Some(fixed_environment(0, Some(3))));
+    set_formula(&mut runtime, sheet, "M1", "=RAND()");
+    set_formula(&mut runtime, sheet, "M2", "=M1");
+    set_formula(&mut runtime, sheet, "M3", "=M1-M2");
+    set_formula(&mut runtime, sheet, "M4", "=M1+M1-2*M2");
+    calculate(&mut runtime);
+    let [first, second, difference, combined] =
+        values(&mut runtime, sheet, &["M1", "M2", "M3", "M4"])[..]
+    else {
+        unreachable!()
+    };
+    assert_eq!(
+        first, second,
+        "a dependent observes the cycle's single RAND result"
+    );
+    assert_eq!(difference, 0.0);
+    assert_eq!(combined, 0.0);
+}
+
+#[test]
+fn calculation_memoizes_shared_precedents() {
+    let (mut runtime, _, sheet) = open_runtime(None);
+    let target = range(&mut runtime, sheet, "O1");
+    runtime
+        .dispatch_set(target, "Value2", OmValue::Number(1.0), &[])
+        .expect("seed doubling chain");
+    for row in 2..=48 {
+        set_formula(
+            &mut runtime,
+            sheet,
+            &format!("O{row}"),
+            &format!("=O{previous}+O{previous}", previous = row - 1),
+        );
+    }
+    calculate(&mut runtime);
+    let [last] = values(&mut runtime, sheet, &["O48"])[..] else {
+        unreachable!()
+    };
+    assert_eq!(last, 2f64.powi(47));
+}
+
+#[test]
+fn calculation_orders_deep_precedent_chains_without_recursing() {
+    let (mut runtime, workbook, sheet) = open_runtime(None);
+    let chain_length = 4_000;
+    for row in 1..chain_length {
+        set_formula(
+            &mut runtime,
+            sheet,
+            &format!("P{row}"),
+            &format!("=P{}+1", row + 1),
+        );
+    }
+    let tail = range(&mut runtime, sheet, &format!("P{chain_length}"));
+    runtime
+        .dispatch_set(tail, "Value2", OmValue::Number(1.0), &[])
+        .expect("seed chain tail");
+
+    let cycle_length = 3_000;
+    for row in 1..=cycle_length {
+        let next = if row == cycle_length { 1 } else { row + 1 };
+        set_formula(
+            &mut runtime,
+            sheet,
+            &format!("Q{row}"),
+            &format!("=Q{next}+1"),
+        );
+    }
+    set_formula(&mut runtime, sheet, "R1", "=Q1");
+
+    let report = runtime
+        .calculate_workbook_with_report(workbook)
+        .expect("calculate deep chains");
+    let [head] = values(&mut runtime, sheet, &["P1"])[..] else {
+        unreachable!()
+    };
+    assert_eq!(head, f64::from(chain_length));
+    assert_eq!(
+        report.circular.len(),
+        cycle_length as usize + 1,
+        "every cycle member and its dependent are reported circular"
+    );
+    for address in ["Q1", "Q1500", "Q3000", "R1"] {
+        let cell = range(&mut runtime, sheet, address);
+        assert_eq!(
+            runtime
+                .dispatch_get(cell, "Value2", &[])
+                .expect("cycle value"),
+            OmValue::from(CellValue::Error(CellError::Calc)),
+            "{address}"
+        );
+    }
+}

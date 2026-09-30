@@ -718,6 +718,11 @@ Wave 2 exit gate:
    이전 날짜를 `#NUM!`으로 거부한다.
    **다음 로컬:** `OOTD-040`/`OOTD-050`/`OOTD-051` common value/coercion/reference/error model,
    calculation session dependency graph, SCC/cycle, memoization과 calc monolith 분리.
+   진행 (2026-09-30, synthetic): calculation cycle마다 formula cell 결과를 memoize해 volatile cell이
+   모든 dependent에게 하나의 값을 주고 공유 precedent는 한 번만 평가된다. lexical dependency
+   graph를 explicit stack post-order로 평가해 4,000-cell chain과 3,000-cell cycle이 stack overflow로
+   process를 중단시키지 않는다. lexical back edge는 provisional이라 `A1`의 `=AREAS(A1:B2)` 같은
+   reference-only cycle은 정상 계산된다. 계약은 `docs/interfaces/calculation_order.md`.
 16. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
    structured error에 추가한다.
 

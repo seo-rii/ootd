@@ -564,6 +564,7 @@ impl ExcelRuntime {
                 worksheet.spill_ranges.insert(anchor, spill_rect);
                 worksheet.dirty = true;
             }
+            context.forget_cell_results();
         }
 
         if !scalar_formula_cells.is_empty() {

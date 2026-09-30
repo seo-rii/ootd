@@ -296,6 +296,11 @@ contract-based until Milestone M1 pins the first behavioral Excel corpus.
   and `RAND`/`RANDBETWEEN`/`RANDARRAY` draw from a reproducible per-session stream. Every
   calendar conversion in formula evaluation honors the workbook 1900/1904 date system. The
   contract is `docs/interfaces/runtime_environment.md`.
+- Calculation order: each cycle memoizes every formula cell result and evaluates lexical
+  precedents in post-order on an explicit stack, so volatile results are consistent across
+  dependents, shared precedents are evaluated once, and deep chains or long cycles cannot
+  overflow the native stack. Run-time references (`INDIRECT`/`OFFSET`) still recurse, and there
+  is no persistent dependency index yet. The contract is `docs/interfaces/calculation_order.md`.
 - Calculation metadata lifecycle: `calcPr` mode, source `calcId`, and cache-completion state are
   parsed into typed codec state. A complete workbook calculation records completed caches; partial
   or uncomputed inputs set `calcId=0` and force full recalculation on load. A SHA-256 digest of
