@@ -740,6 +740,11 @@ Wave 2 exit gate:
    workbook 계산이 pass를 반복하며 circular reference는 이전 pass 값을 읽고 iteration 상한이나
    maximum change 이하 수렴에서 멈춘다. iteration이 없으면 circular reference는 `#CALC!`로 남는다.
    **다음 로컬:** `OOTD-076`/`OOTD-077` locale coercion과 `@`/`#` 연산자 의미.
+   진행 (2026-09-30, synthetic): codec이 cell formula를 file grammar와 typed grammar 사이에서
+   변환한다(`_xlfn.`/`_xlfn._xlws.` future function, `LET`/`LAMBDA`의 `_xlpm.` parameter,
+   `_xlfn.SINGLE`↔`@`, `_xlfn.ANCHORARRAY`↔`#`). Excel 수식이 입력한 그대로 평가·표시되고 입력한
+   수식은 Excel이 요구하는 prefix와 함께 저장되어 `#NAME?`으로 열리지 않는다. 계약은
+   `docs/interfaces/formula_file_grammar.md`.
 16. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
    structured error에 추가한다.
 

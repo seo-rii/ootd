@@ -75,7 +75,7 @@ fn dynamic_array_save_creates_cell_metadata_so_the_formula_reopens_dynamic() {
     );
     let sheet = part_text(&saved, SHEET_PART).expect("sheet");
     assert!(
-        sheet.contains(r#"<c r="M1" cm="1"><f t="array" ref="M1:M3">SEQUENCE(3)</f>"#),
+        sheet.contains(r#"<c r="M1" cm="1"><f t="array" ref="M1:M3">_xlfn.SEQUENCE(3)</f>"#),
         "{sheet}"
     );
 

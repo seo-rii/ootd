@@ -38,6 +38,7 @@
 
     mod cell_value_fidelity;
     mod dynamic_array_metadata;
+    mod formula_grammar;
     mod formula_groups;
 
     mod encrypted_ooxml_fixture {
@@ -55623,7 +55624,7 @@
         )
         .expect("saved worksheet utf8");
         assert!(
-            sheet_xml.contains(r#"<f t="array" ref="J10:K11">SEQUENCE(2,2)</f>"#),
+            sheet_xml.contains(r#"<f t="array" ref="J10:K11">_xlfn.SEQUENCE(2,2)</f>"#),
             "{sheet_xml}",
         );
 

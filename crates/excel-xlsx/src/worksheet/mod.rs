@@ -1,5 +1,6 @@
 mod cell_metadata;
 mod cells;
+mod formula_grammar;
 mod table;
 
 pub use cell_metadata::WorkbookCellMetadata;

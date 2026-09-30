@@ -14,6 +14,7 @@ use super::super::{
 };
 
 use super::cell_metadata::WorkbookCellMetadata;
+use super::formula_grammar::{file_formula_to_model, model_formula_to_file};
 use excel_model::{
     CellData, FormulaGroup, FormulaGroupKind, WorksheetData, WorksheetStructuralOwners,
 };
@@ -1105,7 +1106,7 @@ pub(crate) fn parse_worksheet_cells_with_cell_metadata(
                                     None
                                 } else {
                                     Some(FormulaSource {
-                                        text: formula,
+                                        text: file_formula_to_model(&formula),
                                         is_r1c1: false,
                                     })
                                 },
@@ -3003,7 +3004,7 @@ pub(crate) fn rewrite_worksheet_xml_with_cell_metadata(
                     .map_err(xml_error)?;
                 writer
                     .write_event(Event::Text(BytesText::from_escaped(partial_escape(
-                        formula.text.as_str(),
+                        model_formula_to_file(&formula.text).as_str(),
                     ))))
                     .map_err(xml_error)?;
                 writer
