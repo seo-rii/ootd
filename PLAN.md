@@ -735,8 +735,11 @@ Wave 2 exit gate:
    추가해 새 `Formula2` 배열이 Excel에서 `{=...}` CSE 배열로 열리지 않게 한다. dynamic anchor가
    아닌 cell의 stale dynamic `cm`은 지우고 외부 cell-metadata part에 추가하는 것은 거부한다.
    계약은 `docs/interfaces/dynamic_array_metadata.md`.
-   **다음 로컬:** `OOTD-075`/`OOTD-076`/`OOTD-077` calculation mode/iteration, locale coercion,
-   `@`/`#` 연산자 의미.
+   iterative calculation 완료 (2026-09-30, synthetic, `OOTD-075`): `calcPr`의 `iterate`/
+   `iterateCount`/`iterateDelta`를 검증된 `WorkbookIteration`으로 round-trip하고, iteration이 켜지면
+   workbook 계산이 pass를 반복하며 circular reference는 이전 pass 값을 읽고 iteration 상한이나
+   maximum change 이하 수렴에서 멈춘다. iteration이 없으면 circular reference는 `#CALC!`로 남는다.
+   **다음 로컬:** `OOTD-076`/`OOTD-077` locale coercion과 `@`/`#` 연산자 의미.
 16. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
    structured error에 추가한다.
 

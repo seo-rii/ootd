@@ -442,8 +442,13 @@ Active order:
    cell-metadata part. `Calculate` fills each legacy array's fixed range from its array result,
    repeating one-row or one-column results and writing `#N/A` beyond larger ones. The contract is
    `docs/interfaces/dynamic_array_metadata.md`.
-69. **Active local:** calculation mode and iterative calculation, locale coercion, and `@`/`#`
-   operator semantics (`OOTD-075`/`OOTD-076`/`OOTD-077`).
+69. Iterative calculation is complete (2026-09-30, synthetic, part of `OOTD-075`): `calcPr`
+   `iterate`/`iterateCount`/`iterateDelta` round-trip through a validated `WorkbookIteration`,
+   and with iteration enabled a workbook calculation repeats passes in which circular references
+   read the previous pass's value, stopping at the iteration cap or once no result moves by more
+   than the maximum change. Circular references stay `#CALC!` without iteration.
+70. **Active local:** locale-sensitive coercion and `@`/`#` operator semantics
+   (`OOTD-076`/`OOTD-077`).
 
 Every numbered work unit starts with a failing regression and lands as its own reviewable commit.
 The complete `OOTD-001`~`OOTD-086` ordering, regression inventory, and compatibility completion

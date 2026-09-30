@@ -45,7 +45,34 @@ normally:
 Cycle results are deterministic for a given workbook, independent of which cell starts the
 evaluation.
 
+## Iterative Calculation
+
+`calcPr@iterate`, `iterateCount`, and `iterateDelta` load into `WorkbookIteration`
+(`ExcelRuntime::workbook_iteration`/`set_workbook_iteration`). Invalid values fail closed: a count
+outside 1..=32,767, or a negative or non-finite delta, is a load `Parse` error and a setter
+`InvalidArgument`. Changed settings rewrite only these three attributes, omit Excel's defaults
+(off, 100, 0.001), and keep every other `calcPr` attribute.
+
+With iteration enabled, a workbook calculation runs up to `max_iterations` passes over every
+worksheet inside one `CalcContext`:
+- a circular reference reads the referenced cell's value from the previous pass instead of
+  failing, and lexical back edges provisionally read that value too;
+- the memo is discarded between passes;
+- calculation stops early once no formula result moved by more than `max_change`;
+- converged or capped cycles are not reported as circular.
+
+Without iteration, cycles still evaluate to `#CALC!`. Worksheet and range `Calculate` run a single
+pass.
+
+The regressions are in `crates/excel-runtime/src/tests/iterative_calculation.rs`.
+
 ## Remaining Boundaries
+
+- `Application.Iteration`, `MaxIterations`, and `MaxChange` are not dispatchable members yet,
+  because the pinned object-model template has no captured evidence for them. Hosts use the Rust
+  API.
+- Passes evaluate sheets in collection order, so the iteration count Excel needs to converge may
+  differ from this runtime's.
 
 - References computed at run time (`INDIRECT`, `OFFSET`, `INDEX` returning a reference) are not
   in the lexical graph, so chains built only from them still evaluate recursively.

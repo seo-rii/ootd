@@ -41,6 +41,15 @@ impl<'a> FormulaEvaluator<'a> {
         self.evaluate_cell(sheet_id, row, col)
     }
 
+    /// The stored value of a cell, which iterative calculation reads across a circular reference.
+    fn previous_cell_value(&self, key: (SheetId, u32, u32)) -> CellValue {
+        self.state
+            .worksheet_data()
+            .get(&key.0)
+            .and_then(|worksheet| worksheet.cells.get(&(key.1, key.2)))
+            .map_or(CellValue::Blank, |cell| cell.value.clone())
+    }
+
     /// The formula text of a cell in A1 form, or `None` for a value cell.
     pub(super) fn cell_formula_a1_text(&self, key: (SheetId, u32, u32)) -> Option<String> {
         let (sheet_id, row, col) = key;
@@ -162,8 +171,12 @@ impl<'a> FormulaEvaluator<'a> {
             }
             if path_members.contains(&key) {
                 if provisional.insert(key) {
-                    self.context
-                        .remember_cell_result(key, &Err(FormulaEvalError::Circular));
+                    let provisional_result = if self.context.iterative() {
+                        Ok(self.previous_cell_value(key))
+                    } else {
+                        Err(FormulaEvalError::Circular)
+                    };
+                    self.context.remember_cell_result(key, &provisional_result);
                 }
                 continue;
             }
@@ -256,6 +269,9 @@ impl<'a> FormulaEvaluator<'a> {
             return result;
         }
         if !self.visiting.insert((sheet_id, row, col)) {
+            if self.context.iterative() {
+                return Ok(cell.value.clone());
+            }
             return Err(FormulaEvalError::Circular);
         }
         let formula_text = if formula.is_r1c1 {

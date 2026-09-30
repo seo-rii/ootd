@@ -20,6 +20,7 @@ pub(crate) struct CalcContext {
     date_system: DateSystem,
     random_state: std::cell::Cell<u64>,
     cell_results: std::cell::RefCell<CalcCellResults>,
+    iterative: bool,
 }
 
 pub(super) type CalcCellResults = std::collections::BTreeMap<(SheetId, u32, u32), CalcCellResult>;
@@ -39,7 +40,19 @@ impl CalcContext {
             },
             random_state: std::cell::Cell::new(random_state),
             cell_results: std::cell::RefCell::new(CalcCellResults::new()),
+            iterative: false,
         }
+    }
+
+    /// Enables iterative calculation: a circular reference reads the referenced cell's value from
+    /// the previous pass instead of failing as `#CALC!`.
+    pub(crate) fn with_iteration(mut self, iterative: bool) -> Self {
+        self.iterative = iterative;
+        self
+    }
+
+    pub(super) fn iterative(&self) -> bool {
+        self.iterative
     }
 
     /// Discards memoized formula results after the cycle changes cell values they may read, such

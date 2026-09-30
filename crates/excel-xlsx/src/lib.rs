@@ -170,6 +170,48 @@ pub enum WorkbookCalculationState {
     RecalculationRequired,
 }
 
+/// Iterative calculation settings persisted through `calcPr@iterate`, `iterateCount`, and
+/// `iterateDelta`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WorkbookIteration {
+    pub enabled: bool,
+    pub max_iterations: u32,
+    pub max_change: f64,
+}
+
+impl WorkbookIteration {
+    pub const DEFAULT_MAX_ITERATIONS: u32 = 100;
+    pub const DEFAULT_MAX_CHANGE: f64 = 0.001;
+
+    /// Rejects settings SpreadsheetML cannot represent: a zero or over-32,767 iteration count and
+    /// a negative or non-finite maximum change.
+    pub fn validate(self) -> OmResult<Self> {
+        if !(1..=32_767).contains(&self.max_iterations) {
+            return Err(OmError::invalid_argument(format!(
+                "iterative calculation count must be between 1 and 32767: {}",
+                self.max_iterations
+            )));
+        }
+        if !self.max_change.is_finite() || self.max_change < 0.0 {
+            return Err(OmError::invalid_argument(format!(
+                "iterative calculation maximum change must be a finite non-negative number: {}",
+                self.max_change
+            )));
+        }
+        Ok(self)
+    }
+}
+
+impl Default for WorkbookIteration {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            max_iterations: Self::DEFAULT_MAX_ITERATIONS,
+            max_change: Self::DEFAULT_MAX_CHANGE,
+        }
+    }
+}
+
 /// Parsed calculation properties plus any calculation state requested for the next save.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkbookCalculationProperties {
@@ -178,16 +220,25 @@ pub struct WorkbookCalculationProperties {
     source_calc_id: Option<u32>,
     requested_state: Option<WorkbookCalculationState>,
     mode_dirty: bool,
+    iterate: bool,
+    iterate_count: u32,
+    iterate_delta_bits: u64,
+    iteration_dirty: bool,
 }
 
 impl Default for WorkbookCalculationProperties {
     fn default() -> Self {
+        let iteration = WorkbookIteration::default();
         Self {
             mode: WorkbookCalculationMode::Automatic,
             source_state: WorkbookCalculationState::FullyCalculated,
             source_calc_id: None,
             requested_state: None,
             mode_dirty: false,
+            iterate: iteration.enabled,
+            iterate_count: iteration.max_iterations,
+            iterate_delta_bits: iteration.max_change.to_bits(),
+            iteration_dirty: false,
         }
     }
 }
@@ -210,7 +261,28 @@ impl WorkbookCalculationProperties {
 
     /// Returns whether calculation properties must be rewritten on the next save.
     pub fn is_dirty(&self) -> bool {
-        self.mode_dirty || self.requested_state.is_some()
+        self.mode_dirty || self.iteration_dirty || self.requested_state.is_some()
+    }
+
+    /// Returns the iterative calculation settings parsed from or requested for `calcPr`.
+    pub fn iteration(&self) -> WorkbookIteration {
+        WorkbookIteration {
+            enabled: self.iterate,
+            max_iterations: self.iterate_count,
+            max_change: f64::from_bits(self.iterate_delta_bits),
+        }
+    }
+
+    /// Requests iterative calculation settings for the next save.
+    pub fn set_iteration(&mut self, iteration: WorkbookIteration) -> OmResult<()> {
+        let iteration = iteration.validate()?;
+        if self.iteration() != iteration {
+            self.iterate = iteration.enabled;
+            self.iterate_count = iteration.max_iterations;
+            self.iterate_delta_bits = iteration.max_change.to_bits();
+            self.iteration_dirty = true;
+        }
+        Ok(())
     }
 
     /// Requests a calculation mode update on the next save.
@@ -2103,8 +2175,9 @@ impl XlsxCodec {
                 calculation_inputs_changed
                     .then_some(WorkbookCalculationState::RecalculationRequired)
             });
-        let rewrite_calculation_properties =
-            workbook.calculation_properties.mode_dirty || effective_calculation_state.is_some();
+        let rewrite_calculation_properties = workbook.calculation_properties.mode_dirty
+            || workbook.calculation_properties.iteration_dirty
+            || effective_calculation_state.is_some();
         if saved_workbook.date1904 != workbook.state.model().date1904
             || saved_workbook.is_addin != workbook.state.model().is_addin
             || workbook.state.defined_names.is_dirty()
@@ -2223,7 +2296,11 @@ impl XlsxCodec {
                             unqualified_attribute_is(resolver, attr.key, local_name)
                         })
                     };
+                    let iteration_attribute = typed_attribute(b"iterate")
+                        || typed_attribute(b"iterateCount")
+                        || typed_attribute(b"iterateDelta");
                     if typed_attribute(b"calcMode")
+                        || (workbook.calculation_properties.iteration_dirty && iteration_attribute)
                         || (effective_calculation_state.is_some()
                             && (typed_attribute(b"calcId")
                                 || typed_attribute(b"calcCompleted")
@@ -2242,6 +2319,24 @@ impl XlsxCodec {
                     "calcMode",
                     workbook.calculation_properties.mode.as_ooxml(),
                 ));
+                if workbook.calculation_properties.iteration_dirty {
+                    let iteration = workbook.calculation_properties.iteration();
+                    if iteration.enabled {
+                        rewritten.push_attribute(("iterate", "1"));
+                    }
+                    if iteration.max_iterations != WorkbookIteration::DEFAULT_MAX_ITERATIONS {
+                        rewritten.push_attribute((
+                            "iterateCount",
+                            iteration.max_iterations.to_string().as_str(),
+                        ));
+                    }
+                    if iteration.max_change != WorkbookIteration::DEFAULT_MAX_CHANGE {
+                        rewritten.push_attribute((
+                            "iterateDelta",
+                            CellValue::number_lexical(iteration.max_change).as_str(),
+                        ));
+                    }
+                }
                 if let Some(state) = effective_calculation_state {
                     rewritten.push_attribute(("calcId", "0"));
                     match state {
@@ -3929,6 +4024,7 @@ fn parse_workbook_with_mode(
     let mut calculation_completed = None;
     let mut full_calculation_on_load = None;
     let mut force_full_calculation = None;
+    let mut iteration = WorkbookIteration::default();
     let mut worksheets = Vec::new();
     let mut worksheet_ids = BTreeSet::new();
     let mut worksheet_names = BTreeSet::new();
@@ -4048,8 +4144,29 @@ fn parse_workbook_with_mode(
                         b"forceFullCalc",
                     ) {
                         force_full_calculation = Some(parse_ooxml_bool(value.as_str())?);
+                    } else if unqualified_attribute_is(reader.resolver(), attr.key, b"iterate") {
+                        iteration.enabled = parse_ooxml_bool(value.as_str())?;
+                    } else if unqualified_attribute_is(
+                        reader.resolver(),
+                        attr.key,
+                        b"iterateCount",
+                    ) {
+                        iteration.max_iterations = value.parse::<u32>().map_err(|_| {
+                            OmError::parse(format!("invalid workbook iterateCount: {value}"))
+                        })?;
+                    } else if unqualified_attribute_is(
+                        reader.resolver(),
+                        attr.key,
+                        b"iterateDelta",
+                    ) {
+                        iteration.max_change = value.parse::<f64>().map_err(|_| {
+                            OmError::parse(format!("invalid workbook iterateDelta: {value}"))
+                        })?;
                     }
                 }
+                iteration = iteration.validate().map_err(|error| {
+                    OmError::parse(format!("workbook calcPr: {}", error.message))
+                })?;
             }
             Ok((namespace, Event::Start(element) | Event::Empty(element)))
                 if resolved_element_is(
@@ -4237,6 +4354,10 @@ fn parse_workbook_with_mode(
             source_calc_id: calculation_id,
             requested_state: None,
             mode_dirty: false,
+            iterate: iteration.enabled,
+            iterate_count: iteration.max_iterations,
+            iterate_delta_bits: iteration.max_change.to_bits(),
+            iteration_dirty: false,
         },
         worksheets,
         defined_names,

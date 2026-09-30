@@ -35,7 +35,7 @@ use excel_xlsx::{
     PendingChartRelationshipGraph,
     PendingDrawingRelationshipGraph, PendingPackagePart, PendingPackageRelationship,
     PreparedXlsxSave, SheetDrawingSupportParts, WorksheetSupportParts, XlsxCodec,
-    WorkbookCalculationMode, WorkbookCalculationState, encode_chart_model_xml,
+    WorkbookCalculationMode, WorkbookCalculationState, WorkbookIteration, encode_chart_model_xml,
     materialize_state_only_chart_graphs,
 };
 use office_codegen::{OmFocusSurfaceRegistry, build_focus_surface_registry_from_json};
@@ -1470,6 +1470,28 @@ impl ExcelRuntime {
             #[cfg(test)]
             persistence_failure_point: None,
         }
+    }
+
+    /// The workbook's iterative calculation settings (`calcPr@iterate`/`iterateCount`/
+    /// `iterateDelta`).
+    pub fn workbook_iteration(&self, workbook: WorkbookHandle) -> OmResult<WorkbookIteration> {
+        Ok(self
+            .runtime_workbook(workbook)?
+            .loaded
+            .calculation_properties
+            .iteration())
+    }
+
+    /// Replaces the workbook's iterative calculation settings; they are written on the next save.
+    pub fn set_workbook_iteration(
+        &mut self,
+        workbook: WorkbookHandle,
+        iteration: WorkbookIteration,
+    ) -> OmResult<()> {
+        self.runtime_workbook_mut(workbook)?
+            .loaded
+            .calculation_properties
+            .set_iteration(iteration)
     }
 
     /// The clock, time-zone offset, and random seed formula evaluation uses.

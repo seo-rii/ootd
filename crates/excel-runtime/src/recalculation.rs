@@ -7,6 +7,25 @@ use excel_model::{FormulaGroupKind, WorkbookState};
 use office_common::{CellError, CellValue, ObjectHandle, OmResult, Rect, SheetId, WorkbookHandle};
 use sha2::{Digest, Sha256};
 
+/// Whether an iterative pass changed no formula result by more than `max_change`. A change of type
+/// (for example, a number becoming an error) always counts as unconverged.
+fn formula_values_converged(
+    before: &std::collections::BTreeMap<(SheetId, u32, u32), CellValue>,
+    after: &std::collections::BTreeMap<(SheetId, u32, u32), CellValue>,
+    max_change: f64,
+) -> bool {
+    before.len() == after.len()
+        && after
+            .iter()
+            .all(|(key, value)| match (before.get(key), value) {
+                (Some(CellValue::Number(previous)), CellValue::Number(current)) => {
+                    (current - previous).abs() <= max_change
+                }
+                (Some(previous), current) => previous == current,
+                (None, _) => false,
+            })
+}
+
 /// The value a fixed-size legacy (CSE) array shows at an offset of its range: a one-row or
 /// one-column result repeats across the range, and positions beyond the result are `#N/A`.
 fn legacy_array_cell_value(result: &FormulaArrayResult, row: usize, col: usize) -> CellValue {
@@ -233,19 +252,46 @@ impl ExcelRuntime {
             .iter()
             .map(|worksheet| worksheet.id)
             .collect::<Vec<_>>();
+        let iteration = self
+            .runtime_workbook(workbook)?
+            .loaded
+            .calculation_properties
+            .iteration();
+        let passes = if iteration.enabled {
+            iteration.max_iterations
+        } else {
+            1
+        };
+        let context = self
+            .calc_context(workbook)?
+            .with_iteration(iteration.enabled);
         let mut report = CalculationReport::default();
-        let context = self.calc_context(workbook)?;
-        for sheet_id in sheet_ids {
-            let sheet_report =
-                self.calculate_sheet_formulas_in_context(workbook, sheet_id, None, &context);
-            self.commit_calc_context(&context);
-            let sheet_report = sheet_report?;
-            report.evaluated.extend(sheet_report.evaluated);
-            report.unsupported.extend(sheet_report.unsupported);
-            report.external.extend(sheet_report.external);
-            report.circular.extend(sheet_report.circular);
-            report.volatile.extend(sheet_report.volatile);
-            report.errors.extend(sheet_report.errors);
+        for _ in 0..passes {
+            let before = iteration
+                .enabled
+                .then(|| self.formula_cell_values(workbook, &sheet_ids))
+                .transpose()?;
+            report = CalculationReport::default();
+            for &sheet_id in &sheet_ids {
+                let sheet_report =
+                    self.calculate_sheet_formulas_in_context(workbook, sheet_id, None, &context);
+                self.commit_calc_context(&context);
+                let sheet_report = sheet_report?;
+                report.evaluated.extend(sheet_report.evaluated);
+                report.unsupported.extend(sheet_report.unsupported);
+                report.external.extend(sheet_report.external);
+                report.circular.extend(sheet_report.circular);
+                report.volatile.extend(sheet_report.volatile);
+                report.errors.extend(sheet_report.errors);
+            }
+            context.forget_cell_results();
+            let Some(before) = before else {
+                break;
+            };
+            let after = self.formula_cell_values(workbook, &sheet_ids)?;
+            if formula_values_converged(&before, &after, iteration.max_change) {
+                break;
+            }
         }
         self.record_calculation_snapshot(
             workbook,
@@ -268,6 +314,24 @@ impl ExcelRuntime {
         let report = self.calculate_sheet_formulas_in_context(workbook, sheet_id, scope, &context);
         self.commit_calc_context(&context);
         report
+    }
+
+    /// The cached value of every formula cell, compared between iterative calculation passes.
+    fn formula_cell_values(
+        &self,
+        workbook: WorkbookHandle,
+        sheet_ids: &[SheetId],
+    ) -> OmResult<std::collections::BTreeMap<(SheetId, u32, u32), CellValue>> {
+        let state = &self.runtime_workbook(workbook)?.loaded.state;
+        let mut values = std::collections::BTreeMap::new();
+        for &sheet_id in sheet_ids {
+            for (&(row, col), cell) in &state.worksheet_data_for_sheet(sheet_id)?.cells {
+                if cell.formula.is_some() {
+                    values.insert((sheet_id, row, col), cell.value.clone());
+                }
+            }
+        }
+        Ok(values)
     }
 
     /// Opens one calculation cycle: a single clock reading in the workbook date system plus the
