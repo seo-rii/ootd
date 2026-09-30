@@ -10,7 +10,7 @@ const SHEET_PART: &str = "xl/worksheets/sheet1.xml";
 ///
 /// - `B1:B3` is a shared group: master `B1`, children `B2` and `B3`.
 /// - `C1:C2` is a legacy (CSE) array without dynamic-array cell metadata.
-/// - `D1:D2` is a dynamic array whose anchor carries `cm`.
+/// - `D1:D2` is a dynamic array whose anchor `cm` resolves to `XLDAPR` in `xl/metadata.xml`.
 /// - `E1` is an explicit `t="normal"` formula.
 /// - `F2:F3` is a one-variable data table anchored at `F2`.
 const GROUP_CELLS: [((u32, u32), &str); 16] = [
@@ -61,6 +61,7 @@ fn group_sheet_xml(cells: &[((u32, u32), &str)]) -> String {
 fn workbook_with_sheet(sheet_xml: String) -> Vec<u8> {
     let mut package =
         OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("synthetic package");
+    add_dynamic_array_cell_metadata_part(&mut package);
     package
         .replace_part_bytes(SHEET_PART, sheet_xml.into_bytes())
         .expect("replace worksheet part");
@@ -100,6 +101,20 @@ fn expected_formula_groups() -> BTreeMap<(u32, u32), FormulaGroup> {
             },
         ),
         (
+            (1, 3),
+            FormulaGroup {
+                kind: FormulaGroupKind::LegacyArray,
+                range: Rect {
+                    row_first: 1,
+                    row_last: 2,
+                    col_first: 3,
+                    col_last: 3,
+                },
+                shared_index: None,
+                members: BTreeSet::new(),
+            },
+        ),
+        (
             (2, 6),
             FormulaGroup {
                 kind: FormulaGroupKind::DataTable,
@@ -124,13 +139,13 @@ fn assert_group_model(worksheet: &WorksheetData, context: &str) {
     );
     assert_eq!(
         worksheet.dynamic_array_formulas,
-        BTreeSet::from([(1, 3), (1, 4)]),
-        "{context}: array anchors"
+        BTreeSet::from([(1, 4)]),
+        "{context}: dynamic array anchors"
     );
     assert_eq!(
         worksheet.spill_owners,
-        BTreeMap::from([((2, 3), (1, 3)), ((2, 4), (1, 4))]),
-        "{context}: array members"
+        BTreeMap::from([((2, 4), (1, 4))]),
+        "{context}: dynamic array members"
     );
     assert_eq!(
         worksheet
@@ -274,6 +289,8 @@ fn formula_group_matrix_rejects_targeted_member_mutations_without_changing_state
         (3, 2, "R1C2", "shared formula child"),
         (2, 6, "R2C6", "data table cell"),
         (3, 6, "R2C6", "data table cell"),
+        (1, 3, "R1C3", "legacy array cell"),
+        (2, 3, "R1C3", "legacy array cell"),
     ] {
         for (operation, result) in [
             (

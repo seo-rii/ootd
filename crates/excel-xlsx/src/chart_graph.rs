@@ -1924,7 +1924,7 @@ fn push_escaped_attribute(element: &mut BytesStart<'_>, key: &str, value: &str) 
     element.push_attribute((key, value));
 }
 
-fn append_relationship(
+pub(crate) fn append_relationship(
     xml: &[u8],
     relationship_id: &str,
     relationship_type: &str,
@@ -2394,7 +2394,7 @@ fn empty_relationships_xml() -> Vec<u8> {
         .to_vec()
 }
 
-fn relationship_ids(xml: &[u8]) -> OmResult<BTreeSet<String>> {
+pub(crate) fn relationship_ids(xml: &[u8]) -> OmResult<BTreeSet<String>> {
     let mut ids = BTreeSet::new();
     let mut reader = Reader::from_reader(Cursor::new(xml));
     reader.config_mut().trim_text(false);
@@ -2503,7 +2503,7 @@ fn relationship_type_exists(xml: &[u8], relationship_type: &str) -> OmResult<boo
     }
 }
 
-fn next_relationship_id(used_ids: &mut BTreeSet<String>) -> String {
+pub(crate) fn next_relationship_id(used_ids: &mut BTreeSet<String>) -> String {
     let id = (1..)
         .map(|index| format!("rId{index}"))
         .find(|candidate| !used_ids.contains(candidate))
@@ -2610,7 +2610,7 @@ fn relationships_part_uri_for(part_uri: &str) -> String {
     }
 }
 
-fn relative_relationship_target(source_part_uri: &str, target_part_uri: &str) -> String {
+pub(crate) fn relative_relationship_target(source_part_uri: &str, target_part_uri: &str) -> String {
     let Some((parent, _)) = source_part_uri.rsplit_once('/') else {
         return target_part_uri.to_string();
     };
@@ -2632,7 +2632,7 @@ fn relative_relationship_target(source_part_uri: &str, target_part_uri: &str) ->
     relative.join("/")
 }
 
-fn append_content_type_override_if_missing(
+pub(crate) fn append_content_type_override_if_missing(
     xml: &[u8],
     part_uri: &str,
     content_type: &str,

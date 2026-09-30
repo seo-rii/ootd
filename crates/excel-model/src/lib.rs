@@ -63,10 +63,13 @@ pub struct WorksheetData {
 pub enum FormulaGroupKind {
     Shared,
     DataTable,
+    /// A `t="array"` formula without dynamic-array cell metadata: a fixed-size legacy (CSE) array.
+    LegacyArray,
 }
 
 /// A worksheet formula group keyed by its anchor cell. A shared group owns its master plus the
-/// explicit child cells that reference its `si`; a data-table group owns every cell in `range`.
+/// explicit child cells that reference its `si`; data-table and legacy-array groups own every cell
+/// in `range`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FormulaGroup {
     pub kind: FormulaGroupKind,
@@ -79,7 +82,7 @@ impl FormulaGroup {
     pub fn owns(&self, anchor: (u32, u32), key: (u32, u32)) -> bool {
         match self.kind {
             FormulaGroupKind::Shared => key == anchor || self.members.contains(&key),
-            FormulaGroupKind::DataTable => {
+            FormulaGroupKind::DataTable | FormulaGroupKind::LegacyArray => {
                 key.0 >= self.range.row_first
                     && key.0 <= self.range.row_last
                     && key.1 >= self.range.col_first
@@ -144,6 +147,7 @@ impl WorksheetData {
             FormulaGroupKind::Shared if key == anchor => "shared formula master",
             FormulaGroupKind::Shared => "shared formula child",
             FormulaGroupKind::DataTable => "data table cell",
+            FormulaGroupKind::LegacyArray => "legacy array cell",
         };
         Err(OmError::new(
             OmErrorCode::InvalidState,
@@ -739,12 +743,31 @@ impl WorkbookState {
                             ));
                         }
                     }
-                    FormulaGroupKind::DataTable => {
+                    FormulaGroupKind::DataTable | FormulaGroupKind::LegacyArray => {
+                        let label = if group.kind == FormulaGroupKind::DataTable {
+                            "data table"
+                        } else {
+                            "legacy array"
+                        };
                         if (group.range.row_first, group.range.col_first) != anchor {
                             return Err(OmError::new(
                                 OmErrorCode::InvalidState,
                                 format!(
-                                    "worksheet {} data table anchor R{}C{} is not the top-left of its range",
+                                    "worksheet {} {label} anchor R{}C{} is not the top-left of its range",
+                                    sheet_id.0, anchor.0, anchor.1
+                                ),
+                            ));
+                        }
+                        if group.kind == FormulaGroupKind::LegacyArray
+                            && worksheet
+                                .cells
+                                .get(&anchor)
+                                .is_none_or(|cell| cell.formula.is_none())
+                        {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                format!(
+                                    "worksheet {} legacy array anchor R{}C{} has no formula cell",
                                     sheet_id.0, anchor.0, anchor.1
                                 ),
                             ));
@@ -760,7 +783,7 @@ impl WorkbookState {
                                 .values()
                                 .any(|range| rect_contains(range, key))
                         }),
-                    FormulaGroupKind::DataTable => {
+                    FormulaGroupKind::DataTable | FormulaGroupKind::LegacyArray => {
                         worksheet.spill_ranges.values().find_map(|range| {
                             (range.row_first <= group.range.row_last
                                 && group.range.row_first <= range.row_last
@@ -2110,7 +2133,7 @@ impl WorkbookState {
                         .chain(group.members.iter().copied())
                         .filter(|&key| affected_contains(key)),
                 ),
-                FormulaGroupKind::DataTable => {
+                FormulaGroupKind::DataTable | FormulaGroupKind::LegacyArray => {
                     let range = group.range;
                     if affected_rect.row_first <= range.row_last
                         && range.row_first <= affected_rect.row_last

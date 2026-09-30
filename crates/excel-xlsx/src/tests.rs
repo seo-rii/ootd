@@ -37,6 +37,7 @@
     use office_opc::{CompressionMethod, OpcPart};
 
     mod cell_value_fidelity;
+    mod dynamic_array_metadata;
     mod formula_groups;
 
     mod encrypted_ooxml_fixture {
@@ -120590,8 +120591,52 @@
         package.to_bytes().expect("defined-name workbook bytes")
     }
 
+    const DYNAMIC_ARRAY_CELL_METADATA_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<metadata xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:xda="http://schemas.microsoft.com/office/spreadsheetml/2017/dynamicarray"><metadataTypes count="1"><metadataType name="XLDAPR" minSupportedVersion="120000" copy="1" pasteAll="1" pasteValues="1" merge="1" splitFirst="1" rowColShift="1" clearFormats="1" clearComments="1" assign="1" coerce="1" cellMeta="1"/></metadataTypes><futureMetadata name="XLDAPR" count="1"><bk><extLst><ext uri="{bdbb8cdc-fa1e-496e-a857-3c3f30c029c3}"><xda:dynamicArrayProperties fDynamic="1" fCollapsed="0"/></ext></extLst></bk></futureMetadata><cellMetadata count="1"><bk><rc t="1" v="0"/></bk></cellMetadata></metadata>"#;
+
+    /// Adds `xl/metadata.xml` with one dynamic-array block (`cm="1"`), its workbook relationship,
+    /// and its content-type override, as desktop Excel writes them.
+    fn add_cell_metadata_part(package: &mut OpcPackage, metadata_xml: &str) {
+        let replace_text = |package: &mut OpcPackage, part: &str, from: &str, to: &str| {
+            let text = String::from_utf8(package.part(part).expect(part).bytes.clone())
+                .expect("utf-8 part");
+            assert!(text.contains(from), "{part} lacks {from}");
+            package
+                .replace_part_bytes(part, text.replacen(from, to, 1).into_bytes())
+                .expect("replace part");
+        };
+        replace_text(
+            package,
+            "[Content_Types].xml",
+            "</Types>",
+            r#"<Override PartName="/xl/metadata.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheetMetadata+xml"/></Types>"#,
+        );
+        replace_text(
+            package,
+            "xl/_rels/workbook.xml.rels",
+            "</Relationships>",
+            r#"<Relationship Id="rIdMetadata" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sheetMetadata" Target="metadata.xml"/></Relationships>"#,
+        );
+        package
+            .add_part(OpcPart {
+                name: "xl/metadata.xml".to_string(),
+                content_type: Some(
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheetMetadata+xml"
+                        .to_string(),
+                ),
+                compression: CompressionMethod::Stored,
+                bytes: metadata_xml.as_bytes().to_vec(),
+            })
+            .expect("add cell metadata part");
+    }
+
+    fn add_dynamic_array_cell_metadata_part(package: &mut OpcPackage) {
+        add_cell_metadata_part(package, DYNAMIC_ARRAY_CELL_METADATA_XML);
+    }
+
     fn workbook_with_dynamic_array_formula_bytes() -> Vec<u8> {
         let mut package = OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("package");
+        add_dynamic_array_cell_metadata_part(&mut package);
         let sheet_xml = std::str::from_utf8(
             package
                 .part("xl/worksheets/sheet1.xml")
@@ -120602,7 +120647,7 @@
         .expect("worksheet utf8")
         .replace(
             "  </sheetData>",
-            r#"    <row r="10"><c r="J10"><f t="array" ref="J10:K11">SEQUENCE(2,2)</f><v>1</v></c><c r="K10"><v>2</v></c></row>
+            r#"    <row r="10"><c r="J10" cm="1"><f t="array" ref="J10:K11">SEQUENCE(2,2)</f><v>1</v></c><c r="K10"><v>2</v></c></row>
     <row r="11"><c r="J11"><v>3</v></c></row>
   </sheetData>"#,
         );

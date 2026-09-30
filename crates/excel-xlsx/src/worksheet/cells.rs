@@ -13,6 +13,7 @@ use super::super::{
     xml_error,
 };
 
+use super::cell_metadata::WorkbookCellMetadata;
 use excel_model::{
     CellData, FormulaGroup, FormulaGroupKind, WorksheetData, WorksheetStructuralOwners,
 };
@@ -263,6 +264,7 @@ fn begin_formula_element(
     resolver: &NamespaceResolver,
     decoder: quick_xml::encoding::Decoder,
     cell: Option<(u32, u32, &mut Option<Rect>)>,
+    is_dynamic_array_cell: bool,
     pending_group: &mut Option<PendingFormulaGroup>,
     worksheet_part_uri: &str,
 ) -> OmResult<()> {
@@ -285,7 +287,8 @@ fn begin_formula_element(
     }
     let group_kind = match formula_type.as_deref() {
         None | Some("normal") => return Ok(()),
-        Some("array") => None,
+        Some("array") if is_dynamic_array_cell => None,
+        Some("array") => Some(FormulaGroupKind::LegacyArray),
         Some("shared") => Some(FormulaGroupKind::Shared),
         Some("dataTable") => Some(FormulaGroupKind::DataTable),
         Some(other) => {
@@ -414,22 +417,32 @@ fn record_formula_group(
                 },
             );
         }
-        FormulaGroupKind::DataTable => {
+        FormulaGroupKind::DataTable | FormulaGroupKind::LegacyArray => {
+            let (label, owner) = if pending.kind == FormulaGroupKind::DataTable {
+                ("data table formula", "data table")
+            } else {
+                ("array formula", "array formula")
+            };
             let range_reference = pending.reference.ok_or_else(|| {
                 OmError::parse(format!(
-                    "{worksheet_part_uri}: data table formula at {reference} is missing its range reference"
+                    "{worksheet_part_uri}: {label} at {reference} is missing its range reference"
                 ))
             })?;
-            let range = parse_range(&range_reference, "data table")?;
+            let range = parse_range(&range_reference, owner)?;
             if (range.row_first, range.col_first) != anchor {
                 return Err(OmError::parse(format!(
-                    "{worksheet_part_uri}: data table formula anchor {reference} is not the top-left of {range_reference}"
+                    "{worksheet_part_uri}: {label} anchor {reference} is not the top-left of {range_reference}"
+                )));
+            }
+            if pending.kind == FormulaGroupKind::LegacyArray && !has_formula_text {
+                return Err(OmError::parse(format!(
+                    "{worksheet_part_uri}: array formula anchor {reference} has no formula text"
                 )));
             }
             formula_groups.insert(
                 anchor,
                 FormulaGroup {
-                    kind: FormulaGroupKind::DataTable,
+                    kind: pending.kind,
                     range,
                     shared_index: None,
                     members: BTreeSet::new(),
@@ -470,9 +483,7 @@ fn resolve_formula_groups(
 
     let data_table_overlaps = |anchor: (u32, u32), owns: &dyn Fn(&Rect) -> bool| {
         formula_groups.iter().any(|(other_anchor, other)| {
-            *other_anchor != anchor
-                && other.kind == FormulaGroupKind::DataTable
-                && owns(&other.range)
+            *other_anchor != anchor && other.kind != FormulaGroupKind::Shared && owns(&other.range)
         })
     };
     for (&anchor, group) in formula_groups.iter() {
@@ -483,7 +494,7 @@ fn resolve_formula_groups(
                     spill_ranges.values().any(|range| rect_contains(range, key))
                         || data_table_overlaps(anchor, &|range| rect_contains(range, key))
                 }),
-            FormulaGroupKind::DataTable => (spill_ranges
+            FormulaGroupKind::DataTable | FormulaGroupKind::LegacyArray => (spill_ranges
                 .values()
                 .any(|range| rects_overlap(range, &group.range))
                 || data_table_overlaps(anchor, &|range| rects_overlap(range, &group.range)))
@@ -499,12 +510,32 @@ fn resolve_formula_groups(
     Ok(())
 }
 
+#[cfg(test)]
 pub(crate) fn parse_worksheet_cells(
     worksheet_xml: &[u8],
     shared_strings: &[CellValue],
     spreadsheet_namespace: &str,
     worksheet_part_uri: &str,
 ) -> OmResult<ParsedWorksheetCells> {
+    parse_worksheet_cells_with_cell_metadata(
+        worksheet_xml,
+        shared_strings,
+        spreadsheet_namespace,
+        worksheet_part_uri,
+        &BTreeSet::new(),
+    )
+}
+
+/// Parses worksheet cells, classifying each `t="array"` formula as a dynamic array when its cell
+/// `cm` is one of `dynamic_array_cell_metadata` and as a fixed-size legacy array otherwise.
+pub(crate) fn parse_worksheet_cells_with_cell_metadata(
+    worksheet_xml: &[u8],
+    shared_strings: &[CellValue],
+    spreadsheet_namespace: &str,
+    worksheet_part_uri: &str,
+    dynamic_array_cell_metadata: &BTreeSet<u32>,
+) -> OmResult<ParsedWorksheetCells> {
+    let mut current_cell_is_dynamic_array = false;
     let mut reader = NsReader::from_reader(Cursor::new(worksheet_xml));
     reader.config_mut().trim_text(false);
     let mut buffer = Vec::new();
@@ -621,6 +652,7 @@ pub(crate) fn parse_worksheet_cells(
                 let mut reference = None;
                 let mut cell_type = None;
                 let mut style_index = None;
+                let mut cell_metadata = None;
                 for attr in element.attributes() {
                     let attr = attr.map_err(xml_error)?;
                     let value = attr
@@ -633,6 +665,8 @@ pub(crate) fn parse_worksheet_cells(
                         cell_type = Some(value);
                     } else if unqualified_attribute_is(reader.resolver(), attr.key, b"s") {
                         style_index = Some(value);
+                    } else if unqualified_attribute_is(reader.resolver(), attr.key, b"cm") {
+                        cell_metadata = Some(value);
                     }
                 }
                 let reference = reference.ok_or_else(|| {
@@ -665,6 +699,17 @@ pub(crate) fn parse_worksheet_cells(
                         })
                     })
                     .transpose()?;
+                let cell_metadata = cell_metadata
+                    .map(|value| {
+                        value.parse::<u32>().map_err(|_| {
+                            OmError::parse(format!(
+                                "{worksheet_part_uri}: cell {reference} has invalid cell metadata index: {value}"
+                            ))
+                        })
+                    })
+                    .transpose()?;
+                current_cell_is_dynamic_array =
+                    cell_metadata.is_some_and(|index| dynamic_array_cell_metadata.contains(&index));
                 if !seen_cells.insert((row, col)) {
                     return Err(OmError::parse(format!(
                         "{worksheet_part_uri}: duplicate worksheet cell coordinate: {reference}"
@@ -768,6 +813,7 @@ pub(crate) fn parse_worksheet_cells(
                     current_cell
                         .as_mut()
                         .map(|cell| (cell.0, cell.1, &mut cell.7)),
+                    current_cell_is_dynamic_array,
                     &mut current_formula_group,
                     worksheet_part_uri,
                 )?;
@@ -788,6 +834,7 @@ pub(crate) fn parse_worksheet_cells(
                     current_cell
                         .as_mut()
                         .map(|cell| (cell.0, cell.1, &mut cell.7)),
+                    current_cell_is_dynamic_array,
                     &mut current_formula_group,
                     worksheet_part_uri,
                 )?;
@@ -2096,11 +2143,36 @@ pub(crate) struct ParsedWorksheetCells {
     pub(crate) structural_owners: WorksheetStructuralOwners,
 }
 
+#[cfg(test)]
 pub(crate) fn rewrite_worksheet_xml(
     worksheet: &WorksheetData,
     support_parts: Option<&WorksheetSupportParts>,
     spreadsheet_namespace: &str,
 ) -> OmResult<Vec<u8>> {
+    rewrite_worksheet_xml_with_cell_metadata(
+        worksheet,
+        support_parts,
+        spreadsheet_namespace,
+        &WorkbookCellMetadata::default(),
+    )
+}
+
+/// Rewrites a worksheet, marking every dynamic-array anchor with the workbook's dynamic-array
+/// `cm` index and dropping that index from cells that are no longer dynamic-array anchors.
+pub(crate) fn rewrite_worksheet_xml_with_cell_metadata(
+    worksheet: &WorksheetData,
+    support_parts: Option<&WorksheetSupportParts>,
+    spreadsheet_namespace: &str,
+    cell_metadata: &WorkbookCellMetadata,
+) -> OmResult<Vec<u8>> {
+    let dynamic_array_cm = cell_metadata
+        .dynamic_array_index()
+        .map(|index| index.to_string());
+    let is_stale_dynamic_array_cm = |value: &str| {
+        value
+            .parse::<u32>()
+            .is_ok_and(|index| cell_metadata.dynamic_array_indices.contains(&index))
+    };
     if worksheet.source_xml.is_empty() {
         return Err(OmError::new(
             OmErrorCode::InvalidState,
@@ -2734,6 +2806,7 @@ pub(crate) fn rewrite_worksheet_xml(
                         wrote_reference = true;
                     }
                     "t" => {}
+                    "cm" if is_stale_dynamic_array_cm(value) => {}
                     _ => cell_tag.push_attribute((key.as_str(), value.as_str())),
                 }
             }
@@ -2813,12 +2886,26 @@ pub(crate) fn rewrite_worksheet_xml(
         let mut wrote_reference = false;
         let mut wrote_style = false;
         let mut wrote_type = false;
+        let mut wrote_cell_metadata = false;
+        let dynamic_anchor_cm = worksheet
+            .dynamic_array_formulas
+            .contains(&(row_index, col_index))
+            .then_some(dynamic_array_cm.as_deref())
+            .flatten();
         if let Some(attributes) = cell_templates.get(&(row_index, col_index)) {
             for (key, value) in attributes {
                 match key.as_str() {
                     "r" => {
                         cell_tag.push_attribute(("r", reference.as_str()));
                         wrote_reference = true;
+                    }
+                    "cm" => {
+                        if let Some(cm) = dynamic_anchor_cm {
+                            cell_tag.push_attribute(("cm", cm));
+                            wrote_cell_metadata = true;
+                        } else if !is_stale_dynamic_array_cm(value) {
+                            cell_tag.push_attribute(("cm", value.as_str()));
+                        }
                     }
                     "s" => {
                         if let Some(style) = style.as_deref() {
@@ -2844,6 +2931,9 @@ pub(crate) fn rewrite_worksheet_xml(
         }
         if !wrote_type && let Some(cell_type) = cell_type {
             cell_tag.push_attribute(("t", cell_type));
+        }
+        if !wrote_cell_metadata && let Some(cm) = dynamic_anchor_cm {
+            cell_tag.push_attribute(("cm", cm));
         }
 
         let coordinates = (row_index, col_index);

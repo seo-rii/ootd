@@ -428,9 +428,20 @@ Active order:
    context, evaluator, scalar and aggregate function tables, date/time, text, lookup, numeric,
    engineering, matrix, financial, and A1/R1C1 reference-text helpers, plus seven per-family
    `FormulaParser` impl blocks, leaving `calc/mod.rs` at about 4,100 lines of shared types,
-   expression grammar, and dispatch. Remaining: the common value/coercion/error model and a
-   persistent dependency index with dirty propagation. The contract is
+   expression grammar, and dispatch. The common value/coercion/error model and a persistent
+   dependency index with dirty propagation remain open under the same IDs. The contract is
    `docs/interfaces/calculation_order.md`.
+68. Dynamic-array cell metadata is complete (2026-09-30, synthetic, part of
+   `OOTD-075`/`OOTD-076`/`OOTD-077`): load resolves the workbook `sheetMetadata` part, and a
+   `t="array"` formula is a dynamic array only when its `cm` resolves to `XLDAPR` with
+   `fDynamic="1"`. Every other array formula is a protected fixed-size `LegacyArray` group instead
+   of a resizable spill. Save gives every dynamic-array anchor that dynamic `cm`, adding
+   `xl/metadata.xml` with its relationship and content-type override when the package has none,
+   so new `Formula2` arrays no longer reopen in Excel as `{=...}` CSE arrays. It drops a stale
+   dynamic `cm` from cells that are no longer dynamic anchors and refuses to append to a foreign
+   cell-metadata part. The contract is `docs/interfaces/dynamic_array_metadata.md`.
+69. **Active local:** calculation mode and iterative calculation, locale coercion, and `@`/`#`
+   operator semantics (`OOTD-075`/`OOTD-076`/`OOTD-077`).
 
 Every numbered work unit starts with a failing regression and lands as its own reviewable commit.
 The complete `OOTD-001`~`OOTD-086` ordering, regression inventory, and compatibility completion

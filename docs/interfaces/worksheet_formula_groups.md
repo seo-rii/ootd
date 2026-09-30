@@ -14,10 +14,11 @@ group as a unit instead of as independent cells.
 | no `t`, or `t="normal"` | `CellData.formula` only | the cell itself |
 | `t="shared" ref=R si=N` + text | `FormulaGroup { kind: Shared, range: R, shared_index: N }` keyed by the master | the master plus every child that references `si=N` |
 | `t="shared" si=N` without `ref` | child entry in the master's `members` | — |
-| `t="array" ref=R` | `dynamic_array_formulas` + `spill_ranges` (both legacy CSE and dynamic arrays) | every cell in `R` |
+| `t="array" ref=R` on a cell whose `cm` resolves to dynamic-array metadata | `dynamic_array_formulas` + `spill_ranges` | every cell in `R` |
+| `t="array" ref=R` on any other cell | `FormulaGroup { kind: LegacyArray, range: R }` keyed by the top-left cell | every cell in `R` |
 | `t="dataTable" ref=R` | `FormulaGroup { kind: DataTable, range: R }` keyed by the top-left cell | every cell in `R` |
 
-`WorksheetData.formula_groups` holds shared and data-table groups keyed by anchor.
+`WorksheetData.formula_groups` holds shared, data-table, and legacy-array groups keyed by anchor.
 `FormulaGroup::owns` and `WorksheetData::formula_group_owner_for_key` answer whether a coordinate
 belongs to a group. The codec loads a shared child with `CellData.formula = None` and its cached
 value. A data-table anchor usually has an empty `<f/>` element and therefore also has no formula
@@ -35,10 +36,14 @@ translated text and re-emits its source `<f t="shared" si="N"/>`, so only the ca
 changes. The runtime regressions are in
 `crates/excel-runtime/src/tests/shared_formula_calculation.rs`.
 
-Legacy CSE arrays and dynamic arrays share the spill model: both reject edits to non-anchor
-members and both round-trip their `t="array"`/`ref` metadata. Telling the two apart requires
-resolving the anchor's `cm` attribute against the workbook cell-metadata part (`XLDAPR`), which the
-codec does not read yet. The `cm` attribute itself is preserved on every rewrite.
+## Legacy And Dynamic Arrays
+
+A `t="array"` formula is a dynamic array only when its cell `cm` index resolves, through the
+workbook `sheetMetadata` part, to an `XLDAPR` block whose `xda:dynamicArrayProperties` has
+`fDynamic="1"`. Every other array formula, including one with no `cm` or an unresolved `cm`, is a
+fixed-size legacy (CSE) array. It owns its whole `ref` range, rejects payload edits to any member
+including the anchor, and keeps its `t="array"`/`ref` attributes and `cm` through dirty rewrites.
+The contract for the metadata part is `docs/interfaces/dynamic_array_metadata.md`.
 
 ## Load Validation
 
@@ -91,5 +96,4 @@ covered by `formula_group_members_reject_structural_and_transfer_commands` and
 - Codec-only consumers (without the runtime) see shared children as cached values.
 - No command removes or replaces a whole shared group or data table yet, so group-owned cells stay
   read-only for payload edits.
-- Legacy-array versus dynamic-array classification waits for cell-metadata (`cm` → `XLDAPR`)
-  support.
+- Legacy arrays are not recalculated as arrays yet; only their anchor formula is evaluated.

@@ -70,10 +70,15 @@ use relationships::{
 #[cfg(test)]
 use relationships::parse_workbook_relationship_entries;
 use shared_strings::parse_shared_strings;
+pub use worksheet::WorkbookCellMetadata;
 use worksheet::{
-    cell_reference, collect_support_part_dimension_coords, format_cell_error,
-    parse_worksheet_cells, resolve_table_structural_owners, rewrite_worksheet_xml,
+    SHEET_METADATA_CONTENT_TYPE, cell_reference, collect_support_part_dimension_coords,
+    dynamic_array_cell_metadata_xml, format_cell_error, parse_dynamic_array_cell_metadata,
+    parse_worksheet_cells_with_cell_metadata, resolve_table_structural_owners,
+    rewrite_worksheet_xml_with_cell_metadata,
 };
+#[cfg(test)]
+use worksheet::{parse_worksheet_cells, rewrite_worksheet_xml};
 use xml::{
     expanded_name_is, namespaced_attribute_is, qualified_name_like, resolved_element_is,
     unqualified_attribute_is,
@@ -347,6 +352,7 @@ pub struct WorkbookSupportParts {
     pub theme_summaries: BTreeMap<String, ThemePartSummary>,
     pub calc_chain_relationship: Option<WorkbookSupportRelationship>,
     pub calc_chain_part_uri: Option<String>,
+    pub cell_metadata: WorkbookCellMetadata,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1648,6 +1654,8 @@ impl XlsxCodec {
             })
             .transpose()?
             .unwrap_or_default();
+        let cell_metadata =
+            collect_workbook_cell_metadata(&relationship_entries, &package, main_document.dialect)?;
         let mut worksheet_data = BTreeMap::new();
         let mut worksheet_support_parts = BTreeMap::new();
         let mut sheet_drawing_support_parts = BTreeMap::new();
@@ -1675,11 +1683,12 @@ impl XlsxCodec {
                         main_document.dialect.spreadsheetml_namespace(),
                         part_uri,
                     )?;
-                    let mut parsed_cells = parse_worksheet_cells(
+                    let mut parsed_cells = parse_worksheet_cells_with_cell_metadata(
                         sheet_part.bytes.as_slice(),
                         &shared_strings,
                         main_document.dialect.spreadsheetml_namespace(),
                         part_uri,
+                        &cell_metadata.dynamic_array_indices,
                     )?;
                     resolve_table_structural_owners(
                         &mut parsed_cells.structural_owners,
@@ -3083,6 +3092,22 @@ impl XlsxCodec {
             support_snapshot::RetainedTargetPolicy::RequireDeclared,
         )?;
         chart_graph::validate_chart_graphs_for_save(workbook, &package)?;
+        let needs_dynamic_array_metadata = workbook.state.worksheets().iter().any(|worksheet| {
+            dirty_worksheet_ids.contains(&worksheet.id)
+                && workbook
+                    .state
+                    .worksheet_data_for_sheet(worksheet.id)
+                    .is_ok_and(|data| !data.dynamic_array_formulas.is_empty())
+        });
+        let save_cell_metadata = if needs_dynamic_array_metadata {
+            ensure_dynamic_array_cell_metadata(
+                &mut package,
+                &main_document,
+                &workbook.support_parts.cell_metadata,
+            )?
+        } else {
+            workbook.support_parts.cell_metadata.clone()
+        };
         for worksheet in workbook.state.worksheets() {
             if !dirty_worksheet_ids.contains(&worksheet.id) {
                 continue;
@@ -3094,13 +3119,14 @@ impl XlsxCodec {
                     format!("worksheet {} is missing a part uri", worksheet.name),
                 )
             })?;
-            let bytes = rewrite_worksheet_xml(
+            let bytes = rewrite_worksheet_xml_with_cell_metadata(
                 sheet_data,
                 workbook.worksheet_support_parts.get(&worksheet.id),
                 workbook
                     .support_parts
                     .ooxml_dialect
                     .spreadsheetml_namespace(),
+                &save_cell_metadata,
             )?;
             package.replace_part_bytes(part_uri, bytes)?;
         }
@@ -5114,9 +5140,141 @@ fn collect_workbook_support_parts(
         theme_summaries,
         calc_chain_relationship,
         calc_chain_part_uri,
+        cell_metadata: collect_workbook_cell_metadata(relationships, package, dialect)?,
     };
     ensure_support_parts_present(package, &support_parts)?;
     Ok(support_parts)
+}
+
+/// Resolves the workbook `sheetMetadata` part and the `cm` indices that mark dynamic arrays.
+fn collect_workbook_cell_metadata(
+    relationships: &[RelationshipEntry],
+    package: &OpcPackage,
+    dialect: OoxmlDialect,
+) -> OmResult<WorkbookCellMetadata> {
+    let mut metadata_relationships = relationships.iter().filter(|relationship| {
+        relationship_type_is(
+            dialect,
+            &relationship.relationship_type,
+            OoxmlRelationshipKind::SheetMetadata,
+        )
+    });
+    let Some(relationship) = metadata_relationships.next() else {
+        return Ok(WorkbookCellMetadata::default());
+    };
+    if metadata_relationships.next().is_some() {
+        return Err(OmError::parse(
+            "workbook contains multiple sheetMetadata relationships",
+        ));
+    }
+    if relationship_target_mode_is_external(relationship.target_mode.as_deref()) {
+        return Err(OmError::parse(
+            "workbook sheetMetadata relationship must target an internal part",
+        ));
+    }
+    let part = package.part(&relationship.target).ok_or_else(|| {
+        OmError::parse(format!(
+            "workbook sheetMetadata relationship target is missing: {}",
+            relationship.target
+        ))
+    })?;
+    validate_xml_root_namespace(
+        part.bytes.as_slice(),
+        b"metadata",
+        dialect.spreadsheetml_namespace(),
+        &part.name,
+    )?;
+    Ok(WorkbookCellMetadata {
+        part_uri: Some(part.name.clone()),
+        dynamic_array_indices: parse_dynamic_array_cell_metadata(
+            part.bytes.as_slice(),
+            dialect.spreadsheetml_namespace(),
+            &part.name,
+        )?,
+    })
+}
+
+/// Returns cell metadata that defines a dynamic-array `cm` index, adding a metadata part with its
+/// workbook relationship and content-type override when the package has none. An existing
+/// metadata part without a dynamic-array block is refused rather than rewritten.
+fn ensure_dynamic_array_cell_metadata(
+    package: &mut OpcPackage,
+    main_document: &WorkbookMainDocument,
+    cell_metadata: &WorkbookCellMetadata,
+) -> OmResult<WorkbookCellMetadata> {
+    if cell_metadata.dynamic_array_index().is_some() {
+        return Ok(cell_metadata.clone());
+    }
+    if let Some(part_uri) = cell_metadata.part_uri.as_deref() {
+        return Err(OmError::unsupported(format!(
+            "adding dynamic-array metadata to the existing cell-metadata part {part_uri} is not implemented"
+        )));
+    }
+    let relationship_type = relationship_type(main_document.dialect, OoxmlRelationshipKind::SheetMetadata)
+        .ok_or_else(|| OmError::unsupported("sheetMetadata relationships are not defined for this dialect"))?;
+    let workbook_directory = main_document
+        .part_uri
+        .rsplit_once('/')
+        .map_or("", |(directory, _)| directory);
+    let part_uri = (0..)
+        .map(|index| {
+            let file_name = if index == 0 {
+                "metadata.xml".to_string()
+            } else {
+                format!("metadata{index}.xml")
+            };
+            if workbook_directory.is_empty() {
+                file_name
+            } else {
+                format!("{workbook_directory}/{file_name}")
+            }
+        })
+        .find(|candidate| !package.contains(candidate))
+        .expect("metadata part name search is unbounded");
+    package.add_part(office_opc::OpcPart {
+        name: part_uri.clone(),
+        content_type: Some(SHEET_METADATA_CONTENT_TYPE.to_string()),
+        compression: CompressionMethod::Deflated,
+        bytes: dynamic_array_cell_metadata_xml(main_document.dialect.spreadsheetml_namespace()),
+    })?;
+    let content_types = package
+        .part("[Content_Types].xml")
+        .ok_or_else(|| OmError::invalid_state("package is missing [Content_Types].xml"))?
+        .bytes
+        .clone();
+    package.replace_part_bytes(
+        "[Content_Types].xml",
+        chart_graph::append_content_type_override_if_missing(
+            content_types.as_slice(),
+            &part_uri,
+            SHEET_METADATA_CONTENT_TYPE,
+        )?,
+    )?;
+    let relationships = package
+        .part(&main_document.relationships_part_uri)
+        .ok_or_else(|| {
+            OmError::invalid_state(format!(
+                "workbook relationships part {} is missing",
+                main_document.relationships_part_uri
+            ))
+        })?
+        .bytes
+        .clone();
+    let mut used_ids = chart_graph::relationship_ids(relationships.as_slice())?;
+    let relationship_id = chart_graph::next_relationship_id(&mut used_ids);
+    package.replace_part_bytes(
+        &main_document.relationships_part_uri,
+        chart_graph::append_relationship(
+            relationships.as_slice(),
+            &relationship_id,
+            relationship_type,
+            &chart_graph::relative_relationship_target(&main_document.part_uri, &part_uri),
+        )?,
+    )?;
+    Ok(WorkbookCellMetadata {
+        part_uri: Some(part_uri),
+        dynamic_array_indices: BTreeSet::from([1]),
+    })
 }
 
 fn collect_worksheet_support_parts(

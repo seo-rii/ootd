@@ -726,7 +726,17 @@ Wave 2 exit gate:
    calc monolith를 family별로 분리했다: context, evaluator, scalar/aggregate function table,
    date/time, text, lookup, numeric, engineering, matrix, financial, A1/R1C1 reference text와 7개
    family별 `FormulaParser` impl block. `calc/mod.rs`는 공용 type, expression grammar, dispatch만
-   남아 약 4,100줄이다.
+   남아 약 4,100줄이다. common value/coercion/error model과 persistent dependency index는 같은
+   ID로 남아 있다.
+   dynamic-array cell metadata 완료 (2026-09-30, synthetic): load가 workbook `sheetMetadata`
+   part를 해석해 `cm`이 `XLDAPR` `fDynamic="1"`로 이어질 때만 `t="array"`를 dynamic array로 보고,
+   나머지는 보호되는 고정 크기 `LegacyArray` group으로 모델링한다. save는 모든 dynamic anchor에
+   dynamic `cm`을 쓰고 package에 없으면 `xl/metadata.xml`, relationship, content-type override를
+   추가해 새 `Formula2` 배열이 Excel에서 `{=...}` CSE 배열로 열리지 않게 한다. dynamic anchor가
+   아닌 cell의 stale dynamic `cm`은 지우고 외부 cell-metadata part에 추가하는 것은 거부한다.
+   계약은 `docs/interfaces/dynamic_array_metadata.md`.
+   **다음 로컬:** `OOTD-075`/`OOTD-076`/`OOTD-077` calculation mode/iteration, locale coercion,
+   `@`/`#` 연산자 의미.
 16. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
    structured error에 추가한다.
 
