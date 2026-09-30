@@ -2,6 +2,21 @@
 
 use super::*;
 
+/// The single cell an implicit intersection selects from `rect` at `position`.
+fn implicit_intersection_cell(rect: Rect, position: Option<(u32, u32)>) -> Option<(u32, u32)> {
+    if rect.row_first == rect.row_last && rect.col_first == rect.col_last {
+        return Some((rect.row_first, rect.col_first));
+    }
+    let (row, col) = position?;
+    if rect.col_first == rect.col_last && (rect.row_first..=rect.row_last).contains(&row) {
+        return Some((row, rect.col_first));
+    }
+    if rect.row_first == rect.row_last && (rect.col_first..=rect.col_last).contains(&col) {
+        return Some((rect.row_first, col));
+    }
+    None
+}
+
 pub(crate) struct FormulaEvaluator<'a> {
     pub(super) state: &'a WorkbookState,
     pub(super) context: &'a CalcContext,
@@ -217,6 +232,8 @@ impl<'a> FormulaEvaluator<'a> {
         } else {
             formula.text.clone()
         };
+        let formula_text =
+            self.resolve_implicit_intersections(sheet_id, &formula_text, Some((row, col)));
         let result = {
             let mut parser = FormulaParser::new(&formula_text, self, sheet_id, Some((row, col)));
             parser.parse_dynamic_array_formula()
@@ -286,12 +303,110 @@ impl<'a> FormulaEvaluator<'a> {
         result
     }
 
+    /// Replaces every implicit-intersection operand `@reference` with the single cell the
+    /// reference intersects at `current_position`: the cell itself, the cell in the current row of
+    /// a one-column reference, or the cell in the current column of a one-row reference. A
+    /// reference with no such cell becomes `#VALUE!`, and `@` before any other operand is
+    /// dropped because scalar evaluation already yields a single value.
+    pub(super) fn resolve_implicit_intersections(
+        &mut self,
+        sheet_id: SheetId,
+        formula_text: &str,
+        current_position: Option<(u32, u32)>,
+    ) -> String {
+        if !formula_text.contains('@') {
+            return formula_text.to_string();
+        }
+        let bytes = formula_text.as_bytes();
+        let mut output = String::with_capacity(formula_text.len());
+        let mut index = 0usize;
+        while index < bytes.len() {
+            match bytes[index] {
+                quote @ (b'"' | b'\'') => {
+                    let start = index;
+                    index += 1;
+                    while index < bytes.len() {
+                        if bytes[index] == quote {
+                            if bytes.get(index + 1) == Some(&quote) {
+                                index += 2;
+                                continue;
+                            }
+                            index += 1;
+                            break;
+                        }
+                        index += 1;
+                    }
+                    output.push_str(&formula_text[start..index]);
+                }
+                b'[' => {
+                    let start = index;
+                    let mut depth = 0usize;
+                    while index < bytes.len() {
+                        match bytes[index] {
+                            b'[' => depth += 1,
+                            b']' => {
+                                depth -= 1;
+                                if depth == 0 {
+                                    index += 1;
+                                    break;
+                                }
+                            }
+                            _ => {}
+                        }
+                        index += 1;
+                    }
+                    output.push_str(&formula_text[start..index]);
+                }
+                b'@' => {
+                    let operand_start = index + 1;
+                    let parsed = {
+                        let mut parser =
+                            FormulaParser::new(formula_text, self, sheet_id, current_position);
+                        parser.index = operand_start;
+                        parser.try_parse_reference_set()
+                    };
+                    match parsed {
+                        Ok(Some((reference, next_index))) if next_index > operand_start => {
+                            let token = &formula_text[operand_start..next_index];
+                            let qualifier = token.rfind('!').map_or("", |bang| &token[..=bang]);
+                            let intersection =
+                                reference.single_area().ok().and_then(|(_, rect)| {
+                                    implicit_intersection_cell(rect, current_position)
+                                });
+                            match intersection {
+                                Some((row, col)) => {
+                                    output.push_str(qualifier);
+                                    output.push_str(&format_cell_address(row, col, false, false));
+                                }
+                                None => output.push_str("#VALUE!"),
+                            }
+                            index = next_index;
+                        }
+                        _ => index = operand_start,
+                    }
+                }
+                _ => {
+                    let ch = formula_text[index..]
+                        .chars()
+                        .next()
+                        .expect("index is a char boundary");
+                    output.push(ch);
+                    index += ch.len_utf8();
+                }
+            }
+        }
+        output
+    }
+
     pub(crate) fn evaluate_formula_text(
         &mut self,
         sheet_id: SheetId,
         formula_text: &str,
         current_position: Option<(u32, u32)>,
     ) -> Result<CellValue, FormulaEvalError> {
+        let resolved =
+            self.resolve_implicit_intersections(sheet_id, formula_text, current_position);
+        let formula_text = resolved.as_str();
         let text_result = {
             let mut parser = FormulaParser::new(formula_text, self, sheet_id, current_position);
             parser.parse_text_formula()

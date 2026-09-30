@@ -1642,6 +1642,9 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if let Some(number) = self.parse_number()? {
             return Ok(number);
         }
+        if let Some(error) = self.parse_error_literal() {
+            return Err(error);
+        }
         let checkpoint = self.index;
         if let Some(identifier) = self.parse_identifier() {
             self.skip_whitespace();
@@ -1688,6 +1691,27 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             return Err(FormulaEvalError::Name);
         }
         Err(FormulaEvalError::Unsupported)
+    }
+
+    /// Consumes an error literal such as `#N/A` or `#VALUE!` and returns the error it denotes.
+    fn parse_error_literal(&mut self) -> Option<FormulaEvalError> {
+        const LITERALS: [(&str, FormulaEvalError); 8] = [
+            ("#NULL!", FormulaEvalError::Null),
+            ("#DIV/0!", FormulaEvalError::Div0),
+            ("#VALUE!", FormulaEvalError::Value),
+            ("#REF!", FormulaEvalError::Ref),
+            ("#NAME?", FormulaEvalError::Name),
+            ("#NUM!", FormulaEvalError::Num),
+            ("#N/A", FormulaEvalError::NA),
+            ("#CALC!", FormulaEvalError::Calc),
+        ];
+        let rest = &self.input[self.index..];
+        let (literal, error) = LITERALS.into_iter().find(|(literal, _)| {
+            rest.get(..literal.len())
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case(literal))
+        })?;
+        self.index += literal.len();
+        Some(error)
     }
 
     fn parse_function(&mut self, name: &str) -> Result<f64, FormulaEvalError> {

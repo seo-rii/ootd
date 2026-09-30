@@ -743,7 +743,8 @@ Wave 2 exit gate:
    진행 (2026-09-30, synthetic): codec이 cell formula를 file grammar와 typed grammar 사이에서
    변환한다(`_xlfn.`/`_xlfn._xlws.` future function, `LET`/`LAMBDA`의 `_xlpm.` parameter,
    `_xlfn.SINGLE`↔`@`, `_xlfn.ANCHORARRAY`↔`#`). Excel 수식이 입력한 그대로 평가·표시되고 입력한
-   수식은 Excel이 요구하는 prefix와 함께 저장되어 `#NAME?`으로 열리지 않는다. 계약은
+   수식은 Excel이 요구하는 prefix와 함께 저장되어 `#NAME?`으로 열리지 않는다. runtime은 `@`를
+   수식의 행/열 implicit intersection으로 평가하고 `#N/A` 같은 error literal을 해석한다. 계약은
    `docs/interfaces/formula_file_grammar.md`.
 16. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
    structured error에 추가한다.

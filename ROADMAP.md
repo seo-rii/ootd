@@ -452,8 +452,9 @@ Active order:
    between the file grammar and the typed grammar (`_xlfn.`/`_xlfn._xlws.` future functions,
    `_xlpm.` `LET`/`LAMBDA` parameters, `_xlfn.SINGLE` as `@`, `_xlfn.ANCHORARRAY` as `#`). Excel
    formulas therefore evaluate and display as typed, and typed formulas save with the prefixes
-   Excel requires instead of opening as `#NAME?`. The contract is
-   `docs/interfaces/formula_file_grammar.md`.
+   Excel requires instead of opening as `#NAME?`. The runtime evaluates `@` as implicit
+   intersection with the formula's row or column and parses error literals such as `#N/A`. The
+   contract is `docs/interfaces/formula_file_grammar.md`.
 
 Every numbered work unit starts with a failing regression and lands as its own reviewable commit.
 The complete `OOTD-001`~`OOTD-086` ordering, regression inventory, and compatibility completion

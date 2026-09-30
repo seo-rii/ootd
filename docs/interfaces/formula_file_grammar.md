@@ -36,4 +36,17 @@ The regressions are the unit tests in `formula_grammar.rs` and
 
 - Defined names, data-validation formulas, conditional formats, and chart formulas still keep
   their file text without conversion.
-- The runtime does not evaluate `@` yet.
+
+## Runtime Semantics
+
+Before a formula is parsed, the runtime resolves every `@reference` against the evaluating cell:
+- a single-cell reference yields itself;
+- a one-column reference yields the cell in the formula's row;
+- a one-row reference yields the cell in the formula's column;
+- any other shape, or a formula with no position (`Application.Evaluate`), becomes `#VALUE!`,
+  which `IFERROR` can catch.
+
+`@` before a non-reference operand (`@SUM(…)`) is dropped, because scalar evaluation already yields
+one value. Error literals (`#N/A`, `#VALUE!`, `#REF!`, `#DIV/0!`, `#NUM!`, `#NAME?`, `#NULL!`,
+`#CALC!`) evaluate to their errors. The regression is
+`crates/excel-runtime/src/tests/implicit_intersection.rs`.
