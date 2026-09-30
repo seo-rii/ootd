@@ -412,8 +412,14 @@ Active order:
    1900/1904 date system, and `RAND`/`RANDBETWEEN`/`RANDARRAY` draw from a per-session stream that
    a seed makes reproducible instead of a process-global generator. The contract is
    `docs/interfaces/runtime_environment.md`.
-66. **Active local:** date and time functions interpret serials in the workbook's 1900/1904 date
-   system through the `CalcContext` (`OOTD-038`/`OOTD-039`/`OOTD-047`).
+66. Workbook date-system evaluation is complete (2026-09-30, synthetic): every calendar
+   conversion in formula evaluation, from `DATE`/`DATEVALUE`/`YEAR` through `WORKDAY`/
+   `NETWORKDAYS`, `TEXT` date formats, and coupon/day-count financial functions, goes through one
+   `DateSystem` carried by the `CalcContext`, so a 1904 workbook maps serial 0 to 1904-01-01 and
+   rejects earlier dates with `#NUM!`.
+67. **Active local:** common value/coercion/reference/error model, calculation-session dependency
+   graph with SCC cycle detection and memoization, and a per-family split of the calc monolith
+   (`OOTD-040`/`OOTD-050`/`OOTD-051`).
 
 Every numbered work unit starts with a failing regression and lands as its own reviewable commit.
 The complete `OOTD-001`~`OOTD-086` ordering, regression inventory, and compatibility completion

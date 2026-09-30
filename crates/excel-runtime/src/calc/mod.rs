@@ -700,7 +700,9 @@ impl FormulaScalarFunction {
     }
 
     fn evaluate(self, args: &[f64], context: &CalcContext) -> Result<f64, FormulaEvalError> {
+        let date_system = context.date_system();
         let serial_weekday_monday0 = |serial: i64| {
+            let serial = date_system.serial_1900(serial);
             let adjusted_serial = if serial > 60 { serial - 1 } else { serial };
             (adjusted_serial - 1).rem_euclid(7)
         };
@@ -715,7 +717,7 @@ impl FormulaScalarFunction {
                 }
             };
         let iso_weeknum_from_serial = |serial: i64| -> Result<i64, FormulaEvalError> {
-            let (year, month, day) = formula_ymd_from_serial(serial as f64)?;
+            let (year, month, day) = date_system.ymd(serial as f64)?;
             let days = if (year, month, day) == (1900, 2, 29) {
                 days_from_civil(1900, 2, 28) + 1
             } else {
@@ -737,10 +739,14 @@ impl FormulaScalarFunction {
                 .sum::<u32>() as f64
         };
         let serial_to_next_year = |year: i64| -> Result<i64, FormulaEvalError> {
-            formula_date_serial_from_args((year + 1) as f64, 1.0, 1.0).map(|value| value as i64)
+            date_system
+                .serial_from_args((year + 1) as f64, 1.0, 1.0)
+                .map(|value| value as i64)
         };
         let serial_to_year_start = |year: i64| -> Result<i64, FormulaEvalError> {
-            formula_date_serial_from_args(year as f64, 1.0, 1.0).map(|value| value as i64)
+            date_system
+                .serial_from_args(year as f64, 1.0, 1.0)
+                .map(|value| value as i64)
         };
         let days360 =
             |start_serial: i64, end_serial: i64, european: bool| -> Result<i64, FormulaEvalError> {
@@ -749,10 +755,9 @@ impl FormulaScalarFunction {
                 } else {
                     (start_serial, end_serial, 1)
                 };
-                let (start_year, start_month, start_day) =
-                    formula_ymd_from_serial(start_serial as f64)?;
+                let (start_year, start_month, start_day) = date_system.ymd(start_serial as f64)?;
                 let (mut end_year, mut end_month, mut end_day) =
-                    formula_ymd_from_serial(end_serial as f64)?;
+                    date_system.ymd(end_serial as f64)?;
                 let mut start_day = start_day;
                 if european {
                     if start_day == 31 {
@@ -795,8 +800,8 @@ impl FormulaScalarFunction {
                 } else {
                     (start_serial, end_serial, 1.0)
                 };
-                let (start_year, _, _) = formula_ymd_from_serial(start_serial as f64)?;
-                let (end_year, _, _) = formula_ymd_from_serial(end_serial as f64)?;
+                let (start_year, _, _) = date_system.ymd(start_serial as f64)?;
+                let (end_year, _, _) = date_system.ymd(end_serial as f64)?;
                 if start_year == end_year {
                     return Ok(
                         sign * (end_serial - start_serial) as f64 / days_in_excel_year(start_year)
@@ -823,7 +828,8 @@ impl FormulaScalarFunction {
         };
         let financial_date_serial = |value: f64| -> Result<i64, FormulaEvalError> {
             let serial = formula_serial_integer(value).map_err(|_| FormulaEvalError::Value)?;
-            formula_ymd_from_serial(serial as f64)
+            date_system
+                .ymd(serial as f64)
                 .map(|_| serial)
                 .map_err(|_| FormulaEvalError::Value)
         };
@@ -899,7 +905,7 @@ impl FormulaScalarFunction {
             let mut next_coupon = maturity;
             loop {
                 let previous_coupon =
-                    formula_edate(next_coupon as f64, -(months_per_coupon as f64))? as i64;
+                    date_system.edate(next_coupon as f64, -(months_per_coupon as f64))? as i64;
                 if previous_coupon <= settlement {
                     let full_period = yearfrac_by_basis(previous_coupon, next_coupon, basis)?;
                     if full_period <= 0.0 {
@@ -914,7 +920,7 @@ impl FormulaScalarFunction {
                     let mut coupon_date = next_coupon;
                     while coupon_date < maturity {
                         coupon_date =
-                            formula_edate(coupon_date as f64, months_per_coupon as f64)? as i64;
+                            date_system.edate(coupon_date as f64, months_per_coupon as f64)? as i64;
                         coupon_count = coupon_count.checked_add(1).ok_or(FormulaEvalError::Num)?;
                         if coupon_count > 10000 {
                             return Err(FormulaEvalError::Num);
@@ -1138,7 +1144,7 @@ impl FormulaScalarFunction {
             let months_per_coupon = 12 / frequency;
             let notional_coupon = 100.0 * rate / frequency as f64;
             let previous_regular_coupon =
-                formula_edate(first_coupon as f64, -(months_per_coupon as f64))? as i64;
+                date_system.edate(first_coupon as f64, -(months_per_coupon as f64))? as i64;
             let first_period_days =
                 coupon_period_days(previous_regular_coupon, first_coupon, frequency, basis);
             if first_period_days <= 0.0 {
@@ -1158,7 +1164,7 @@ impl FormulaScalarFunction {
                 / discount
                     .powf(frequency as f64 * yearfrac_by_basis(settlement, first_coupon, basis)?);
             let mut coupon_date =
-                formula_edate(first_coupon as f64, months_per_coupon as f64)? as i64;
+                date_system.edate(first_coupon as f64, months_per_coupon as f64)? as i64;
             let mut guard = 0_usize;
             while coupon_date <= maturity {
                 let mut cashflow = notional_coupon;
@@ -1172,7 +1178,8 @@ impl FormulaScalarFunction {
                 if coupon_date == maturity {
                     return formula_checked_numeric_result(total - accrued);
                 }
-                coupon_date = formula_edate(coupon_date as f64, months_per_coupon as f64)? as i64;
+                coupon_date =
+                    date_system.edate(coupon_date as f64, months_per_coupon as f64)? as i64;
                 guard += 1;
                 if guard > 10000 {
                     return Err(FormulaEvalError::Num);
@@ -1217,7 +1224,7 @@ impl FormulaScalarFunction {
             }
             let months_per_coupon = 12 / frequency;
             let next_regular_coupon =
-                formula_edate(last_interest as f64, months_per_coupon as f64)? as i64;
+                date_system.edate(last_interest as f64, months_per_coupon as f64)? as i64;
             if maturity > next_regular_coupon {
                 return Err(FormulaEvalError::Num);
             }
@@ -2023,7 +2030,7 @@ impl FormulaScalarFunction {
                 let mut guard = 0_usize;
                 while next_coupon <= accrual_start {
                     next_coupon =
-                        formula_edate(next_coupon as f64, months_per_coupon as f64)? as i64;
+                        date_system.edate(next_coupon as f64, months_per_coupon as f64)? as i64;
                     guard += 1;
                     if guard > 10000 {
                         return Err(FormulaEvalError::Num);
@@ -2031,7 +2038,7 @@ impl FormulaScalarFunction {
                 }
                 loop {
                     let previous_coupon =
-                        formula_edate(next_coupon as f64, -(months_per_coupon as f64))? as i64;
+                        date_system.edate(next_coupon as f64, -(months_per_coupon as f64))? as i64;
                     if previous_coupon <= accrual_start {
                         break;
                     }
@@ -2046,7 +2053,7 @@ impl FormulaScalarFunction {
                 let mut accrued_periods = 0.0;
                 while accrual_start < settlement {
                     let previous_coupon =
-                        formula_edate(next_coupon as f64, -(months_per_coupon as f64))? as i64;
+                        date_system.edate(next_coupon as f64, -(months_per_coupon as f64))? as i64;
                     let period_start = accrual_start.max(previous_coupon);
                     let period_end = settlement.min(next_coupon);
                     if period_end > period_start {
@@ -2065,7 +2072,7 @@ impl FormulaScalarFunction {
                         break;
                     }
                     next_coupon =
-                        formula_edate(next_coupon as f64, months_per_coupon as f64)? as i64;
+                        date_system.edate(next_coupon as f64, months_per_coupon as f64)? as i64;
                     guard += 1;
                     if guard > 10000 {
                         return Err(FormulaEvalError::Num);
@@ -2819,13 +2826,13 @@ impl FormulaScalarFunction {
                 let [year, month, day] = args else {
                     return Err(FormulaEvalError::Value);
                 };
-                formula_date_serial_from_args(*year, *month, *day)
+                date_system.serial_from_args(*year, *month, *day)
             }
             FormulaScalarFunction::Day => {
                 let [serial] = args else {
                     return Err(FormulaEvalError::Value);
                 };
-                let (_, _, day) = formula_ymd_from_serial(*serial)?;
+                let (_, _, day) = date_system.ymd(*serial)?;
                 Ok(day as f64)
             }
             FormulaScalarFunction::Days => {
@@ -2995,13 +3002,13 @@ impl FormulaScalarFunction {
                 let [serial, months] = args else {
                     return Err(FormulaEvalError::Value);
                 };
-                formula_edate(*serial, *months)
+                date_system.edate(*serial, *months)
             }
             FormulaScalarFunction::EOMonth => {
                 let [serial, months] = args else {
                     return Err(FormulaEvalError::Value);
                 };
-                formula_eomonth(*serial, *months)
+                date_system.eomonth(*serial, *months)
             }
             FormulaScalarFunction::Effect => {
                 let [nominal_rate, npery] = args else {
@@ -3628,7 +3635,7 @@ impl FormulaScalarFunction {
                 let [serial] = args else {
                     return Err(FormulaEvalError::Value);
                 };
-                let (_, month, _) = formula_ymd_from_serial(*serial)?;
+                let (_, month, _) = date_system.ymd(*serial)?;
                 Ok(month as f64)
             }
             FormulaScalarFunction::MRound => {
@@ -4819,8 +4826,8 @@ impl FormulaScalarFunction {
                     return iso_weeknum_from_serial(serial).map(|week| week as f64);
                 }
                 let first_day_monday0 = week_start_from_return_type(return_type, false)?;
-                let (year, _, _) = formula_ymd_from_serial(serial as f64)?;
-                let jan1_serial = formula_date_serial_from_args(year as f64, 1.0, 1.0)? as i64;
+                let (year, _, _) = date_system.ymd(serial as f64)?;
+                let jan1_serial = date_system.serial_from_args(year as f64, 1.0, 1.0)? as i64;
                 let jan1_weekday_monday0 = serial_weekday_monday0(jan1_serial);
                 let days_since_week_start =
                     (jan1_weekday_monday0 - first_day_monday0).rem_euclid(7);
@@ -4854,7 +4861,7 @@ impl FormulaScalarFunction {
                 let [serial] = args else {
                     return Err(FormulaEvalError::Value);
                 };
-                let (year, _, _) = formula_ymd_from_serial(*serial)?;
+                let (year, _, _) = date_system.ymd(*serial)?;
                 Ok(year as f64)
             }
             FormulaScalarFunction::YearFrac => {
@@ -7176,7 +7183,7 @@ fn formula_numbervalue(
     }
 }
 
-fn formula_datevalue_text(text: &str) -> Result<f64, FormulaEvalError> {
+fn formula_datevalue_text(date_system: DateSystem, text: &str) -> Result<f64, FormulaEvalError> {
     let trimmed = text.trim();
     if trimmed.chars().any(|ch| ch.is_ascii_alphabetic()) {
         let normalized = trimmed.replace([',', '-', '/'], " ");
@@ -7249,7 +7256,7 @@ fn formula_datevalue_text(text: &str) -> Result<f64, FormulaEvalError> {
         if day > i64::from(days_in_excel_month(year, month as u32)) {
             return Err(FormulaEvalError::Value);
         }
-        return formula_date_serial_from_args(year as f64, month as f64, day as f64);
+        return date_system.serial_from_args(year as f64, month as f64, day as f64);
     }
     let separator = if trimmed.contains('-') {
         '-'
@@ -7284,7 +7291,7 @@ fn formula_datevalue_text(text: &str) -> Result<f64, FormulaEvalError> {
     if day > i64::from(days_in_excel_month(year, month as u32)) {
         return Err(FormulaEvalError::Value);
     }
-    formula_date_serial_from_args(year as f64, month as f64, day as f64)
+    date_system.serial_from_args(year as f64, month as f64, day as f64)
 }
 
 fn formula_timevalue_text(text: &str) -> Result<f64, FormulaEvalError> {
@@ -7335,7 +7342,7 @@ fn formula_timevalue_text(text: &str) -> Result<f64, FormulaEvalError> {
     Ok((hour * 3600 + minute * 60 + second) as f64 / 86_400.0)
 }
 
-fn formula_value_text(text: &str) -> Result<f64, FormulaEvalError> {
+fn formula_value_text(date_system: DateSystem, text: &str) -> Result<f64, FormulaEvalError> {
     let mut body = text.trim();
     if body.is_empty() {
         return Err(FormulaEvalError::Value);
@@ -7388,7 +7395,7 @@ fn formula_value_text(text: &str) -> Result<f64, FormulaEvalError> {
     let mut value = match formula_numbervalue(body, ".", ",") {
         Ok(value) => value,
         Err(FormulaEvalError::Value) if !accounting_negative && !explicit_negative => {
-            if let Ok(value) = formula_datevalue_text(body) {
+            if let Ok(value) = formula_datevalue_text(date_system, body) {
                 value
             } else if let Ok(value) = formula_timevalue_text(body) {
                 value
@@ -7404,7 +7411,7 @@ fn formula_value_text(text: &str) -> Result<f64, FormulaEvalError> {
                         continue;
                     }
                     if let (Ok(date), Ok(time)) = (
-                        formula_datevalue_text(date_text),
+                        formula_datevalue_text(date_system, date_text),
                         formula_timevalue_text(time_text),
                     ) {
                         parsed = Some(date + time);
@@ -8023,6 +8030,7 @@ pub(super) fn formula_current_excel_serial() -> Result<f64, FormulaEvalError> {
 /// workbook date system, and the session random stream, which advances only through this context.
 pub(super) struct CalcContext {
     now_serial: Option<f64>,
+    date_system: DateSystem,
     random_state: std::cell::Cell<u64>,
 }
 
@@ -8033,8 +8041,17 @@ impl CalcContext {
             now_serial: environment
                 .local_unix_seconds()
                 .map(|seconds| 25_569.0 + seconds / 86_400.0 - date_system_offset),
+            date_system: if date1904 {
+                DateSystem::Excel1904
+            } else {
+                DateSystem::Excel1900
+            },
             random_state: std::cell::Cell::new(random_state),
         }
+    }
+
+    pub(super) fn date_system(&self) -> DateSystem {
+        self.date_system
     }
 
     /// The random stream state after every draw made through this context.
@@ -8094,20 +8111,60 @@ fn formula_rand_between(
     Ok((i128::from(bottom) + offset) as f64)
 }
 
-fn formula_edate(serial: f64, months: f64) -> Result<f64, FormulaEvalError> {
-    let (year, month, day) = formula_ymd_from_serial(serial)?;
-    let months = formula_integer_argument(months)?;
-    let (target_year, target_month) = normalize_year_month(year, i64::from(month) + months)?;
-    let target_day = i64::from(day.min(days_in_excel_month(target_year, target_month)));
-    formula_date_serial_from_args(target_year as f64, target_month as f64, target_day as f64)
+/// The workbook date system a calculation interprets serials in. Calendar conversions run in the
+/// 1900 system; a 1904 serial is the 1900 serial minus 1,462 days, and 1904 serials are never
+/// negative.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum DateSystem {
+    Excel1900,
+    Excel1904,
 }
 
-fn formula_eomonth(serial: f64, months: f64) -> Result<f64, FormulaEvalError> {
-    let (year, month, _) = formula_ymd_from_serial(serial)?;
-    let months = formula_integer_argument(months)?;
-    let (target_year, target_month) = normalize_year_month(year, i64::from(month) + months)?;
-    let target_day = i64::from(days_in_excel_month(target_year, target_month));
-    formula_date_serial_from_args(target_year as f64, target_month as f64, target_day as f64)
+impl DateSystem {
+    const EXCEL_1904_OFFSET_DAYS: i64 = 1_462;
+
+    fn offset_days(self) -> i64 {
+        match self {
+            Self::Excel1900 => 0,
+            Self::Excel1904 => Self::EXCEL_1904_OFFSET_DAYS,
+        }
+    }
+
+    /// The 1900-system serial of a whole-day serial in this system.
+    fn serial_1900(self, serial: i64) -> i64 {
+        serial + self.offset_days()
+    }
+
+    fn ymd(self, serial: f64) -> Result<(i64, u32, u32), FormulaEvalError> {
+        if self == Self::Excel1904 && serial.is_finite() && serial < 0.0 {
+            return Err(FormulaEvalError::Num);
+        }
+        formula_ymd_from_serial(serial + self.offset_days() as f64)
+    }
+
+    fn serial_from_args(self, year: f64, month: f64, day: f64) -> Result<f64, FormulaEvalError> {
+        let serial = formula_date_serial_from_args(year, month, day)? - self.offset_days() as f64;
+        if serial < 0.0 {
+            return Err(FormulaEvalError::Num);
+        }
+        Ok(serial)
+    }
+
+    fn edate(self, serial: f64, months: f64) -> Result<f64, FormulaEvalError> {
+        let (year, month, day) = self.ymd(serial)?;
+        let months = formula_integer_argument(months)?;
+        let (target_year, target_month) = normalize_year_month(year, i64::from(month) + months)?;
+        let target_day = i64::from(day.min(days_in_excel_month(target_year, target_month)));
+        self.serial_from_args(target_year as f64, target_month as f64, target_day as f64)
+    }
+
+    fn eomonth(self, serial: f64, months: f64) -> Result<f64, FormulaEvalError> {
+        let (year, month, _) = self.ymd(serial)?;
+        let months = formula_integer_argument(months)?;
+        let (target_year, target_month) = normalize_year_month(year, i64::from(month) + months)?;
+        let target_day = i64::from(days_in_excel_month(target_year, target_month));
+        self.serial_from_args(target_year as f64, target_month as f64, target_day as f64)
+    }
 }
 
 fn formula_weekday_monday0_from_serial(serial: i64) -> i64 {
@@ -8161,16 +8218,24 @@ fn formula_weekend_mask_from_string(value: &str) -> Result<[bool; 7], FormulaEva
     Ok(mask)
 }
 
-fn formula_is_workday_serial(serial: i64, holidays: &[i64], weekend: &[bool; 7]) -> bool {
-    !weekend[formula_weekday_monday0_from_serial(serial) as usize] && !holidays.contains(&serial)
+fn formula_is_workday_serial(
+    date_system: DateSystem,
+    serial: i64,
+    holidays: &[i64],
+    weekend: &[bool; 7],
+) -> bool {
+    !weekend[formula_weekday_monday0_from_serial(date_system.serial_1900(serial)) as usize]
+        && !holidays.contains(&serial)
 }
 
 fn formula_networkdays(
+    date_system: DateSystem,
     start_serial: i64,
     end_serial: i64,
     holidays: &[i64],
 ) -> Result<f64, FormulaEvalError> {
     formula_networkdays_with_weekend(
+        date_system,
         start_serial,
         end_serial,
         holidays,
@@ -8179,6 +8244,7 @@ fn formula_networkdays(
 }
 
 fn formula_networkdays_with_weekend(
+    date_system: DateSystem,
     start_serial: i64,
     end_serial: i64,
     holidays: &[i64],
@@ -8189,11 +8255,11 @@ fn formula_networkdays_with_weekend(
     } else {
         (end_serial, start_serial, -1.0)
     };
-    formula_ymd_from_serial(first as f64)?;
-    formula_ymd_from_serial(last as f64)?;
+    date_system.ymd(first as f64)?;
+    date_system.ymd(last as f64)?;
     let mut count = 0_u64;
     for serial in first..=last {
-        if formula_is_workday_serial(serial, holidays, weekend) {
+        if formula_is_workday_serial(date_system, serial, holidays, weekend) {
             count += 1;
         }
     }
@@ -8201,11 +8267,13 @@ fn formula_networkdays_with_weekend(
 }
 
 fn formula_workday(
+    date_system: DateSystem,
     start_serial: i64,
     days: i64,
     holidays: &[i64],
 ) -> Result<f64, FormulaEvalError> {
     formula_workday_with_weekend(
+        date_system,
         start_serial,
         days,
         holidays,
@@ -8214,19 +8282,20 @@ fn formula_workday(
 }
 
 fn formula_workday_with_weekend(
+    date_system: DateSystem,
     start_serial: i64,
     days: i64,
     holidays: &[i64],
     weekend: &[bool; 7],
 ) -> Result<f64, FormulaEvalError> {
-    formula_ymd_from_serial(start_serial as f64)?;
+    date_system.ymd(start_serial as f64)?;
     let direction = if days < 0 { -1 } else { 1 };
     let mut serial = start_serial;
     let mut remaining = days.unsigned_abs();
     while remaining > 0 {
         serial = serial.checked_add(direction).ok_or(FormulaEvalError::Num)?;
-        formula_ymd_from_serial(serial as f64)?;
-        if formula_is_workday_serial(serial, holidays, weekend) {
+        date_system.ymd(serial as f64)?;
+        if formula_is_workday_serial(date_system, serial, holidays, weekend) {
             remaining -= 1;
         }
     }
@@ -11789,7 +11858,11 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                             };
                             let serial = formula_serial_integer(date)
                                 .and_then(|serial| {
-                                    formula_ymd_from_serial(serial as f64).map(|_| serial)
+                                    self.evaluator
+                                        .context
+                                        .date_system()
+                                        .ymd(serial as f64)
+                                        .map(|_| serial)
                                 })
                                 .map_err(|_| FormulaEvalError::Value)?;
                             dates.push(serial);
@@ -11812,7 +11885,13 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                     }
                     self.index = identifier_checkpoint;
                     let serial = formula_serial_integer(self.parse_comparison()?)
-                        .and_then(|serial| formula_ymd_from_serial(serial as f64).map(|_| serial))
+                        .and_then(|serial| {
+                            self.evaluator
+                                .context
+                                .date_system()
+                                .ymd(serial as f64)
+                                .map(|_| serial)
+                        })
                         .map_err(|_| FormulaEvalError::Value)?;
                     dates.push(serial);
                 }
@@ -11832,7 +11911,13 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                 }
                 self.index = identifier_checkpoint;
                 let serial = formula_serial_integer(self.parse_comparison()?)
-                    .and_then(|serial| formula_ymd_from_serial(serial as f64).map(|_| serial))
+                    .and_then(|serial| {
+                        self.evaluator
+                            .context
+                            .date_system()
+                            .ymd(serial as f64)
+                            .map(|_| serial)
+                    })
                     .map_err(|_| FormulaEvalError::Value)?;
                 dates.push(serial);
             }
@@ -11966,7 +12051,11 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                             };
                             let serial = formula_serial_integer(date)
                                 .and_then(|serial| {
-                                    formula_ymd_from_serial(serial as f64).map(|_| serial)
+                                    self.evaluator
+                                        .context
+                                        .date_system()
+                                        .ymd(serial as f64)
+                                        .map(|_| serial)
                                 })
                                 .map_err(|_| FormulaEvalError::Value)?;
                             dates.push(serial);
@@ -11989,7 +12078,13 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                     }
                     self.index = identifier_checkpoint;
                     let serial = formula_serial_integer(self.parse_comparison()?)
-                        .and_then(|serial| formula_ymd_from_serial(serial as f64).map(|_| serial))
+                        .and_then(|serial| {
+                            self.evaluator
+                                .context
+                                .date_system()
+                                .ymd(serial as f64)
+                                .map(|_| serial)
+                        })
                         .map_err(|_| FormulaEvalError::Value)?;
                     dates.push(serial);
                 }
@@ -12009,7 +12104,13 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                 }
                 self.index = identifier_checkpoint;
                 let serial = formula_serial_integer(self.parse_comparison()?)
-                    .and_then(|serial| formula_ymd_from_serial(serial as f64).map(|_| serial))
+                    .and_then(|serial| {
+                        self.evaluator
+                            .context
+                            .date_system()
+                            .ymd(serial as f64)
+                            .map(|_| serial)
+                    })
                     .map_err(|_| FormulaEvalError::Value)?;
                 dates.push(serial);
             }
@@ -14257,7 +14358,7 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             }
 
             let (year, month, day, weekday) = if needs_date {
-                let (year, month, day) = formula_ymd_from_serial(number)?;
+                let (year, month, day) = self.evaluator.context.date_system().ymd(number)?;
                 let serial = formula_serial_integer(number)?;
                 (
                     year,
@@ -16150,7 +16251,7 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if !self.consume_char(')') {
             return Err(FormulaEvalError::Unsupported);
         }
-        formula_value_text(text.as_str())
+        formula_value_text(self.evaluator.context.date_system(), text.as_str())
     }
 
     fn parse_numbervalue_function(&mut self) -> Result<f64, FormulaEvalError> {
@@ -16799,7 +16900,7 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if !self.consume_char(')') {
             return Err(FormulaEvalError::Unsupported);
         }
-        formula_datevalue_text(text.as_str())
+        formula_datevalue_text(self.evaluator.context.date_system(), text.as_str())
     }
 
     fn parse_timevalue_function(&mut self) -> Result<f64, FormulaEvalError> {
@@ -16846,8 +16947,16 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if !self.consume_char(')') {
             return Err(FormulaEvalError::Unsupported);
         }
-        let (start_year, start_month, start_day) = formula_ymd_from_serial(start_serial as f64)?;
-        let (end_year, end_month, end_day) = formula_ymd_from_serial(end_serial as f64)?;
+        let (start_year, start_month, start_day) = self
+            .evaluator
+            .context
+            .date_system()
+            .ymd(start_serial as f64)?;
+        let (end_year, end_month, end_day) = self
+            .evaluator
+            .context
+            .date_system()
+            .ymd(end_serial as f64)?;
         match unit.as_str() {
             "D" => Ok((end_serial - start_serial) as f64),
             "Y" => {
@@ -16883,13 +16992,13 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                 ))
             }
             "YD" => {
-                let mut anchor = formula_date_serial_from_args(
+                let mut anchor = self.evaluator.context.date_system().serial_from_args(
                     end_year as f64,
                     f64::from(start_month),
                     f64::from(start_day),
                 )? as i64;
                 if anchor > end_serial {
-                    anchor = formula_date_serial_from_args(
+                    anchor = self.evaluator.context.date_system().serial_from_args(
                         (end_year - 1) as f64,
                         f64::from(start_month),
                         f64::from(start_day),
@@ -16909,7 +17018,12 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         }
         let days = formula_integer_argument(self.parse_comparison()?)?;
         let holidays = self.parse_optional_holidays_tail()?;
-        formula_workday(start_serial, days, holidays.as_slice())
+        formula_workday(
+            self.evaluator.context.date_system(),
+            start_serial,
+            days,
+            holidays.as_slice(),
+        )
     }
 
     fn parse_workday_intl_function(&mut self) -> Result<f64, FormulaEvalError> {
@@ -16920,7 +17034,13 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         }
         let days = formula_integer_argument(self.parse_comparison()?)?;
         let (weekend, holidays) = self.parse_optional_weekend_holidays_tail()?;
-        formula_workday_with_weekend(start_serial, days, holidays.as_slice(), &weekend)
+        formula_workday_with_weekend(
+            self.evaluator.context.date_system(),
+            start_serial,
+            days,
+            holidays.as_slice(),
+            &weekend,
+        )
     }
 
     fn parse_networkdays_function(&mut self) -> Result<f64, FormulaEvalError> {
@@ -16931,7 +17051,12 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         }
         let end_serial = formula_serial_integer(self.parse_comparison()?)?;
         let holidays = self.parse_optional_holidays_tail()?;
-        formula_networkdays(start_serial, end_serial, holidays.as_slice())
+        formula_networkdays(
+            self.evaluator.context.date_system(),
+            start_serial,
+            end_serial,
+            holidays.as_slice(),
+        )
     }
 
     fn parse_networkdays_intl_function(&mut self) -> Result<f64, FormulaEvalError> {
@@ -16942,7 +17067,13 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         }
         let end_serial = formula_serial_integer(self.parse_comparison()?)?;
         let (weekend, holidays) = self.parse_optional_weekend_holidays_tail()?;
-        formula_networkdays_with_weekend(start_serial, end_serial, holidays.as_slice(), &weekend)
+        formula_networkdays_with_weekend(
+            self.evaluator.context.date_system(),
+            start_serial,
+            end_serial,
+            holidays.as_slice(),
+            &weekend,
+        )
     }
 
     fn parse_if_function(&mut self) -> Result<f64, FormulaEvalError> {

@@ -154,3 +154,63 @@ fn runtime_environment_round_trips_through_the_public_api() {
     runtime.set_environment(environment.clone());
     assert_eq!(runtime.environment(), &environment);
 }
+
+#[test]
+fn runtime_environment_date_functions_use_the_workbook_date_system() {
+    let (mut runtime, workbook, sheet) = open_runtime(Some(fixed_environment(540, None)));
+    runtime
+        .dispatch_set(workbook.0, "Date1904", OmValue::Bool(true), &[])
+        .expect("switch to the 1904 date system");
+    let cases = [
+        ("M1", "=DATE(1904,1,1)", 0.0),
+        ("M2", "=YEAR(0)", 1_904.0),
+        ("M3", "=DATE(2026,1,2)", 46_024.0 - 1_462.0),
+        (
+            "M4",
+            "=YEAR(NOW())*10000+MONTH(NOW())*100+DAY(NOW())",
+            20_260_102.0,
+        ),
+        ("M5", "=EDATE(DATE(2026,1,31),1)-DATE(2026,2,28)", 0.0),
+        ("M6", "=EOMONTH(DATE(2026,2,10),0)-DATE(2026,2,28)", 0.0),
+        ("M7", "=WEEKDAY(DATE(2026,1,2))", 6.0),
+        ("M8", "=NETWORKDAYS(DATE(2026,1,2),DATE(2026,1,9))", 6.0),
+        ("M9", "=WORKDAY(DATE(2026,1,2),1)-DATE(2026,1,5)", 0.0),
+        ("M10", "=DATEVALUE(\"2026-01-02\")", 46_024.0 - 1_462.0),
+        ("M11", "=DATEDIF(DATE(2026,1,2),DATE(2027,3,4),\"m\")", 14.0),
+        ("M12", "=WEEKNUM(DATE(2026,1,2))", 1.0),
+    ];
+    for (address, formula, _) in cases {
+        set_formula(&mut runtime, sheet, address, formula);
+    }
+    set_formula(
+        &mut runtime,
+        sheet,
+        "N1",
+        "=TEXT(DATE(2026,1,2),\"yyyy-mm-dd\")",
+    );
+    set_formula(&mut runtime, sheet, "N2", "=DATE(1900,1,1)");
+    calculate(&mut runtime);
+
+    for (address, formula, expected) in cases {
+        let [actual] = values(&mut runtime, sheet, &[address])[..] else {
+            unreachable!()
+        };
+        assert_eq!(actual, expected, "{address} {formula}");
+    }
+    let text = range(&mut runtime, sheet, "N1");
+    assert_eq!(
+        expect_text(
+            runtime
+                .dispatch_get(text, "Value2", &[])
+                .expect("N1 Value2")
+        ),
+        "2026-01-02"
+    );
+    let before_epoch = range(&mut runtime, sheet, "N2");
+    assert_eq!(
+        runtime
+            .dispatch_get(before_epoch, "Value2", &[])
+            .expect("N2 Value2"),
+        OmValue::from(CellValue::Error(CellError::Num))
+    );
+}

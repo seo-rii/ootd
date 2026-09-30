@@ -712,7 +712,12 @@ Wave 2 exit gate:
    clock reading을 workbook 1900/1904 date system serial로 보고, `RAND`/`RANDBETWEEN`/`RANDARRAY`는
    process-global generator 대신 seed로 재현 가능한 session stream을 쓴다. 계약은
    `docs/interfaces/runtime_environment.md`.
-   **다음 로컬:** date/time 함수가 `CalcContext`의 1900/1904 date system으로 serial을 해석한다.
+   workbook date system 평가 완료 (2026-09-30, synthetic): `DATE`/`DATEVALUE`/`YEAR`부터
+   `WORKDAY`/`NETWORKDAYS`, `TEXT` date format, coupon/day-count 재무 함수까지 모든 calendar 변환이
+   `CalcContext`의 `DateSystem` 하나를 거친다. 1904 workbook은 serial 0을 1904-01-01로 보고 그
+   이전 날짜를 `#NUM!`으로 거부한다.
+   **다음 로컬:** `OOTD-040`/`OOTD-050`/`OOTD-051` common value/coercion/reference/error model,
+   calculation session dependency graph, SCC/cycle, memoization과 calc monolith 분리.
 16. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
    structured error에 추가한다.
 
@@ -732,7 +737,7 @@ Wave 3 exit gate:
    formula group model, group-level mutation preflight와 shared child 계산 완료.
 3. `OOTD-038` + `OOTD-039` + `OOTD-047`: clock, timezone, locale, date system, RNG와 runtime
    policy를 workbook/session `RuntimeEnvironment`/`CalcContext`에 주입한다. clock, UTC offset,
-   RNG 주입 완료; date 함수의 1904 해석과 locale이 남아 있다.
+   RNG 주입과 date 함수의 1904 해석 완료; locale은 `OOTD-076`에 남아 있다.
 4. `OOTD-040` + `OOTD-050` + `OOTD-051`: common value/coercion/reference/error model,
    calculation session dependency graph, SCC/cycle, memoization을 만들고 calc monolith를
    function family별로 분리한다.
