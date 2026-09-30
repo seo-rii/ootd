@@ -405,8 +405,15 @@ Active order:
    absolute references stay fixed; `Range.Formula`, dependency scans, and `Calculate` treat
    children as formula cells without dirtying the opened workbook, child formula edits fail closed,
    and save re-emits the source `<f t="shared" si="N"/>` with only the refreshed `<v>`.
-65. **Active local:** clock, timezone, locale, date system, RNG, and runtime policy are injected
-   through a workbook/session `RuntimeEnvironment`/`CalcContext` (`OOTD-038`/`OOTD-039`/`OOTD-047`).
+65. The `OOTD-038`/`OOTD-039`/`OOTD-047` environment injection is complete (2026-09-30,
+   synthetic): `ExcelRuntime::set_environment` supplies a system or fixed `RuntimeClock`, a UTC
+   offset, and an optional random seed. Every calculation cycle evaluates against one
+   `CalcContext`, so all `NOW`/`TODAY` cells observe one clock reading projected into the workbook
+   1900/1904 date system, and `RAND`/`RANDBETWEEN`/`RANDARRAY` draw from a per-session stream that
+   a seed makes reproducible instead of a process-global generator. The contract is
+   `docs/interfaces/runtime_environment.md`.
+66. **Active local:** date and time functions interpret serials in the workbook's 1900/1904 date
+   system through the `CalcContext` (`OOTD-038`/`OOTD-039`/`OOTD-047`).
 
 Every numbered work unit starts with a failing regression and lands as its own reviewable commit.
 The complete `OOTD-001`~`OOTD-086` ordering, regression inventory, and compatibility completion

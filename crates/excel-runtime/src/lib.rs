@@ -1,8 +1,10 @@
 mod calc;
 mod dispatch;
+mod environment;
 mod persistence;
 mod recalculation;
 
+pub use environment::{RuntimeClock, RuntimeEnvironment};
 pub use recalculation::{CalculationCell, CalculationCellError, CalculationReport};
 
 use calc::{
@@ -1387,6 +1389,8 @@ pub struct ExcelRuntime {
     workbooks: BTreeMap<u64, RuntimeWorkbook>,
     objects: BTreeMap<u64, RuntimeObjectKind>,
     stale_objects: BTreeSet<u64>,
+    environment: RuntimeEnvironment,
+    random_state: std::sync::atomic::AtomicU64,
     #[cfg(test)]
     persistence_failure_point: Option<persistence::PersistenceFailurePoint>,
 }
@@ -1438,9 +1442,24 @@ impl ExcelRuntime {
             workbooks: BTreeMap::new(),
             objects,
             stale_objects: BTreeSet::new(),
+            random_state: std::sync::atomic::AtomicU64::new(
+                RuntimeEnvironment::default().initial_random_state(),
+            ),
+            environment: RuntimeEnvironment::default(),
             #[cfg(test)]
             persistence_failure_point: None,
         }
+    }
+
+    /// The clock, time-zone offset, and random seed formula evaluation uses.
+    pub fn environment(&self) -> &RuntimeEnvironment {
+        &self.environment
+    }
+
+    /// Replaces the evaluation environment and restarts the session random stream from its seed.
+    pub fn set_environment(&mut self, environment: RuntimeEnvironment) {
+        self.random_state = std::sync::atomic::AtomicU64::new(environment.initial_random_state());
+        self.environment = environment;
     }
 
     pub fn root_application(&self) -> ObjectHandle {
@@ -19796,9 +19815,12 @@ impl ExcelRuntime {
         expression: &str,
         context: &str,
     ) -> OmResult<OmValue> {
+        let calc_context = self.calc_context(workbook)?;
         let state = &self.runtime_workbook(workbook)?.loaded.state;
-        let mut evaluator = FormulaEvaluator::new(state);
-        match evaluator.evaluate_formula_text(sheet_id, expression, None) {
+        let mut evaluator = FormulaEvaluator::new(state, &calc_context);
+        let result = evaluator.evaluate_formula_text(sheet_id, expression, None);
+        self.commit_calc_context(&calc_context);
+        match result {
             Ok(value) => Ok(OmValue::from(value)),
             Err(error) => match error.into_cell_value() {
                 Some(value) => Ok(OmValue::from(value)),
@@ -27863,9 +27885,10 @@ impl ExcelRuntime {
             criteria.what.to_lowercase()
         };
 
+        let context = self.calc_context(workbook)?;
         let state = &self.runtime_workbook(workbook)?.loaded.state;
         let worksheet = state.worksheet_data_for_sheet(sheet_id)?;
-        let mut evaluator = FormulaEvaluator::new(state);
+        let mut evaluator = FormulaEvaluator::new(state, &context);
         let mut index = after_index;
         for _ in 0..positions.len() {
             index = if search_direction == XL_SEARCH_NEXT {

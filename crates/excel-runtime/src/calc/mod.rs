@@ -1,4 +1,7 @@
-use super::{APPLICATION_VERSION, EXCEL_MAX_COLUMN_INDEX, EXCEL_MAX_ROW_INDEX, xml_local_name};
+use super::{
+    APPLICATION_VERSION, EXCEL_MAX_COLUMN_INDEX, EXCEL_MAX_ROW_INDEX, RuntimeEnvironment,
+    xml_local_name,
+};
 use excel_model::{CellData, FormulaGroupKind, WorkbookState};
 use office_common::{
     CellError, CellValue, DefinedNameId, FormulaSource, NameScope, OmError, OmErrorCode, OmResult,
@@ -10,8 +13,6 @@ use regex::{Regex, RegexBuilder};
 use std::cmp::Ordering;
 use std::collections::BTreeSet;
 use std::io::Cursor;
-
-static FORMULA_RANDOM_STATE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum FormulaEvalError {
@@ -698,7 +699,7 @@ impl FormulaScalarFunction {
         }
     }
 
-    fn evaluate(self, args: &[f64]) -> Result<f64, FormulaEvalError> {
+    fn evaluate(self, args: &[f64], context: &CalcContext) -> Result<f64, FormulaEvalError> {
         let serial_weekday_monday0 = |serial: i64| {
             let adjusted_serial = if serial > 60 { serial - 1 } else { serial };
             (adjusted_serial - 1).rem_euclid(7)
@@ -3791,7 +3792,7 @@ impl FormulaScalarFunction {
                 let [] = args else {
                     return Err(FormulaEvalError::Value);
                 };
-                formula_current_excel_serial()
+                context.now_serial()
             }
             FormulaScalarFunction::Odd => {
                 let [number] = args else {
@@ -4401,13 +4402,13 @@ impl FormulaScalarFunction {
                 let [] = args else {
                     return Err(FormulaEvalError::Value);
                 };
-                Ok(formula_rand())
+                Ok(context.rand())
             }
             FormulaScalarFunction::RandBetween => {
                 let [bottom, top] = args else {
                     return Err(FormulaEvalError::Value);
                 };
-                formula_rand_between(*bottom, *top)
+                context.rand_between(*bottom, *top)
             }
             FormulaScalarFunction::Power => {
                 let [base, exponent] = args else {
@@ -4687,7 +4688,7 @@ impl FormulaScalarFunction {
                 let [] = args else {
                     return Err(FormulaEvalError::Value);
                 };
-                formula_current_excel_serial().map(f64::floor)
+                context.now_serial().map(f64::floor)
             }
             FormulaScalarFunction::Trunc => {
                 let (value, digits) = match args {
@@ -8008,6 +8009,9 @@ fn formula_serial_integer(serial: f64) -> Result<i64, FormulaEvalError> {
     Ok(serial as i64)
 }
 
+/// The 1900-system serial of the system clock in UTC, used by tests that bracket `NOW()` under the
+/// default environment.
+#[cfg(test)]
 pub(super) fn formula_current_excel_serial() -> Result<f64, FormulaEvalError> {
     let elapsed = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -8015,44 +8019,58 @@ pub(super) fn formula_current_excel_serial() -> Result<f64, FormulaEvalError> {
     Ok(25_569.0 + elapsed.as_secs_f64() / 86_400.0)
 }
 
-fn formula_random_u64() -> u64 {
-    loop {
-        let current = FORMULA_RANDOM_STATE.load(std::sync::atomic::Ordering::Relaxed);
-        let state = if current == 0 {
-            let seed = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|duration| duration.as_nanos() as u64)
-                .unwrap_or(0x9e37_79b9_7f4a_7c15);
-            let seed = seed ^ 0xa076_1d64_78bd_642f;
-            if seed == 0 {
-                0xe703_7ed1_a0b4_28db
-            } else {
-                seed
-            }
-        } else {
-            current
-        };
-        let next = state
+/// The deterministic inputs of one calculation cycle: a single clock reading projected into the
+/// workbook date system, and the session random stream, which advances only through this context.
+pub(super) struct CalcContext {
+    now_serial: Option<f64>,
+    random_state: std::cell::Cell<u64>,
+}
+
+impl CalcContext {
+    pub(super) fn new(environment: &RuntimeEnvironment, date1904: bool, random_state: u64) -> Self {
+        let date_system_offset = if date1904 { 1_462.0 } else { 0.0 };
+        Self {
+            now_serial: environment
+                .local_unix_seconds()
+                .map(|seconds| 25_569.0 + seconds / 86_400.0 - date_system_offset),
+            random_state: std::cell::Cell::new(random_state),
+        }
+    }
+
+    /// The random stream state after every draw made through this context.
+    pub(super) fn random_state(&self) -> u64 {
+        self.random_state.get()
+    }
+
+    fn now_serial(&self) -> Result<f64, FormulaEvalError> {
+        self.now_serial.ok_or(FormulaEvalError::Num)
+    }
+
+    fn next_random_u64(&self) -> u64 {
+        let next = self
+            .random_state
+            .get()
             .wrapping_mul(6_364_136_223_846_793_005)
             .wrapping_add(1_442_695_040_888_963_407);
-        match FORMULA_RANDOM_STATE.compare_exchange_weak(
-            current,
-            next,
-            std::sync::atomic::Ordering::Relaxed,
-            std::sync::atomic::Ordering::Relaxed,
-        ) {
-            Ok(_) => return next,
-            Err(_) => continue,
-        }
+        self.random_state.set(next);
+        next
+    }
+
+    fn rand(&self) -> f64 {
+        const SCALE: f64 = 1.0 / ((1_u64 << 53) as f64);
+        ((self.next_random_u64() >> 11) as f64) * SCALE
+    }
+
+    fn rand_between(&self, bottom: f64, top: f64) -> Result<f64, FormulaEvalError> {
+        formula_rand_between(bottom, top, || self.next_random_u64())
     }
 }
 
-fn formula_rand() -> f64 {
-    const SCALE: f64 = 1.0 / ((1_u64 << 53) as f64);
-    ((formula_random_u64() >> 11) as f64) * SCALE
-}
-
-fn formula_rand_between(bottom: f64, top: f64) -> Result<f64, FormulaEvalError> {
+fn formula_rand_between(
+    bottom: f64,
+    top: f64,
+    next_random_u64: impl FnOnce() -> u64,
+) -> Result<f64, FormulaEvalError> {
     if !bottom.is_finite() || !top.is_finite() {
         return Err(FormulaEvalError::Value);
     }
@@ -8072,7 +8090,7 @@ fn formula_rand_between(bottom: f64, top: f64) -> Result<f64, FormulaEvalError> 
     }
     let span = i128::from(top) - i128::from(bottom) + 1;
     let span = u64::try_from(span).map_err(|_| FormulaEvalError::Num)?;
-    let offset = (formula_random_u64() % span) as i128;
+    let offset = (next_random_u64() % span) as i128;
     Ok((i128::from(bottom) + offset) as f64)
 }
 
@@ -9088,14 +9106,16 @@ impl FormulaAggregateFunction {
 
 pub(super) struct FormulaEvaluator<'a> {
     state: &'a WorkbookState,
+    context: &'a CalcContext,
     visiting: BTreeSet<(SheetId, u32, u32)>,
     resolving_names: BTreeSet<DefinedNameId>,
 }
 
 impl<'a> FormulaEvaluator<'a> {
-    pub(super) fn new(state: &'a WorkbookState) -> Self {
+    pub(super) fn new(state: &'a WorkbookState, context: &'a CalcContext) -> Self {
         Self {
             state,
+            context,
             visiting: BTreeSet::new(),
             resolving_names: BTreeSet::new(),
         }
@@ -19390,10 +19410,11 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if min > max {
             return Err(FormulaEvalError::Value);
         }
+        let context = self.evaluator.context;
         if whole_number {
-            formula_rand_between(min, max)
+            context.rand_between(min, max)
         } else {
-            formula_checked_numeric_result(min + (max - min) * formula_rand())
+            formula_checked_numeric_result(min + (max - min) * context.rand())
         }
     }
 
@@ -20379,7 +20400,7 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         loop {
             self.skip_whitespace();
             if self.consume_char(')') {
-                return function.evaluate(args.as_slice());
+                return function.evaluate(args.as_slice(), self.evaluator.context);
             }
             args.push(self.parse_comparison()?);
             self.skip_whitespace();
@@ -20387,7 +20408,7 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                 continue;
             }
             if self.consume_char(')') {
-                return function.evaluate(args.as_slice());
+                return function.evaluate(args.as_slice(), self.evaluator.context);
             }
             return Err(FormulaEvalError::Unsupported);
         }

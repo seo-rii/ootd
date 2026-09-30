@@ -1,4 +1,4 @@
-use super::calc::FormulaEvalError;
+use super::calc::{CalcContext, FormulaEvalError};
 use super::{
     EXCEL_MAX_COLUMN_INDEX, EXCEL_MAX_ROW_INDEX, ExcelRuntime, FormulaArrayResult,
     FormulaEvaluator, RuntimeCalculationSnapshot, WorkbookCalculationState,
@@ -223,8 +223,12 @@ impl ExcelRuntime {
             .map(|worksheet| worksheet.id)
             .collect::<Vec<_>>();
         let mut report = CalculationReport::default();
+        let context = self.calc_context(workbook)?;
         for sheet_id in sheet_ids {
-            let sheet_report = self.calculate_sheet_formulas(workbook, sheet_id, None)?;
+            let sheet_report =
+                self.calculate_sheet_formulas_in_context(workbook, sheet_id, None, &context);
+            self.commit_calc_context(&context);
+            let sheet_report = sheet_report?;
             report.evaluated.extend(sheet_report.evaluated);
             report.unsupported.extend(sheet_report.unsupported);
             report.external.extend(sheet_report.external);
@@ -248,6 +252,41 @@ impl ExcelRuntime {
         workbook: WorkbookHandle,
         sheet_id: SheetId,
         scope: Option<Rect>,
+    ) -> OmResult<CalculationReport> {
+        let context = self.calc_context(workbook)?;
+        let report = self.calculate_sheet_formulas_in_context(workbook, sheet_id, scope, &context);
+        self.commit_calc_context(&context);
+        report
+    }
+
+    /// Opens one calculation cycle: a single clock reading in the workbook date system plus the
+    /// current session random stream.
+    pub(super) fn calc_context(&self, workbook: WorkbookHandle) -> OmResult<CalcContext> {
+        let date1904 = self
+            .runtime_workbook(workbook)?
+            .loaded
+            .state
+            .model()
+            .date1904;
+        Ok(CalcContext::new(
+            &self.environment,
+            date1904,
+            self.random_state.load(std::sync::atomic::Ordering::Relaxed),
+        ))
+    }
+
+    /// Carries the random draws of a finished cycle forward to the next one.
+    pub(super) fn commit_calc_context(&self, context: &CalcContext) {
+        self.random_state
+            .store(context.random_state(), std::sync::atomic::Ordering::Relaxed);
+    }
+
+    fn calculate_sheet_formulas_in_context(
+        &mut self,
+        workbook: WorkbookHandle,
+        sheet_id: SheetId,
+        scope: Option<Rect>,
+        context: &CalcContext,
     ) -> OmResult<CalculationReport> {
         let snapshot = self.runtime_workbook(workbook)?.loaded.state.clone();
         let worksheet = snapshot.worksheet_data_for_sheet(sheet_id)?;
@@ -389,7 +428,7 @@ impl ExcelRuntime {
                 continue;
             }
             if is_dynamic {
-                let mut evaluator = FormulaEvaluator::new(&snapshot);
+                let mut evaluator = FormulaEvaluator::new(&snapshot, context);
                 match evaluator.evaluate_dynamic_array_formula_cell_result(sheet_id, row, col) {
                     Ok(result) => {
                         if let Some(CellValue::Error(error)) = result.values.first() {
@@ -536,7 +575,7 @@ impl ExcelRuntime {
                     row,
                     column: col,
                 };
-                let mut evaluator = FormulaEvaluator::new(&scalar_snapshot);
+                let mut evaluator = FormulaEvaluator::new(&scalar_snapshot, context);
                 match evaluator.evaluate_formula_cell_result(sheet_id, row, col) {
                     Ok(CellValue::Error(error)) => {
                         report.errors.push(CalculationCellError {

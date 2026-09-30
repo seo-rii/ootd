@@ -290,6 +290,11 @@ contract-based until Milestone M1 pins the first behavioral Excel corpus.
   addresses for evaluated, unsupported, external-workbook, circular, volatile, and Excel-error
   outcomes. Unsupported and external formulas retain their previous cached values; volatile is an
   overlapping annotation, and unresolved categories make the report incomplete.
+- Calculation environment: `ExcelRuntime::set_environment` injects a system or fixed clock, a
+  UTC offset, and an optional random seed. Each calculation cycle evaluates against one
+  `CalcContext`, so `NOW`/`TODAY` observe one clock reading in the workbook 1900/1904 date system
+  and `RAND`/`RANDBETWEEN`/`RANDARRAY` draw from a reproducible per-session stream. Other date
+  functions still assume the 1900 system. The contract is `docs/interfaces/runtime_environment.md`.
 - Calculation metadata lifecycle: `calcPr` mode, source `calcId`, and cache-completion state are
   parsed into typed codec state. A complete workbook calculation records completed caches; partial
   or uncomputed inputs set `calcId=0` and force full recalculation on load. A SHA-256 digest of

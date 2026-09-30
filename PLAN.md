@@ -706,8 +706,13 @@ Wave 2 exit gate:
    child 위치로 옮겨 상대 참조는 이동하고 절대 참조는 유지된다. `Range.Formula`, dependency scan,
    `Calculate`가 child를 formula cell로 다루고 열린 workbook을 dirty로 만들지 않으며, child 수식
    편집은 fail-closed하고 save는 원래 `<f t="shared" si="N"/>`와 갱신된 `<v>`만 쓴다.
-   **다음 로컬:** `OOTD-038`/`OOTD-039`/`OOTD-047` clock, timezone, locale, date system, RNG와
-   runtime policy를 `RuntimeEnvironment`/`CalcContext`로 주입한다.
+   `OOTD-038`/`OOTD-039`/`OOTD-047` environment 주입 완료 (2026-09-30, synthetic):
+   `ExcelRuntime::set_environment`가 system/fixed `RuntimeClock`, UTC offset, random seed를
+   받는다. calculation cycle마다 하나의 `CalcContext`를 사용해 모든 `NOW`/`TODAY` cell이 같은
+   clock reading을 workbook 1900/1904 date system serial로 보고, `RAND`/`RANDBETWEEN`/`RANDARRAY`는
+   process-global generator 대신 seed로 재현 가능한 session stream을 쓴다. 계약은
+   `docs/interfaces/runtime_environment.md`.
+   **다음 로컬:** date/time 함수가 `CalcContext`의 1900/1904 date system으로 serial을 해석한다.
 16. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
    structured error에 추가한다.
 
@@ -726,7 +731,8 @@ Wave 3 exit gate:
 2. `OOTD-027` + `OOTD-028` + `OOTD-067`: normal/shared/legacy-array/data-table/dynamic-array
    formula group model, group-level mutation preflight와 shared child 계산 완료.
 3. `OOTD-038` + `OOTD-039` + `OOTD-047`: clock, timezone, locale, date system, RNG와 runtime
-   policy를 workbook/session `RuntimeEnvironment`/`CalcContext`에 주입한다.
+   policy를 workbook/session `RuntimeEnvironment`/`CalcContext`에 주입한다. clock, UTC offset,
+   RNG 주입 완료; date 함수의 1904 해석과 locale이 남아 있다.
 4. `OOTD-040` + `OOTD-050` + `OOTD-051`: common value/coercion/reference/error model,
    calculation session dependency graph, SCC/cycle, memoization을 만들고 calc monolith를
    function family별로 분리한다.
