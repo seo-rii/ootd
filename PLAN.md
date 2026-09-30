@@ -723,6 +723,8 @@ Wave 2 exit gate:
    graph를 explicit stack post-order로 평가해 4,000-cell chain과 3,000-cell cycle이 stack overflow로
    process를 중단시키지 않는다. lexical back edge는 provisional이라 `A1`의 `=AREAS(A1:B2)` 같은
    reference-only cycle은 정상 계산된다. 계약은 `docs/interfaces/calculation_order.md`.
+   calc 분리 시작: `calc/context.rs`(calculation context)와 `calc/date_time.rs`(date system,
+   calendar/workday 규칙).
 16. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
    structured error에 추가한다.
 

@@ -424,9 +424,11 @@ Active order:
    shared precedents are evaluated once, and evaluation walks the lexical dependency graph in
    post-order on an explicit stack, so a 4,000-cell chain or a 3,000-cell cycle no longer aborts
    the process with a stack overflow. Lexical back edges are provisional, so reference-only cycles
-   such as `=AREAS(A1:B2)` in `A1` still compute. Remaining: the common value/coercion/error
-   model, a persistent dependency index with dirty propagation, and the calc module split. The
-   contract is `docs/interfaces/calculation_order.md`.
+   such as `=AREAS(A1:B2)` in `A1` still compute. The calc split has started with
+   `calc/context.rs` (calculation context) and `calc/date_time.rs` (date systems, calendar and
+   workday rules). Remaining: the common value/coercion/error model, a persistent dependency index
+   with dirty propagation, and the rest of the calc module split. The contract is
+   `docs/interfaces/calculation_order.md`.
 
 Every numbered work unit starts with a failing regression and lands as its own reviewable commit.
 The complete `OOTD-001`~`OOTD-086` ordering, regression inventory, and compatibility completion
