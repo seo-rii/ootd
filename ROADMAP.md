@@ -447,8 +447,8 @@ Active order:
    and with iteration enabled a workbook calculation repeats passes in which circular references
    read the previous pass's value, stopping at the iteration cap or once no result moves by more
    than the maximum change. Circular references stay `#CALC!` without iteration.
-70. **Active local:** locale-sensitive coercion and `@`/`#` operator semantics
-   (`OOTD-076`/`OOTD-077`). Progress (2026-09-30, synthetic): the codec converts cell formulas
+70. Formula grammar, `@`/`#`, and locale coercion are complete (2026-09-30, synthetic,
+   `OOTD-076`/`OOTD-077`): the codec converts cell formulas
    between the file grammar and the typed grammar (`_xlfn.`/`_xlfn._xlws.` future functions,
    `_xlpm.` `LET`/`LAMBDA` parameters, `_xlfn.SINGLE` as `@`, `_xlfn.ANCHORARRAY` as `#`). Excel
    formulas therefore evaluate and display as typed, and typed formulas save with the prefixes
@@ -458,6 +458,8 @@ Active order:
    `Application.DecimalSeparator`/`ThousandsSeparator` when system separators are off) now drives
    `VALUE`/`DATEVALUE` coercion. The contracts are `docs/interfaces/formula_file_grammar.md` and
    `docs/interfaces/runtime_environment.md`.
+71. **Active local:** defined-name scope, built-in and hidden names, constants, multi-area/3D/
+   external references, and lifecycle retargeting (`OOTD-078`).
 
 Every numbered work unit starts with a failing regression and lands as its own reviewable commit.
 The complete `OOTD-001`~`OOTD-086` ordering, regression inventory, and compatibility completion

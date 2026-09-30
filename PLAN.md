@@ -749,6 +749,8 @@ Wave 2 exit gate:
    `Application.DecimalSeparator`/`ThousandsSeparator`가 대신함)이 `VALUE`/`DATEVALUE` coercion을
    결정한다. 계약은 `docs/interfaces/formula_file_grammar.md`와
    `docs/interfaces/runtime_environment.md`.
+   **다음 로컬:** `OOTD-078` defined name scope, built-in/hidden name, constant, multi-area/3D/
+   external reference와 lifecycle retargeting.
 16. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
    structured error에 추가한다.
 
