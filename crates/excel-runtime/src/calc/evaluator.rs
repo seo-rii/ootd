@@ -2,6 +2,36 @@
 
 use super::*;
 
+/// Whether `&` appears outside string literals, quoted sheet names, and bracketed references.
+fn formula_has_top_level_concatenation(formula: &str) -> bool {
+    let bytes = formula.as_bytes();
+    let mut index = 0usize;
+    let mut bracket_depth = 0usize;
+    while index < bytes.len() {
+        match bytes[index] {
+            quote @ (b'"' | b'\'') if bracket_depth == 0 => {
+                index += 1;
+                while index < bytes.len() {
+                    if bytes[index] == quote {
+                        if bytes.get(index + 1) == Some(&quote) {
+                            index += 1;
+                        } else {
+                            break;
+                        }
+                    }
+                    index += 1;
+                }
+            }
+            b'[' => bracket_depth += 1,
+            b']' => bracket_depth = bracket_depth.saturating_sub(1),
+            b'&' if bracket_depth == 0 => return true,
+            _ => {}
+        }
+        index += 1;
+    }
+    false
+}
+
 /// The single cell an implicit intersection selects from `rect` at `position`.
 fn implicit_intersection_cell(rect: Rect, position: Option<(u32, u32)>) -> Option<(u32, u32)> {
     if rect.row_first == rect.row_last && rect.col_first == rect.col_last {
@@ -416,9 +446,25 @@ impl<'a> FormulaEvaluator<'a> {
             Err(FormulaEvalError::Unsupported) => {}
             Err(error) => return Err(error),
         }
-        FormulaParser::new(formula_text, self, sheet_id, current_position)
+        let evaluate_typed = |evaluator: &mut Self| {
+            let probe = FormulaParser::new(formula_text, evaluator, sheet_id, current_position)
+                .parse_value_probe_formula()?;
+            match probe {
+                FormulaValueProbe::Error(error) => Err(error),
+                probe => formula_cell_value_from_probe(probe).ok_or(FormulaEvalError::Unsupported),
+            }
+        };
+        // A top-level `&` makes the result text, which the numeric parser cannot produce.
+        if formula_has_top_level_concatenation(formula_text) {
+            return evaluate_typed(self);
+        }
+        let numeric_result = FormulaParser::new(formula_text, self, sheet_id, current_position)
             .parse_formula()
-            .map(CellValue::Number)
+            .map(CellValue::Number);
+        if !matches!(numeric_result, Err(FormulaEvalError::Unsupported)) {
+            return numeric_result;
+        }
+        evaluate_typed(self)
     }
 
     pub(super) fn evaluate_formula_value_probe_text(

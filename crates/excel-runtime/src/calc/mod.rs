@@ -1693,6 +1693,110 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         Err(FormulaEvalError::Unsupported)
     }
 
+    /// Parses an array constant such as `{1,2;"a",TRUE}` into rows of values. Elements are signed
+    /// numbers, strings, booleans, and error literals; `,` separates columns and `;` rows.
+    fn parse_array_constant(
+        &mut self,
+    ) -> Result<Option<Vec<Vec<FormulaValueProbe>>>, FormulaEvalError> {
+        self.skip_whitespace();
+        if !self.consume_char('{') {
+            return Ok(None);
+        }
+        let mut rows = vec![Vec::new()];
+        loop {
+            self.skip_whitespace();
+            let element = if let Some(text) = self.parse_string_literal()? {
+                FormulaValueProbe::Text(text)
+            } else if let Some(error) = self.parse_error_literal() {
+                FormulaValueProbe::Error(error)
+            } else {
+                let negative = self.consume_char('-');
+                if !negative {
+                    self.consume_char('+');
+                }
+                if let Some(number) = self.parse_number()? {
+                    FormulaValueProbe::Number(if negative { -number } else { number })
+                } else if !negative && let Some(identifier) = self.parse_identifier() {
+                    if identifier.eq_ignore_ascii_case("TRUE") {
+                        FormulaValueProbe::Bool(true)
+                    } else if identifier.eq_ignore_ascii_case("FALSE") {
+                        FormulaValueProbe::Bool(false)
+                    } else {
+                        return Err(FormulaEvalError::Unsupported);
+                    }
+                } else {
+                    return Err(FormulaEvalError::Unsupported);
+                }
+            };
+            rows.last_mut()
+                .expect("array constant has a row")
+                .push(element);
+            self.skip_whitespace();
+            if self.consume_char(',') {
+                continue;
+            }
+            if self.consume_char(';') {
+                rows.push(Vec::new());
+                continue;
+            }
+            if self.consume_char('}') {
+                break;
+            }
+            return Err(FormulaEvalError::Unsupported);
+        }
+        let width = rows[0].len();
+        if rows.iter().any(|row| row.len() != width) {
+            return Err(FormulaEvalError::Value);
+        }
+        Ok(Some(rows))
+    }
+
+    /// An argument that is an array constant, written inline or through a defined name whose
+    /// formula is one, flattened in row order.
+    fn try_parse_array_constant_argument(
+        &mut self,
+    ) -> Result<Option<Vec<FormulaValueProbe>>, FormulaEvalError> {
+        let checkpoint = self.index;
+        if let Some(rows) = self.parse_array_constant()? {
+            return Ok(Some(rows.into_iter().flatten().collect()));
+        }
+        self.index = checkpoint;
+        let Some(identifier) = self.parse_identifier() else {
+            return Ok(None);
+        };
+        self.skip_whitespace();
+        let refers_to = self
+            .evaluator
+            .state
+            .defined_names
+            .lookup(Some(self.sheet_id), identifier.as_str())
+            .filter(|name| {
+                !name.refers_to.is_r1c1 && name.refers_to.text.trim_start().starts_with('{')
+            })
+            .map(|name| name.refers_to.text.clone());
+        let (Some(refers_to), true) = (
+            refers_to,
+            self.peek_char().is_none_or(|ch| matches!(ch, ',' | ')')),
+        ) else {
+            self.index = checkpoint;
+            return Ok(None);
+        };
+        let mut parser = FormulaParser::new(
+            &refers_to,
+            &mut *self.evaluator,
+            self.sheet_id,
+            self.current_position,
+        );
+        let rows = parser
+            .parse_array_constant()?
+            .ok_or(FormulaEvalError::Unsupported)?;
+        parser.skip_whitespace();
+        if parser.index != refers_to.len() {
+            return Err(FormulaEvalError::Unsupported);
+        }
+        Ok(Some(rows.into_iter().flatten().collect()))
+    }
+
     /// Consumes an error literal such as `#N/A` or `#VALUE!` and returns the error it denotes.
     fn parse_error_literal(&mut self) -> Option<FormulaEvalError> {
         const LITERALS: [(&str, FormulaEvalError); 8] = [
@@ -3834,7 +3938,18 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         }
     }
 
+    /// Parses one text argument, joining `&`-separated operands.
     fn parse_text_value_argument(&mut self) -> Result<String, FormulaEvalError> {
+        let mut text = self.parse_text_value_operand()?;
+        self.skip_whitespace();
+        while self.consume_char('&') {
+            text.push_str(&self.parse_text_value_operand()?);
+            self.skip_whitespace();
+        }
+        Ok(text)
+    }
+
+    fn parse_text_value_operand(&mut self) -> Result<String, FormulaEvalError> {
         self.skip_whitespace();
         if let Some(text) = self.parse_string_literal()? {
             return Ok(text);
@@ -3915,7 +4030,53 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         Ok(vec![self.parse_text_value_argument()?])
     }
 
+    /// Parses one argument, joining `&`-separated operands into text. Blank operands contribute
+    /// nothing, numbers and booleans use their text forms, and the first error operand is the
+    /// result.
     fn parse_value_probe_argument(&mut self) -> Result<FormulaValueProbe, FormulaEvalError> {
+        let first = self.parse_value_probe_operand()?;
+        self.skip_whitespace();
+        if self.peek_char() != Some('&') {
+            return Ok(first);
+        }
+        let mut parts = vec![first];
+        while self.consume_char('&') {
+            parts.push(self.parse_value_probe_operand()?);
+            self.skip_whitespace();
+        }
+        let mut text = String::new();
+        for part in parts {
+            match part {
+                FormulaValueProbe::Error(error) => return Ok(FormulaValueProbe::Error(error)),
+                part => text.push_str(&formula_value_to_text(part, false)?),
+            }
+        }
+        Ok(FormulaValueProbe::Text(text))
+    }
+
+    /// One operand of a value-probe argument. An operand that a following arithmetic operator
+    /// extends is reparsed as a numeric expression, so `A1+1&"x"` concatenates `A1+1`.
+    fn parse_value_probe_operand(&mut self) -> Result<FormulaValueProbe, FormulaEvalError> {
+        let checkpoint = self.index;
+        let value = self.parse_value_probe_single_operand()?;
+        self.skip_whitespace();
+        if matches!(self.peek_char(), Some('+' | '-' | '*' | '/'))
+            && !matches!(
+                value,
+                FormulaValueProbe::Text(_) | FormulaValueProbe::Lambda { .. }
+            )
+        {
+            self.index = checkpoint;
+            return match self.parse_expression() {
+                Ok(value) => Ok(FormulaValueProbe::Number(value)),
+                Err(FormulaEvalError::Unsupported) => Err(FormulaEvalError::Unsupported),
+                Err(error) => Ok(FormulaValueProbe::Error(error)),
+            };
+        }
+        Ok(value)
+    }
+
+    fn parse_value_probe_single_operand(&mut self) -> Result<FormulaValueProbe, FormulaEvalError> {
         self.skip_whitespace();
         if let Some(text) = self.parse_string_literal()? {
             return Ok(FormulaValueProbe::Text(text));
@@ -3966,11 +4127,15 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                     return Ok(FormulaValueProbe::Bool(false));
                 }
                 if let Some(value) = self.binding_value(identifier.as_str())
-                    && self.peek_char().is_none_or(|ch| matches!(ch, ',' | ')'))
+                    && self
+                        .peek_char()
+                        .is_none_or(|ch| matches!(ch, ',' | ')' | '&'))
                 {
                     return Ok(value);
                 }
-                if self.peek_char().is_none_or(|ch| matches!(ch, ',' | ')'))
+                if self
+                    .peek_char()
+                    .is_none_or(|ch| matches!(ch, ',' | ')' | '&'))
                     && let Some(value) = self.defined_name_value_probe(identifier.as_str())?
                 {
                     return Ok(value);

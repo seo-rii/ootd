@@ -2113,6 +2113,18 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if let Some(reference) = self.parse_reference_set_before_boundary(&[',', ')'])? {
             return self.evaluator.numeric_values_in_reference(&reference);
         }
+        if let Some(values) = self.try_parse_array_constant_argument()? {
+            // Like references, array constants contribute only their numbers.
+            let mut numbers = Vec::new();
+            for value in values {
+                match value {
+                    FormulaValueProbe::Number(number) => numbers.push(number),
+                    FormulaValueProbe::Error(error) => return Err(error),
+                    _ => {}
+                }
+            }
+            return Ok(numbers);
+        }
         Ok(vec![self.parse_comparison()?])
     }
 

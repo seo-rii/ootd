@@ -33,6 +33,7 @@
     mod chart_paste_fail_closed;
     mod chart_paste_handle_lifecycle;
     mod chart_paste_values_transaction;
+    mod defined_name_semantics;
     mod implicit_intersection;
     mod iterative_calculation;
     mod legacy_array_calculation;

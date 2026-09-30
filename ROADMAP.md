@@ -459,7 +459,11 @@ Active order:
    `VALUE`/`DATEVALUE` coercion. The contracts are `docs/interfaces/formula_file_grammar.md` and
    `docs/interfaces/runtime_environment.md`.
 71. **Active local:** defined-name scope, built-in and hidden names, constants, multi-area/3D/
-   external references, and lifecycle retargeting (`OOTD-078`).
+   external references, and lifecycle retargeting (`OOTD-078`). Progress (2026-09-30,
+   synthetic): names evaluate constants, name chains, single- and multi-area ranges, sheet-scope
+   shadowing, callable `LAMBDA` names, and array constants. The evaluator gained `&`
+   concatenation in cell formulas and function arguments and inline `{…}` array constants for
+   numeric aggregates. The contract is `docs/interfaces/defined_name_evaluation.md`.
 
 Every numbered work unit starts with a failing regression and lands as its own reviewable commit.
 The complete `OOTD-001`~`OOTD-086` ordering, regression inventory, and compatibility completion
