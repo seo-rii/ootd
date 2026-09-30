@@ -38,6 +38,7 @@
     mod range_fill_spill;
     mod range_paste_special_transaction;
     mod range_structural_shift_transaction;
+    mod shared_formula_calculation;
 
     mod encrypted_ooxml_fixture {
         include!(concat!(

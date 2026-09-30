@@ -1,5 +1,5 @@
 use super::{APPLICATION_VERSION, EXCEL_MAX_COLUMN_INDEX, EXCEL_MAX_ROW_INDEX, xml_local_name};
-use excel_model::WorkbookState;
+use excel_model::{CellData, FormulaGroupKind, WorkbookState};
 use office_common::{
     CellError, CellValue, DefinedNameId, FormulaSource, NameScope, OmError, OmErrorCode, OmResult,
     OmValue, Rect, SheetId,
@@ -22072,6 +22072,54 @@ fn parse_a1_axis_reference_to_r1c1(
     }
 
     None
+}
+
+/// Gives every shared-formula child the master formula translated to the child's position, so
+/// evaluation, formula inspection, and dependency scans treat each child as a formula cell. The
+/// XLSX rewriter keeps emitting the child's original formula-less `<f>` element.
+pub(super) fn expand_shared_formula_children(state: &mut WorkbookState) -> OmResult<()> {
+    let sheet_ids = state.worksheet_data().keys().copied().collect::<Vec<_>>();
+    for sheet_id in sheet_ids {
+        let worksheet = state.worksheet_data_for_sheet_mut(sheet_id)?;
+        let mut expansions = Vec::new();
+        for (&anchor, group) in &worksheet.formula_groups {
+            if group.kind != FormulaGroupKind::Shared {
+                continue;
+            }
+            let Some(master) = worksheet
+                .cells
+                .get(&anchor)
+                .and_then(|cell| cell.formula.as_ref())
+            else {
+                continue;
+            };
+            let relative = if master.is_r1c1 {
+                master.text.clone()
+            } else {
+                convert_formula_a1_to_r1c1(&master.text, anchor.0, anchor.1)
+            };
+            for &child in &group.members {
+                expansions.push((
+                    child,
+                    convert_formula_r1c1_to_a1(&relative, child.0, child.1),
+                ));
+            }
+        }
+        for (child, text) in expansions {
+            let cell = worksheet.cells.entry(child).or_insert(CellData {
+                value: CellValue::Blank,
+                formula: None,
+                style_id: None,
+            });
+            if cell.formula.is_none() {
+                cell.formula = Some(FormulaSource {
+                    text,
+                    is_r1c1: false,
+                });
+            }
+        }
+    }
+    Ok(())
 }
 
 pub(super) fn convert_formula_a1_to_r1c1(formula: &str, base_row: u32, base_col: u32) -> String {

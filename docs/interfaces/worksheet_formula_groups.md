@@ -19,9 +19,21 @@ group as a unit instead of as independent cells.
 
 `WorksheetData.formula_groups` holds shared and data-table groups keyed by anchor.
 `FormulaGroup::owns` and `WorksheetData::formula_group_owner_for_key` answer whether a coordinate
-belongs to a group. A shared child keeps `CellData.formula = None` and its cached value; the
-child's formula text is not synthesized. A data-table anchor usually has an empty `<f/>` element
-and therefore also has no formula text.
+belongs to a group. The codec loads a shared child with `CellData.formula = None` and its cached
+value. A data-table anchor usually has an empty `<f/>` element and therefore also has no formula
+text.
+
+## Shared Child Calculation
+
+When the runtime opens a workbook it gives every shared child the master formula translated to
+the child's position: the master's A1 text is converted to R1C1 at the master and back to A1 at
+the child, so relative references move with the child and absolute references stay fixed
+(`$A$1+A1` in `C1` becomes `$A$1+B1` in `D1`). Evaluation, dependency scans, and `Range.Formula`
+therefore treat children as formula cells, and `Calculate` refreshes their cached values. The
+expansion does not mark the workbook dirty. On save the XLSX rewriter ignores a child's
+translated text and re-emits its source `<f t="shared" si="N"/>`, so only the cached `<v>`
+changes. The runtime regressions are in
+`crates/excel-runtime/src/tests/shared_formula_calculation.rs`.
 
 Legacy CSE arrays and dynamic arrays share the spill model: both reject edits to non-anchor
 members and both round-trip their `t="array"`/`ref` metadata. Telling the two apart requires
@@ -76,8 +88,7 @@ covered by `formula_group_members_reject_structural_and_transfer_commands` and
 
 ## Remaining Boundaries
 
-- Shared children do not carry synthesized formula text, so calculation treats them as their
-  cached values.
+- Codec-only consumers (without the runtime) see shared children as cached values.
 - No command removes or replaces a whole shared group or data table yet, so group-owned cells stay
   read-only for payload edits.
 - Legacy-array versus dynamic-array classification waits for cell-metadata (`cm` → `XLDAPR`)

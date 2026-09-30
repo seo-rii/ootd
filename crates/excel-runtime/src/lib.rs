@@ -7,7 +7,8 @@ pub use recalculation::{CalculationCell, CalculationCellError, CalculationReport
 
 use calc::{
     FormulaArrayResult, FormulaEvaluator, convert_formula_a1_to_r1c1,
-    convert_formula_r1c1_to_a1, format_external_address_qualifier, format_formula_string_literal,
+    convert_formula_r1c1_to_a1, expand_shared_formula_children, format_external_address_qualifier,
+    format_formula_string_literal,
     format_rect_address_with_flags, format_rect_r1c1_address_with_flags, formula_cell_error_text,
     formula_sheet_address_qualifier, parse_rect_a1, render_range_text_value,
     shift_formula_a1_references, split_reference_union_text, worksheet_function_formula_name,
@@ -1608,6 +1609,7 @@ impl ExcelRuntime {
         if let Some(display_name) = display_name.filter(|value| !value.is_empty()) {
             loaded.state.set_display_name(display_name);
         }
+        expand_shared_formula_children(&mut loaded.state)?;
 
         let handle_value = self.next_handle;
         let workbook_id = WorkbookId(handle_value);

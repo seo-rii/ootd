@@ -2849,7 +2849,13 @@ pub(crate) fn rewrite_worksheet_xml(
         let coordinates = (row_index, col_index);
         // Shared children and data-table anchors carry their group definition in an `<f>` element
         // without formula text, so a rewrite keeps that element and all of its group attributes.
-        let is_formula_group_cell = worksheet.formula_group_owner_for_key(coordinates).is_some();
+        let formula_group_owner = worksheet.formula_group_owner_for_key(coordinates);
+        let is_formula_group_cell = formula_group_owner.is_some();
+        // A runtime may give a shared child its translated formula text; the child's source
+        // `<f t="shared" si="N"/>` stays authoritative on save.
+        let is_shared_formula_child = formula_group_owner.is_some_and(|(anchor, group)| {
+            group.kind == FormulaGroupKind::Shared && anchor != coordinates
+        });
         let is_empty_cell = cell.formula.is_none()
             && !is_formula_group_cell
             && matches!(cell.value, CellValue::Blank)
@@ -2993,11 +2999,14 @@ pub(crate) fn rewrite_worksheet_xml(
                         writer.get_mut().write_all(raw_bytes).map_err(io_error)?;
                     }
                     CellContentSegment::Formula => {
-                        if let Some(formula) = &cell.formula {
+                        if is_shared_formula_child
+                            || (cell.formula.is_none() && is_formula_group_cell)
+                        {
+                            writer.get_mut().write_all(raw_bytes).map_err(io_error)?;
+                            wrote_formula = true;
+                        } else if let Some(formula) = &cell.formula {
                             write_formula_xml(writer, formula)?;
                             wrote_formula = true;
-                        } else if is_formula_group_cell {
-                            writer.get_mut().write_all(raw_bytes).map_err(io_error)?;
                         }
                     }
                     CellContentSegment::Value => match &cell.value {

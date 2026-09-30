@@ -400,8 +400,13 @@ Active order:
    shared/legacy-array/dynamic-array/normal/data-table load, no-op, unrelated-edit, touched-rewrite,
    targeted-mutation, and reopen matrix pins the contract in
    `docs/interfaces/worksheet_formula_groups.md`.
-64. **Active local:** shared-formula children calculate from their master's formula shifted to the
-   child offset instead of acting as cached constants (`OOTD-027`/`OOTD-028`/`OOTD-067`).
+64. Shared-formula child calculation is complete (2026-09-30, synthetic): runtime open translates
+   each child's master formula to its position through R1C1, so relative references move and
+   absolute references stay fixed; `Range.Formula`, dependency scans, and `Calculate` treat
+   children as formula cells without dirtying the opened workbook, child formula edits fail closed,
+   and save re-emits the source `<f t="shared" si="N"/>` with only the refreshed `<v>`.
+65. **Active local:** clock, timezone, locale, date system, RNG, and runtime policy are injected
+   through a workbook/session `RuntimeEnvironment`/`CalcContext` (`OOTD-038`/`OOTD-039`/`OOTD-047`).
 
 Every numbered work unit starts with a failing regression and lands as its own reviewable commit.
 The complete `OOTD-001`~`OOTD-086` ordering, regression inventory, and compatibility completion

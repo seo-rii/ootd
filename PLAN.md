@@ -702,8 +702,12 @@ Wave 2 exit gate:
    command는 허용하며 save preflight가 일관되지 않은 group을 거부한다. shared/legacy-array/
    dynamic-array/normal/data-table의 load/no-op/unrelated-edit/touched-rewrite/targeted-mutation/
    reopen matrix를 고정했다. 계약은 `docs/interfaces/worksheet_formula_groups.md`.
-   **다음 로컬:** shared formula child가 cached constant가 아니라 master 수식을 child offset만큼
-   이동한 수식으로 계산되게 한다.
+   shared child 계산 완료 (2026-09-30, synthetic): runtime open이 master 수식을 R1C1로 거쳐 각
+   child 위치로 옮겨 상대 참조는 이동하고 절대 참조는 유지된다. `Range.Formula`, dependency scan,
+   `Calculate`가 child를 formula cell로 다루고 열린 workbook을 dirty로 만들지 않으며, child 수식
+   편집은 fail-closed하고 save는 원래 `<f t="shared" si="N"/>`와 갱신된 `<v>`만 쓴다.
+   **다음 로컬:** `OOTD-038`/`OOTD-039`/`OOTD-047` clock, timezone, locale, date system, RNG와
+   runtime policy를 `RuntimeEnvironment`/`CalcContext`로 주입한다.
 16. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
    structured error에 추가한다.
 
@@ -720,7 +724,7 @@ Wave 3 exit gate:
 1. `OOTD-023` + `OOTD-024` + `OOTD-025` + `OOTD-026` + `OOTD-066` 완료: cell type별
    blank/missing/formula-cache fidelity model과 load/edit/save matrix가 고정되었다.
 2. `OOTD-027` + `OOTD-028` + `OOTD-067`: normal/shared/legacy-array/data-table/dynamic-array
-   formula group model과 group-level mutation preflight 완료. shared child 계산이 남아 있다.
+   formula group model, group-level mutation preflight와 shared child 계산 완료.
 3. `OOTD-038` + `OOTD-039` + `OOTD-047`: clock, timezone, locale, date system, RNG와 runtime
    policy를 workbook/session `RuntimeEnvironment`/`CalcContext`에 주입한다.
 4. `OOTD-040` + `OOTD-050` + `OOTD-051`: common value/coercion/reference/error model,
