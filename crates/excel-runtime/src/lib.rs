@@ -4,7 +4,7 @@ mod environment;
 mod persistence;
 mod recalculation;
 
-pub use environment::{RuntimeClock, RuntimeEnvironment};
+pub use environment::{RuntimeClock, RuntimeDateOrder, RuntimeEnvironment, RuntimeLocale};
 pub use recalculation::{CalculationCell, CalculationCellError, CalculationReport};
 
 use calc::{

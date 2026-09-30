@@ -21,6 +21,7 @@ pub(crate) struct CalcContext {
     random_state: std::cell::Cell<u64>,
     cell_results: std::cell::RefCell<CalcCellResults>,
     iterative: bool,
+    locale: RuntimeLocale,
 }
 
 pub(super) type CalcCellResults = std::collections::BTreeMap<(SheetId, u32, u32), CalcCellResult>;
@@ -41,7 +42,20 @@ impl CalcContext {
             random_state: std::cell::Cell::new(random_state),
             cell_results: std::cell::RefCell::new(CalcCellResults::new()),
             iterative: false,
+            locale: environment.locale,
         }
+    }
+
+    /// Replaces the locale's digit separators, as `Application.UseSystemSeparators = False` does
+    /// with `DecimalSeparator` and `ThousandsSeparator`.
+    pub(crate) fn with_separators(mut self, decimal: char, group: char) -> Self {
+        self.locale.decimal_separator = decimal;
+        self.locale.group_separator = group;
+        self
+    }
+
+    pub(super) fn locale(&self) -> RuntimeLocale {
+        self.locale
     }
 
     /// Enables iterative calculation: a circular reference reads the referenced cell's value from

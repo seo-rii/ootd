@@ -9,7 +9,11 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if !self.consume_char(')') {
             return Err(FormulaEvalError::Unsupported);
         }
-        formula_datevalue_text(self.evaluator.context.date_system(), text.as_str())
+        formula_datevalue_text(
+            self.evaluator.context.date_system(),
+            self.evaluator.context.locale(),
+            text.as_str(),
+        )
     }
 
     pub(super) fn parse_timevalue_function(&mut self) -> Result<f64, FormulaEvalError> {

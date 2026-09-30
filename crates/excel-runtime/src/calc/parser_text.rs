@@ -2323,7 +2323,11 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if !self.consume_char(')') {
             return Err(FormulaEvalError::Unsupported);
         }
-        formula_value_text(self.evaluator.context.date_system(), text.as_str())
+        formula_value_text(
+            self.evaluator.context.date_system(),
+            self.evaluator.context.locale(),
+            text.as_str(),
+        )
     }
 
     pub(super) fn parse_numbervalue_function(&mut self) -> Result<f64, FormulaEvalError> {

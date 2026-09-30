@@ -343,11 +343,22 @@ impl ExcelRuntime {
             .state
             .model()
             .date1904;
-        Ok(CalcContext::new(
+        let context = CalcContext::new(
             &self.environment,
             date1904,
             self.random_state.load(std::sync::atomic::Ordering::Relaxed),
-        ))
+        );
+        let separator = |text: &str| text.chars().next();
+        Ok(
+            match (
+                self.use_system_separators,
+                separator(&self.decimal_separator),
+                separator(&self.thousands_separator),
+            ) {
+                (false, Some(decimal), Some(group)) => context.with_separators(decimal, group),
+                _ => context,
+            },
+        )
     }
 
     /// Carries the random draws of a finished cycle forward to the next one.

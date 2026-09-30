@@ -34,6 +34,7 @@ fn fixed_environment(utc_offset_minutes: i32, random_seed: Option<u64>) -> Runti
         clock: RuntimeClock::Fixed(UNIX_EPOCH + Duration::from_secs(FIXED_UNIX_SECONDS)),
         utc_offset_minutes,
         random_seed,
+        locale: crate::RuntimeLocale::default(),
     }
 }
 
@@ -309,4 +310,63 @@ fn calculation_orders_deep_precedent_chains_without_recursing() {
             "{address}"
         );
     }
+}
+
+#[test]
+fn runtime_environment_locale_drives_text_coercion() {
+    let german = RuntimeEnvironment {
+        locale: crate::RuntimeLocale {
+            decimal_separator: ',',
+            group_separator: '.',
+            date_order: crate::RuntimeDateOrder::DayMonthYear,
+        },
+        ..fixed_environment(0, None)
+    };
+    let cases = |runtime: &mut ExcelRuntime, sheet: ObjectHandle, cases: &[(&str, &str, f64)]| {
+        for (address, formula, _) in cases {
+            set_formula(runtime, sheet, address, formula);
+        }
+        calculate(runtime);
+        for (address, formula, expected) in cases {
+            let [actual] = values(runtime, sheet, &[address])[..] else {
+                unreachable!()
+            };
+            assert_eq!(actual, *expected, "{address} {formula}");
+        }
+    };
+
+    let (mut runtime, _, sheet) = open_runtime(Some(german));
+    cases(
+        &mut runtime,
+        sheet,
+        &[
+            ("M1", "=VALUE(\"1.234,5\")", 1_234.5),
+            ("M2", "=VALUE(\"3/4/2026\")-DATE(2026,4,3)", 0.0),
+            ("M3", "=DATEVALUE(\"02.01.2026\")-DATE(2026,1,2)", 0.0),
+        ],
+    );
+
+    let (mut runtime, _, sheet) = open_runtime(None);
+    cases(
+        &mut runtime,
+        sheet,
+        &[
+            ("M1", "=VALUE(\"1,234.5\")", 1_234.5),
+            ("M2", "=VALUE(\"3/4/2026\")-DATE(2026,3,4)", 0.0),
+        ],
+    );
+    for (member, value) in [
+        ("UseSystemSeparators", OmValue::Bool(false)),
+        ("DecimalSeparator", OmValue::Text(",".to_string())),
+        ("ThousandsSeparator", OmValue::Text(" ".to_string())),
+    ] {
+        runtime
+            .dispatch_set(runtime.root_application(), member, value, &[])
+            .unwrap_or_else(|error| panic!("Application.{member}: {error:?}"));
+    }
+    cases(
+        &mut runtime,
+        sheet,
+        &[("M3", "=VALUE(\"1 234,5\")", 1_234.5)],
+    );
 }

@@ -744,8 +744,11 @@ Wave 2 exit gate:
    변환한다(`_xlfn.`/`_xlfn._xlws.` future function, `LET`/`LAMBDA`의 `_xlpm.` parameter,
    `_xlfn.SINGLE`↔`@`, `_xlfn.ANCHORARRAY`↔`#`). Excel 수식이 입력한 그대로 평가·표시되고 입력한
    수식은 Excel이 요구하는 prefix와 함께 저장되어 `#NAME?`으로 열리지 않는다. runtime은 `@`를
-   수식의 행/열 implicit intersection으로 평가하고 `#N/A` 같은 error literal을 해석한다. 계약은
-   `docs/interfaces/formula_file_grammar.md`.
+   수식의 행/열 implicit intersection으로 평가하고 `#N/A` 같은 error literal을 해석한다.
+   `RuntimeEnvironment::locale`(소수/그룹 구분자와 숫자 날짜 순서, system separator를 끄면
+   `Application.DecimalSeparator`/`ThousandsSeparator`가 대신함)이 `VALUE`/`DATEVALUE` coercion을
+   결정한다. 계약은 `docs/interfaces/formula_file_grammar.md`와
+   `docs/interfaces/runtime_environment.md`.
 16. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
    structured error에 추가한다.
 

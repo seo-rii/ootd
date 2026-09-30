@@ -17,6 +17,7 @@ it.
 | `clock` | `RuntimeClock::System` reads the host clock; `RuntimeClock::Fixed(instant)` reports one instant | `System` |
 | `utc_offset_minutes` | Offset added to the clock reading to obtain workbook-local time | `0` (UTC) |
 | `random_seed` | Seed of the session random stream; `None` seeds once from the system clock | `None` |
+| `locale` | `RuntimeLocale`: decimal separator, digit-group separator, and `RuntimeDateOrder` for numeric dates | en-US (`.`, `,`, month/day/year) |
 
 `set_environment` restarts the session random stream from the new environment's seed, so the same
 seed and the same sequence of calculations reproduce the same random values.
@@ -43,6 +44,11 @@ The context captures:
   day-count financial functions) goes through one `DateSystem`. In the 1904 system a serial is the
   1900 serial minus 1,462 days, negative serials and dates before 1904-01-01 are `#NUM!`, and
   serial differences are unchanged.
+- **Locale:** `VALUE`, `DATEVALUE`, and text-to-number coercion read digits with the locale's
+  decimal and group separators and numeric dates in its date order. A four-digit leading year
+  always reads year/month/day, and `.` separates date parts only when it is not the decimal
+  separator. When `Application.UseSystemSeparators` is false, `Application.DecimalSeparator` and
+  `ThousandsSeparator` replace the locale's separators for the cycle.
 - **Random stream:** `RAND`, `RANDBETWEEN`, and `RANDARRAY` draw from the session stream held by
   the runtime. The context works on a copy and the runtime stores the advanced state when the
   cycle ends, so consecutive cycles continue one deterministic sequence. Draws made while `Find`
@@ -54,7 +60,8 @@ The regressions are in `crates/excel-runtime/src/tests/runtime_environment.rs`.
 
 - The offset is fixed; daylight-saving transitions and named time zones are the host's
   responsibility.
-- Locale-sensitive parsing and formatting are not part of the environment yet (`OOTD-076`).
+- The locale covers text-to-number and text-to-date coercion only. Number formatting, month and
+  day names, list separators in `FormulaLocal`, and localized function names are not localized.
 - Number-format rendering outside formula evaluation (`Range.Text`) has not been audited for the
   1904 system.
 - Functions that validate a whole-day serial before converting it (`DAYS360`, `ISOWEEKNUM`,

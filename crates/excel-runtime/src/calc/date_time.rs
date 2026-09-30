@@ -5,6 +5,7 @@ use super::*;
 
 pub(super) fn formula_datevalue_text(
     date_system: DateSystem,
+    locale: RuntimeLocale,
     text: &str,
 ) -> Result<f64, FormulaEvalError> {
     let trimmed = text.trim();
@@ -81,10 +82,13 @@ pub(super) fn formula_datevalue_text(
         }
         return date_system.serial_from_args(year as f64, month as f64, day as f64);
     }
+    // `.` separates dates only where it cannot be a decimal point.
     let separator = if trimmed.contains('-') {
         '-'
     } else if trimmed.contains('/') {
         '/'
+    } else if trimmed.contains('.') && locale.decimal_separator != '.' {
+        '.'
     } else {
         return Err(FormulaEvalError::Value);
     };
@@ -103,7 +107,11 @@ pub(super) fn formula_datevalue_text(
     let (year, month, day) = if parts[0].trim().len() == 4 {
         (first, second, third)
     } else {
-        (third, first, second)
+        match locale.date_order {
+            RuntimeDateOrder::MonthDayYear => (third, first, second),
+            RuntimeDateOrder::DayMonthYear => (third, second, first),
+            RuntimeDateOrder::YearMonthDay => (first, second, third),
+        }
     };
     if !(1900..=9999).contains(&year) || !(1..=12).contains(&month) || day < 1 {
         return Err(FormulaEvalError::Value);

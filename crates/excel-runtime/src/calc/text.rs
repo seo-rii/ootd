@@ -381,6 +381,7 @@ pub(super) fn formula_numbervalue(
 
 pub(super) fn formula_value_text(
     date_system: DateSystem,
+    locale: RuntimeLocale,
     text: &str,
 ) -> Result<f64, FormulaEvalError> {
     let mut body = text.trim();
@@ -432,10 +433,12 @@ pub(super) fn formula_value_text(
         return Err(FormulaEvalError::Value);
     }
 
-    let mut value = match formula_numbervalue(body, ".", ",") {
+    let decimal = locale.decimal_separator.to_string();
+    let group = locale.group_separator.to_string();
+    let mut value = match formula_numbervalue(body, &decimal, &group) {
         Ok(value) => value,
         Err(FormulaEvalError::Value) if !accounting_negative && !explicit_negative => {
-            if let Ok(value) = formula_datevalue_text(date_system, body) {
+            if let Ok(value) = formula_datevalue_text(date_system, locale, body) {
                 value
             } else if let Ok(value) = formula_timevalue_text(body) {
                 value
@@ -451,7 +454,7 @@ pub(super) fn formula_value_text(
                         continue;
                     }
                     if let (Ok(date), Ok(time)) = (
-                        formula_datevalue_text(date_system, date_text),
+                        formula_datevalue_text(date_system, locale, date_text),
                         formula_timevalue_text(time_text),
                     ) {
                         parsed = Some(date + time);

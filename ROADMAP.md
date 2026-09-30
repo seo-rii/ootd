@@ -453,8 +453,11 @@ Active order:
    `_xlpm.` `LET`/`LAMBDA` parameters, `_xlfn.SINGLE` as `@`, `_xlfn.ANCHORARRAY` as `#`). Excel
    formulas therefore evaluate and display as typed, and typed formulas save with the prefixes
    Excel requires instead of opening as `#NAME?`. The runtime evaluates `@` as implicit
-   intersection with the formula's row or column and parses error literals such as `#N/A`. The
-   contract is `docs/interfaces/formula_file_grammar.md`.
+   intersection with the formula's row or column and parses error literals such as `#N/A`.
+   `RuntimeEnvironment::locale` (decimal/group separators and numeric date order, overridden by
+   `Application.DecimalSeparator`/`ThousandsSeparator` when system separators are off) now drives
+   `VALUE`/`DATEVALUE` coercion. The contracts are `docs/interfaces/formula_file_grammar.md` and
+   `docs/interfaces/runtime_environment.md`.
 
 Every numbered work unit starts with a failing regression and lands as its own reviewable commit.
 The complete `OOTD-001`~`OOTD-086` ordering, regression inventory, and compatibility completion
