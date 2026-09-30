@@ -643,7 +643,28 @@ const PINNED_OM_TEMPLATE_JSON: &str = include_str!(concat!(
     "/../../specs/pinned/office_idl_excel_om.template.json"
 ));
 #[cfg(test)]
-const FORMULA_IMPLEMENTATION_SOURCE: &str = include_str!("calc/mod.rs");
+/// The formula implementation from the function-name helpers through the reference-text boundary,
+/// in the order the parser-coverage test scans it.
+const FORMULA_IMPLEMENTATION_SOURCE: &str = concat!(
+    include_str!("calc/text.rs"),
+    include_str!("calc/engineering.rs"),
+    include_str!("calc/matrix.rs"),
+    include_str!("calc/financial.rs"),
+    include_str!("calc/date_time.rs"),
+    include_str!("calc/context.rs"),
+    include_str!("calc/lookup.rs"),
+    include_str!("calc/aggregate_functions.rs"),
+    include_str!("calc/evaluator.rs"),
+    include_str!("calc/mod.rs"),
+    include_str!("calc/parser_text.rs"),
+    include_str!("calc/parser_lookup.rs"),
+    include_str!("calc/parser_statistics.rs"),
+    include_str!("calc/parser_logic.rs"),
+    include_str!("calc/parser_financial.rs"),
+    include_str!("calc/parser_math.rs"),
+    include_str!("calc/parser_date_time.rs"),
+    include_str!("calc/reference_text.rs"),
+);
 
 /// Purpose-specific dirty state for one open workbook.
 ///

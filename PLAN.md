@@ -723,8 +723,10 @@ Wave 2 exit gate:
    graph를 explicit stack post-order로 평가해 4,000-cell chain과 3,000-cell cycle이 stack overflow로
    process를 중단시키지 않는다. lexical back edge는 provisional이라 `A1`의 `=AREAS(A1:B2)` 같은
    reference-only cycle은 정상 계산된다. 계약은 `docs/interfaces/calculation_order.md`.
-   calc 분리 시작: `calc/context.rs`(calculation context)와 `calc/date_time.rs`(date system,
-   calendar/workday 규칙).
+   calc monolith를 family별로 분리했다: context, evaluator, scalar/aggregate function table,
+   date/time, text, lookup, numeric, engineering, matrix, financial, A1/R1C1 reference text와 7개
+   family별 `FormulaParser` impl block. `calc/mod.rs`는 공용 type, expression grammar, dispatch만
+   남아 약 4,100줄이다.
 16. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
    structured error에 추가한다.
 
