@@ -13,6 +13,7 @@ pub(super) use cells::{
 };
 #[cfg(test)]
 pub(super) use cells::{parse_worksheet_cells, rewrite_worksheet_xml};
+pub(super) use formula_grammar::{file_formula_to_model, model_formula_to_file};
 pub(super) use table::resolve_table_structural_owners;
 
 #[cfg(test)]

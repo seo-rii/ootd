@@ -135,3 +135,79 @@ fn typed_formulas_save_with_file_grammar_prefixes() {
         Some("SUM(@A1:A3,1)")
     );
 }
+
+#[test]
+fn defined_name_formulas_use_the_typed_grammar() {
+    let mut package = OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("package");
+    let workbook = String::from_utf8(package.part("xl/workbook.xml").expect("workbook").bytes.clone())
+        .expect("workbook utf-8")
+        .replace(
+            "</sheets>",
+            r#"</sheets><definedNames><definedName name="Pick">_xlfn.XLOOKUP(1,Sheet1!$A$1:$A$3,Sheet1!$B$1:$B$3)</definedName><definedName name="Twice">_xlfn.LAMBDA(_xlpm.v,_xlpm.v*2)</definedName></definedNames>"#,
+        );
+    package
+        .replace_part_bytes("xl/workbook.xml", workbook.into_bytes())
+        .expect("replace workbook");
+    let mut loaded = XlsxCodec
+        .load(
+            &package.to_bytes().expect("bytes"),
+            CommonLoadOptions::default(),
+        )
+        .expect("load defined names");
+    let texts = loaded
+        .state
+        .defined_names
+        .iter()
+        .map(|name| (name.display_name.clone(), name.refers_to.text.clone()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        texts,
+        vec![
+            (
+                "Pick".to_string(),
+                "XLOOKUP(1,Sheet1!$A$1:$A$3,Sheet1!$B$1:$B$3)".to_string()
+            ),
+            ("Twice".to_string(), "LAMBDA(v,v*2)".to_string()),
+        ]
+    );
+
+    let twice = loaded
+        .state
+        .defined_names
+        .iter()
+        .find(|name| name.display_name == "Twice")
+        .expect("Twice")
+        .id;
+    loaded
+        .state
+        .defined_names_mut()
+        .set_refers_to_by_id(
+            twice,
+            FormulaSource {
+                text: "LAMBDA(v,IFS(v>0,v*3,TRUE,0))".to_string(),
+                is_r1c1: false,
+            },
+        )
+        .expect("edit defined name");
+    let saved = XlsxCodec
+        .save(&loaded, CommonSaveOptions::default())
+        .expect("save defined names");
+    let workbook_xml = String::from_utf8(
+        OpcPackage::from_bytes(&saved)
+            .expect("saved package")
+            .part("xl/workbook.xml")
+            .expect("workbook")
+            .bytes
+            .clone(),
+    )
+    .expect("workbook utf-8");
+    for expected in [
+        r#"<definedName name="Pick">_xlfn.XLOOKUP(1,Sheet1!$A$1:$A$3,Sheet1!$B$1:$B$3)</definedName>"#,
+        r#"<definedName name="Twice">_xlfn.LAMBDA(_xlpm.v,_xlfn.IFS(_xlpm.v&gt;0,_xlpm.v*3,TRUE,0))</definedName>"#,
+    ] {
+        assert!(
+            workbook_xml.contains(expected),
+            "missing {expected} in:\n{workbook_xml}"
+        );
+    }
+}

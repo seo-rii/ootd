@@ -73,7 +73,8 @@ use shared_strings::parse_shared_strings;
 pub use worksheet::WorkbookCellMetadata;
 use worksheet::{
     SHEET_METADATA_CONTENT_TYPE, cell_reference, collect_support_part_dimension_coords,
-    dynamic_array_cell_metadata_xml, format_cell_error, parse_dynamic_array_cell_metadata,
+    dynamic_array_cell_metadata_xml, file_formula_to_model, format_cell_error,
+    model_formula_to_file, parse_dynamic_array_cell_metadata,
     parse_worksheet_cells_with_cell_metadata, resolve_table_structural_owners,
     rewrite_worksheet_xml_with_cell_metadata,
 };
@@ -4302,7 +4303,7 @@ fn parse_workbook_with_mode(
             scope,
             record.display_name,
             FormulaSource {
-                text: record.text,
+                text: file_formula_to_model(&record.text),
                 is_r1c1: false,
             },
         );
@@ -27810,7 +27811,7 @@ fn write_defined_names<W: Write>(
             .map_err(xml_error)?;
         writer
             .write_event(Event::Text(BytesText::from_escaped(partial_escape(
-                defined_name.refers_to.text.as_str(),
+                model_formula_to_file(&defined_name.refers_to.text).as_str(),
             ))))
             .map_err(xml_error)?;
         writer

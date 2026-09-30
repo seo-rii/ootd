@@ -25,8 +25,8 @@ XLSX codec converts at the package boundary in `crates/excel-xlsx/src/worksheet/
 - `LET` names enter scope at their declaration and `LAMBDA` parameters for the whole call. Only
   identifiers inside that scope gain `_xlpm.`, so an outer name that matches a parameter
   elsewhere in the formula is left alone.
-- Load converts shared-formula masters, array formulas, data-table formulas, and ordinary
-  formulas alike. Untouched cells keep their source bytes on save. A rewritten cell converts its
+- Load converts shared-formula masters, array formulas, data-table formulas, ordinary
+  formulas, and defined-name formulas alike. Untouched cells keep their source bytes on save. A rewritten cell converts its
   typed text back, so loading and re-saving file-grammar formulas reproduces them exactly.
 
 The regressions are the unit tests in `formula_grammar.rs` and
@@ -34,8 +34,8 @@ The regressions are the unit tests in `formula_grammar.rs` and
 
 ## Remaining Boundaries
 
-- Defined names, data-validation formulas, conditional formats, and chart formulas still keep
-  their file text without conversion.
+- Data-validation formulas, conditional formats, and chart formulas still keep their file text
+  without conversion.
 
 ## Runtime Semantics
 
