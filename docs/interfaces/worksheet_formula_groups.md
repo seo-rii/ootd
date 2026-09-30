@@ -45,6 +45,15 @@ fixed-size legacy (CSE) array. It owns its whole `ref` range, rejects payload ed
 including the anchor, and keeps its `t="array"`/`ref` attributes and `cm` through dirty rewrites.
 The contract for the metadata part is `docs/interfaces/dynamic_array_metadata.md`.
 
+`Calculate` evaluates a legacy array's anchor formula as an array and writes the result into the
+fixed range without resizing it:
+- a one-row or one-column result repeats across the range;
+- positions beyond a larger result are `#N/A`;
+- an error or circular result fills every cell.
+
+Scalar formulas that read the members observe the refreshed values in the same cycle. The runtime
+regression is `crates/excel-runtime/src/tests/legacy_array_calculation.rs`.
+
 ## Load Validation
 
 Load fails closed with the worksheet part and cell reference when:
@@ -96,4 +105,3 @@ covered by `formula_group_members_reject_structural_and_transfer_commands` and
 - Codec-only consumers (without the runtime) see shared children as cached values.
 - No command removes or replaces a whole shared group or data table yet, so group-owned cells stay
   read-only for payload edits.
-- Legacy arrays are not recalculated as arrays yet; only their anchor formula is evaluated.

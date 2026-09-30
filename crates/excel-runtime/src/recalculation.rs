@@ -3,9 +3,20 @@ use super::{
     EXCEL_MAX_COLUMN_INDEX, EXCEL_MAX_ROW_INDEX, ExcelRuntime, FormulaArrayResult,
     FormulaEvaluator, RuntimeCalculationSnapshot, WorkbookCalculationState,
 };
-use excel_model::WorkbookState;
+use excel_model::{FormulaGroupKind, WorkbookState};
 use office_common::{CellError, CellValue, ObjectHandle, OmResult, Rect, SheetId, WorkbookHandle};
 use sha2::{Digest, Sha256};
+
+/// The value a fixed-size legacy (CSE) array shows at an offset of its range: a one-row or
+/// one-column result repeats across the range, and positions beyond the result are `#N/A`.
+fn legacy_array_cell_value(result: &FormulaArrayResult, row: usize, col: usize) -> CellValue {
+    let row = if result.rows == 1 { 0 } else { row };
+    let col = if result.cols == 1 { 0 } else { col };
+    if row >= result.rows || col >= result.cols {
+        return CellValue::Error(CellError::NA);
+    }
+    result.values[row * result.cols + col].clone()
+}
 
 /// A one-based formula-cell address within a runtime workbook.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -306,6 +317,11 @@ impl ExcelRuntime {
                             col,
                             formula.text.clone(),
                             worksheet.dynamic_array_formulas.contains(&(row, col)),
+                            worksheet
+                                .formula_groups
+                                .get(&(row, col))
+                                .filter(|group| group.kind == FormulaGroupKind::LegacyArray)
+                                .map(|group| group.range),
                         )
                     })
             })
@@ -413,8 +429,9 @@ impl ExcelRuntime {
         let mut report = CalculationReport::default();
         let mut formula_cache_changed = false;
         let mut dynamic_updates = Vec::<((u32, u32), FormulaArrayResult)>::new();
+        let mut legacy_array_updates = Vec::<(Rect, FormulaArrayResult)>::new();
         let mut scalar_formula_cells = Vec::new();
-        for (row, col, formula, is_dynamic) in formula_cells {
+        for (row, col, formula, is_dynamic, legacy_array_range) in formula_cells {
             let calculation_cell = CalculationCell {
                 sheet_id,
                 row,
@@ -427,7 +444,43 @@ impl ExcelRuntime {
                 report.external.push(calculation_cell);
                 continue;
             }
-            if is_dynamic {
+            if let Some(range) = legacy_array_range {
+                let mut evaluator = FormulaEvaluator::new(&snapshot, context);
+                let result = match evaluator
+                    .evaluate_dynamic_array_formula_cell_result(sheet_id, row, col)
+                {
+                    Ok(result) => {
+                        if let Some(CellValue::Error(error)) = result.values.first() {
+                            report.errors.push(CalculationCellError {
+                                cell: calculation_cell,
+                                error: error.clone(),
+                            });
+                        } else {
+                            report.evaluated.push(calculation_cell);
+                        }
+                        result
+                    }
+                    Err(FormulaEvalError::Unsupported) => {
+                        report.unsupported.push(calculation_cell);
+                        continue;
+                    }
+                    Err(FormulaEvalError::Circular) => {
+                        report.circular.push(calculation_cell);
+                        FormulaArrayResult::single(CellValue::Error(CellError::Calc))
+                    }
+                    Err(error) => {
+                        let Some(CellValue::Error(cell_error)) = error.into_cell_value() else {
+                            continue;
+                        };
+                        report.errors.push(CalculationCellError {
+                            cell: calculation_cell,
+                            error: cell_error.clone(),
+                        });
+                        FormulaArrayResult::single(CellValue::Error(cell_error))
+                    }
+                };
+                legacy_array_updates.push((range, result));
+            } else if is_dynamic {
                 let mut evaluator = FormulaEvaluator::new(&snapshot, context);
                 match evaluator.evaluate_dynamic_array_formula_cell_result(sheet_id, row, col) {
                     Ok(result) => {
@@ -563,6 +616,38 @@ impl ExcelRuntime {
                 }
                 worksheet.spill_ranges.insert(anchor, spill_rect);
                 worksheet.dirty = true;
+            }
+            context.forget_cell_results();
+        }
+
+        if !legacy_array_updates.is_empty() {
+            let worksheet = self
+                .runtime_workbook_mut(workbook)?
+                .loaded
+                .state
+                .worksheet_data_for_sheet_mut(sheet_id)?;
+            for (range, result) in legacy_array_updates {
+                for target_row in range.row_first..=range.row_last {
+                    for target_col in range.col_first..=range.col_last {
+                        let value = legacy_array_cell_value(
+                            &result,
+                            (target_row - range.row_first) as usize,
+                            (target_col - range.col_first) as usize,
+                        );
+                        let key = (target_row, target_col);
+                        let cell = worksheet.cells.entry(key).or_insert(excel_model::CellData {
+                            value: CellValue::Blank,
+                            formula: None,
+                            style_id: None,
+                        });
+                        if cell.value != value {
+                            cell.value = value;
+                            worksheet.dirty_cells.insert(key);
+                            worksheet.dirty = true;
+                            formula_cache_changed = true;
+                        }
+                    }
+                }
             }
             context.forget_cell_results();
         }

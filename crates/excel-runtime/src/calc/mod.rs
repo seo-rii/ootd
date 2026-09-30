@@ -82,7 +82,7 @@ pub(super) struct FormulaArrayResult {
 }
 
 impl FormulaArrayResult {
-    fn single(value: CellValue) -> Self {
+    pub(super) fn single(value: CellValue) -> Self {
         Self {
             rows: 1,
             cols: 1,

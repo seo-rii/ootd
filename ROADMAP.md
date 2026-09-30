@@ -439,7 +439,9 @@ Active order:
    `xl/metadata.xml` with its relationship and content-type override when the package has none,
    so new `Formula2` arrays no longer reopen in Excel as `{=...}` CSE arrays. It drops a stale
    dynamic `cm` from cells that are no longer dynamic anchors and refuses to append to a foreign
-   cell-metadata part. The contract is `docs/interfaces/dynamic_array_metadata.md`.
+   cell-metadata part. `Calculate` fills each legacy array's fixed range from its array result,
+   repeating one-row or one-column results and writing `#N/A` beyond larger ones. The contract is
+   `docs/interfaces/dynamic_array_metadata.md`.
 69. **Active local:** calculation mode and iterative calculation, locale coercion, and `@`/`#`
    operator semantics (`OOTD-075`/`OOTD-076`/`OOTD-077`).
 
