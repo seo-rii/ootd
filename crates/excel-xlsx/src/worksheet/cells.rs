@@ -13,7 +13,9 @@ use super::super::{
     xml_error,
 };
 
-use excel_model::{CellData, WorksheetData, WorksheetStructuralOwners};
+use excel_model::{
+    CellData, FormulaGroup, FormulaGroupKind, WorksheetData, WorksheetStructuralOwners,
+};
 use office_common::{
     CellError, CellValue, ExcelLimits, FormulaSource, IsoDateTime, OmError, OmErrorCode, OmResult,
     Rect, RichTextSource, RichTextValue, StyleId,
@@ -226,6 +228,277 @@ pub(crate) fn parse_bounded_a1_rect(
     })
 }
 
+#[derive(Debug)]
+struct PendingFormulaGroup {
+    kind: FormulaGroupKind,
+    reference: Option<String>,
+    shared_index: Option<String>,
+}
+
+fn rect_contains(rect: &Rect, (row, col): (u32, u32)) -> bool {
+    row >= rect.row_first && row <= rect.row_last && col >= rect.col_first && col <= rect.col_last
+}
+
+fn rects_overlap(left: &Rect, right: &Rect) -> bool {
+    left.row_first <= right.row_last
+        && right.row_first <= left.row_last
+        && left.col_first <= right.col_last
+        && right.col_first <= left.col_last
+}
+
+fn rect_reference(rect: &Rect) -> String {
+    let first = cell_reference(rect.row_first, rect.col_first);
+    let last = cell_reference(rect.row_last, rect.col_last);
+    if first == last {
+        first
+    } else {
+        format!("{first}:{last}")
+    }
+}
+
+/// Reads one `<f>` element's group attributes. Array formulas record their spill range on the
+/// owning cell immediately; shared and data-table formulas are recorded when the cell closes.
+fn begin_formula_element(
+    element: &BytesStart<'_>,
+    resolver: &NamespaceResolver,
+    decoder: quick_xml::encoding::Decoder,
+    cell: Option<(u32, u32, &mut Option<Rect>)>,
+    pending_group: &mut Option<PendingFormulaGroup>,
+    worksheet_part_uri: &str,
+) -> OmResult<()> {
+    let mut formula_type = None;
+    let mut formula_reference = None;
+    let mut shared_index = None;
+    for attr in element.attributes() {
+        let attr = attr.map_err(xml_error)?;
+        let value = attr
+            .decode_and_unescape_value(decoder)
+            .map_err(xml_error)?
+            .into_owned();
+        if unqualified_attribute_is(resolver, attr.key, b"t") {
+            formula_type = Some(value);
+        } else if unqualified_attribute_is(resolver, attr.key, b"ref") {
+            formula_reference = Some(value);
+        } else if unqualified_attribute_is(resolver, attr.key, b"si") {
+            shared_index = Some(value);
+        }
+    }
+    let group_kind = match formula_type.as_deref() {
+        None | Some("normal") => return Ok(()),
+        Some("array") => None,
+        Some("shared") => Some(FormulaGroupKind::Shared),
+        Some("dataTable") => Some(FormulaGroupKind::DataTable),
+        Some(other) => {
+            return Err(OmError::parse(format!(
+                "{worksheet_part_uri}: unsupported formula type {other}"
+            )));
+        }
+    };
+    let Some((row, col, current_spill_range)) = cell else {
+        return Err(OmError::parse(format!(
+            "{worksheet_part_uri}: {} formula is not contained by a worksheet cell",
+            formula_type.as_deref().unwrap_or_default()
+        )));
+    };
+    if let Some(kind) = group_kind {
+        *pending_group = Some(PendingFormulaGroup {
+            kind,
+            reference: formula_reference,
+            shared_index,
+        });
+        return Ok(());
+    }
+
+    let formula_reference = formula_reference.ok_or_else(|| {
+        OmError::new(
+            OmErrorCode::Parse,
+            "array formula is missing its spill range reference",
+        )
+    })?;
+    let normalized = formula_reference.replace('$', "");
+    let (first, last) = normalized.split_once(':').map_or(
+        (normalized.as_str(), normalized.as_str()),
+        |(first, last)| (first, last),
+    );
+    let (row_first, col_first) = parse_cell_reference(first, None).map_err(|error| {
+        OmError::new(
+            error.code,
+            format!("{worksheet_part_uri}: {}", error.message),
+        )
+    })?;
+    let (row_last, col_last) = parse_cell_reference(last, None).map_err(|error| {
+        OmError::new(
+            error.code,
+            format!("{worksheet_part_uri}: {}", error.message),
+        )
+    })?;
+    if row_first > row_last || col_first > col_last {
+        return Err(OmError::new(
+            OmErrorCode::Parse,
+            format!("invalid array formula spill range: {formula_reference}"),
+        ));
+    }
+    if (row, col) != (row_first, col_first) {
+        return Err(OmError::new(
+            OmErrorCode::Parse,
+            format!(
+                "array formula anchor {} is not the top-left of {formula_reference}",
+                cell_reference(row, col),
+            ),
+        ));
+    }
+    *current_spill_range = Some(Rect {
+        row_first,
+        row_last,
+        col_first,
+        col_last,
+    });
+    Ok(())
+}
+
+fn record_formula_group(
+    anchor: (u32, u32),
+    pending: PendingFormulaGroup,
+    has_formula_text: bool,
+    formula_groups: &mut BTreeMap<(u32, u32), FormulaGroup>,
+    shared_formula_masters: &mut BTreeMap<u32, (u32, u32)>,
+    shared_formula_children: &mut Vec<((u32, u32), u32)>,
+    worksheet_part_uri: &str,
+) -> OmResult<()> {
+    let reference = cell_reference(anchor.0, anchor.1);
+    let parse_range = |value: &str, owner: &str| {
+        parse_bounded_a1_rect(&value.replace('$', ""), worksheet_part_uri, owner)
+    };
+    match pending.kind {
+        FormulaGroupKind::Shared => {
+            let shared_index = pending.shared_index.ok_or_else(|| {
+                OmError::parse(format!(
+                    "{worksheet_part_uri}: shared formula at {reference} is missing its shared index"
+                ))
+            })?;
+            let shared_index = shared_index.parse::<u32>().map_err(|_| {
+                OmError::parse(format!(
+                    "{worksheet_part_uri}: invalid shared formula index at {reference}: {shared_index}"
+                ))
+            })?;
+            let Some(range_reference) = pending.reference else {
+                shared_formula_children.push((anchor, shared_index));
+                return Ok(());
+            };
+            let range = parse_range(&range_reference, "shared formula")?;
+            if !rect_contains(&range, anchor) {
+                return Err(OmError::parse(format!(
+                    "{worksheet_part_uri}: shared formula master {reference} is outside shared formula range {range_reference}"
+                )));
+            }
+            if !has_formula_text {
+                return Err(OmError::parse(format!(
+                    "{worksheet_part_uri}: shared formula master {reference} has no formula text"
+                )));
+            }
+            if shared_formula_masters
+                .insert(shared_index, anchor)
+                .is_some()
+            {
+                return Err(OmError::parse(format!(
+                    "{worksheet_part_uri}: duplicate shared formula index {shared_index} at {reference}"
+                )));
+            }
+            formula_groups.insert(
+                anchor,
+                FormulaGroup {
+                    kind: FormulaGroupKind::Shared,
+                    range,
+                    shared_index: Some(shared_index),
+                    members: BTreeSet::new(),
+                },
+            );
+        }
+        FormulaGroupKind::DataTable => {
+            let range_reference = pending.reference.ok_or_else(|| {
+                OmError::parse(format!(
+                    "{worksheet_part_uri}: data table formula at {reference} is missing its range reference"
+                ))
+            })?;
+            let range = parse_range(&range_reference, "data table")?;
+            if (range.row_first, range.col_first) != anchor {
+                return Err(OmError::parse(format!(
+                    "{worksheet_part_uri}: data table formula anchor {reference} is not the top-left of {range_reference}"
+                )));
+            }
+            formula_groups.insert(
+                anchor,
+                FormulaGroup {
+                    kind: FormulaGroupKind::DataTable,
+                    range,
+                    shared_index: None,
+                    members: BTreeSet::new(),
+                },
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Attaches shared children to their masters and rejects cells owned by more than one formula
+/// group or array spill range.
+fn resolve_formula_groups(
+    formula_groups: &mut BTreeMap<(u32, u32), FormulaGroup>,
+    shared_formula_masters: &BTreeMap<u32, (u32, u32)>,
+    shared_formula_children: Vec<((u32, u32), u32)>,
+    spill_ranges: &BTreeMap<(u32, u32), Rect>,
+    worksheet_part_uri: &str,
+) -> OmResult<()> {
+    for (child, shared_index) in shared_formula_children {
+        let reference = cell_reference(child.0, child.1);
+        let anchor = shared_formula_masters.get(&shared_index).ok_or_else(|| {
+            OmError::parse(format!(
+                "{worksheet_part_uri}: shared formula index {shared_index} at {reference} has no master formula"
+            ))
+        })?;
+        let group = formula_groups
+            .get_mut(anchor)
+            .expect("shared formula master is recorded as a group");
+        if !rect_contains(&group.range, child) {
+            return Err(OmError::parse(format!(
+                "{worksheet_part_uri}: shared formula child {reference} is outside shared formula range {}",
+                rect_reference(&group.range)
+            )));
+        }
+        group.members.insert(child);
+    }
+
+    let data_table_overlaps = |anchor: (u32, u32), owns: &dyn Fn(&Rect) -> bool| {
+        formula_groups.iter().any(|(other_anchor, other)| {
+            *other_anchor != anchor
+                && other.kind == FormulaGroupKind::DataTable
+                && owns(&other.range)
+        })
+    };
+    for (&anchor, group) in formula_groups.iter() {
+        let conflict = match group.kind {
+            FormulaGroupKind::Shared => std::iter::once(anchor)
+                .chain(group.members.iter().copied())
+                .find(|&key| {
+                    spill_ranges.values().any(|range| rect_contains(range, key))
+                        || data_table_overlaps(anchor, &|range| rect_contains(range, key))
+                }),
+            FormulaGroupKind::DataTable => (spill_ranges
+                .values()
+                .any(|range| rects_overlap(range, &group.range))
+                || data_table_overlaps(anchor, &|range| rects_overlap(range, &group.range)))
+            .then_some(anchor),
+        };
+        if let Some(key) = conflict {
+            return Err(OmError::parse(format!(
+                "{worksheet_part_uri}: overlapping formula group at {}",
+                cell_reference(key.0, key.1)
+            )));
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn parse_worksheet_cells(
     worksheet_xml: &[u8],
     shared_strings: &[CellValue],
@@ -238,6 +511,10 @@ pub(crate) fn parse_worksheet_cells(
     let mut cells = BTreeMap::new();
     let mut dynamic_array_formulas = BTreeSet::new();
     let mut spill_ranges = BTreeMap::new();
+    let mut formula_groups = BTreeMap::new();
+    let mut shared_formula_masters = BTreeMap::new();
+    let mut shared_formula_children = Vec::new();
+    let mut current_formula_group = None::<PendingFormulaGroup>;
     let mut seen_cells = BTreeSet::new();
     let mut current_row = None;
     let mut current_field = None;
@@ -393,6 +670,7 @@ pub(crate) fn parse_worksheet_cells(
                         "{worksheet_part_uri}: duplicate worksheet cell coordinate: {reference}"
                     )));
                 }
+                current_formula_group = None;
                 current_cell = Some((
                     row,
                     col,
@@ -483,78 +761,36 @@ pub(crate) fn parse_worksheet_cells(
                     b"f",
                 ) =>
             {
-                let mut formula_type = None;
-                let mut formula_reference = None;
-                for attr in element.attributes() {
-                    let attr = attr.map_err(xml_error)?;
-                    let value = attr
-                        .decode_and_unescape_value(reader.decoder())
-                        .map_err(xml_error)?
-                        .into_owned();
-                    if unqualified_attribute_is(reader.resolver(), attr.key, b"t") {
-                        formula_type = Some(value);
-                    } else if unqualified_attribute_is(reader.resolver(), attr.key, b"ref") {
-                        formula_reference = Some(value);
-                    }
-                }
-                if formula_type.as_deref() == Some("array") {
-                    let formula_reference = formula_reference.ok_or_else(|| {
-                        OmError::new(
-                            OmErrorCode::Parse,
-                            "array formula is missing its spill range reference",
-                        )
-                    })?;
-                    let normalized = formula_reference.replace('$', "");
-                    let (first, last) = normalized.split_once(':').map_or(
-                        (normalized.as_str(), normalized.as_str()),
-                        |(first, last)| (first, last),
-                    );
-                    let (row_first, col_first) =
-                        parse_cell_reference(first, None).map_err(|error| {
-                            OmError::new(
-                                error.code,
-                                format!("{worksheet_part_uri}: {}", error.message),
-                            )
-                        })?;
-                    let (row_last, col_last) =
-                        parse_cell_reference(last, None).map_err(|error| {
-                            OmError::new(
-                                error.code,
-                                format!("{worksheet_part_uri}: {}", error.message),
-                            )
-                        })?;
-                    if row_first > row_last || col_first > col_last {
-                        return Err(OmError::new(
-                            OmErrorCode::Parse,
-                            format!("invalid array formula spill range: {formula_reference}"),
-                        ));
-                    }
-                    let spill_range = Rect {
-                        row_first,
-                        row_last,
-                        col_first,
-                        col_last,
-                    };
-                    let Some((row, col, _, _, _, _, _, current_spill_range)) =
-                        current_cell.as_mut()
-                    else {
-                        return Err(OmError::new(
-                            OmErrorCode::Parse,
-                            "array formula is not contained by a worksheet cell",
-                        ));
-                    };
-                    if (*row, *col) != (row_first, col_first) {
-                        return Err(OmError::new(
-                            OmErrorCode::Parse,
-                            format!(
-                                "array formula anchor {} is not the top-left of {formula_reference}",
-                                cell_reference(*row, *col),
-                            ),
-                        ));
-                    }
-                    *current_spill_range = Some(spill_range);
-                }
+                begin_formula_element(
+                    &element,
+                    reader.resolver(),
+                    reader.decoder(),
+                    current_cell
+                        .as_mut()
+                        .map(|cell| (cell.0, cell.1, &mut cell.7)),
+                    &mut current_formula_group,
+                    worksheet_part_uri,
+                )?;
                 current_field = Some("formula");
+            }
+            Ok((namespace, Event::Empty(element)))
+                if resolved_element_is(
+                    &namespace,
+                    element.local_name(),
+                    spreadsheet_namespace.as_bytes(),
+                    b"f",
+                ) =>
+            {
+                begin_formula_element(
+                    &element,
+                    reader.resolver(),
+                    reader.decoder(),
+                    current_cell
+                        .as_mut()
+                        .map(|cell| (cell.0, cell.1, &mut cell.7)),
+                    &mut current_formula_group,
+                    worksheet_part_uri,
+                )?;
             }
             Ok((namespace, Event::Start(element)))
                 if current_inline_item.is_none()
@@ -799,6 +1035,17 @@ pub(crate) fn parse_worksheet_cells(
                         row,
                         col,
                     )?;
+                    if let Some(pending_group) = current_formula_group.take() {
+                        record_formula_group(
+                            (row, col),
+                            pending_group,
+                            !formula.is_empty(),
+                            &mut formula_groups,
+                            &mut shared_formula_masters,
+                            &mut shared_formula_children,
+                            worksheet_part_uri,
+                        )?;
+                    }
                     if !matches!(cell_value, CellValue::Blank)
                         || !formula.is_empty()
                         || style_id.is_some()
@@ -846,6 +1093,14 @@ pub(crate) fn parse_worksheet_cells(
         }
         buffer.clear();
     }
+
+    resolve_formula_groups(
+        &mut formula_groups,
+        &shared_formula_masters,
+        shared_formula_children,
+        &spill_ranges,
+        worksheet_part_uri,
+    )?;
 
     let mut spill_owners = BTreeMap::new();
     for &cell in cells.keys() {
@@ -1818,6 +2073,7 @@ pub(crate) fn parse_worksheet_cells(
         dynamic_array_formulas,
         spill_ranges,
         spill_owners,
+        formula_groups,
         structural_owners: WorksheetStructuralOwners {
             merged_ranges,
             data_validation_ranges,
@@ -1836,6 +2092,7 @@ pub(crate) struct ParsedWorksheetCells {
     pub(crate) dynamic_array_formulas: BTreeSet<(u32, u32)>,
     pub(crate) spill_ranges: BTreeMap<(u32, u32), Rect>,
     pub(crate) spill_owners: BTreeMap<(u32, u32), (u32, u32)>,
+    pub(crate) formula_groups: BTreeMap<(u32, u32), FormulaGroup>,
     pub(crate) structural_owners: WorksheetStructuralOwners,
 }
 
@@ -2589,7 +2846,12 @@ pub(crate) fn rewrite_worksheet_xml(
             cell_tag.push_attribute(("t", cell_type));
         }
 
+        let coordinates = (row_index, col_index);
+        // Shared children and data-table anchors carry their group definition in an `<f>` element
+        // without formula text, so a rewrite keeps that element and all of its group attributes.
+        let is_formula_group_cell = worksheet.formula_group_owner_for_key(coordinates).is_some();
         let is_empty_cell = cell.formula.is_none()
+            && !is_formula_group_cell
             && matches!(cell.value, CellValue::Blank)
             && cell.style_id.is_some();
         if is_empty_cell {
@@ -2603,7 +2865,6 @@ pub(crate) fn rewrite_worksheet_xml(
             .write_event(Event::Start(cell_tag))
             .map_err(xml_error)?;
 
-        let coordinates = (row_index, col_index);
         let is_dynamic_array_formula = worksheet.dynamic_array_formulas.contains(&coordinates);
         let spill_reference = is_dynamic_array_formula.then(|| {
             let spill_range = worksheet
@@ -2628,6 +2889,7 @@ pub(crate) fn rewrite_worksheet_xml(
                             continue;
                         }
                         if !is_dynamic_array_formula
+                            && !is_formula_group_cell
                             && worksheet.dirty_cells.contains(&coordinates)
                             && matches!(key.as_str(), "t" | "ref" | "si" | "aca")
                         {
@@ -2734,6 +2996,8 @@ pub(crate) fn rewrite_worksheet_xml(
                         if let Some(formula) = &cell.formula {
                             write_formula_xml(writer, formula)?;
                             wrote_formula = true;
+                        } else if is_formula_group_cell {
+                            writer.get_mut().write_all(raw_bytes).map_err(io_error)?;
                         }
                     }
                     CellContentSegment::Value => match &cell.value {

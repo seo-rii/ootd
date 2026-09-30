@@ -81,8 +81,8 @@ and checks:
 
 - A rewritten numeric or boolean cell does not retain its source spelling; the guarantee is
   typed-value identity, not byte identity. Untouched cells keep their bytes.
-- Shared, legacy array, and data-table formula groups (`f@t`, `si`, `ref`) are outside this
-  contract and remain `OOTD-027`/`OOTD-028`/`OOTD-067`.
+- Shared, legacy array, and data-table formula groups (`f@t`, `si`, `ref`) are specified by
+  `docs/interfaces/worksheet_formula_groups.md`.
 - Desktop Excel evidence remains required before any row above is Oracle-verified. Excel's own
   tolerance of `true`/`false` and of empty `v` lexicals is unobserved, so those rows are
   synthetic policy decisions.

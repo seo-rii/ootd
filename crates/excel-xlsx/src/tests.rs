@@ -37,6 +37,7 @@
     use office_opc::{CompressionMethod, OpcPart};
 
     mod cell_value_fidelity;
+    mod formula_groups;
 
     mod encrypted_ooxml_fixture {
         include!(concat!(

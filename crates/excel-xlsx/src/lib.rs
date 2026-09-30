@@ -1697,6 +1697,7 @@ impl XlsxCodec {
                             dynamic_array_formulas: parsed_cells.dynamic_array_formulas,
                             spill_ranges: parsed_cells.spill_ranges,
                             spill_owners: parsed_cells.spill_owners,
+                            formula_groups: parsed_cells.formula_groups,
                             structural_owners: parsed_cells.structural_owners,
                         },
                     );

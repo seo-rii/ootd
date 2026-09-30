@@ -55,7 +55,38 @@ pub struct WorksheetData {
     pub dynamic_array_formulas: BTreeSet<(u32, u32)>,
     pub spill_ranges: BTreeMap<(u32, u32), Rect>,
     pub spill_owners: BTreeMap<(u32, u32), (u32, u32)>,
+    pub formula_groups: BTreeMap<(u32, u32), FormulaGroup>,
     pub structural_owners: WorksheetStructuralOwners,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FormulaGroupKind {
+    Shared,
+    DataTable,
+}
+
+/// A worksheet formula group keyed by its anchor cell. A shared group owns its master plus the
+/// explicit child cells that reference its `si`; a data-table group owns every cell in `range`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FormulaGroup {
+    pub kind: FormulaGroupKind,
+    pub range: Rect,
+    pub shared_index: Option<u32>,
+    pub members: BTreeSet<(u32, u32)>,
+}
+
+impl FormulaGroup {
+    pub fn owns(&self, anchor: (u32, u32), key: (u32, u32)) -> bool {
+        match self.kind {
+            FormulaGroupKind::Shared => key == anchor || self.members.contains(&key),
+            FormulaGroupKind::DataTable => {
+                key.0 >= self.range.row_first
+                    && key.0 <= self.range.row_last
+                    && key.1 >= self.range.col_first
+                    && key.1 <= self.range.col_last
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -91,11 +122,44 @@ impl WorksheetData {
         })
     }
 
+    pub fn formula_group_owner_for_key(
+        &self,
+        key: (u32, u32),
+    ) -> Option<((u32, u32), &FormulaGroup)> {
+        self.formula_groups
+            .iter()
+            .find(|(anchor, group)| group.owns(**anchor, key))
+            .map(|(anchor, group)| (*anchor, group))
+    }
+
+    fn ensure_formula_group_is_not_modified(
+        &self,
+        key: (u32, u32),
+        operation: &str,
+    ) -> OmResult<()> {
+        let Some((anchor, group)) = self.formula_group_owner_for_key(key) else {
+            return Ok(());
+        };
+        let member = match group.kind {
+            FormulaGroupKind::Shared if key == anchor => "shared formula master",
+            FormulaGroupKind::Shared => "shared formula child",
+            FormulaGroupKind::DataTable => "data table cell",
+        };
+        Err(OmError::new(
+            OmErrorCode::InvalidState,
+            format!(
+                "cannot {operation} {member} R{}C{}; formula group anchor is R{}C{}",
+                key.0, key.1, anchor.0, anchor.1,
+            ),
+        ))
+    }
+
     fn ensure_spill_children_are_not_edited(
         &self,
         keys: impl IntoIterator<Item = (u32, u32)>,
     ) -> OmResult<()> {
         for key in keys {
+            self.ensure_formula_group_is_not_modified(key, "edit")?;
             if let Some(anchor) = self.spill_owner_for_key(key) {
                 return Err(OmError::new(
                     OmErrorCode::InvalidState,
@@ -115,6 +179,7 @@ impl WorksheetData {
         operation: &str,
     ) -> OmResult<()> {
         for key in keys {
+            self.ensure_formula_group_is_not_modified(key, operation)?;
             if let Some(anchor) = self.spill_owner_for_key(key) {
                 return Err(OmError::new(
                     OmErrorCode::InvalidState,
@@ -635,6 +700,86 @@ impl WorkbookState {
                     return Err(OmError::new(
                         OmErrorCode::InvalidState,
                         format!("worksheet {} cell R{}C{} {detail}", sheet_id.0, row, col),
+                    ));
+                }
+            }
+            for (&anchor, group) in &worksheet.formula_groups {
+                let rect_contains = |range: &Rect, key: (u32, u32)| {
+                    key.0 >= range.row_first
+                        && key.0 <= range.row_last
+                        && key.1 >= range.col_first
+                        && key.1 <= range.col_last
+                };
+                ExcelLimits::validate_rect(group.range)?;
+                match group.kind {
+                    FormulaGroupKind::Shared => {
+                        if worksheet
+                            .cells
+                            .get(&anchor)
+                            .is_none_or(|cell| cell.formula.is_none())
+                        {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                format!(
+                                    "worksheet {} shared formula master R{}C{} has no formula cell",
+                                    sheet_id.0, anchor.0, anchor.1
+                                ),
+                            ));
+                        }
+                        if let Some(member) = std::iter::once(anchor)
+                            .chain(group.members.iter().copied())
+                            .find(|&key| !rect_contains(&group.range, key))
+                        {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                format!(
+                                    "worksheet {} formula group member R{}C{} is outside its group range",
+                                    sheet_id.0, member.0, member.1
+                                ),
+                            ));
+                        }
+                    }
+                    FormulaGroupKind::DataTable => {
+                        if (group.range.row_first, group.range.col_first) != anchor {
+                            return Err(OmError::new(
+                                OmErrorCode::InvalidState,
+                                format!(
+                                    "worksheet {} data table anchor R{}C{} is not the top-left of its range",
+                                    sheet_id.0, anchor.0, anchor.1
+                                ),
+                            ));
+                        }
+                    }
+                }
+                let spill_conflict = match group.kind {
+                    FormulaGroupKind::Shared => std::iter::once(anchor)
+                        .chain(group.members.iter().copied())
+                        .find(|&key| {
+                            worksheet
+                                .spill_ranges
+                                .values()
+                                .any(|range| rect_contains(range, key))
+                        }),
+                    FormulaGroupKind::DataTable => {
+                        worksheet.spill_ranges.values().find_map(|range| {
+                            (range.row_first <= group.range.row_last
+                                && group.range.row_first <= range.row_last
+                                && range.col_first <= group.range.col_last
+                                && group.range.col_first <= range.col_last)
+                                .then_some((
+                                    range.row_first.max(group.range.row_first),
+                                    range.col_first.max(group.range.col_first),
+                                ))
+                        })
+                    }
+                };
+                if let Some(key) = spill_conflict {
+                    return Err(OmError::new(
+                        OmErrorCode::InvalidState,
+                        format!(
+                            "worksheet {} formula group cell R{}C{} overlaps an array spill range",
+                            sheet_id.0, key.0, key.1
+                        ),
                     ));
                 }
             }
@@ -1954,6 +2099,33 @@ impl WorkbookState {
                 protected_keys.push(child);
             }
         }
+        let affected_contains = |key: (u32, u32)| {
+            (affected_rect.row_first..=affected_rect.row_last).contains(&key.0)
+                && (affected_rect.col_first..=affected_rect.col_last).contains(&key.1)
+        };
+        for (&anchor, group) in &worksheet.formula_groups {
+            match group.kind {
+                FormulaGroupKind::Shared => protected_keys.extend(
+                    std::iter::once(anchor)
+                        .chain(group.members.iter().copied())
+                        .filter(|&key| affected_contains(key)),
+                ),
+                FormulaGroupKind::DataTable => {
+                    let range = group.range;
+                    if affected_rect.row_first <= range.row_last
+                        && range.row_first <= affected_rect.row_last
+                        && affected_rect.col_first <= range.col_last
+                        && range.col_first <= affected_rect.col_last
+                    {
+                        protected_keys.push((
+                            affected_rect.row_first.max(range.row_first),
+                            affected_rect.col_first.max(range.col_first),
+                        ));
+                    }
+                }
+            }
+        }
+        protected_keys.sort_unstable();
         worksheet.ensure_spill_topology_is_not_modified(protected_keys, operation)?;
 
         let source_cells = worksheet
@@ -2349,8 +2521,8 @@ mod tests {
     use super::{
         CellData, CellShiftDirection, ChartModel, ChartObjectModel, ChartSheetBinding,
         ChartSourceExpr, ChartType, DefinedNameTable, DrawingModel, DrawingObjectModel,
-        SeriesModel, TableStructuralOwner, WorkbookState, WorkbookStateParts, WorksheetData,
-        WorksheetStructuralOwners,
+        FormulaGroup, FormulaGroupKind, SeriesModel, TableStructuralOwner, WorkbookState,
+        WorkbookStateParts, WorksheetData, WorksheetStructuralOwners,
     };
     use std::collections::{BTreeMap, BTreeSet};
 
@@ -2458,6 +2630,226 @@ mod tests {
                 col_last: 4,
             },
         );
+    }
+
+    /// Seeds a shared group at `C6:C7` (master `C6`, child `C7`) and a data table at `E6:E7`,
+    /// using formulas without cell references so structural commands reach group preflight.
+    fn seed_formula_groups(state: &mut WorkbookState) {
+        let worksheet = state
+            .worksheet_data_for_sheet_mut(SheetId(3))
+            .expect("worksheet data");
+        for (key, formula) in [
+            ((6, 3), Some("1+1")),
+            ((7, 3), None),
+            ((6, 5), None),
+            ((7, 5), None),
+        ] {
+            worksheet.cells.insert(
+                key,
+                CellData {
+                    value: CellValue::Number(2.0),
+                    formula: formula.map(|text| FormulaSource {
+                        text: text.to_string(),
+                        is_r1c1: false,
+                    }),
+                    style_id: Some(StyleId(5)),
+                },
+            );
+        }
+        worksheet.formula_groups.insert(
+            (6, 3),
+            FormulaGroup {
+                kind: FormulaGroupKind::Shared,
+                range: Rect {
+                    row_first: 6,
+                    row_last: 7,
+                    col_first: 3,
+                    col_last: 3,
+                },
+                shared_index: Some(0),
+                members: BTreeSet::from([(7, 3)]),
+            },
+        );
+        worksheet.formula_groups.insert(
+            (6, 5),
+            FormulaGroup {
+                kind: FormulaGroupKind::DataTable,
+                range: Rect {
+                    row_first: 6,
+                    row_last: 7,
+                    col_first: 5,
+                    col_last: 5,
+                },
+                shared_index: None,
+                members: BTreeSet::new(),
+            },
+        );
+    }
+
+    #[test]
+    fn formula_group_members_reject_structural_and_transfer_commands() {
+        let mut state = sample_state();
+        seed_formula_groups(&mut state);
+        let before = state.clone();
+        let moved = |key: (u32, u32)| {
+            BTreeMap::from([(
+                key,
+                Some(CellData {
+                    value: CellValue::Number(9.0),
+                    formula: None,
+                    style_id: None,
+                }),
+            )])
+        };
+
+        let results = [
+            (
+                "shift",
+                state.shift_cells_with_change(
+                    SheetId(3),
+                    Rect::single_cell(1, 3),
+                    CellShiftDirection::Down,
+                ),
+                "cannot insert shared formula master R6C3; formula group anchor is R6C3",
+            ),
+            (
+                "fill source",
+                state.fill_cells_with_change(SheetId(3), BTreeSet::from([(7, 3)]), moved((20, 20))),
+                "cannot fill shared formula child R7C3; formula group anchor is R6C3",
+            ),
+            (
+                "copy target",
+                state.copy_cells_with_change(SheetId(3), moved((7, 5))),
+                "cannot copy into data table cell R7C5; formula group anchor is R6C5",
+            ),
+            (
+                "cut target",
+                state.cut_cells_with_change(SheetId(3), moved((6, 5))),
+                "cannot cut data table cell R6C5; formula group anchor is R6C5",
+            ),
+            (
+                "rearrange",
+                state.rearrange_cells_with_change(SheetId(3), moved((6, 3))),
+                "cannot rearrange shared formula master R6C3; formula group anchor is R6C3",
+            ),
+        ];
+        for (label, result, message) in results {
+            let error = result.expect_err(label);
+            assert_eq!(error.code, OmErrorCode::InvalidState, "{label}");
+            assert_eq!(error.message, message, "{label}");
+        }
+        let error = state
+            .validate_cut_source_cells(SheetId(3), &BTreeSet::from([(7, 5)]))
+            .expect_err("cut source");
+        assert_eq!(
+            error.message,
+            "cannot cut data table cell R7C5; formula group anchor is R6C5"
+        );
+        assert_eq!(state, before);
+
+        assert!(
+            state
+                .clear_range_formats_with_change(&RangeRef::single_rect(
+                    WorkbookId(7),
+                    SheetId(3),
+                    Rect {
+                        row_first: 6,
+                        row_last: 7,
+                        col_first: 3,
+                        col_last: 5,
+                    },
+                ))
+                .expect("format-only clears keep formula groups intact")
+        );
+        let worksheet = state
+            .worksheet_data_for_sheet(SheetId(3))
+            .expect("worksheet");
+        assert_eq!(
+            worksheet.formula_groups,
+            before
+                .worksheet_data_for_sheet(SheetId(3))
+                .expect("worksheet")
+                .formula_groups
+        );
+        state
+            .validate_for_save()
+            .expect("format-only clear stays savable");
+    }
+
+    type FormulaGroupSaveCase = (&'static str, fn(&mut WorksheetData), &'static str);
+
+    #[test]
+    fn save_preflight_rejects_incoherent_formula_groups() {
+        let cases: [FormulaGroupSaveCase; 5] = [
+            (
+                "master without formula",
+                |worksheet| {
+                    worksheet.cells.get_mut(&(6, 3)).expect("master").formula = None;
+                },
+                "worksheet 3 shared formula master R6C3 has no formula cell",
+            ),
+            (
+                "master outside range",
+                |worksheet| {
+                    worksheet
+                        .formula_groups
+                        .get_mut(&(6, 3))
+                        .expect("shared group")
+                        .range
+                        .row_first = 7;
+                },
+                "worksheet 3 formula group member R6C3 is outside its group range",
+            ),
+            (
+                "child outside range",
+                |worksheet| {
+                    worksheet
+                        .formula_groups
+                        .get_mut(&(6, 3))
+                        .expect("shared group")
+                        .members
+                        .insert((9, 3));
+                },
+                "worksheet 3 formula group member R9C3 is outside its group range",
+            ),
+            (
+                "data table anchor is not top-left",
+                |worksheet| {
+                    worksheet
+                        .formula_groups
+                        .get_mut(&(6, 5))
+                        .expect("data table")
+                        .range
+                        .row_first = 5;
+                },
+                "worksheet 3 data table anchor R6C5 is not the top-left of its range",
+            ),
+            (
+                "group overlaps spill",
+                |worksheet| {
+                    worksheet.dynamic_array_formulas.insert((6, 3));
+                    worksheet
+                        .spill_ranges
+                        .insert((6, 3), Rect::single_cell(6, 3));
+                },
+                "worksheet 3 formula group cell R6C3 overlaps an array spill range",
+            ),
+        ];
+        for (label, mutate, message) in cases {
+            let mut state = sample_state();
+            seed_formula_groups(&mut state);
+            state
+                .validate_for_save()
+                .expect("seeded groups are savable");
+            mutate(
+                state
+                    .worksheet_data_for_sheet_mut(SheetId(3))
+                    .expect("worksheet data"),
+            );
+            let error = state.validate_for_save().expect_err(label);
+            assert_eq!(error.code, OmErrorCode::InvalidState, "{label}");
+            assert_eq!(error.message, message, "{label}");
+        }
     }
 
     fn add_second_worksheet(state: &mut WorkbookState) {

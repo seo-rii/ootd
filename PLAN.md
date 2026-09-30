@@ -693,8 +693,17 @@ Wave 2 exit gate:
    통과한다. 계약은 `docs/interfaces/worksheet_cell_values.md`.
    **외부 gate:** pinned Windows Excel host에서 wrapper를 실행해 서로 다른 run ID의 독립 run 두
    개를 수집하고 repeated-capture gate를 통과시킨다.
-   **다음 로컬:** `OOTD-027`/`OOTD-028`/`OOTD-067` formula group model과 group-level mutation
-   preflight.
+   `OOTD-027`/`OOTD-028`/`OOTD-067` group model 완료 (2026-09-30, synthetic): shared formula
+   master/`si`/`ref`/child와 data table을 `WorksheetData.formula_groups`로 모델링하고, 빈 `<f/>`
+   element를 읽으며, 알 수 없는 `t`, 누락·잘못된·중복 `si`, master 없는 child, range 밖 child,
+   top-left가 아닌 data table anchor, 두 group 또는 spill이 함께 소유한 cell을 fail-closed한다.
+   dirty rewrite는 `t`/`ref`/`si`를 지우지 않고 child의 빈 `<f/>`를 그대로 다시 쓴다. 모든 public
+   값·수식·transfer·fill·sort·structural shift command가 group cell을 원자적으로 거부하고 format-only
+   command는 허용하며 save preflight가 일관되지 않은 group을 거부한다. shared/legacy-array/
+   dynamic-array/normal/data-table의 load/no-op/unrelated-edit/touched-rewrite/targeted-mutation/
+   reopen matrix를 고정했다. 계약은 `docs/interfaces/worksheet_formula_groups.md`.
+   **다음 로컬:** shared formula child가 cached constant가 아니라 master 수식을 child offset만큼
+   이동한 수식으로 계산되게 한다.
 16. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
    structured error에 추가한다.
 
@@ -711,7 +720,7 @@ Wave 3 exit gate:
 1. `OOTD-023` + `OOTD-024` + `OOTD-025` + `OOTD-026` + `OOTD-066` 완료: cell type별
    blank/missing/formula-cache fidelity model과 load/edit/save matrix가 고정되었다.
 2. `OOTD-027` + `OOTD-028` + `OOTD-067`: normal/shared/legacy-array/data-table/dynamic-array
-   formula group model과 group-level mutation preflight를 구현한다.
+   formula group model과 group-level mutation preflight 완료. shared child 계산이 남아 있다.
 3. `OOTD-038` + `OOTD-039` + `OOTD-047`: clock, timezone, locale, date system, RNG와 runtime
    policy를 workbook/session `RuntimeEnvironment`/`CalcContext`에 주입한다.
 4. `OOTD-040` + `OOTD-050` + `OOTD-051`: common value/coercion/reference/error model,

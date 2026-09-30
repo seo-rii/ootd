@@ -389,8 +389,19 @@ Active order:
    `f`/`v` text instead of dropping them. Rewrites share one canonical boolean/numeric lexical
    contract, and a 26-cell load/no-op/unrelated-edit/touched-rewrite/reopen matrix pins every
    supported value channel. The contract is `docs/interfaces/worksheet_cell_values.md`.
-63. **Active local:** normal/shared/legacy-array/data-table/dynamic-array formula group model and
-   group-level mutation preflight (`OOTD-027`/`OOTD-028`/`OOTD-067`).
+63. The `OOTD-027`/`OOTD-028`/`OOTD-067` group model is complete (2026-09-30, synthetic): worksheet
+   load records shared groups (master, `si`, `ref`, explicit children) and data tables as
+   `WorksheetData.formula_groups`, parses formula-less `<f/>` elements, and fails closed on
+   unknown `t`, missing/invalid/duplicate `si`, orphan or out-of-range children, misplaced
+   data-table anchors, and cells claimed by two groups or a spill. Dirty rewrites keep every group
+   attribute and re-emit formula-less child elements instead of stripping `t`/`ref`/`si`. Every
+   public payload, transfer, fill, sort, and structural shift command rejects group-owned cells
+   atomically, format-only commands stay allowed, and save preflight rejects incoherent groups. A
+   shared/legacy-array/dynamic-array/normal/data-table load, no-op, unrelated-edit, touched-rewrite,
+   targeted-mutation, and reopen matrix pins the contract in
+   `docs/interfaces/worksheet_formula_groups.md`.
+64. **Active local:** shared-formula children calculate from their master's formula shifted to the
+   child offset instead of acting as cached constants (`OOTD-027`/`OOTD-028`/`OOTD-067`).
 
 Every numbered work unit starts with a failing regression and lands as its own reviewable commit.
 The complete `OOTD-001`~`OOTD-086` ordering, regression inventory, and compatibility completion
