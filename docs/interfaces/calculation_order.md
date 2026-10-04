@@ -43,7 +43,8 @@ normally:
   recursion.
 
 Cycle results are deterministic for a given workbook, independent of which cell starts the
-evaluation.
+evaluation. The regressions are in `crates/excel-runtime/src/tests/runtime_environment.rs`
+(`calculation_*`).
 
 ## Iterative Calculation
 
@@ -73,13 +74,9 @@ The regressions are in `crates/excel-runtime/src/tests/iterative_calculation.rs`
   API.
 - Passes evaluate sheets in collection order, so the iteration count Excel needs to converge may
   differ from this runtime's.
-
 - References computed at run time (`INDIRECT`, `OFFSET`, `INDEX` returning a reference) are not
   in the lexical graph, so chains built only from them still evaluate recursively.
 - The graph is rebuilt per cycle. There is no persistent dependency index or dirty-set
   propagation yet.
 - A full-column or full-row reference scans every materialized cell in the covered rows for each
   referencing formula.
-
-The regressions are in `crates/excel-runtime/src/tests/runtime_environment.rs`
-(`calculation_*`).

@@ -546,6 +546,46 @@ pub(crate) fn expand_shared_formula_children(state: &mut WorkbookState) -> OmRes
     Ok(())
 }
 
+/// The end of a quoted sheet name (`'…'` with doubled-quote escapes) or a bracketed structured or
+/// external reference (`[…]`, nested) starting at `start`, which reference rewriting copies
+/// verbatim.
+fn formula_name_segment_end(formula: &str, start: usize) -> Option<usize> {
+    let bytes = formula.as_bytes();
+    match bytes.get(start)? {
+        b'\'' => {
+            let mut index = start + 1;
+            while index < bytes.len() {
+                if bytes[index] == b'\'' {
+                    if bytes.get(index + 1) == Some(&b'\'') {
+                        index += 2;
+                        continue;
+                    }
+                    return Some(index + 1);
+                }
+                index += 1;
+            }
+            Some(bytes.len())
+        }
+        b'[' => {
+            let mut depth = 0usize;
+            for (index, byte) in bytes.iter().enumerate().skip(start) {
+                match byte {
+                    b'[' => depth += 1,
+                    b']' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            return Some(index + 1);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Some(bytes.len())
+        }
+        _ => None,
+    }
+}
+
 pub(crate) fn convert_formula_a1_to_r1c1(formula: &str, base_row: u32, base_col: u32) -> String {
     let bytes = formula.as_bytes();
     let mut output = String::with_capacity(formula.len());
@@ -570,6 +610,14 @@ pub(crate) fn convert_formula_a1_to_r1c1(formula: &str, base_row: u32, base_col:
                 index += ch.len_utf8();
             }
             output.push_str(&formula[quoted_start..index]);
+            continue;
+        }
+
+        // Quoted sheet names and bracketed structured or external references are names, not
+        // cell references, even when their text looks like one (`'Q1'!A1`, `Table1[Col1]`).
+        if let Some(end) = formula_name_segment_end(formula, index) {
+            output.push_str(&formula[index..end]);
+            index = end;
             continue;
         }
 
@@ -778,6 +826,14 @@ pub(crate) fn convert_formula_r1c1_to_a1(formula: &str, base_row: u32, base_col:
                 index += ch.len_utf8();
             }
             output.push_str(&formula[quoted_start..index]);
+            continue;
+        }
+
+        // Quoted sheet names and bracketed structured or external references are names, not
+        // cell references, even when their text looks like one (`'Q1'!A1`, `Table1[Col1]`).
+        if let Some(end) = formula_name_segment_end(formula, index) {
+            output.push_str(&formula[index..end]);
+            index = end;
             continue;
         }
 
@@ -1017,6 +1073,14 @@ pub(crate) fn shift_formula_a1_references(formula: &str, row_delta: i64, col_del
             continue;
         }
 
+        // Quoted sheet names and bracketed structured or external references are names, not
+        // cell references, even when their text looks like one (`'Q1'!A1`, `Table1[Col1]`).
+        if let Some(end) = formula_name_segment_end(formula, index) {
+            output.push_str(&formula[index..end]);
+            index = end;
+            continue;
+        }
+
         let previous_is_boundary = formula[..index]
             .chars()
             .next_back()
@@ -1251,4 +1315,44 @@ pub(super) fn column_to_letters(mut col: u32) -> String {
         col = (col - 1) / 26;
     }
     letters.iter().rev().collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        convert_formula_a1_to_r1c1, convert_formula_r1c1_to_a1, shift_formula_a1_references,
+    };
+
+    #[test]
+    fn r1c1_conversion_keeps_names_that_look_like_references() {
+        for (a1, r1c1) in [
+            ("'Q1'!A1+B2", "'Q1'!R[-1]C[-1]+RC"),
+            ("SUM(Table1[Col1])+B2", "SUM(Table1[Col1])+RC"),
+            ("\"A1\"&B2", "\"A1\"&RC"),
+        ] {
+            assert_eq!(convert_formula_a1_to_r1c1(a1, 2, 2), r1c1, "to R1C1 {a1}");
+            assert_eq!(convert_formula_r1c1_to_a1(r1c1, 2, 2), a1, "to A1 {r1c1}");
+        }
+    }
+
+    #[test]
+    fn shifting_moves_references_but_not_names_that_look_like_them() {
+        assert_eq!(shift_formula_a1_references("'Q1'!A1+1", 1, 0), "'Q1'!A2+1");
+        assert_eq!(
+            shift_formula_a1_references("'Q1 Sales'!B2", 0, 1),
+            "'Q1 Sales'!C2"
+        );
+        assert_eq!(
+            shift_formula_a1_references("'It''s A1'!A1", 1, 1),
+            "'It''s A1'!B2"
+        );
+        assert_eq!(
+            shift_formula_a1_references("SUM(Table1[Col1])+B1", 1, 0),
+            "SUM(Table1[Col1])+B2"
+        );
+        assert_eq!(
+            shift_formula_a1_references("[1]Sheet1!A1+\"A1\"", 1, 0),
+            "[1]Sheet1!A2+\"A1\""
+        );
+    }
 }
