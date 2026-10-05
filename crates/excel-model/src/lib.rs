@@ -57,6 +57,9 @@ pub struct WorksheetData {
     pub spill_owners: BTreeMap<(u32, u32), (u32, u32)>,
     pub formula_groups: BTreeMap<(u32, u32), FormulaGroup>,
     pub structural_owners: WorksheetStructuralOwners,
+    /// Whole-row and whole-column shifts applied since `source_xml` was read, in order. The
+    /// XLSX rewriter replays them onto source-keyed worksheet elements.
+    pub structural_shifts: Vec<StructuralShift>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1061,6 +1064,21 @@ impl WorkbookState {
         Ok(())
     }
 
+    /// Replaces a worksheet's source XML with the bytes just saved, together with the structural
+    /// inventory read from them, so recorded structural shifts are no longer pending.
+    pub fn rebase_worksheet_source(
+        &mut self,
+        sheet_id: SheetId,
+        source_xml: Vec<u8>,
+        structural_owners: WorksheetStructuralOwners,
+    ) -> OmResult<()> {
+        let worksheet = self.worksheet_data_for_sheet_mut(sheet_id)?;
+        worksheet.source_xml = source_xml;
+        worksheet.structural_owners = structural_owners;
+        worksheet.structural_shifts.clear();
+        Ok(())
+    }
+
     pub fn insert_cell(
         &mut self,
         sheet_id: SheetId,
@@ -1649,20 +1667,14 @@ impl WorkbookState {
         self.apply_cell_batch_with_change(sheet_id, replacements, CellBatchMutationKind::Rearrange)
     }
 
-    pub fn shift_cells_with_change(
-        &mut self,
-        sheet_id: SheetId,
+    /// The whole-row or whole-column shift a structural edit of `rect` performs, or `None` for
+    /// a partial corridor.
+    pub fn structural_shift_for(
+        &self,
         rect: Rect,
         direction: CellShiftDirection,
-    ) -> OmResult<bool> {
-        ExcelLimits::validate_rect(rect)?;
-        let (operation, member) = match direction {
-            CellShiftDirection::Up | CellShiftDirection::Left => ("delete", "Delete"),
-            CellShiftDirection::Down | CellShiftDirection::Right => ("insert", "Insert"),
-        };
-        // Whole rows or columns: cell formulas and defined names are retargeted. Partial
-        // corridors still refuse any reference-bearing formula.
-        let structural_shift = match direction {
+    ) -> Option<StructuralShift> {
+        match direction {
             CellShiftDirection::Up | CellShiftDirection::Down
                 if rect.col_first == 1 && rect.col_last == ExcelLimits::MAX_COLUMN_INDEX =>
             {
@@ -1684,7 +1696,23 @@ impl WorkbookState {
                 })
             }
             _ => None,
+        }
+    }
+
+    pub fn shift_cells_with_change(
+        &mut self,
+        sheet_id: SheetId,
+        rect: Rect,
+        direction: CellShiftDirection,
+    ) -> OmResult<bool> {
+        ExcelLimits::validate_rect(rect)?;
+        let (operation, member) = match direction {
+            CellShiftDirection::Up | CellShiftDirection::Left => ("delete", "Delete"),
+            CellShiftDirection::Down | CellShiftDirection::Right => ("insert", "Insert"),
         };
+        // Whole rows or columns: cell formulas and defined names are retargeted. Partial
+        // corridors still refuse any reference-bearing formula.
+        let structural_shift = self.structural_shift_for(rect, direction);
         let sheet_names = self
             .worksheets
             .iter()
@@ -1746,7 +1774,14 @@ impl WorkbookState {
                 .iter()
                 .enumerate()
             {
-                if formula_contains_a1_reference(formula) {
+                let needs_retarget = match structural_shift {
+                    Some(shift) => retarget_formula_references(formula, shift, false, |q| {
+                        classify(Some(owner_sheet_id), q)
+                    })
+                    .map_or(true, |rewritten| rewritten != *formula),
+                    None => formula_contains_a1_reference(formula),
+                };
+                if needs_retarget {
                     return Err(OmError::unsupported(format!(
                         "Range.{member} structural data-validation formula retarget is not implemented for worksheet {} formula {}",
                         owner_sheet_id.0,
@@ -2085,16 +2120,24 @@ impl WorkbookState {
             }
         }
         let worksheet = self.worksheet_data_for_sheet(sheet_id)?;
+        let in_corridor = |range: &&Rect| {
+            affected_rect.row_first <= range.row_last
+                && range.row_first <= affected_rect.row_last
+                && affected_rect.col_first <= range.col_last
+                && range.col_first <= affected_rect.col_last
+        };
+        // Whole-row and whole-column shifts move merged ranges, validation ranges, and row and
+        // column metadata. They still refuse a deletion that cuts through a merged range or
+        // removes a whole validation range, and validation formulas they would have to rewrite.
+        let merged_blocks = |range: &&Rect| match structural_shift {
+            Some(shift) => shift.partially_deletes(**range),
+            None => in_corridor(range),
+        };
         if let Some(merged_range) = worksheet
             .structural_owners
             .merged_ranges
             .iter()
-            .find(|range| {
-                affected_rect.row_first <= range.row_last
-                    && range.row_first <= affected_rect.row_last
-                    && affected_rect.col_first <= range.col_last
-                    && range.col_first <= affected_rect.col_last
-            })
+            .find(merged_blocks)
         {
             return Err(OmError::unsupported(format!(
                 "Range.{member} structural merged-cell retarget is not implemented for worksheet {} range R{}C{}:R{}C{}",
@@ -2105,16 +2148,15 @@ impl WorkbookState {
                 merged_range.col_last,
             )));
         }
+        let validation_blocks = |range: &&Rect| match structural_shift {
+            Some(shift) => shift.shift_rect(**range).is_none(),
+            None => in_corridor(range),
+        };
         if let Some(validation_range) = worksheet
             .structural_owners
             .data_validation_ranges
             .iter()
-            .find(|range| {
-                affected_rect.row_first <= range.row_last
-                    && range.row_first <= affected_rect.row_last
-                    && affected_rect.col_first <= range.col_last
-                    && range.col_first <= affected_rect.col_last
-            })
+            .find(validation_blocks)
         {
             return Err(OmError::unsupported(format!(
                 "Range.{member} structural data-validation retarget is not implemented for worksheet {} range R{}C{}:R{}C{}",
@@ -2152,12 +2194,8 @@ impl WorkbookState {
             .structural_owners
             .row_metadata_ranges
             .iter()
-            .find(|range| {
-                affected_rect.row_first <= range.row_last
-                    && range.row_first <= affected_rect.row_last
-                    && affected_rect.col_first <= range.col_last
-                    && range.col_first <= affected_rect.col_last
-            })
+            .filter(|_| structural_shift.is_none())
+            .find(in_corridor)
         {
             return Err(OmError::unsupported(format!(
                 "Range.{member} structural row metadata retarget is not implemented for worksheet {} row {}",
@@ -2168,12 +2206,8 @@ impl WorkbookState {
             .structural_owners
             .column_metadata_ranges
             .iter()
-            .find(|range| {
-                affected_rect.row_first <= range.row_last
-                    && range.row_first <= affected_rect.row_last
-                    && affected_rect.col_first <= range.col_last
-                    && range.col_first <= affected_rect.col_last
-            })
+            .filter(|_| structural_shift.is_none())
+            .find(in_corridor)
         {
             return Err(OmError::unsupported(format!(
                 "Range.{member} structural column metadata retarget is not implemented for worksheet {} columns C{}:C{}",
@@ -2306,8 +2340,31 @@ impl WorkbookState {
             CellBatchMutationKind::Rearrange,
         )?;
         if let Some(shift) = structural_shift {
-            changed |=
-                self.apply_structural_retargets(sheet_id, shift, formula_rewrites, name_rewrites)?;
+            self.apply_structural_retargets(sheet_id, shift, formula_rewrites, name_rewrites)?;
+            let worksheet = self.worksheet_data_for_sheet_mut(sheet_id)?;
+            let owners = &mut worksheet.structural_owners;
+            // Row metadata spans every column and column metadata every row, so each moves only
+            // along its own axis.
+            let axis_metadata = match shift.axis {
+                StructuralAxis::Rows => &mut owners.row_metadata_ranges,
+                StructuralAxis::Columns => &mut owners.column_metadata_ranges,
+            };
+            *axis_metadata = axis_metadata
+                .iter()
+                .filter_map(|range| shift.shift_rect(*range))
+                .collect();
+            for ranges in [
+                &mut owners.merged_ranges,
+                &mut owners.data_validation_ranges,
+            ] {
+                *ranges = ranges
+                    .iter()
+                    .filter_map(|range| shift.shift_rect(*range))
+                    .collect();
+            }
+            worksheet.structural_shifts.push(shift);
+            worksheet.dirty = true;
+            changed = true;
         }
         Ok(changed)
     }

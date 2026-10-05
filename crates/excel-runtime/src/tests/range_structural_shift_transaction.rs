@@ -1784,3 +1784,131 @@ fn whole_row_and_column_shifts_retarget_formulas_and_names() {
     .expect("sheet utf-8");
     assert!(sheet_xml.contains("<f>SUM(F1:F4)</f>"), "{sheet_xml}");
 }
+
+const STRUCTURED_SHEET: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1:G12"/><sheetViews><sheetView workbookViewId="0"><selection activeCell="D10" sqref="D10"/></sheetView></sheetViews><cols><col min="3" max="3" width="20" customWidth="1"/></cols><sheetData><row r="1"><c r="A1"><v>1</v></c><c r="B1"><v>2</v></c></row><row r="10"><c r="D10"><v>10</v></c></row><row r="12" ht="30" customHeight="1"><c r="G12"><v>12</v></c></row></sheetData><mergeCells count="2"><mergeCell ref="B1:C1"/><mergeCell ref="D10:E11"/></mergeCells><conditionalFormatting sqref="F10:F12"><cfRule type="cellIs" dxfId="0" priority="1" operator="greaterThan"><formula>5</formula></cfRule></conditionalFormatting><dataValidations count="1"><dataValidation type="list" allowBlank="1" sqref="D10:D20"><formula1>"a,b"</formula1></dataValidation></dataValidations><hyperlinks><hyperlink ref="G12" location="Sheet1!A1" display="home"/></hyperlinks></worksheet>"#;
+
+fn saved_sheet_xml(runtime: &ExcelRuntime, workbook: WorkbookHandle) -> (Vec<u8>, String) {
+    let saved = runtime
+        .save_workbook(
+            workbook,
+            SaveWorkbookSpec {
+                format: FileFormat::Xlsx,
+                profile: ExcelProfile::Excel365,
+                lossless: true,
+            },
+        )
+        .expect("save structured workbook");
+    let sheet = String::from_utf8(
+        OpcPackage::from_bytes(&saved)
+            .expect("saved package")
+            .part("xl/worksheets/sheet1.xml")
+            .expect("sheet")
+            .bytes
+            .clone(),
+    )
+    .expect("sheet utf-8");
+    (saved, sheet)
+}
+
+#[test]
+fn whole_row_and_column_shifts_move_worksheet_structure() {
+    let mut package = OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("package");
+    package
+        .replace_part_bytes(
+            "xl/worksheets/sheet1.xml",
+            STRUCTURED_SHEET.as_bytes().to_vec(),
+        )
+        .expect("replace sheet");
+    let mut runtime = ExcelRuntime::new();
+    let workbook = runtime
+        .open_workbook(OpenWorkbookSpec {
+            bytes: package.to_bytes().expect("bytes"),
+            format_hint: Some(FileFormat::Xlsx),
+            profile: ExcelProfile::Excel365,
+            read_only: false,
+        })
+        .expect("open structured workbook");
+    let worksheet = worksheet_handle(&mut runtime, workbook);
+
+    shift(&mut runtime, worksheet, "A5:XFD6", "Insert", XL_SHIFT_DOWN);
+    let (_, sheet) = saved_sheet_xml(&runtime, workbook);
+    for expected in [
+        r#"<selection activeCell="D12" sqref="D12"/>"#,
+        r#"<col min="3" max="3" width="20" customWidth="1"/>"#,
+        r#"<row r="14" ht="30" customHeight="1"><c r="G14"><v>12</v></c></row>"#,
+        r#"<mergeCell ref="B1:C1"/><mergeCell ref="D12:E13"/>"#,
+        r#"<conditionalFormatting sqref="F12:F14">"#,
+        r#"<dataValidation type="list" allowBlank="1" sqref="D12:D22"><formula1>"a,b"</formula1>"#,
+        r#"<hyperlink ref="G14" location="Sheet1!A1" display="home"/>"#,
+    ] {
+        assert!(
+            sheet.contains(expected),
+            "after row insert, missing {expected} in:\n{sheet}"
+        );
+    }
+
+    shift(
+        &mut runtime,
+        worksheet,
+        "B1:B1048576",
+        "Insert",
+        XL_SHIFT_TO_RIGHT,
+    );
+    let (saved, sheet) = saved_sheet_xml(&runtime, workbook);
+    for expected in [
+        r#"<selection activeCell="E12" sqref="E12"/>"#,
+        r#"<col min="4" max="4" width="20" customWidth="1"/>"#,
+        r#"<c r="C1"><v>2</v></c>"#,
+        r#"<mergeCell ref="C1:D1"/><mergeCell ref="E12:F13"/>"#,
+        r#"<conditionalFormatting sqref="G12:G14">"#,
+        r#"sqref="E12:E22""#,
+        r#"<hyperlink ref="H14""#,
+    ] {
+        assert!(
+            sheet.contains(expected),
+            "after column insert, missing {expected} in:\n{sheet}"
+        );
+    }
+
+    let target = range_handle(&mut runtime, worksheet, "A13:XFD13");
+    let error = runtime
+        .dispatch_invoke(target, "Delete", &[OmValue::Number(f64::from(XL_SHIFT_UP))])
+        .expect_err("deleting through a merged range fails closed");
+    assert_eq!(error.code, OmErrorCode::Unsupported);
+    assert!(error.message.contains("merged-cell"), "{error:?}");
+
+    let mut reopened = ExcelRuntime::new();
+    let reopened_workbook = reopened
+        .open_workbook(OpenWorkbookSpec {
+            bytes: saved,
+            format_hint: Some(FileFormat::Xlsx),
+            profile: ExcelProfile::Excel365,
+            read_only: false,
+        })
+        .expect("reopen structured workbook");
+    let reopened_sheet = worksheet_handle(&mut reopened, reopened_workbook);
+    shift(
+        &mut reopened,
+        reopened_sheet,
+        "A1:XFD2",
+        "Delete",
+        XL_SHIFT_UP,
+    );
+    let (_, sheet) = saved_sheet_xml(&reopened, reopened_workbook);
+    for expected in [
+        r#"<mergeCell ref="E10:F11"/>"#,
+        r#"<hyperlink ref="H12""#,
+        r#"<row r="12" ht="30" customHeight="1">"#,
+        r#"<col min="4" max="4" width="20" customWidth="1"/>"#,
+    ] {
+        assert!(
+            sheet.contains(expected),
+            "after reopen and delete, missing {expected} in:\n{sheet}"
+        );
+    }
+    assert!(
+        !sheet.contains("C1:D1"),
+        "the merge on deleted row 1 is removed:\n{sheet}"
+    );
+}

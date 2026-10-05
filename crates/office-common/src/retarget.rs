@@ -517,6 +517,77 @@ impl Reference {
     }
 }
 
+impl StructuralShift {
+    /// The last row or column index on this shift's axis.
+    pub fn axis_max(self) -> u32 {
+        match self.axis {
+            StructuralAxis::Rows => ExcelLimits::MAX_ROW_INDEX,
+            StructuralAxis::Columns => ExcelLimits::MAX_COLUMN_INDEX,
+        }
+    }
+
+    /// Where a row or column index lands, or `None` when it is deleted or pushed off the grid.
+    pub fn shift_index(self, value: u32) -> Option<u32> {
+        if value < self.first {
+            Some(value)
+        } else if self.insert {
+            value
+                .checked_add(self.count)
+                .filter(|moved| *moved <= self.axis_max())
+        } else if value < self.first + self.count {
+            None
+        } else {
+            Some(value - self.count)
+        }
+    }
+
+    /// Where a cell lands, or `None` when its row or column is deleted or pushed off the grid.
+    pub fn shift_cell(self, (row, col): (u32, u32)) -> Option<(u32, u32)> {
+        match self.axis {
+            StructuralAxis::Rows => self.shift_index(row).map(|row| (row, col)),
+            StructuralAxis::Columns => self.shift_index(col).map(|col| (row, col)),
+        }
+    }
+
+    /// Moves a rectangle as Excel moves a range: inserted spans expand it, deleted spans shrink
+    /// it, and `None` means the whole rectangle was deleted.
+    pub fn shift_rect(self, rect: crate::Rect) -> Option<crate::Rect> {
+        let max = self.axis_max();
+        match self.axis {
+            StructuralAxis::Rows => retarget_span(rect.row_first, rect.row_last, self, max, true)
+                .map(|(row_first, row_last)| crate::Rect {
+                    row_first,
+                    row_last,
+                    ..rect
+                }),
+            StructuralAxis::Columns => {
+                retarget_span(rect.col_first, rect.col_last, self, max, true).map(
+                    |(col_first, col_last)| crate::Rect {
+                        col_first,
+                        col_last,
+                        ..rect
+                    },
+                )
+            }
+        }
+    }
+
+    /// Whether a deletion removes part, but not all, of the rectangle's span on this axis.
+    pub fn partially_deletes(self, rect: crate::Rect) -> bool {
+        if self.insert {
+            return false;
+        }
+        let (low, high) = match self.axis {
+            StructuralAxis::Rows => (rect.row_first, rect.row_last),
+            StructuralAxis::Columns => (rect.col_first, rect.col_last),
+        };
+        let last = self.first + self.count - 1;
+        let overlaps = low <= last && self.first <= high;
+        let contained = low >= self.first && high <= last;
+        overlaps && !contained
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -592,6 +663,26 @@ mod tests {
             "A1+C1+SUM(C:D)+SUM(1:2)"
         );
         assert_eq!(retarget("$XFD$1", insert), "#REF!");
+    }
+
+    #[test]
+    fn rects_and_cells_shift_with_the_edit() {
+        use crate::Rect;
+        let rect = |row_first, row_last| Rect {
+            row_first,
+            row_last,
+            col_first: 2,
+            col_last: 3,
+        };
+        assert_eq!(rows(5, 2, true).shift_rect(rect(3, 6)), Some(rect(3, 8)));
+        assert_eq!(rows(5, 2, true).shift_rect(rect(5, 5)), Some(rect(7, 7)));
+        assert_eq!(rows(5, 2, false).shift_rect(rect(5, 6)), None);
+        assert_eq!(rows(5, 2, false).shift_rect(rect(4, 9)), Some(rect(4, 7)));
+        assert!(rows(5, 2, false).partially_deletes(rect(4, 5)));
+        assert!(!rows(5, 2, false).partially_deletes(rect(5, 6)));
+        assert_eq!(rows(5, 2, false).shift_cell((6, 1)), None);
+        assert_eq!(rows(5, 2, false).shift_cell((9, 1)), Some((7, 1)));
+        assert_eq!(rows(5, 2, true).shift_cell((1_048_576, 1)), None);
     }
 
     #[test]

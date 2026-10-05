@@ -55,16 +55,35 @@ retarget every cell formula and defined name in the workbook that references the
   references are unchanged. Edited cells are marked dirty at their new positions, and names are
   rewritten through the name table.
 
+Worksheet structure moves with the cells. Each shift is recorded on the worksheet
+(`WorksheetData::structural_shifts`), and the XLSX rewriter replays the recorded shifts:
+- onto source-keyed rows and cells (row attributes such as `ht`, and cell attributes);
+- onto `mergeCell@ref`, `dataValidation@sqref`, `conditionalFormatting@sqref`, `hyperlink@ref`,
+  `autoFilter@ref`, `selection@sqref`/`activeCell`, `pane@topLeftCell`, and `col@min`/`max`.
+
+Ranges grow, shrink, or move as references do. Ranges on deleted rows or columns are removed, and
+`mergeCells@count` follows. A selection or pane origin on deleted cells returns to A1. The model's
+structural inventory moves with the shift, save checks the worksheet's hyperlink snapshot against
+the replayed refs, and a successful save rebases the source XML and clears the record.
+
 The shift is refused atomically, as before, when it would need to rewrite any of:
 - an R1C1 formula;
 - a reference to an unknown sheet, or a 3D reference;
 - a member of a shared-formula group;
 - a name whose moving reference is relative or unqualified;
-- data-validation, table, or chart formulas.
+- a data-validation formula that references the moved area;
+- table or chart formulas.
+
+It is also refused when it would:
+- delete through part of a merged range;
+- remove a whole data-validation range or a hyperlink;
+- move cells on a worksheet with comments or VML drawings, or with tables or drawings in the moved
+  area.
 
 Partial-width or partial-height `Insert`/`Delete` still refuse any reference-bearing formula. The
-rules live in `office_common::retarget_formula_references`; the regressions are its unit tests
-and `whole_row_and_column_shifts_retarget_formulas_and_names`.
+rules live in `office_common::retarget_formula_references` and `StructuralShift`. The regressions
+are their unit tests, `whole_row_and_column_shifts_retarget_formulas_and_names`, and
+`whole_row_and_column_shifts_move_worksheet_structure`.
 
 ## Remaining Boundaries
 

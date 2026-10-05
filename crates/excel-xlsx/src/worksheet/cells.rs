@@ -20,7 +20,7 @@ use excel_model::{
 };
 use office_common::{
     CellError, CellValue, ExcelLimits, FormulaSource, IsoDateTime, OmError, OmErrorCode, OmResult,
-    Rect, RichTextSource, RichTextValue, StyleId,
+    Rect, RichTextSource, RichTextValue, StructuralAxis, StructuralShift, StyleId,
 };
 use quick_xml::escape::partial_escape;
 use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
@@ -246,6 +246,156 @@ fn rects_overlap(left: &Rect, right: &Rect) -> bool {
         && right.row_first <= left.row_last
         && left.col_first <= right.col_last
         && right.col_first <= left.col_last
+}
+
+fn replay_shifts_on_cell(shifts: &[StructuralShift], key: (u32, u32)) -> Option<(u32, u32)> {
+    shifts
+        .iter()
+        .try_fold(key, |key, shift| shift.shift_cell(key))
+}
+
+fn remap_shifted_cells<T>(shifts: &[StructuralShift], map: &mut BTreeMap<(u32, u32), T>) {
+    *map = std::mem::take(map)
+        .into_iter()
+        .filter_map(|(key, value)| replay_shifts_on_cell(shifts, key).map(|key| (key, value)))
+        .collect();
+}
+
+fn replay_shifts_on_rect(shifts: &[StructuralShift], rect: Rect) -> Option<Rect> {
+    shifts
+        .iter()
+        .try_fold(rect, |rect, shift| shift.shift_rect(rect))
+}
+
+/// Replays structural shifts onto a space-separated `sqref`, dropping deleted ranges. `None`
+/// means every range was deleted.
+pub(crate) fn replay_shifts_on_sqref(
+    shifts: &[StructuralShift],
+    sqref: &str,
+) -> OmResult<Option<String>> {
+    let mut kept = Vec::new();
+    for part in sqref.split_whitespace() {
+        let rect = parse_bounded_a1_rect(&part.replace('$', ""), "worksheet", "range")?;
+        if let Some(rect) = replay_shifts_on_rect(shifts, rect) {
+            kept.push(rect_reference(&rect));
+        }
+    }
+    Ok((!kept.is_empty()).then(|| kept.join(" ")))
+}
+
+/// Rewrites the range attributes of a worksheet element through recorded structural shifts.
+/// `None` means the element's whole range was deleted and the element is removed.
+fn shift_worksheet_element(
+    element: &BytesStart<'_>,
+    local_name: Option<&[u8]>,
+    worksheet: &WorksheetData,
+) -> OmResult<Option<BytesStart<'static>>> {
+    let shifts = worksheet.structural_shifts.as_slice();
+    let Some(local_name) = local_name.filter(|_| !shifts.is_empty()) else {
+        return Ok(Some(element.to_owned()));
+    };
+    if local_name == b"mergeCells" {
+        // Merges on deleted rows or columns are removed; the container needs at least one.
+        let remaining = worksheet.structural_owners.merged_ranges.len();
+        if remaining == 0 {
+            return Ok(None);
+        }
+        let mut shifted =
+            BytesStart::new(String::from_utf8_lossy(element.name().as_ref()).into_owned());
+        for attribute in element.attributes() {
+            let attribute = attribute.map_err(xml_error)?;
+            if attribute.key.as_ref() == b"count" {
+                shifted.push_attribute(("count", remaining.to_string().as_str()));
+            } else {
+                shifted.push_attribute(attribute);
+            }
+        }
+        return Ok(Some(shifted));
+    }
+    let range_attributes: &[&[u8]] = match local_name {
+        b"mergeCell" | b"hyperlink" | b"autoFilter" => &[b"ref"],
+        b"dataValidation" | b"conditionalFormatting" => &[b"sqref"],
+        b"selection" => &[b"sqref", b"activeCell"],
+        b"pane" => &[b"topLeftCell"],
+        b"col" => &[b"min", b"max"],
+        _ => return Ok(Some(element.to_owned())),
+    };
+    let mut attributes = Vec::new();
+    for attribute in element.attributes() {
+        let attribute = attribute.map_err(xml_error)?;
+        let value = attribute.unescape_value().map_err(xml_error)?.into_owned();
+        attributes.push((attribute.key.as_ref().to_vec(), value));
+    }
+    let value_of = |name: &[u8]| {
+        attributes
+            .iter()
+            .find(|(key, _)| key.as_slice() == name)
+            .map(|(_, value)| value.clone())
+    };
+    let mut replacements = Vec::<(&[u8], String)>::new();
+    match local_name {
+        b"col" => {
+            let (Some(min), Some(max)) = (value_of(b"min"), value_of(b"max")) else {
+                return Ok(Some(element.to_owned()));
+            };
+            let parse = |value: &str| {
+                value.parse::<u32>().map_err(|_| {
+                    OmError::parse(format!("worksheet col has invalid bound: {value}"))
+                })
+            };
+            let rect = Rect {
+                row_first: 1,
+                row_last: 1,
+                col_first: parse(&min)?,
+                col_last: parse(&max)?,
+            };
+            let column_shifts = shifts
+                .iter()
+                .copied()
+                .filter(|shift| shift.axis == StructuralAxis::Columns)
+                .collect::<Vec<_>>();
+            let Some(rect) = replay_shifts_on_rect(&column_shifts, rect) else {
+                return Ok(None);
+            };
+            replacements.push((b"min", rect.col_first.to_string()));
+            replacements.push((b"max", rect.col_last.to_string()));
+        }
+        b"selection" | b"pane" => {
+            for &name in range_attributes {
+                let Some(value) = value_of(name) else {
+                    continue;
+                };
+                let moved = if name == b"sqref" {
+                    replay_shifts_on_sqref(shifts, &value)?
+                } else {
+                    let rect = parse_bounded_a1_rect(&value.replace('$', ""), "worksheet", "cell")?;
+                    replay_shifts_on_rect(shifts, rect).map(|rect| rect_reference(&rect))
+                };
+                // A selection or pane origin on deleted cells returns to A1, as Excel does.
+                replacements.push((name, moved.unwrap_or_else(|| "A1".to_string())));
+            }
+        }
+        _ => {
+            let name = range_attributes[0];
+            let Some(value) = value_of(name) else {
+                return Ok(Some(element.to_owned()));
+            };
+            match replay_shifts_on_sqref(shifts, &value)? {
+                Some(moved) => replacements.push((name, moved)),
+                None => return Ok(None),
+            }
+        }
+    }
+    let mut shifted =
+        BytesStart::new(String::from_utf8_lossy(element.name().as_ref()).into_owned());
+    for (key, value) in &attributes {
+        let value = replacements
+            .iter()
+            .find(|(name, _)| *name == key.as_slice())
+            .map_or(value.as_str(), |(_, replacement)| replacement.as_str());
+        shifted.push_attribute((key.as_slice(), value.as_bytes()));
+    }
+    Ok(Some(shifted))
 }
 
 fn rect_reference(rect: &Rect) -> String {
@@ -2728,12 +2878,37 @@ pub(crate) fn rewrite_worksheet_xml_with_cell_metadata(
             "worksheet source XML does not contain a SpreadsheetML worksheet root",
         )
     })?;
+    if !worksheet.structural_shifts.is_empty() {
+        let shifts = worksheet.structural_shifts.as_slice();
+        remap_shifted_cells(shifts, &mut cell_templates);
+        remap_shifted_cells(shifts, &mut cell_element_names);
+        remap_shifted_cells(shifts, &mut cell_content_segments);
+        // A raw fragment carries its source `r`, so a moved cell is always rewritten.
+        raw_cell_fragments.retain(|key, _| replay_shifts_on_cell(shifts, *key) == Some(*key));
+        row_templates = std::mem::take(&mut row_templates)
+            .into_iter()
+            .filter_map(|(row, mut attributes)| {
+                let mut moved = Some(row);
+                for shift in shifts {
+                    match shift.axis {
+                        StructuralAxis::Rows => {
+                            moved = moved.and_then(|row| shift.shift_index(row))
+                        }
+                        // Column edits make the `spans` hint stale; it is optional.
+                        StructuralAxis::Columns => attributes.retain(|(key, _)| key != "spans"),
+                    }
+                }
+                moved.map(|row| (row, attributes))
+            })
+            .collect();
+    }
     let mut reader = NsReader::from_reader(Cursor::new(worksheet.source_xml.as_slice()));
     reader.config_mut().trim_text(false);
     let mut writer = Writer::new(Cursor::new(Vec::new()));
     let mut buffer = Vec::new();
     let mut skipping_sheet_data = 0usize;
     let mut skipping_dimension = false;
+    let mut skipping_moved_away = 0usize;
     let support_part_dimension_coords = collect_support_part_dimension_coords(support_parts);
     let anchored_dirty_cells = support_part_dimension_coords
         .iter()
@@ -3539,6 +3714,12 @@ pub(crate) fn rewrite_worksheet_xml_with_cell_metadata(
 
     loop {
         match reader.read_resolved_event_into(&mut buffer) {
+            Ok((_, Event::Start(_))) if skipping_moved_away > 0 => skipping_moved_away += 1,
+            Ok((_, Event::End(_))) if skipping_moved_away > 0 => skipping_moved_away -= 1,
+            Ok((_, Event::Eof)) if skipping_moved_away > 0 => {
+                return Err(OmError::parse("worksheet ended inside a removed element"));
+            }
+            Ok(_) if skipping_moved_away > 0 => {}
             Ok((namespace, Event::Start(element)))
                 if skipping_sheet_data > 0
                     || (skipping_dimension
@@ -3678,9 +3859,11 @@ pub(crate) fn rewrite_worksheet_xml_with_cell_metadata(
                     )?;
                     inserted_sheet_data = true;
                 }
-                writer
-                    .write_event(Event::Empty(element.to_owned()))
-                    .map_err(xml_error)?;
+                if let Some(element) = shift_worksheet_element(&element, local_name, worksheet)? {
+                    writer
+                        .write_event(Event::Empty(element))
+                        .map_err(xml_error)?;
+                }
             }
             Ok((namespace, Event::Start(element))) => {
                 let element_namespace_is_spreadsheet = matches!(
@@ -3715,10 +3898,15 @@ pub(crate) fn rewrite_worksheet_xml_with_cell_metadata(
                     )?;
                     inserted_sheet_data = true;
                 }
-                writer
-                    .write_event(Event::Start(element.to_owned()))
-                    .map_err(xml_error)?;
-                depth += 1;
+                match shift_worksheet_element(&element, local_name, worksheet)? {
+                    Some(element) => {
+                        writer
+                            .write_event(Event::Start(element))
+                            .map_err(xml_error)?;
+                        depth += 1;
+                    }
+                    None => skipping_moved_away = 1,
+                }
             }
             Ok((namespace, Event::End(element))) => {
                 if depth == 1

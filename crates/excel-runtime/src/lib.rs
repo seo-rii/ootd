@@ -12956,6 +12956,23 @@ impl ExcelRuntime {
                                     )));
                                 }
                             };
+                            // Refuse, before the model changes, an edit whose recorded shift the
+                            // worksheet snapshot (hyperlinks, comment anchors) cannot follow.
+                            if let (Some(shift), Some(parts)) = (
+                                runtime.loaded.state.structural_shift_for(rect, direction),
+                                runtime.loaded.worksheet_support_parts.get(&sheet_id),
+                            ) {
+                                let mut parts = parts.clone();
+                                for &recorded in &runtime
+                                    .loaded
+                                    .state
+                                    .worksheet_data_for_sheet(sheet_id)?
+                                    .structural_shifts
+                                {
+                                    parts.apply_structural_shift(recorded)?;
+                                }
+                                parts.apply_structural_shift(shift)?;
+                            }
                             let changed = runtime
                                 .loaded
                                 .state
@@ -13025,6 +13042,23 @@ impl ExcelRuntime {
                                     )));
                                 }
                             };
+                            // Refuse, before the model changes, an edit whose recorded shift the
+                            // worksheet snapshot (hyperlinks, comment anchors) cannot follow.
+                            if let (Some(shift), Some(parts)) = (
+                                runtime.loaded.state.structural_shift_for(rect, direction),
+                                runtime.loaded.worksheet_support_parts.get(&sheet_id),
+                            ) {
+                                let mut parts = parts.clone();
+                                for &recorded in &runtime
+                                    .loaded
+                                    .state
+                                    .worksheet_data_for_sheet(sheet_id)?
+                                    .structural_shifts
+                                {
+                                    parts.apply_structural_shift(recorded)?;
+                                }
+                                parts.apply_structural_shift(shift)?;
+                            }
                             let changed = runtime
                                 .loaded
                                 .state

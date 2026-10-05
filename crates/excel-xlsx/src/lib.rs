@@ -16,6 +16,7 @@ use excel_model::{
 #[cfg(test)]
 use excel_model::CellData;
 pub use office_common::{
+    StructuralShift,
     ActiveContentAuditManifest, ActiveContentContentTypeEntryKind, ActiveContentKind,
     ActiveContentPolicy, ActiveContentRemovedContentTypeEntry, ActiveContentRemovedPart,
     ActiveContentRemovedRelationship, ExternalDataAccessReport, ExternalDataInventory,
@@ -76,7 +77,7 @@ use worksheet::{
     dynamic_array_cell_metadata_xml, file_formula_to_model, format_cell_error,
     model_formula_to_file, parse_dynamic_array_cell_metadata,
     parse_worksheet_cells_with_cell_metadata, resolve_table_structural_owners,
-    rewrite_worksheet_xml_with_cell_metadata,
+    replay_shifts_on_sqref, rewrite_worksheet_xml_with_cell_metadata,
 };
 #[cfg(test)]
 use worksheet::{parse_worksheet_cells, rewrite_worksheet_xml};
@@ -1153,6 +1154,47 @@ pub struct WorksheetSupportParts {
     pub comment_relationship_ids: Vec<String>,
 }
 
+impl WorksheetSupportParts {
+    /// Moves the worksheet snapshot's hyperlink references through a whole-row or whole-column
+    /// shift so save validation expects the rewritten worksheet. Shifts that would remove a
+    /// hyperlink, or that would need comment and VML anchors moved, are refused.
+    pub fn apply_structural_shift(&mut self, shift: StructuralShift) -> OmResult<()> {
+        if !self.comment_part_uris.is_empty()
+            || !self.vml_drawing_part_uris.is_empty()
+            || !self.legacy_drawing_relationship_ids.is_empty()
+        {
+            return Err(OmError::unsupported(
+                "structural comment anchor retarget is not implemented for worksheets with comments or VML drawings",
+            ));
+        }
+        let shifts = [shift];
+        let moved = |reference: &str| -> OmResult<String> {
+            replay_shifts_on_sqref(&shifts, reference)?.ok_or_else(|| {
+                OmError::unsupported(format!(
+                    "structural hyperlink removal is not implemented for hyperlink {reference}"
+                ))
+            })
+        };
+        for reference in &mut self.hyperlink_refs {
+            *reference = moved(reference)?;
+        }
+        for summary in &mut self.hyperlink_summaries {
+            summary.reference = moved(&summary.reference)?;
+        }
+        for binding in &mut self.hyperlink_bindings {
+            binding.reference = moved(&binding.reference)?;
+        }
+        if let Some(summary) = self.hyperlinks_part_summary.as_mut() {
+            for attributes in &mut summary.hyperlink_attr_maps {
+                if let Some(reference) = attributes.get_mut("ref") {
+                    *reference = moved(reference)?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct SheetDrawingSupportParts {
     pub sheet_part_uri: Option<String>,
@@ -1772,6 +1814,7 @@ impl XlsxCodec {
                     worksheet_data.insert(
                         worksheet.id,
                         WorksheetData {
+                            structural_shifts: Default::default(),
                             cells: parsed_cells.cells,
                             source_xml: sheet_part.bytes.clone(),
                             dirty: false,
@@ -2873,6 +2916,7 @@ impl XlsxCodec {
         ensure_worksheet_support_parts_present_for_save(
             &package,
             &workbook.worksheet_support_parts,
+            &workbook.state,
             &worksheet_xml_rewrite_recovery_ids,
             workbook.support_parts.ooxml_dialect,
         )?;
@@ -3860,9 +3904,11 @@ impl XlsxCodec {
         }
 
         ensure_support_parts_present_for_save(&package, &workbook.support_parts)?;
-        ensure_worksheet_support_parts_present(
+        ensure_worksheet_support_parts_present_for_save(
             &package,
             &workbook.worksheet_support_parts,
+            &workbook.state,
+            &BTreeSet::new(),
             workbook.support_parts.ooxml_dialect,
         )?;
         ensure_pivot_package_inventory_preserved(
@@ -3932,9 +3978,10 @@ impl XlsxCodec {
                 let saved_worksheet_data = next_loaded
                     .state
                     .worksheet_data_for_sheet(sheet_id)?;
-                next_state.set_worksheet_source_xml(
+                next_state.rebase_worksheet_source(
                     sheet_id,
                     saved_worksheet_data.source_xml.clone(),
+                    saved_worksheet_data.structural_owners.clone(),
                 )?;
             }
             next_state.opaque_parts = std::mem::take(&mut next_loaded.state.opaque_parts);
@@ -21352,22 +21399,6 @@ fn parse_theme_part_summary(theme_xml: &[u8]) -> OmResult<ThemePartSummary> {
     }
 }
 
-fn ensure_worksheet_support_parts_present(
-    package: &OpcPackage,
-    support_parts: &BTreeMap<SheetId, WorksheetSupportParts>,
-    dialect: OoxmlDialect,
-) -> OmResult<()> {
-    for worksheet_support_parts in support_parts.values() {
-        ensure_single_worksheet_support_parts_present_with_options(
-            package,
-            worksheet_support_parts,
-            false,
-            dialect,
-        )?;
-    }
-    Ok(())
-}
-
 fn ensure_single_worksheet_support_parts_present(
     package: &OpcPackage,
     support_parts: &WorksheetSupportParts,
@@ -21384,13 +21415,32 @@ fn ensure_single_worksheet_support_parts_present(
 fn ensure_worksheet_support_parts_present_for_save(
     package: &OpcPackage,
     support_parts: &BTreeMap<SheetId, WorksheetSupportParts>,
+    state: &WorkbookState,
     worksheet_xml_rewrite_recovery_ids: &BTreeSet<SheetId>,
     dialect: OoxmlDialect,
 ) -> OmResult<()> {
     for (sheet_id, worksheet_support_parts) in support_parts {
+        // The snapshot describes the source worksheet; a rewritten worksheet has also replayed
+        // the structural shifts recorded since then.
+        let shifts = state
+            .worksheet_data()
+            .get(sheet_id)
+            .map(|worksheet| worksheet.structural_shifts.as_slice())
+            .unwrap_or_default();
+        let shifted;
+        let expected = if shifts.is_empty() {
+            worksheet_support_parts
+        } else {
+            let mut parts = worksheet_support_parts.clone();
+            for &shift in shifts {
+                parts.apply_structural_shift(shift)?;
+            }
+            shifted = parts;
+            &shifted
+        };
         ensure_single_worksheet_support_parts_present_with_options(
             package,
-            worksheet_support_parts,
+            expected,
             worksheet_xml_rewrite_recovery_ids.contains(sheet_id),
             dialect,
         )?;
