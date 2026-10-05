@@ -1615,3 +1615,172 @@ fn range_structural_shifts_inventory_drawing_anchor_owners() {
         "opaque drawing anchor",
     );
 }
+
+fn formula_of(runtime: &mut ExcelRuntime, worksheet: ObjectHandle, address: &str) -> OmValue {
+    let range = range_handle(runtime, worksheet, address);
+    runtime
+        .dispatch_get(range, "Formula", &[])
+        .unwrap_or_else(|error| panic!("{address}.Formula: {error:?}"))
+}
+
+fn value_of(runtime: &mut ExcelRuntime, worksheet: ObjectHandle, address: &str) -> OmValue {
+    let range = range_handle(runtime, worksheet, address);
+    runtime
+        .dispatch_get(range, "Value2", &[])
+        .unwrap_or_else(|error| panic!("{address}.Value2: {error:?}"))
+}
+
+fn shift(
+    runtime: &mut ExcelRuntime,
+    worksheet: ObjectHandle,
+    address: &str,
+    member: &str,
+    direction: i32,
+) {
+    let target = range_handle(runtime, worksheet, address);
+    runtime
+        .dispatch_invoke(target, member, &[OmValue::Number(f64::from(direction))])
+        .unwrap_or_else(|error| panic!("{address}.{member}: {error:?}"));
+}
+
+fn set_formula(runtime: &mut ExcelRuntime, worksheet: ObjectHandle, address: &str, formula: &str) {
+    let range = range_handle(runtime, worksheet, address);
+    runtime
+        .dispatch_set(range, "Formula", OmValue::Text(formula.to_string()), &[])
+        .unwrap_or_else(|error| panic!("{address}.Formula: {error:?}"));
+}
+
+#[test]
+fn whole_row_and_column_shifts_retarget_formulas_and_names() {
+    let mut runtime = ExcelRuntime::new();
+    let workbook = open_clean_workbook(&mut runtime);
+    let worksheet = worksheet_handle(&mut runtime, workbook);
+    let sheet_name = runtime.worksheets(workbook).expect("worksheets")[0]
+        .name
+        .clone();
+    for row in 1..=5 {
+        set_number(&mut runtime, worksheet, &format!("E{row}"), f64::from(row));
+    }
+    set_formula(&mut runtime, worksheet, "F1", "=SUM(E1:E5)");
+    set_formula(&mut runtime, worksheet, "G1", "=E3*10");
+    set_formula(&mut runtime, worksheet, "H1", "=SUM(Block)");
+    let names = expect_object_handle(
+        runtime
+            .dispatch_get(workbook.0, "Names", &[])
+            .expect("Workbook.Names"),
+    );
+    runtime
+        .dispatch_invoke(
+            names,
+            "Add",
+            &[
+                OmValue::Text("Block".to_string()),
+                OmValue::Text(format!("={sheet_name}!$E$2:$E$4")),
+            ],
+        )
+        .expect("Names.Add Block");
+
+    shift(&mut runtime, worksheet, "A2:XFD2", "Insert", XL_SHIFT_DOWN);
+    for (address, formula) in [
+        ("F1", "=SUM(E1:E6)"),
+        ("G1", "=E4*10"),
+        ("H1", "=SUM(Block)"),
+    ] {
+        assert_eq!(
+            formula_of(&mut runtime, worksheet, address),
+            OmValue::Text(formula.to_string()),
+            "after row insert {address}"
+        );
+    }
+    let block = expect_object_handle(
+        runtime
+            .dispatch_invoke(names, "Item", &[OmValue::Text("Block".to_string())])
+            .expect("Names.Item(Block)"),
+    );
+    assert_eq!(
+        runtime
+            .dispatch_get(block, "RefersTo", &[])
+            .expect("RefersTo"),
+        OmValue::Text(format!("={sheet_name}!$E$3:$E$5"))
+    );
+    runtime
+        .calculate_workbook_with_report(workbook)
+        .expect("calculate after insert");
+    assert_eq!(
+        value_of(&mut runtime, worksheet, "F1"),
+        OmValue::Number(15.0)
+    );
+    assert_eq!(
+        value_of(&mut runtime, worksheet, "G1"),
+        OmValue::Number(30.0)
+    );
+    assert_eq!(
+        value_of(&mut runtime, worksheet, "H1"),
+        OmValue::Number(9.0)
+    );
+
+    shift(&mut runtime, worksheet, "A3:XFD4", "Delete", XL_SHIFT_UP);
+    assert_eq!(
+        formula_of(&mut runtime, worksheet, "F1"),
+        OmValue::Text("=SUM(E1:E4)".to_string())
+    );
+    assert_eq!(
+        formula_of(&mut runtime, worksheet, "G1"),
+        OmValue::Text("=#REF!*10".to_string())
+    );
+    assert_eq!(
+        runtime
+            .dispatch_get(block, "RefersTo", &[])
+            .expect("RefersTo"),
+        OmValue::Text(format!("={sheet_name}!$E$3:$E$3"))
+    );
+
+    shift(
+        &mut runtime,
+        worksheet,
+        "A1:A1048576",
+        "Insert",
+        XL_SHIFT_TO_RIGHT,
+    );
+    assert_eq!(
+        formula_of(&mut runtime, worksheet, "G1"),
+        OmValue::Text("=SUM(F1:F4)".to_string()),
+        "the SUM formula moved from F1 to G1 and now reads column F"
+    );
+    runtime
+        .calculate_workbook_with_report(workbook)
+        .expect("calculate after delete and column insert");
+    assert_eq!(
+        value_of(&mut runtime, worksheet, "G1"),
+        OmValue::Number(1.0 + 4.0 + 5.0)
+    );
+    assert_eq!(
+        value_of(&mut runtime, worksheet, "H1"),
+        OmValue::from(CellValue::Error(CellError::Ref))
+    );
+    assert_eq!(
+        value_of(&mut runtime, worksheet, "I1"),
+        OmValue::Number(4.0)
+    );
+
+    let saved = runtime
+        .save_workbook(
+            workbook,
+            SaveWorkbookSpec {
+                format: FileFormat::Xlsx,
+                profile: ExcelProfile::Excel365,
+                lossless: true,
+            },
+        )
+        .expect("save retargeted workbook");
+    let sheet_xml = String::from_utf8(
+        OpcPackage::from_bytes(&saved)
+            .expect("saved package")
+            .part("xl/worksheets/sheet1.xml")
+            .expect("sheet")
+            .bytes
+            .clone(),
+    )
+    .expect("sheet utf-8");
+    assert!(sheet_xml.contains("<f>SUM(F1:F4)</f>"), "{sheet_xml}");
+}

@@ -3,9 +3,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use office_common::{
     CellValue, ChartId, DefinedName, DefinedNameId, DrawingId, ExcelLimits, FormulaSource,
     NameScope, NameValidationMode, ObjectPlacement, OmArray, OmError, OmErrorCode, OmResult,
-    OmValue, OpaquePart, RangeRef, RangeSet, Rect, ReferenceTarget, SheetId, SheetKind, SheetScope,
-    SheetVisibility, StyleId, WorkbookId, WorkbookModel, WorksheetModel,
-    formula_contains_a1_reference,
+    OmValue, OpaquePart, RangeRef, RangeSet, Rect, ReferenceTarget, SheetId, SheetKind, SheetMatch,
+    SheetScope, SheetVisibility, StructuralAxis, StructuralShift, StyleId, WorkbookId,
+    WorkbookModel, WorksheetModel, formula_contains_a1_reference, retarget_formula_references,
 };
 
 mod charts;
@@ -1660,15 +1660,84 @@ impl WorkbookState {
             CellShiftDirection::Up | CellShiftDirection::Left => ("delete", "Delete"),
             CellShiftDirection::Down | CellShiftDirection::Right => ("insert", "Insert"),
         };
+        // Whole rows or columns: cell formulas and defined names are retargeted. Partial
+        // corridors still refuse any reference-bearing formula.
+        let structural_shift = match direction {
+            CellShiftDirection::Up | CellShiftDirection::Down
+                if rect.col_first == 1 && rect.col_last == ExcelLimits::MAX_COLUMN_INDEX =>
+            {
+                Some(StructuralShift {
+                    axis: StructuralAxis::Rows,
+                    first: rect.row_first,
+                    count: rect.height(),
+                    insert: direction == CellShiftDirection::Down,
+                })
+            }
+            CellShiftDirection::Left | CellShiftDirection::Right
+                if rect.row_first == 1 && rect.row_last == ExcelLimits::MAX_ROW_INDEX =>
+            {
+                Some(StructuralShift {
+                    axis: StructuralAxis::Columns,
+                    first: rect.col_first,
+                    count: rect.width(),
+                    insert: direction == CellShiftDirection::Right,
+                })
+            }
+            _ => None,
+        };
+        let sheet_names = self
+            .worksheets
+            .iter()
+            .map(|worksheet| (worksheet.name.to_lowercase(), worksheet.id))
+            .collect::<BTreeMap<_, _>>();
+        let classify = |owner: Option<SheetId>, qualifier: Option<&str>| match qualifier {
+            None => match owner {
+                Some(owner) if owner == sheet_id => SheetMatch::Edited,
+                Some(_) => SheetMatch::Other,
+                None => SheetMatch::Unknown,
+            },
+            Some(name) => match sheet_names.get(&name.to_lowercase()) {
+                Some(&id) if id == sheet_id => SheetMatch::Edited,
+                Some(_) => SheetMatch::Other,
+                None => SheetMatch::Unknown,
+            },
+        };
+        let mut formula_rewrites = Vec::<(SheetId, (u32, u32), String)>::new();
+        let mut name_rewrites = Vec::<(DefinedNameId, String)>::new();
         for (&owner_sheet_id, owner) in &self.worksheet_data {
             for (&(row, col), cell) in &owner.cells {
-                if let Some(formula) = &cell.formula
-                    && (formula.is_r1c1 || formula_contains_a1_reference(&formula.text))
-                {
-                    return Err(OmError::unsupported(format!(
+                let Some(formula) = &cell.formula else {
+                    continue;
+                };
+                let blocked = || {
+                    OmError::unsupported(format!(
                         "Range.{member} structural formula retarget is not implemented for worksheet {} cell R{}C{}",
                         owner_sheet_id.0, row, col
-                    )));
+                    ))
+                };
+                let Some(shift) = structural_shift else {
+                    if formula.is_r1c1 || formula_contains_a1_reference(&formula.text) {
+                        return Err(blocked());
+                    }
+                    continue;
+                };
+                if formula.is_r1c1 {
+                    return Err(blocked());
+                }
+                let rewritten = retarget_formula_references(&formula.text, shift, false, |q| {
+                    classify(Some(owner_sheet_id), q)
+                })
+                .map_err(|_| blocked())?;
+                if rewritten != formula.text {
+                    // A shared formula's children derive from its master, so a group whose
+                    // members would diverge cannot be rewritten member by member.
+                    if owner
+                        .formula_group_owner_for_key((row, col))
+                        .is_some_and(|(_, group)| group.kind == FormulaGroupKind::Shared)
+                    {
+                        return Err(blocked());
+                    }
+                    formula_rewrites.push((owner_sheet_id, (row, col), rewritten));
                 }
             }
             for (formula_index, formula) in owner
@@ -1734,17 +1803,33 @@ impl WorkbookState {
             }
         }
         for defined_name in self.defined_names.iter() {
-            if defined_name.refers_to.is_r1c1
-                || formula_contains_a1_reference(&defined_name.refers_to.text)
-            {
+            let blocked = || {
                 let scope = match defined_name.scope {
                     NameScope::Workbook => "workbook".to_string(),
                     NameScope::Worksheet(sheet_id) => format!("worksheet {}", sheet_id.0),
                 };
-                return Err(OmError::unsupported(format!(
+                OmError::unsupported(format!(
                     "Range.{member} structural defined-name retarget is not implemented for {scope} name '{}'",
                     defined_name.display_name
-                )));
+                ))
+            };
+            let refers_to = &defined_name.refers_to;
+            let Some(shift) = structural_shift else {
+                if refers_to.is_r1c1 || formula_contains_a1_reference(&refers_to.text) {
+                    return Err(blocked());
+                }
+                continue;
+            };
+            if refers_to.is_r1c1 {
+                return Err(blocked());
+            }
+            // Relative parts of a name resolve at each caller, so only absolute references are
+            // retargeted, and unqualified references have no sheet to classify.
+            let rewritten =
+                retarget_formula_references(&refers_to.text, shift, true, |q| classify(None, q))
+                    .map_err(|_| blocked())?;
+            if rewritten != refers_to.text {
+                name_rewrites.push((defined_name.id, rewritten));
             }
         }
         let affected_rect = match direction {
@@ -2215,7 +2300,75 @@ impl WorkbookState {
             }
         }
 
-        self.apply_cell_batch_with_change(sheet_id, replacements, CellBatchMutationKind::Rearrange)
+        let mut changed = self.apply_cell_batch_with_change(
+            sheet_id,
+            replacements,
+            CellBatchMutationKind::Rearrange,
+        )?;
+        if let Some(shift) = structural_shift {
+            changed |=
+                self.apply_structural_retargets(sheet_id, shift, formula_rewrites, name_rewrites)?;
+        }
+        Ok(changed)
+    }
+
+    /// Writes formula and defined-name texts that a whole-row or whole-column shift retargeted,
+    /// placing each cell formula at the position its cell moved to.
+    fn apply_structural_retargets(
+        &mut self,
+        sheet_id: SheetId,
+        shift: StructuralShift,
+        formula_rewrites: Vec<(SheetId, (u32, u32), String)>,
+        name_rewrites: Vec<(DefinedNameId, String)>,
+    ) -> OmResult<bool> {
+        let moved_index = |value: u32| -> Option<u32> {
+            if value < shift.first {
+                Some(value)
+            } else if shift.insert {
+                Some(value + shift.count)
+            } else if value < shift.first + shift.count {
+                None
+            } else {
+                Some(value - shift.count)
+            }
+        };
+        let moved = |(row, col): (u32, u32)| match shift.axis {
+            StructuralAxis::Rows => moved_index(row).map(|row| (row, col)),
+            StructuralAxis::Columns => moved_index(col).map(|col| (row, col)),
+        };
+        let mut changed = false;
+        for (owner_sheet_id, key, text) in formula_rewrites {
+            let key = if owner_sheet_id == sheet_id {
+                match moved(key) {
+                    Some(key) => key,
+                    None => continue,
+                }
+            } else {
+                key
+            };
+            let worksheet = self.worksheet_data_for_sheet_mut(owner_sheet_id)?;
+            let Some(formula) = worksheet
+                .cells
+                .get_mut(&key)
+                .and_then(|cell| cell.formula.as_mut())
+            else {
+                continue;
+            };
+            formula.text = text;
+            worksheet.dirty = true;
+            worksheet.dirty_cells.insert(key);
+            changed = true;
+        }
+        for (name_id, text) in name_rewrites {
+            changed |= self.defined_names.set_refers_to_by_id(
+                name_id,
+                FormulaSource {
+                    text,
+                    is_r1c1: false,
+                },
+            )?;
+        }
+        Ok(changed)
     }
 
     pub fn fill_cells_with_change(

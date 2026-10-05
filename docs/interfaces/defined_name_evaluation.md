@@ -43,6 +43,29 @@ caller.
 
 The regression is `crates/excel-runtime/src/tests/defined_name_semantics.rs`.
 
+## Structural Retargeting
+
+`Range.Insert` and `Range.Delete` of whole rows (`A2:XFD3`) or whole columns (`B1:C1048576`)
+retarget every cell formula and defined name in the workbook that references the edited sheet:
+- On insert, endpoints at or after the insertion point move. A range end pushed past the grid
+  stays on the last row or column; any other endpoint pushed past it becomes `#REF!`.
+- On delete, endpoints after the deleted span move back. A range that loses only part of its span
+  shrinks, and a reference entirely inside the span becomes `#REF!`.
+- References to other sheets, string literals, structured references, and external-workbook
+  references are unchanged. Edited cells are marked dirty at their new positions, and names are
+  rewritten through the name table.
+
+The shift is refused atomically, as before, when it would need to rewrite any of:
+- an R1C1 formula;
+- a reference to an unknown sheet, or a 3D reference;
+- a member of a shared-formula group;
+- a name whose moving reference is relative or unqualified;
+- data-validation, table, or chart formulas.
+
+Partial-width or partial-height `Insert`/`Delete` still refuse any reference-bearing formula. The
+rules live in `office_common::retarget_formula_references`; the regressions are its unit tests
+and `whole_row_and_column_shifts_retarget_formulas_and_names`.
+
 ## Remaining Boundaries
 
 - `Names.Add` and `Name.RefersTo` treat A1 text as relative to A1. Desktop Excel reads and
@@ -51,5 +74,7 @@ The regression is `crates/excel-runtime/src/tests/defined_name_semantics.rs`.
 - Built-in `_xlnm.` names (`Print_Area`, `_FilterDatabase`, `Print_Titles`) are preserved but not
   given special evaluation meaning.
 - External-workbook references in name formulas are not evaluated.
+- A deleted reference is written as `#REF!` without its sheet qualifier (Excel shows
+  `Sheet1!#REF!`).
 - A text argument passed straight to a numeric aggregate (`SUM("x"&1)`) is unsupported rather
   than `#VALUE!`.

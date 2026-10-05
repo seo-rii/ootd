@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 mod name;
 mod reference;
+mod retarget;
 
 pub use name::{
     BuiltinName, DefinedName, DefinedNameId, DefinedNameKind, DefinedNameMetadata, NameKey,
@@ -16,6 +17,9 @@ pub use name::{
 };
 pub use reference::{
     ExternalReference, RangeArea, RangeSet, ReferenceTarget, formula_contains_a1_reference,
+};
+pub use retarget::{
+    RetargetBlocker, SheetMatch, StructuralAxis, StructuralShift, retarget_formula_references,
 };
 
 pub type OmResult<T> = Result<T, OmError>;
