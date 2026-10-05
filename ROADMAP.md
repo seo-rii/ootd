@@ -468,9 +468,9 @@ Active order:
    `Insert`/`Delete` now retarget cell formulas and absolute defined names instead of refusing,
    expanding, shrinking, or `#REF!`-ing references the way Excel does. Merged cells, validation
    and conditional-format ranges, hyperlinks, auto-filters, selections, and row and column metadata
-   move with them through a recorded shift log that the XLSX rewriter replays. Partial corridors,
-   R1C1, 3D, shared-group, relative-name, table, chart, comment, and drawing owners still fail
-   closed. The
+   move with them through a recorded shift log that the XLSX rewriter replays, and comment and VML
+   note anchors move in their own parts. Partial corridors, R1C1, 3D, shared-group, relative-name,
+   table, chart, and drawing owners, and deletions of commented cells, still fail closed. The
    contract is `docs/interfaces/defined_name_evaluation.md`.
 
 Every numbered work unit starts with a failing regression and lands as its own reviewable commit.

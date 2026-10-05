@@ -61,6 +61,10 @@ Worksheet structure moves with the cells. Each shift is recorded on the workshee
 - onto `mergeCell@ref`, `dataValidation@sqref`, `conditionalFormatting@sqref`, `hyperlink@ref`,
   `autoFilter@ref`, `selection@sqref`/`activeCell`, `pane@topLeftCell`, and `col@min`/`max`.
 
+Comment anchors (`comment@ref` in the comments part) and legacy VML shapes (zero-based
+`x:Row`/`x:Column` and the `x:Anchor` box) move too. The save writes the moved comment and VML
+parts next to the rewritten worksheet.
+
 Ranges grow, shrink, or move as references do. Ranges on deleted rows or columns are removed, and
 `mergeCells@count` follows. A selection or pane origin on deleted cells returns to A1. The model's
 structural inventory moves with the shift, save checks the worksheet's hyperlink snapshot against
@@ -76,14 +80,14 @@ The shift is refused atomically, as before, when it would need to rewrite any of
 
 It is also refused when it would:
 - delete through part of a merged range;
-- remove a whole data-validation range or a hyperlink;
-- move cells on a worksheet with comments or VML drawings, or with tables or drawings in the moved
-  area.
+- remove a whole data-validation range, a hyperlink, or a commented cell;
+- move cells with tables or drawings in the moved area.
 
 Partial-width or partial-height `Insert`/`Delete` still refuse any reference-bearing formula. The
 rules live in `office_common::retarget_formula_references` and `StructuralShift`. The regressions
-are their unit tests, `whole_row_and_column_shifts_retarget_formulas_and_names`, and
-`whole_row_and_column_shifts_move_worksheet_structure`.
+are their unit tests, `whole_row_and_column_shifts_retarget_formulas_and_names`,
+`whole_row_and_column_shifts_move_worksheet_structure`, and
+`whole_row_shifts_move_comments_notes_and_hyperlinks`.
 
 ## Remaining Boundaries
 

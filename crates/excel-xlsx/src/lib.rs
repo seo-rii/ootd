@@ -46,6 +46,7 @@ mod external_data;
 mod pivot;
 mod relationships;
 mod shared_strings;
+mod structural_shift;
 mod support_snapshot;
 mod worksheet;
 mod xml;
@@ -1159,13 +1160,35 @@ impl WorksheetSupportParts {
     /// shift so save validation expects the rewritten worksheet. Shifts that would remove a
     /// hyperlink, or that would need comment and VML anchors moved, are refused.
     pub fn apply_structural_shift(&mut self, shift: StructuralShift) -> OmResult<()> {
-        if !self.comment_part_uris.is_empty()
-            || !self.vml_drawing_part_uris.is_empty()
-            || !self.legacy_drawing_relationship_ids.is_empty()
+        if self.comment_part_uris.len() != self.comment_part_source_bytes.len()
+            || self.vml_drawing_part_uris.len() != self.vml_drawing_part_source_bytes.len()
         {
             return Err(OmError::unsupported(
-                "structural comment anchor retarget is not implemented for worksheets with comments or VML drawings",
+                "structural comment anchor retarget requires the source comment and VML parts",
             ));
+        }
+        // Comment and VML parts move as bytes; their expected summaries are re-read from the
+        // moved bytes so save validation checks the parts the save writes.
+        for (part_uri, bytes) in &mut self.comment_part_source_bytes {
+            *bytes = structural_shift::shift_comment_part(bytes, shift)?;
+            let summary = parse_comment_part_summary(bytes)?;
+            if let Some(anchor_refs) = self.comment_anchor_refs.get_mut(part_uri) {
+                *anchor_refs = summary
+                    .comments
+                    .iter()
+                    .map(|comment| comment.reference.clone())
+                    .collect();
+            }
+            if self.comment_summaries.contains_key(part_uri) {
+                self.comment_summaries.insert(part_uri.clone(), summary);
+            }
+        }
+        for (part_uri, bytes) in &mut self.vml_drawing_part_source_bytes {
+            *bytes = structural_shift::shift_vml_part(bytes, shift)?;
+            if self.vml_drawing_summaries.contains_key(part_uri) {
+                self.vml_drawing_summaries
+                    .insert(part_uri.clone(), parse_vml_drawing_part_summary(bytes)?);
+            }
         }
         let shifts = [shift];
         let moved = |reference: &str| -> OmResult<String> {
@@ -2916,7 +2939,7 @@ impl XlsxCodec {
         ensure_worksheet_support_parts_present_for_save(
             &package,
             &workbook.worksheet_support_parts,
-            &workbook.state,
+            None,
             &worksheet_xml_rewrite_recovery_ids,
             workbook.support_parts.ooxml_dialect,
         )?;
@@ -3259,9 +3282,19 @@ impl XlsxCodec {
                     format!("worksheet {} is missing a part uri", worksheet.name),
                 )
             })?;
+            let shifted_support_parts = match workbook.worksheet_support_parts.get(&worksheet.id) {
+                Some(parts) if !sheet_data.structural_shifts.is_empty() => {
+                    let mut shifted = parts.clone();
+                    for &shift in &sheet_data.structural_shifts {
+                        shifted.apply_structural_shift(shift)?;
+                    }
+                    Some(std::borrow::Cow::Owned(shifted))
+                }
+                parts => parts.map(std::borrow::Cow::Borrowed),
+            };
             let bytes = rewrite_worksheet_xml_with_cell_metadata(
                 sheet_data,
-                workbook.worksheet_support_parts.get(&worksheet.id),
+                shifted_support_parts.as_deref(),
                 workbook
                     .support_parts
                     .ooxml_dialect
@@ -3269,6 +3302,18 @@ impl XlsxCodec {
                 &save_cell_metadata,
             )?;
             package.replace_part_bytes(part_uri, bytes)?;
+            // Comment and VML anchors follow the worksheet's recorded structural shifts.
+            if let Some(std::borrow::Cow::Owned(shifted)) = shifted_support_parts {
+                for (part_uri, bytes) in shifted
+                    .comment_part_source_bytes
+                    .into_iter()
+                    .chain(shifted.vml_drawing_part_source_bytes)
+                {
+                    if package.contains(&part_uri) {
+                        package.replace_part_bytes(&part_uri, bytes)?;
+                    }
+                }
+            }
         }
 
         if has_dirty_worksheets || effective_calculation_state.is_some() {
@@ -3907,7 +3952,7 @@ impl XlsxCodec {
         ensure_worksheet_support_parts_present_for_save(
             &package,
             &workbook.worksheet_support_parts,
-            &workbook.state,
+            Some(&workbook.state),
             &BTreeSet::new(),
             workbook.support_parts.ooxml_dialect,
         )?;
@@ -21415,16 +21460,15 @@ fn ensure_single_worksheet_support_parts_present(
 fn ensure_worksheet_support_parts_present_for_save(
     package: &OpcPackage,
     support_parts: &BTreeMap<SheetId, WorksheetSupportParts>,
-    state: &WorkbookState,
+    rewritten_state: Option<&WorkbookState>,
     worksheet_xml_rewrite_recovery_ids: &BTreeSet<SheetId>,
     dialect: OoxmlDialect,
 ) -> OmResult<()> {
     for (sheet_id, worksheet_support_parts) in support_parts {
-        // The snapshot describes the source worksheet; a rewritten worksheet has also replayed
-        // the structural shifts recorded since then.
-        let shifts = state
-            .worksheet_data()
-            .get(sheet_id)
+        // The snapshot describes the source worksheet. After the rewrite (`rewritten_state`),
+        // the package has also replayed the structural shifts recorded since then.
+        let shifts = rewritten_state
+            .and_then(|state| state.worksheet_data().get(sheet_id))
             .map(|worksheet| worksheet.structural_shifts.as_slice())
             .unwrap_or_default();
         let shifted;

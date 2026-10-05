@@ -1912,3 +1912,88 @@ fn whole_row_and_column_shifts_move_worksheet_structure() {
         "the merge on deleted row 1 is removed:\n{sheet}"
     );
 }
+
+#[test]
+fn whole_row_shifts_move_comments_notes_and_hyperlinks() {
+    let mut package =
+        OpcPackage::from_bytes(&synthetic_comment_workbook_bytes()).expect("comment package");
+    package
+        .replace_part_bytes(
+            "xl/drawings/vmlDrawing1.vml",
+            br#"<xml xmlns:v="urn:schemas-microsoft-com:vml" xmlns:x="urn:schemas-microsoft-com:office:excel"><v:shape id="_x0000_s1025"><x:ClientData ObjectType="Note"><x:Anchor>1, 15, 0, 2, 3, 15, 4, 16</x:Anchor><x:Row>0</x:Row><x:Column>0</x:Column></x:ClientData></v:shape></xml>"#
+                .to_vec(),
+        )
+        .expect("replace VML");
+    let mut runtime = ExcelRuntime::new();
+    let workbook = runtime
+        .open_workbook(OpenWorkbookSpec {
+            bytes: package.to_bytes().expect("bytes"),
+            format_hint: Some(FileFormat::Xlsx),
+            profile: ExcelProfile::Excel365,
+            read_only: false,
+        })
+        .expect("open comment workbook");
+    let worksheet = worksheet_handle(&mut runtime, workbook);
+
+    shift(&mut runtime, worksheet, "A1:XFD2", "Insert", XL_SHIFT_DOWN);
+    let (saved, sheet) = saved_sheet_xml(&runtime, workbook);
+    assert!(
+        sheet.contains(r#"<hyperlink ref="C3" r:id="rId1"/>"#),
+        "{sheet}"
+    );
+    let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+    let part = |name: &str| {
+        String::from_utf8(saved_package.part(name).expect(name).bytes.clone()).expect("utf-8")
+    };
+    let comments = part("xl/comments1.xml");
+    assert!(
+        comments.contains(r#"<comment ref="A3" authorId="0">"#),
+        "{comments}"
+    );
+    let vml = part("xl/drawings/vmlDrawing1.vml");
+    assert!(
+        vml.contains(
+            "<x:Anchor>1, 15, 2, 2, 3, 15, 6, 16</x:Anchor><x:Row>2</x:Row><x:Column>0</x:Column>"
+        ),
+        "{vml}"
+    );
+
+    let target = range_handle(&mut runtime, worksheet, "A3:XFD3");
+    let error = runtime
+        .dispatch_invoke(target, "Delete", &[OmValue::Number(f64::from(XL_SHIFT_UP))])
+        .expect_err("deleting a commented cell fails closed");
+    assert_eq!(error.code, OmErrorCode::Unsupported);
+    assert!(error.message.contains("comment"), "{error:?}");
+
+    let mut reopened = ExcelRuntime::new();
+    let reopened_workbook = reopened
+        .open_workbook(OpenWorkbookSpec {
+            bytes: saved,
+            format_hint: Some(FileFormat::Xlsx),
+            profile: ExcelProfile::Excel365,
+            read_only: false,
+        })
+        .expect("reopen comment workbook");
+    let reopened_sheet = worksheet_handle(&mut reopened, reopened_workbook);
+    shift(
+        &mut reopened,
+        reopened_sheet,
+        "A1:XFD1",
+        "Delete",
+        XL_SHIFT_UP,
+    );
+    let (saved, _) = saved_sheet_xml(&reopened, reopened_workbook);
+    let comments = String::from_utf8(
+        OpcPackage::from_bytes(&saved)
+            .expect("package")
+            .part("xl/comments1.xml")
+            .expect("comments")
+            .bytes
+            .clone(),
+    )
+    .expect("utf-8");
+    assert!(
+        comments.contains(r#"<comment ref="A2" authorId="0">"#),
+        "{comments}"
+    );
+}
