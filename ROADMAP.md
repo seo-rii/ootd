@@ -463,7 +463,9 @@ Active order:
    synthetic): names evaluate constants, name chains, single- and multi-area ranges, sheet-scope
    shadowing, callable `LAMBDA` names, and array constants. The evaluator gained `&`
    concatenation in cell formulas and function arguments and inline `{…}` array constants for
-   numeric aggregates. The contract is `docs/interfaces/defined_name_evaluation.md`.
+   numeric aggregates. Relative references in name formulas resolve at the calling cell and wrap
+   around the grid, as Excel stores them relative to A1. The contract is
+   `docs/interfaces/defined_name_evaluation.md`.
 
 Every numbered work unit starts with a failing regression and lands as its own reviewable commit.
 The complete `OOTD-001`~`OOTD-086` ordering, regression inventory, and compatibility completion

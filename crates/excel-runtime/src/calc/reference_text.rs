@@ -1043,6 +1043,37 @@ pub(super) fn parse_r1c1_axis(bytes: &[u8], start: usize, base: i64) -> Option<(
 }
 
 pub(crate) fn shift_formula_a1_references(formula: &str, row_delta: i64, col_delta: i64) -> String {
+    shift_formula_a1_references_with(formula, row_delta, col_delta, false)
+}
+
+/// Moves relative references the way Excel resolves a defined name's formula at a calling cell:
+/// a reference that leaves the grid wraps around it instead of becoming `#REF!`, so a name stored
+/// as `A1048576` means "one row up" from every caller.
+pub(crate) fn shift_formula_a1_references_wrapping(
+    formula: &str,
+    row_delta: i64,
+    col_delta: i64,
+) -> String {
+    shift_formula_a1_references_with(formula, row_delta, col_delta, true)
+}
+
+/// Wraps a shifted one-based index into `1..=max`, or rejects it when wrapping is off.
+fn shifted_axis_index(value: i64, max: u32, wrap: bool) -> Option<i64> {
+    if (1..=i64::from(max)).contains(&value) {
+        Some(value)
+    } else if wrap {
+        Some((value - 1).rem_euclid(i64::from(max)) + 1)
+    } else {
+        None
+    }
+}
+
+fn shift_formula_a1_references_with(
+    formula: &str,
+    row_delta: i64,
+    col_delta: i64,
+    wrap: bool,
+) -> String {
     if row_delta == 0 && col_delta == 0 {
         return formula.to_string();
     }
@@ -1087,7 +1118,7 @@ pub(crate) fn shift_formula_a1_references(formula: &str, row_delta: i64, col_del
             .is_none_or(|ch| !ch.is_ascii_alphanumeric() && ch != '_' && ch != '.');
         if previous_is_boundary {
             if let Some((reference, next_index)) =
-                shift_formula_a1_axis_reference(formula, index, row_delta, col_delta)
+                shift_formula_a1_axis_reference_with(formula, index, row_delta, col_delta, wrap)
             {
                 output.push_str(&reference);
                 index = next_index;
@@ -1141,28 +1172,33 @@ pub(crate) fn shift_formula_a1_references(formula: &str, row_delta: i64, col_del
                                 && col <= EXCEL_MAX_COLUMN_INDEX
                             {
                                 let shifted_row = if row_absolute {
-                                    i64::from(row)
+                                    Some(i64::from(row))
                                 } else {
-                                    i64::from(row) + row_delta
+                                    shifted_axis_index(
+                                        i64::from(row) + row_delta,
+                                        EXCEL_MAX_ROW_INDEX,
+                                        wrap,
+                                    )
                                 };
                                 let shifted_col = if column_absolute {
-                                    i64::from(col)
+                                    Some(i64::from(col))
                                 } else {
-                                    i64::from(col) + col_delta
+                                    shifted_axis_index(
+                                        i64::from(col) + col_delta,
+                                        EXCEL_MAX_COLUMN_INDEX,
+                                        wrap,
+                                    )
                                 };
-                                if shifted_row < 1
-                                    || shifted_row > i64::from(EXCEL_MAX_ROW_INDEX)
-                                    || shifted_col < 1
-                                    || shifted_col > i64::from(EXCEL_MAX_COLUMN_INDEX)
-                                {
-                                    output.push_str("#REF!");
-                                } else {
-                                    output.push_str(&format_cell_address(
-                                        shifted_row as u32,
-                                        shifted_col as u32,
-                                        row_absolute,
-                                        column_absolute,
-                                    ));
+                                match (shifted_row, shifted_col) {
+                                    (Some(shifted_row), Some(shifted_col)) => {
+                                        output.push_str(&format_cell_address(
+                                            shifted_row as u32,
+                                            shifted_col as u32,
+                                            row_absolute,
+                                            column_absolute,
+                                        ));
+                                    }
+                                    _ => output.push_str("#REF!"),
                                 }
                                 index = cursor;
                                 continue;
@@ -1184,11 +1220,12 @@ pub(crate) fn shift_formula_a1_references(formula: &str, row_delta: i64, col_del
     output
 }
 
-pub(super) fn shift_formula_a1_axis_reference(
+fn shift_formula_a1_axis_reference_with(
     formula: &str,
     start: usize,
     row_delta: i64,
     col_delta: i64,
+    wrap: bool,
 ) -> Option<(String, usize)> {
     let bytes = formula.as_bytes();
     let parse_column_endpoint = |mut cursor: usize| -> Option<(u32, bool, usize)> {
@@ -1245,23 +1282,19 @@ pub(super) fn shift_formula_a1_axis_reference(
             parse_column_endpoint(colon_index + 1)
         && next_is_boundary(next_index)
     {
-        let first = if first_absolute {
-            i64::from(first_col)
-        } else {
-            i64::from(first_col) + col_delta
+        let shift = |value: u32, absolute: bool| {
+            if absolute {
+                Some(i64::from(value))
+            } else {
+                shifted_axis_index(i64::from(value) + col_delta, EXCEL_MAX_COLUMN_INDEX, wrap)
+            }
         };
-        let second = if second_absolute {
-            i64::from(second_col)
-        } else {
-            i64::from(second_col) + col_delta
-        };
-        if first < 1
-            || first > i64::from(EXCEL_MAX_COLUMN_INDEX)
-            || second < 1
-            || second > i64::from(EXCEL_MAX_COLUMN_INDEX)
-        {
+        let (Some(first), Some(second)) = (
+            shift(first_col, first_absolute),
+            shift(second_col, second_absolute),
+        ) else {
             return Some(("#REF!".to_string(), next_index));
-        }
+        };
         return Some((
             format!(
                 "{}:{}",
@@ -1277,23 +1310,19 @@ pub(super) fn shift_formula_a1_axis_reference(
         && let Some((second_row, second_absolute, next_index)) = parse_row_endpoint(colon_index + 1)
         && next_is_boundary(next_index)
     {
-        let first = if first_absolute {
-            i64::from(first_row)
-        } else {
-            i64::from(first_row) + row_delta
+        let shift = |value: u32, absolute: bool| {
+            if absolute {
+                Some(i64::from(value))
+            } else {
+                shifted_axis_index(i64::from(value) + row_delta, EXCEL_MAX_ROW_INDEX, wrap)
+            }
         };
-        let second = if second_absolute {
-            i64::from(second_row)
-        } else {
-            i64::from(second_row) + row_delta
-        };
-        if first < 1
-            || first > i64::from(EXCEL_MAX_ROW_INDEX)
-            || second < 1
-            || second > i64::from(EXCEL_MAX_ROW_INDEX)
-        {
+        let (Some(first), Some(second)) = (
+            shift(first_row, first_absolute),
+            shift(second_row, second_absolute),
+        ) else {
             return Some(("#REF!".to_string(), next_index));
-        }
+        };
         return Some((
             format!(
                 "{}:{}",
@@ -1333,6 +1362,16 @@ mod tests {
             assert_eq!(convert_formula_a1_to_r1c1(a1, 2, 2), r1c1, "to R1C1 {a1}");
             assert_eq!(convert_formula_r1c1_to_a1(r1c1, 2, 2), a1, "to A1 {r1c1}");
         }
+    }
+
+    #[test]
+    fn wrapping_shift_resolves_relative_name_references_around_the_grid() {
+        use super::shift_formula_a1_references_wrapping as wrap;
+        assert_eq!(wrap("Sheet1!A1048576", 4, 2), "Sheet1!C4");
+        assert_eq!(wrap("Sheet1!XFD1+$A$1", 0, 1), "Sheet1!A1+$A$1");
+        assert_eq!(wrap("SUM(A1:A3)", 9, 0), "SUM(A10:A12)");
+        assert_eq!(wrap("B:B", 0, 16_384), "B:B");
+        assert_eq!(shift_formula_a1_references("A1048576", 4, 2), "#REF!");
     }
 
     #[test]

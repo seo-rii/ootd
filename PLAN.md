@@ -753,7 +753,8 @@ Wave 2 exit gate:
    external reference와 lifecycle retargeting.
    진행 (2026-09-30, synthetic): name이 constant, name chain, 단일/다중 area range, sheet scope
    shadowing, 호출 가능한 `LAMBDA` name, array constant로 평가된다. evaluator에 cell formula와
-   함수 인수의 `&` 연결과 numeric aggregate용 inline `{…}` array constant를 추가했다. 계약은
+   함수 인수의 `&` 연결과 numeric aggregate용 inline `{…}` array constant를 추가했다. name formula의
+   상대 참조는 A1 기준 저장 형식대로 호출 cell에서 해석되고 grid 밖으로 나가면 wrap한다. 계약은
    `docs/interfaces/defined_name_evaluation.md`.
 16. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
    structured error에 추가한다.

@@ -9,6 +9,16 @@ A name in a formula resolves through `DefinedNameTable::lookup`. A name scoped t
 worksheet shadows a workbook-scoped name with the same spelling, and case is ignored. A name whose
 formula refers to itself, directly or through other names, evaluates to `#CALC!`.
 
+## Relative References
+
+A1 name formulas are stored relative to A1, as Excel writes them. When a name is used, its
+relative row and column parts move by the calling cell's offset from A1, and absolute (`$`) parts
+stay fixed. A reference that leaves the grid wraps around it, so a name stored as
+`Sheet1!A1048576` means "the cell one row up" and `Sheet1!XFD1` "the cell one column left" from
+every caller. `Sheet1!$P$1:$P1048576` means "column P from row 1 to the row above". Without a
+calling cell (`Application.Evaluate`) A1 is the caller. R1C1 name formulas already resolve at the
+caller.
+
 ## Name Formulas
 
 | Name formula | Use | Result |
@@ -35,8 +45,9 @@ The regression is `crates/excel-runtime/src/tests/defined_name_semantics.rs`.
 
 ## Remaining Boundaries
 
-- Relative references inside a name formula (without `$`) are evaluated as absolute positions,
-  not relative to the calling cell as desktop Excel resolves them.
+- `Names.Add` and `Name.RefersTo` treat A1 text as relative to A1. Desktop Excel reads and
+  reports it relative to the active cell, so the two differ when relative names are added or
+  read with another cell active.
 - Built-in `_xlnm.` names (`Print_Area`, `_FilterDatabase`, `Print_Titles`) are preserved but not
   given special evaluation meaning.
 - External-workbook references in name formulas are not evaluated.

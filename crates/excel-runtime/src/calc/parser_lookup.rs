@@ -1911,11 +1911,20 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             NameScope::Worksheet(sheet_id) => sheet_id,
         };
         parse_formula_reference_text(
-            defined_name.refers_to.text.as_str(),
+            self.name_formula_at_caller(defined_name.refers_to.text.as_str())
+                .as_str(),
             default_sheet_id,
             self.evaluator.state,
         )
         .ok()
+    }
+
+    /// A defined name's formula with its relative references resolved at the calling cell.
+    /// Name formulas are stored relative to A1, so they move by the caller's offset from A1 and
+    /// wrap around the grid. Without a calling cell (`Application.Evaluate`) A1 is the caller.
+    pub(super) fn name_formula_at_caller(&self, refers_to: &str) -> String {
+        let (row, col) = self.current_position.unwrap_or((1, 1));
+        shift_formula_a1_references_wrapping(refers_to, i64::from(row) - 1, i64::from(col) - 1)
     }
 
     pub(super) fn defined_name_value_probe(
@@ -1942,6 +1951,11 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if !self.evaluator.resolving_names.insert(name_id) {
             return Err(FormulaEvalError::Calc);
         }
+        let refers_to_text = if is_r1c1 {
+            refers_to_text
+        } else {
+            self.name_formula_at_caller(refers_to_text.as_str())
+        };
         let result = (|| {
             let default_sheet_id = match scope {
                 NameScope::Workbook => self.sheet_id,

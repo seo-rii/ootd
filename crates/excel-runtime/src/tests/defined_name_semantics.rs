@@ -164,3 +164,71 @@ fn defined_names_evaluate_constants_ranges_and_scopes() {
     }
     assert!(failures.is_empty(), "{failures:#?}");
 }
+
+#[test]
+fn relative_name_references_resolve_at_the_calling_cell() {
+    let (mut runtime, workbook, sheet, _) = open_runtime();
+    let sheet_name = runtime.worksheets(workbook).expect("worksheets")[0]
+        .name
+        .clone();
+    for row in 1..=4 {
+        let cell = range(&mut runtime, sheet, &format!("P{row}"));
+        runtime
+            .dispatch_set(cell, "Value2", OmValue::Number(f64::from(row * 10)), &[])
+            .expect("seed value");
+    }
+    // As Excel writes them: relative to A1, so `A1048576` is "the row above" in the same column
+    // and `XFD1` is "the column to the left".
+    add_name(
+        &mut runtime,
+        workbook,
+        NameScope::Workbook,
+        "Above",
+        &format!("{sheet_name}!A1048576"),
+    );
+    add_name(
+        &mut runtime,
+        workbook,
+        NameScope::Workbook,
+        "Left",
+        &format!("{sheet_name}!XFD1"),
+    );
+    add_name(
+        &mut runtime,
+        workbook,
+        NameScope::Workbook,
+        "Fixed",
+        &format!("{sheet_name}!$P$1"),
+    );
+    add_name(
+        &mut runtime,
+        workbook,
+        NameScope::Workbook,
+        "RunToHere",
+        &format!("{sheet_name}!$P$1:$P1048576"),
+    );
+
+    let cases = [
+        ("P3", "=Above+1", 21.0),
+        ("Q2", "=Left*2", 40.0),
+        ("Q4", "=Fixed+Left", 50.0),
+        ("P9", "=SUM(RunToHere)", 91.0),
+    ];
+    for (address, formula, _) in &cases {
+        let cell = range(&mut runtime, sheet, address);
+        runtime
+            .dispatch_set(cell, "Formula", OmValue::Text(formula.to_string()), &[])
+            .unwrap_or_else(|error| panic!("set {address}: {error:?}"));
+    }
+    runtime
+        .calculate_workbook_with_report(workbook)
+        .expect("calculate relative names");
+    for (address, formula, expected) in cases {
+        let cell = range(&mut runtime, sheet, address);
+        assert_eq!(
+            runtime.dispatch_get(cell, "Value2", &[]).expect("value"),
+            OmValue::Number(expected),
+            "{address} {formula}"
+        );
+    }
+}

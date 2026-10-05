@@ -14563,8 +14563,8 @@
                 .expect("set 3D reference source values");
         }
         for (name, refers_to) in [
-            ("Span3D", "='First Sheet:Third Sheet'!A1"),
-            ("Span3DRect", "='First Sheet:Third Sheet'!A1:B1"),
+            ("Span3D", "='First Sheet:Third Sheet'!$A$1"),
+            ("Span3DRect", "='First Sheet:Third Sheet'!$A$1:$B$1"),
         ] {
             runtime
                 .dispatch_invoke(
