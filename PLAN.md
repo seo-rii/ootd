@@ -758,8 +758,9 @@ Wave 2 exit gate:
    `Insert`/`Delete`는 거부하는 대신 cell formula와 절대 참조 defined name을 Excel처럼 확장·축소·
    `#REF!`로 retarget한다. merged cell, validation/conditional format range, hyperlink, auto filter,
    selection, 행/열 metadata도 기록된 shift log를 XLSX rewriter가 replay해 함께 이동하고, comment와
-   VML note anchor도 각 part에서 이동한다. 부분 corridor, R1C1, 3D, shared group, 상대 name,
-   table/chart/drawing owner와 comment가 있는 cell 삭제는 여전히 fail-closed한다. 계약은
+   VML note anchor도 각 part에서 이동한다. chart series source와 chart frame anchor도 이동한다.
+   부분 corridor, R1C1, 3D, shared group, 상대 name, table, opaque drawing owner와 comment가 있는
+   cell 삭제는 여전히 fail-closed한다. 계약은
    `docs/interfaces/defined_name_evaluation.md`.
 16. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를
    structured error에 추가한다.

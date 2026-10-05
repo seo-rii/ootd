@@ -1881,7 +1881,16 @@ impl WorkbookState {
                 col_last: ExcelLimits::MAX_COLUMN_INDEX,
             },
         };
-        for (&chart_id, chart) in &self.charts {
+        let structural_graphics = match structural_shift {
+            Some(shift) => Some(self.prepare_structural_graphic_retargets(
+                sheet_id,
+                shift,
+                member,
+                &|qualifier| classify(None, qualifier),
+            )?),
+            None => None,
+        };
+        for (&chart_id, chart) in self.charts.iter().filter(|_| structural_shift.is_none()) {
             for (series_index, series) in chart.series.iter().enumerate() {
                 for (source_name, source) in [
                     ("name", series.name.as_ref()),
@@ -2007,7 +2016,7 @@ impl WorkbookState {
             })?;
             Ok((row, col))
         };
-        for (&drawing_id, drawing) in &self.drawings {
+        for (&drawing_id, drawing) in self.drawings.iter().filter(|_| structural_shift.is_none()) {
             if drawing.workbook_id != self.model.id {
                 return Err(OmError::invalid_state(format!(
                     "drawing {} belongs to workbook {}, expected {}",
@@ -2341,6 +2350,10 @@ impl WorkbookState {
         )?;
         if let Some(shift) = structural_shift {
             self.apply_structural_retargets(sheet_id, shift, formula_rewrites, name_rewrites)?;
+            if let Some((charts, drawings)) = structural_graphics {
+                self.charts = charts;
+                self.drawings = drawings;
+            }
             let worksheet = self.worksheet_data_for_sheet_mut(sheet_id)?;
             let owners = &mut worksheet.structural_owners;
             // Row metadata spans every column and column metadata every row, so each moves only
@@ -2367,6 +2380,197 @@ impl WorkbookState {
             changed = true;
         }
         Ok(changed)
+    }
+
+    /// Charts and drawings after a whole-row or whole-column shift of `sheet_id`, prepared on
+    /// copies so a refused shift changes nothing. Series sources on the edited sheet move like
+    /// formulas, and chart frames hosted on it move their cell anchors; a move-only frame keeps its
+    /// extent. Unresolved or 3D sources, sources whose whole range is deleted, opaque drawing
+    /// objects, and cell-bound absolute anchors are refused.
+    fn prepare_structural_graphic_retargets(
+        &self,
+        sheet_id: SheetId,
+        shift: StructuralShift,
+        member: &str,
+        classify: &dyn Fn(Option<&str>) -> SheetMatch,
+    ) -> OmResult<(
+        BTreeMap<ChartId, ChartModel>,
+        BTreeMap<DrawingId, DrawingModel>,
+    )> {
+        let mut charts = self.charts.clone();
+        for (&chart_id, chart) in &mut charts {
+            let mut chart_changed = false;
+            for (series_index, series) in chart.series.iter_mut().enumerate() {
+                for (source_name, source) in [
+                    ("name", series.name.as_mut()),
+                    ("x-values", series.x_values.as_mut()),
+                    ("values", series.values.as_mut()),
+                    ("bubble-size", series.bubble_size.as_mut()),
+                ] {
+                    let Some(source) = source else {
+                        continue;
+                    };
+                    let blocked = |detail: &str| {
+                        OmError::unsupported(format!(
+                            "Range.{member} structural chart source retarget is not implemented for chart {} series {} {source_name} {detail}",
+                            chart_id.0,
+                            series_index + 1,
+                        ))
+                    };
+                    let mut source_changed = false;
+                    let mut references = vec![(&mut source.raw, &mut source.resolved)];
+                    if let Some(full_reference) = source.full_reference.as_mut() {
+                        references.push((&mut full_reference.raw, &mut full_reference.resolved));
+                    }
+                    for (raw, resolved) in references {
+                        let Some(target) = resolved.as_mut() else {
+                            if raw.is_r1c1 || formula_contains_a1_reference(&raw.text) {
+                                return Err(blocked("unresolved reference"));
+                            }
+                            continue;
+                        };
+                        let ReferenceTarget::Range(range) = target else {
+                            continue;
+                        };
+                        let mut areas = Vec::with_capacity(range.areas().len());
+                        let mut moved = false;
+                        for area in range.areas() {
+                            let mut area = *area;
+                            match area.scope {
+                                SheetScope::Multi3D { .. } => return Err(blocked("3D range")),
+                                SheetScope::Single(owner) if owner == sheet_id => {
+                                    let rect = shift
+                                        .shift_rect(area.rect)
+                                        .ok_or_else(|| blocked("range on deleted cells"))?;
+                                    moved |= rect != area.rect;
+                                    area.rect = rect;
+                                }
+                                SheetScope::Single(_) => {}
+                            }
+                            areas.push(area);
+                        }
+                        if !moved {
+                            continue;
+                        }
+                        if raw.is_r1c1 {
+                            return Err(blocked("R1C1 reference"));
+                        }
+                        raw.text = retarget_formula_references(&raw.text, shift, false, classify)
+                            .map_err(|_| blocked("reference text"))?;
+                        *range = RangeSet::new(range.workbook_id(), areas)?;
+                        source_changed = true;
+                    }
+                    if source_changed {
+                        source.dirty = true;
+                        chart_changed = true;
+                    }
+                }
+            }
+            if chart_changed {
+                chart.content_dirty = true;
+                chart.dirty = true;
+            }
+        }
+
+        let moved_marker = |zero_based: u32| -> u32 {
+            match shift.shift_index(zero_based + 1) {
+                Some(moved) => moved - 1,
+                // Pushed past the grid by an insert, or inside a deleted span.
+                None if shift.insert => shift.axis_max() - 1,
+                None => shift.first - 1,
+            }
+        };
+        let axis_of = |marker: &office_common::CellMarker| match shift.axis {
+            StructuralAxis::Rows => marker.row_zero_based,
+            StructuralAxis::Columns => marker.col_zero_based,
+        };
+        let with_axis = |marker: &office_common::CellMarker, value: u32, collapsed: bool| {
+            let mut marker = *marker;
+            match shift.axis {
+                StructuralAxis::Rows => {
+                    marker.row_zero_based = value;
+                    if collapsed {
+                        marker.row_offset = office_common::Emu(0);
+                    }
+                }
+                StructuralAxis::Columns => {
+                    marker.col_zero_based = value;
+                    if collapsed {
+                        marker.col_offset = office_common::Emu(0);
+                    }
+                }
+            }
+            marker
+        };
+        let is_deleted = |zero_based: u32| shift.shift_index(zero_based + 1).is_none();
+        let mut drawings = self.drawings.clone();
+        for (&drawing_id, drawing) in &mut drawings {
+            if drawing.host_sheet_id != sheet_id {
+                continue;
+            }
+            let mut drawing_changed = false;
+            for object in &mut drawing.objects {
+                let chart_object = match object {
+                    DrawingObjectModel::UnsupportedRaw { id, .. } => {
+                        return Err(OmError::unsupported(format!(
+                            "Range.{member} structural drawing anchor retarget is not implemented for drawing {} object {} worksheet {} opaque anchor",
+                            drawing_id.0, id.0, sheet_id.0,
+                        )));
+                    }
+                    DrawingObjectModel::ChartFrame(chart_object) => chart_object,
+                };
+                let blocked = |detail: &str| {
+                    OmError::unsupported(format!(
+                        "Range.{member} structural drawing anchor retarget is not implemented for drawing {} object {} worksheet {} {detail}",
+                        drawing_id.0, chart_object.id.0, sheet_id.0,
+                    ))
+                };
+                let anchor = match chart_object.anchor.as_ref() {
+                    Some(office_common::DrawingAnchor::TwoCell(anchor)) => {
+                        let from = axis_of(&anchor.from);
+                        let to = axis_of(&anchor.to);
+                        let new_from = moved_marker(from);
+                        let new_to = if chart_object.placement == ObjectPlacement::MoveOnly {
+                            (new_from + (to - from.min(to))).min(shift.axis_max() - 1)
+                        } else {
+                            moved_marker(to).max(new_from)
+                        };
+                        let mut anchor = anchor.clone();
+                        anchor.from = with_axis(&anchor.from, new_from, is_deleted(from));
+                        anchor.to = with_axis(&anchor.to, new_to, is_deleted(to));
+                        Some(office_common::DrawingAnchor::TwoCell(anchor))
+                    }
+                    Some(office_common::DrawingAnchor::OneCell(anchor)) => {
+                        let from = axis_of(&anchor.from);
+                        let mut anchor = anchor.clone();
+                        anchor.from = with_axis(&anchor.from, moved_marker(from), is_deleted(from));
+                        Some(office_common::DrawingAnchor::OneCell(anchor))
+                    }
+                    Some(office_common::DrawingAnchor::Absolute(_))
+                        if chart_object.placement == ObjectPlacement::FreeFloating =>
+                    {
+                        None
+                    }
+                    Some(office_common::DrawingAnchor::Absolute(_)) => {
+                        return Err(blocked("cell-bound absolute anchor"));
+                    }
+                    Some(office_common::DrawingAnchor::UnsupportedRaw) | None => {
+                        return Err(blocked("unresolved anchor"));
+                    }
+                };
+                if let Some(anchor) = anchor
+                    && chart_object.anchor.as_ref() != Some(&anchor)
+                {
+                    chart_object.anchor = Some(anchor);
+                    chart_object.dirty = true;
+                    drawing_changed = true;
+                }
+            }
+            if drawing_changed {
+                drawing.dirty = true;
+            }
+        }
+        Ok((charts, drawings))
     }
 
     /// Writes formula and defined-name texts that a whole-row or whole-column shift retargeted,

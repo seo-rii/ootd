@@ -469,8 +469,9 @@ Active order:
    expanding, shrinking, or `#REF!`-ing references the way Excel does. Merged cells, validation
    and conditional-format ranges, hyperlinks, auto-filters, selections, and row and column metadata
    move with them through a recorded shift log that the XLSX rewriter replays, and comment and VML
-   note anchors move in their own parts. Partial corridors, R1C1, 3D, shared-group, relative-name,
-   table, chart, and drawing owners, and deletions of commented cells, still fail closed. The
+   note anchors move in their own parts. Chart series sources and chart-frame anchors move as
+   well. Partial corridors, R1C1, 3D, shared-group, relative-name, table, and opaque drawing
+   owners, and deletions of commented cells, still fail closed. The
    contract is `docs/interfaces/defined_name_evaluation.md`.
 
 Every numbered work unit starts with a failing regression and lands as its own reviewable commit.

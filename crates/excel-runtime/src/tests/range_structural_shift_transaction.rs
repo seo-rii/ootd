@@ -1997,3 +1997,79 @@ fn whole_row_shifts_move_comments_notes_and_hyperlinks() {
         "{comments}"
     );
 }
+
+#[test]
+fn whole_row_shifts_move_chart_sources_and_frames() {
+    let mut package = OpcPackage::from_bytes(&synthetic_workbook_with_embedded_chart_bytes())
+        .expect("chart package");
+    let drawing = String::from_utf8(
+        package
+            .part("xl/drawings/drawing1.xml")
+            .expect("drawing")
+            .bytes
+            .clone(),
+    )
+    .expect("drawing utf-8");
+    let start = drawing.find("<xdr:absoluteAnchor").expect("anchor start");
+    let frame = drawing.find("<xdr:graphicFrame").expect("frame start");
+    let end = drawing.find("</xdr:absoluteAnchor>").expect("anchor end");
+    let drawing = format!(
+        "{}<xdr:twoCellAnchor><xdr:from><xdr:col>1</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>3</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>5</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>10</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>{}</xdr:twoCellAnchor>{}",
+        &drawing[..start],
+        &drawing[frame..end],
+        &drawing[end + "</xdr:absoluteAnchor>".len()..],
+    );
+    package
+        .replace_part_bytes("xl/drawings/drawing1.xml", drawing.into_bytes())
+        .expect("replace drawing");
+    let mut runtime = ExcelRuntime::new();
+    let workbook = runtime
+        .open_workbook(OpenWorkbookSpec {
+            bytes: package.to_bytes().expect("bytes"),
+            format_hint: Some(FileFormat::Xlsx),
+            profile: ExcelProfile::Excel365,
+            read_only: false,
+        })
+        .expect("open chart workbook");
+    let worksheet = worksheet_handle(&mut runtime, workbook);
+
+    shift(&mut runtime, worksheet, "A1:XFD2", "Insert", XL_SHIFT_DOWN);
+    let (saved, _) = saved_sheet_xml(&runtime, workbook);
+    let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+    let part = |name: &str| {
+        String::from_utf8(saved_package.part(name).expect(name).bytes.clone()).expect("utf-8")
+    };
+    let chart = part("xl/charts/chart1.xml");
+    for expected in [
+        "<c:f>Sheet1!$C$3</c:f>",
+        "<c:f>Sheet1!$A$3:$B$3</c:f>",
+        "<c:f>Sheet1!$A$3:$C$3</c:f>",
+    ] {
+        assert!(chart.contains(expected), "missing {expected} in:\n{chart}");
+    }
+    assert!(chart.contains("Revenue Trend"), "the chart keeps its title");
+    let drawing = part("xl/drawings/drawing1.xml");
+    for expected in [
+        "<xdr:from><xdr:col>1</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>5</xdr:row>",
+        "<xdr:to><xdr:col>5</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>12</xdr:row>",
+    ] {
+        assert!(
+            drawing.contains(expected),
+            "missing {expected} in:\n{drawing}"
+        );
+    }
+    assert!(
+        drawing.contains("Embedded Revenue Chart"),
+        "the frame keeps its properties"
+    );
+
+    let mut reopened = ExcelRuntime::new();
+    reopened
+        .open_workbook(OpenWorkbookSpec {
+            bytes: saved,
+            format_hint: Some(FileFormat::Xlsx),
+            profile: ExcelProfile::Excel365,
+            read_only: false,
+        })
+        .expect("reopen chart workbook");
+}

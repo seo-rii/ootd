@@ -65,6 +65,14 @@ Comment anchors (`comment@ref` in the comments part) and legacy VML shapes (zero
 `x:Row`/`x:Column` and the `x:Anchor` box) move too. The save writes the moved comment and VML
 parts next to the rewritten worksheet.
 
+Charts follow too:
+- **Series sources:** the `name`, `x-values`, `values`, and `bubble-size` sources on the edited
+  sheet rewrite their reference text and resolved ranges. The chart is patched in place, so its
+  formatting is kept.
+- **Chart frames:** frames hosted on the sheet move their two-cell or one-cell anchors. A
+  move-only frame keeps its extent, and an edge inside a deleted span lands on the first row or
+  column after it.
+
 Ranges grow, shrink, or move as references do. Ranges on deleted rows or columns are removed, and
 `mergeCells@count` follows. A selection or pane origin on deleted cells returns to A1. The model's
 structural inventory moves with the shift, save checks the worksheet's hyperlink snapshot against
@@ -81,13 +89,17 @@ The shift is refused atomically, as before, when it would need to rewrite any of
 It is also refused when it would:
 - delete through part of a merged range;
 - remove a whole data-validation range, a hyperlink, or a commented cell;
-- move cells with tables or drawings in the moved area.
+- move cells on a sheet with tables in the moved area;
+- leave a chart source whose whole range is deleted, or one that is unresolved or 3D;
+- move a sheet that hosts opaque drawing objects (pictures, shapes) or cell-bound absolute
+  anchors.
 
 Partial-width or partial-height `Insert`/`Delete` still refuse any reference-bearing formula. The
 rules live in `office_common::retarget_formula_references` and `StructuralShift`. The regressions
 are their unit tests, `whole_row_and_column_shifts_retarget_formulas_and_names`,
-`whole_row_and_column_shifts_move_worksheet_structure`, and
-`whole_row_shifts_move_comments_notes_and_hyperlinks`.
+`whole_row_and_column_shifts_move_worksheet_structure`,
+`whole_row_shifts_move_comments_notes_and_hyperlinks`, and
+`whole_row_shifts_move_chart_sources_and_frames`.
 
 ## Remaining Boundaries
 
