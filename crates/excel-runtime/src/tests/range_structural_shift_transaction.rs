@@ -2073,3 +2073,128 @@ fn whole_row_shifts_move_chart_sources_and_frames() {
         })
         .expect("reopen chart workbook");
 }
+
+fn table_fixture_bytes(table_xml: &str) -> Vec<u8> {
+    let mut package = OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("base package");
+    let text = |package: &OpcPackage, name: &str| {
+        String::from_utf8(package.part(name).expect(name).bytes.clone()).expect("utf-8")
+    };
+    let content_types = text(&package, "[Content_Types].xml").replace(
+        "</Types>",
+        "<Override PartName=\"/xl/tables/table1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml\"/></Types>",
+    );
+    package
+        .replace_part_bytes("[Content_Types].xml", content_types.into_bytes())
+        .expect("content types");
+    let sheet = text(&package, "xl/worksheets/sheet1.xml").replace(
+        "</worksheet>",
+        r#"<tableParts xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" count="1"><tablePart r:id="rIdTable1"/></tableParts></worksheet>"#,
+    );
+    package
+        .replace_part_bytes("xl/worksheets/sheet1.xml", sheet.into_bytes())
+        .expect("worksheet");
+    for (name, bytes) in [
+        (
+            "xl/worksheets/_rels/sheet1.xml.rels",
+            br#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdTable1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/table" Target="../tables/table1.xml"/></Relationships>"#.to_vec(),
+        ),
+        ("xl/tables/table1.xml", table_xml.as_bytes().to_vec()),
+    ] {
+        package
+            .add_part(OpcPart {
+                name: name.to_string(),
+                content_type: None,
+                compression: CompressionMethod::Stored,
+                bytes,
+            })
+            .expect("add part");
+    }
+    package.to_bytes().expect("table workbook bytes")
+}
+
+#[test]
+fn whole_row_and_column_shifts_move_tables() {
+    let bytes = table_fixture_bytes(
+        r#"<?xml version="1.0" encoding="UTF-8"?><table xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" id="1" name="Table1" displayName="Table1" ref="D4:E6" totalsRowShown="0"><autoFilter ref="D4:E6"/><tableColumns count="2"><tableColumn id="1" name="Left"/><tableColumn id="2" name="Right"/></tableColumns></table>"#,
+    );
+    let mut runtime = ExcelRuntime::new();
+    let workbook = runtime
+        .open_workbook(OpenWorkbookSpec {
+            bytes,
+            format_hint: Some(FileFormat::Xlsx),
+            profile: ExcelProfile::Excel365,
+            read_only: false,
+        })
+        .expect("open table workbook");
+    let worksheet = worksheet_handle(&mut runtime, workbook);
+    let table_xml = |runtime: &ExcelRuntime| {
+        let (saved, _) = saved_sheet_xml(runtime, workbook);
+        let package = OpcPackage::from_bytes(&saved).expect("saved package");
+        let table = String::from_utf8(
+            package
+                .part("xl/tables/table1.xml")
+                .expect("table")
+                .bytes
+                .clone(),
+        )
+        .expect("utf-8");
+        (saved, table)
+    };
+
+    shift(&mut runtime, worksheet, "A5:XFD5", "Insert", XL_SHIFT_DOWN);
+    shift(
+        &mut runtime,
+        worksheet,
+        "A1:A1048576",
+        "Insert",
+        XL_SHIFT_TO_RIGHT,
+    );
+    let (_, table) = table_xml(&runtime);
+    assert!(table.contains(r#"ref="E4:F7""#), "{table}");
+    assert!(table.contains(r#"<autoFilter ref="E4:F7"/>"#), "{table}");
+    assert!(
+        table.contains(r#"<tableColumn id="2" name="Right"/>"#),
+        "{table}"
+    );
+
+    for (address, member, direction, label) in [
+        ("A4:XFD4", "Delete", XL_SHIFT_UP, "deleting the header row"),
+        (
+            "F1:F1048576",
+            "Insert",
+            XL_SHIFT_TO_RIGHT,
+            "inserting a column inside the table",
+        ),
+    ] {
+        let target = range_handle(&mut runtime, worksheet, address);
+        let error = runtime
+            .dispatch_invoke(target, member, &[OmValue::Number(f64::from(direction))])
+            .expect_err(label);
+        assert_eq!(error.code, OmErrorCode::Unsupported, "{label}");
+        assert!(error.message.contains("table range"), "{label}: {error:?}");
+    }
+
+    shift(&mut runtime, worksheet, "A5:XFD6", "Delete", XL_SHIFT_UP);
+    let (saved, table) = table_xml(&runtime);
+    assert!(table.contains(r#"ref="E4:F5""#), "{table}");
+    let reopened = runtime
+        .codec
+        .load(&saved, LoadOptions::default())
+        .expect("reopen table workbook");
+    let sheet_id = reopened.state.worksheets()[0].id;
+    assert_eq!(
+        reopened
+            .state
+            .worksheet_data_for_sheet(sheet_id)
+            .expect("worksheet")
+            .structural_owners
+            .table_owners[0]
+            .range,
+        Rect {
+            row_first: 4,
+            row_last: 5,
+            col_first: 5,
+            col_last: 6,
+        }
+    );
+}

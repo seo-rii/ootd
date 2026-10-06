@@ -3302,6 +3302,19 @@ impl XlsxCodec {
                 &save_cell_metadata,
             )?;
             package.replace_part_bytes(part_uri, bytes)?;
+            // Table parts follow the worksheet's recorded structural shifts.
+            if !sheet_data.structural_shifts.is_empty() {
+                for table_owner in &sheet_data.structural_owners.table_owners {
+                    let Some(source) = package.part(&table_owner.part_uri) else {
+                        continue;
+                    };
+                    let shifted = structural_shift::shift_table_part(
+                        &source.bytes,
+                        &sheet_data.structural_shifts,
+                    )?;
+                    package.replace_part_bytes(&table_owner.part_uri, shifted)?;
+                }
+            }
             // Comment and VML anchors follow the worksheet's recorded structural shifts.
             if let Some(std::borrow::Cow::Owned(shifted)) = shifted_support_parts {
                 for (part_uri, bytes) in shifted

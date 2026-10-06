@@ -55,6 +55,52 @@ fn shift_comment_element(
     Ok(shifted)
 }
 
+/// Replays structural shifts onto a table part's `table`, `autoFilter`, `sortState`, and
+/// `sortCondition` references. The model only admits shifts the table can follow.
+pub(crate) fn shift_table_part(xml: &[u8], shifts: &[StructuralShift]) -> OmResult<Vec<u8>> {
+    let mut reader = Reader::from_reader(Cursor::new(xml));
+    reader.config_mut().trim_text(false);
+    let mut writer = Writer::new(Cursor::new(Vec::new()));
+    let mut buffer = Vec::new();
+    let shifted = |element: &BytesStart<'_>| -> OmResult<BytesStart<'static>> {
+        let mut shifted =
+            BytesStart::new(String::from_utf8_lossy(element.name().as_ref()).into_owned());
+        for attribute in element.attributes() {
+            let attribute = attribute.map_err(xml_error)?;
+            if attribute.key.as_ref() == b"ref" {
+                let reference = attribute.unescape_value().map_err(xml_error)?;
+                let moved = replay_shifts_on_sqref(shifts, &reference)?.ok_or_else(|| {
+                    OmError::invalid_state(format!(
+                        "table reference {reference} was deleted by a structural shift"
+                    ))
+                })?;
+                shifted.push_attribute(("ref", moved.as_str()));
+            } else {
+                shifted.push_attribute(attribute);
+            }
+        }
+        Ok(shifted)
+    };
+    let is_ranged = |element: &BytesStart<'_>| {
+        matches!(
+            xml_local_name(element.name().as_ref()),
+            b"table" | b"autoFilter" | b"sortState" | b"sortCondition"
+        )
+    };
+    loop {
+        let event = reader.read_event_into(&mut buffer).map_err(xml_error)?;
+        let event = match event {
+            Event::Start(element) if is_ranged(&element) => Event::Start(shifted(&element)?),
+            Event::Empty(element) if is_ranged(&element) => Event::Empty(shifted(&element)?),
+            Event::Eof => break,
+            event => event.into_owned(),
+        };
+        writer.write_event(event).map_err(xml_error)?;
+        buffer.clear();
+    }
+    Ok(writer.into_inner().into_inner())
+}
+
 /// Rewrites the zero-based `x:Row`/`x:Column` cell and `x:Anchor` box of every legacy VML
 /// shape's client data. VML is edited textually because Excel's VML is not reliably XML.
 pub(crate) fn shift_vml_part(xml: &[u8], shift: StructuralShift) -> OmResult<Vec<u8>> {

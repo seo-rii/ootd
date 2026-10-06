@@ -114,6 +114,30 @@ pub struct TableStructuralOwner {
     pub formulas: Vec<String>,
 }
 
+/// Whether a table can follow a whole-row or whole-column shift. Rows may be inserted anywhere and
+/// deleted from the body while the header and one data row survive; columns may only move a
+/// table that lies entirely on one side of the edit, because inserting or deleting table columns
+/// would change the table's column definitions.
+fn table_follows_structural_shift(range: Rect, shift: StructuralShift) -> bool {
+    let last = shift.first + shift.count - 1;
+    match shift.axis {
+        StructuralAxis::Rows if shift.insert => shift.shift_rect(range).is_some(),
+        StructuralAxis::Rows => {
+            !(shift.first..=last).contains(&range.row_first)
+                && shift
+                    .shift_rect(range)
+                    .is_some_and(|moved| moved.row_last > moved.row_first)
+        }
+        StructuralAxis::Columns => {
+            range.col_last < shift.first
+                || (shift.insert
+                    && range.col_first >= shift.first
+                    && shift.shift_rect(range).is_some())
+                || (!shift.insert && range.col_first > last)
+        }
+    }
+}
+
 impl WorksheetData {
     fn spill_owner_for_key(&self, key: (u32, u32)) -> Option<(u32, u32)> {
         self.spill_owners.get(&key).copied().or_else(|| {
@@ -1825,7 +1849,14 @@ impl WorkbookState {
             }
             for table_owner in &owner.structural_owners.table_owners {
                 for (formula_index, formula) in table_owner.formulas.iter().enumerate() {
-                    if formula_contains_a1_reference(formula) {
+                    let needs_retarget = match structural_shift {
+                        Some(shift) => retarget_formula_references(formula, shift, false, |q| {
+                            classify(Some(owner_sheet_id), q)
+                        })
+                        .map_or(true, |rewritten| rewritten != *formula),
+                        None => formula_contains_a1_reference(formula),
+                    };
+                    if needs_retarget {
                         return Err(OmError::unsupported(format!(
                             "Range.{member} structural table formula retarget is not implemented for worksheet {} relationship {} part {} formula {}",
                             owner_sheet_id.0,
@@ -2181,11 +2212,14 @@ impl WorkbookState {
                 .structural_owners
                 .table_owners
                 .iter()
-                .find(|table_owner| {
-                    affected_rect.row_first <= table_owner.range.row_last
-                        && table_owner.range.row_first <= affected_rect.row_last
-                        && affected_rect.col_first <= table_owner.range.col_last
-                        && table_owner.range.col_first <= affected_rect.col_last
+                .find(|table_owner| match structural_shift {
+                    Some(shift) => !table_follows_structural_shift(table_owner.range, shift),
+                    None => {
+                        affected_rect.row_first <= table_owner.range.row_last
+                            && table_owner.range.row_first <= affected_rect.row_last
+                            && affected_rect.col_first <= table_owner.range.col_last
+                            && table_owner.range.col_first <= affected_rect.col_last
+                    }
                 })
         {
             return Err(OmError::unsupported(format!(
@@ -2366,6 +2400,11 @@ impl WorkbookState {
                 .iter()
                 .filter_map(|range| shift.shift_rect(*range))
                 .collect();
+            for table_owner in &mut owners.table_owners {
+                if let Some(range) = shift.shift_rect(table_owner.range) {
+                    table_owner.range = range;
+                }
+            }
             for ranges in [
                 &mut owners.merged_ranges,
                 &mut owners.data_validation_ranges,

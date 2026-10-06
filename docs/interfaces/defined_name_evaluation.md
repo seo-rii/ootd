@@ -65,6 +65,14 @@ Comment anchors (`comment@ref` in the comments part) and legacy VML shapes (zero
 `x:Row`/`x:Column` and the `x:Anchor` box) move too. The save writes the moved comment and VML
 parts next to the rewritten worksheet.
 
+Tables follow too. Their parts replay the recorded shifts onto `table@ref`, `autoFilter@ref`,
+`sortState@ref`, and `sortCondition@ref`:
+- Rows may be inserted anywhere: a table moves, or grows when the insertion is inside its body.
+- Body rows may be deleted while the header row and one data row survive.
+- A column insert or delete may only move a table that lies wholly to one side of it, because
+  adding or removing table columns would change the table's column definitions.
+- Table formulas must not need retargeting.
+
 Charts follow too:
 - **Series sources:** the `name`, `x-values`, `values`, and `bubble-size` sources on the edited
   sheet rewrite their reference text and resolved ranges. The chart is patched in place, so its
@@ -89,7 +97,8 @@ The shift is refused atomically, as before, when it would need to rewrite any of
 It is also refused when it would:
 - delete through part of a merged range;
 - remove a whole data-validation range, a hyperlink, or a commented cell;
-- move cells on a sheet with tables in the moved area;
+- delete a table's header row or all of its data rows, or insert or delete columns inside a
+  table;
 - leave a chart source whose whole range is deleted, or one that is unresolved or 3D;
 - move a sheet that hosts opaque drawing objects (pictures, shapes) or cell-bound absolute
   anchors.
@@ -98,8 +107,8 @@ Partial-width or partial-height `Insert`/`Delete` still refuse any reference-bea
 rules live in `office_common::retarget_formula_references` and `StructuralShift`. The regressions
 are their unit tests, `whole_row_and_column_shifts_retarget_formulas_and_names`,
 `whole_row_and_column_shifts_move_worksheet_structure`,
-`whole_row_shifts_move_comments_notes_and_hyperlinks`, and
-`whole_row_shifts_move_chart_sources_and_frames`.
+`whole_row_shifts_move_comments_notes_and_hyperlinks`,
+`whole_row_shifts_move_chart_sources_and_frames`, and `whole_row_and_column_shifts_move_tables`.
 
 ## Remaining Boundaries
 
