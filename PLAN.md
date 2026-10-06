@@ -760,7 +760,8 @@ Wave 2 exit gate:
    selection, 행/열 metadata도 기록된 shift log를 XLSX rewriter가 replay해 함께 이동하고, comment와
    VML note anchor도 각 part에서 이동한다. chart series source와 chart frame anchor도 이동한다.
    table은 행 편집에서 이동·확장하고 양옆 열 편집에서 이동한다. 그림과 도형도 drawing part 안에서
-   이동한다. 부분 corridor, R1C1, 3D, shared group, 상대 name, table 내부 열 편집, table header나
+   이동한다. shift가 이동하거나 다시 쓰는 shared formula group은 일반 formula로 풀린다. 부분
+   corridor, R1C1, 3D, 상대 name, table 내부 열 편집, table header나
    comment가 있는 cell 삭제는 여전히 fail-closed한다. 계약은
    `docs/interfaces/defined_name_evaluation.md`.
 16. `OOTD-055`: part, relationship, sheet, cell, member/argument와 repair/security context를

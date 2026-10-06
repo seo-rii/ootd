@@ -1755,6 +1755,8 @@ impl WorkbookState {
             },
         };
         let mut formula_rewrites = Vec::<(SheetId, (u32, u32), String)>::new();
+        // Shared-formula groups a whole-axis shift moves or rewrites become ordinary formulas.
+        let mut unshared_groups = BTreeSet::<(SheetId, (u32, u32))>::new();
         let mut name_rewrites = Vec::<(DefinedNameId, String)>::new();
         for (&owner_sheet_id, owner) in &self.worksheet_data {
             for (&(row, col), cell) in &owner.cells {
@@ -1782,12 +1784,11 @@ impl WorkbookState {
                 .map_err(|_| blocked())?;
                 if rewritten != formula.text {
                     // A shared formula's children derive from its master, so a group whose
-                    // members would diverge cannot be rewritten member by member.
-                    if owner
-                        .formula_group_owner_for_key((row, col))
-                        .is_some_and(|(_, group)| group.kind == FormulaGroupKind::Shared)
+                    // members diverge is unshared into ordinary formulas.
+                    if let Some((anchor, group)) = owner.formula_group_owner_for_key((row, col))
+                        && group.kind == FormulaGroupKind::Shared
                     {
-                        return Err(blocked());
+                        unshared_groups.insert((owner_sheet_id, anchor));
                     }
                     formula_rewrites.push((owner_sheet_id, (row, col), rewritten));
                 }
@@ -2290,6 +2291,14 @@ impl WorkbookState {
         };
         for (&anchor, group) in &worksheet.formula_groups {
             match group.kind {
+                FormulaGroupKind::Shared
+                    if structural_shift.is_some()
+                        && std::iter::once(anchor)
+                            .chain(group.members.iter().copied())
+                            .any(affected_contains) =>
+                {
+                    unshared_groups.insert((sheet_id, anchor));
+                }
                 FormulaGroupKind::Shared => protected_keys.extend(
                     std::iter::once(anchor)
                         .chain(group.members.iter().copied())
@@ -2377,11 +2386,64 @@ impl WorkbookState {
             }
         }
 
-        let mut changed = self.apply_cell_batch_with_change(
+        // Every member of an unshared group needs its own formula text, which the runtime expands
+        // from the master when a workbook opens.
+        for &(owner_sheet_id, anchor) in &unshared_groups {
+            let owner = self.worksheet_data_for_sheet(owner_sheet_id)?;
+            let group = &owner.formula_groups[&anchor];
+            if let Some(missing) = std::iter::once(anchor)
+                .chain(group.members.iter().copied())
+                .find(|key| {
+                    owner
+                        .cells
+                        .get(key)
+                        .is_none_or(|cell| cell.formula.is_none())
+                })
+            {
+                return Err(OmError::unsupported(format!(
+                    "Range.{member} structural shared formula retarget requires expanded formula text for worksheet {} cell R{}C{}",
+                    owner_sheet_id.0, missing.0, missing.1,
+                )));
+            }
+        }
+        let mut removed_groups = Vec::new();
+        for &(owner_sheet_id, anchor) in &unshared_groups {
+            let owner = self.worksheet_data_for_sheet_mut(owner_sheet_id)?;
+            if let Some(group) = owner.formula_groups.remove(&anchor) {
+                removed_groups.push((owner_sheet_id, anchor, group));
+            }
+        }
+        let mut changed = match self.apply_cell_batch_with_change(
             sheet_id,
             replacements,
             CellBatchMutationKind::Rearrange,
-        )?;
+        ) {
+            Ok(changed) => changed,
+            Err(error) => {
+                for (owner_sheet_id, anchor, group) in removed_groups {
+                    self.worksheet_data_for_sheet_mut(owner_sheet_id)?
+                        .formula_groups
+                        .insert(anchor, group);
+                }
+                return Err(error);
+            }
+        };
+        // Unshared members are rewritten as ordinary formulas wherever they now are.
+        for (owner_sheet_id, anchor, group) in removed_groups {
+            let owner = self.worksheet_data_for_sheet_mut(owner_sheet_id)?;
+            for key in std::iter::once(anchor).chain(group.members) {
+                let key = match structural_shift {
+                    Some(shift) if owner_sheet_id == sheet_id => match shift.shift_cell(key) {
+                        Some(key) => key,
+                        None => continue,
+                    },
+                    _ => key,
+                };
+                owner.dirty_cells.insert(key);
+            }
+            owner.dirty = true;
+            changed = true;
+        }
         if let Some(shift) = structural_shift {
             self.apply_structural_retargets(sheet_id, shift, formula_rewrites, name_rewrites)?;
             if let Some((charts, drawings)) = structural_graphics {

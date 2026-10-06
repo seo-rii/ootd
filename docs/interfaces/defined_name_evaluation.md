@@ -90,10 +90,15 @@ Ranges grow, shrink, or move as references do. Ranges on deleted rows or columns
 structural inventory moves with the shift, save checks the worksheet's hyperlink snapshot against
 the replayed refs, and a successful save rebases the source XML and clears the record.
 
+A shared-formula group that a whole-axis shift moves, or whose member formulas it rewrites, is
+unshared: every member becomes an ordinary formula with its own text (the runtime expands
+children from their master at open), retargets like any other formula, and is saved as a plain
+`<f>`. Groups the shift neither moves nor rewrites stay shared. A child without expanded formula
+text, as in codec-only use, refuses the shift.
+
 The shift is refused atomically, as before, when it would need to rewrite any of:
 - an R1C1 formula;
 - a reference to an unknown sheet, or a 3D reference;
-- a member of a shared-formula group;
 - a name whose moving reference is relative or unqualified;
 - a data-validation formula that references the moved area;
 - table or chart formulas.
@@ -113,7 +118,9 @@ are their unit tests, `whole_row_and_column_shifts_retarget_formulas_and_names`,
 `whole_row_and_column_shifts_move_worksheet_structure`,
 `whole_row_shifts_move_comments_notes_and_hyperlinks`,
 `whole_row_shifts_move_chart_sources_and_frames`, `whole_row_and_column_shifts_move_tables`, and
-`whole_row_shifts_move_shapes_and_keep_absolute_objects`.
+`whole_row_shifts_move_shapes_and_keep_absolute_objects`, with shared formulas pinned by
+`whole_row_shifts_unshare_moved_shared_formulas` and
+`whole_row_shifts_keep_untouched_shared_formulas_shared`.
 
 ## Remaining Boundaries
 

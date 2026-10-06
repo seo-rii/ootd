@@ -158,3 +158,86 @@ fn shared_formula_children_reject_runtime_formula_edits() {
         before
     );
 }
+
+fn insert_rows(runtime: &mut ExcelRuntime, sheet: ObjectHandle, address: &str) {
+    let target = range(runtime, sheet, address);
+    runtime
+        .dispatch_invoke(
+            target,
+            "Insert",
+            &[OmValue::Number(f64::from(crate::XL_SHIFT_DOWN))],
+        )
+        .unwrap_or_else(|error| panic!("{address}.Insert: {error:?}"));
+}
+
+fn saved_sheet(runtime: &ExcelRuntime, workbook: WorkbookHandle) -> String {
+    let saved = runtime
+        .save_workbook(
+            workbook,
+            SaveWorkbookSpec {
+                format: FileFormat::Xlsx,
+                profile: ExcelProfile::Excel365,
+                lossless: true,
+            },
+        )
+        .expect("save shared formula workbook");
+    String::from_utf8(
+        OpcPackage::from_bytes(&saved)
+            .expect("saved package")
+            .part("xl/worksheets/sheet1.xml")
+            .expect("sheet")
+            .bytes
+            .clone(),
+    )
+    .expect("sheet utf-8")
+}
+
+#[test]
+fn whole_row_shifts_unshare_moved_shared_formulas() {
+    let (mut runtime, workbook, sheet) =
+        open_shared_formula_workbook(shared_formula_workbook_bytes());
+    insert_rows(&mut runtime, sheet, "A2:XFD2");
+    for (address, expected) in [
+        ("B1", "=A1*2"),
+        ("B3", "=A3*2"),
+        ("B4", "=A4*2"),
+        ("C1", "=$A$1+A1"),
+        ("D1", "=$A$1+B1"),
+        ("C3", "=$A$1+A3"),
+    ] {
+        assert_eq!(formula(&mut runtime, sheet, address), expected, "{address}");
+    }
+    runtime
+        .calculate_workbook_with_report(workbook)
+        .expect("calculate unshared formulas");
+    assert_eq!(value2(&mut runtime, sheet, "B4"), 6.0);
+    assert_eq!(value2(&mut runtime, sheet, "C3"), 3.0);
+    let sheet_xml = saved_sheet(&runtime, workbook);
+    assert!(!sheet_xml.contains(r#"t="shared""#), "{sheet_xml}");
+    for expected in [
+        r#"<c r="B3"><f>A3*2</f>"#,
+        r#"<c r="B4"><f>A4*2</f>"#,
+        r#"<c r="D1"><f>$A$1+B1</f>"#,
+    ] {
+        assert!(
+            sheet_xml.contains(expected),
+            "missing {expected} in:\n{sheet_xml}"
+        );
+    }
+}
+
+#[test]
+fn whole_row_shifts_keep_untouched_shared_formulas_shared() {
+    let (mut runtime, workbook, sheet) =
+        open_shared_formula_workbook(shared_formula_workbook_bytes());
+    insert_rows(&mut runtime, sheet, "A10:XFD10");
+    let sheet_xml = saved_sheet(&runtime, workbook);
+    assert!(
+        sheet_xml.contains(r#"<f t="shared" ref="B1:B3" si="0">A1*2</f>"#),
+        "{sheet_xml}"
+    );
+    assert!(
+        sheet_xml.contains(r#"<f t="shared" si="0"/>"#),
+        "{sheet_xml}"
+    );
+}
