@@ -3961,6 +3961,31 @@ impl XlsxCodec {
             package.replace_part_bytes(chart_part_uri, encoded_xml)?;
         }
 
+        // Pictures and shapes follow their host worksheet's recorded structural shifts. This runs
+        // after every chart-frame rewrite, which moves chart anchors from the model.
+        let mut shifted_drawing_parts = BTreeSet::new();
+        for drawing in workbook.state.drawings.values() {
+            let Some(part_uri) = drawing.raw_part_uri.as_deref() else {
+                continue;
+            };
+            if !shifted_drawing_parts.insert(part_uri) {
+                continue;
+            }
+            let Some(shifts) = workbook
+                .state
+                .worksheet_data()
+                .get(&drawing.host_sheet_id)
+                .map(|worksheet| worksheet.structural_shifts.as_slice())
+                .filter(|shifts| !shifts.is_empty())
+            else {
+                continue;
+            };
+            let Some(part) = package.part(part_uri) else {
+                continue;
+            };
+            let shifted = structural_shift::shift_drawing_part(&part.bytes, shifts)?;
+            package.replace_part_bytes(part_uri, shifted)?;
+        }
         ensure_support_parts_present_for_save(&package, &workbook.support_parts)?;
         ensure_worksheet_support_parts_present_for_save(
             &package,

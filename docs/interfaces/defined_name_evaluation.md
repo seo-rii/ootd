@@ -80,6 +80,10 @@ Charts follow too:
 - **Chart frames:** frames hosted on the sheet move their two-cell or one-cell anchors. A
   move-only frame keeps its extent, and an edge inside a deleted span lands on the first row or
   column after it.
+- **Pictures, shapes, and other drawing objects:** the save replays the recorded shifts onto
+  their `from`/`to` markers in the drawing part, editing each anchor in place and leaving the rest
+  of the part byte-identical. `oneCellAnchor` and `editAs="oneCell"` objects keep their size;
+  `editAs="absolute"` and `absoluteAnchor` objects do not move.
 
 Ranges grow, shrink, or move as references do. Ranges on deleted rows or columns are removed, and
 `mergeCells@count` follows. A selection or pane origin on deleted cells returns to A1. The model's
@@ -100,15 +104,16 @@ It is also refused when it would:
 - delete a table's header row or all of its data rows, or insert or delete columns inside a
   table;
 - leave a chart source whose whole range is deleted, or one that is unresolved or 3D;
-- move a sheet that hosts opaque drawing objects (pictures, shapes) or cell-bound absolute
-  anchors.
+- move a sheet that hosts a drawing object whose anchor kind is not two-cell, one-cell, or
+  absolute, or a chart frame with a cell-bound absolute anchor.
 
 Partial-width or partial-height `Insert`/`Delete` still refuse any reference-bearing formula. The
 rules live in `office_common::retarget_formula_references` and `StructuralShift`. The regressions
 are their unit tests, `whole_row_and_column_shifts_retarget_formulas_and_names`,
 `whole_row_and_column_shifts_move_worksheet_structure`,
 `whole_row_shifts_move_comments_notes_and_hyperlinks`,
-`whole_row_shifts_move_chart_sources_and_frames`, and `whole_row_and_column_shifts_move_tables`.
+`whole_row_shifts_move_chart_sources_and_frames`, `whole_row_and_column_shifts_move_tables`, and
+`whole_row_shifts_move_shapes_and_keep_absolute_objects`.
 
 ## Remaining Boundaries
 

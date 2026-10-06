@@ -2550,7 +2550,20 @@ impl WorkbookState {
             let mut drawing_changed = false;
             for object in &mut drawing.objects {
                 let chart_object = match object {
-                    DrawingObjectModel::UnsupportedRaw { id, .. } => {
+                    // Pictures and shapes move in the drawing part when the save replays the
+                    // worksheet's recorded shifts; only cell or absolute anchors can be replayed.
+                    DrawingObjectModel::UnsupportedRaw {
+                        id, raw_anchor_xml, ..
+                    } => {
+                        let open_tag = raw_anchor_xml.trim_start();
+                        let open_tag =
+                            &open_tag[..open_tag.find(['>', ' ']).unwrap_or(open_tag.len())];
+                        if ["twoCellAnchor", "oneCellAnchor", "absoluteAnchor"]
+                            .iter()
+                            .any(|kind| open_tag.ends_with(kind))
+                        {
+                            continue;
+                        }
                         return Err(OmError::unsupported(format!(
                             "Range.{member} structural drawing anchor retarget is not implemented for drawing {} object {} worksheet {} opaque anchor",
                             drawing_id.0, id.0, sheet_id.0,

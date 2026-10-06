@@ -2198,3 +2198,58 @@ fn whole_row_and_column_shifts_move_tables() {
         }
     );
 }
+
+#[test]
+fn whole_row_shifts_move_shapes_and_keep_absolute_objects() {
+    let mut runtime = ExcelRuntime::new();
+    let workbook = runtime
+        .open_workbook(OpenWorkbookSpec {
+            bytes: synthetic_workbook_with_embedded_chart_and_raw_shape_bytes(),
+            format_hint: Some(FileFormat::Xlsx),
+            profile: ExcelProfile::Excel365,
+            read_only: false,
+        })
+        .expect("open shape workbook");
+    let worksheet = worksheet_handle(&mut runtime, workbook);
+    shift(&mut runtime, worksheet, "A1:XFD2", "Insert", XL_SHIFT_DOWN);
+    let (saved, _) = saved_sheet_xml(&runtime, workbook);
+    let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+    let drawing = String::from_utf8(
+        saved_package
+            .part("xl/drawings/drawing1.xml")
+            .expect("drawing")
+            .bytes
+            .clone(),
+    )
+    .expect("utf-8");
+    assert!(
+        drawing.contains("<xdr:from><xdr:col>5</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>3</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>"),
+        "the shape moves with its row: {drawing}"
+    );
+    assert!(
+        drawing.contains("<a:t>Keep me</a:t>"),
+        "the shape is preserved: {drawing}"
+    );
+    assert!(
+        drawing.contains(r#"<xdr:pos x="25400" y="38100""#),
+        "the absolute chart stays put: {drawing}"
+    );
+    let chart = String::from_utf8(
+        saved_package
+            .part("xl/charts/chart1.xml")
+            .expect("chart")
+            .bytes
+            .clone(),
+    )
+    .expect("utf-8");
+    assert!(chart.contains("<c:f>Sheet1!$A$3:$C$3</c:f>"), "{chart}");
+    let mut reopened = ExcelRuntime::new();
+    reopened
+        .open_workbook(OpenWorkbookSpec {
+            bytes: saved,
+            format_hint: Some(FileFormat::Xlsx),
+            profile: ExcelProfile::Excel365,
+            read_only: false,
+        })
+        .expect("reopen shape workbook");
+}
