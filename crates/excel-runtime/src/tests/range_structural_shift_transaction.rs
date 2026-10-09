@@ -756,7 +756,7 @@ fn range_structural_shifts_reject_data_validation_formula_owners_atomically() {
     .expect("worksheet utf8");
     let validation_xml = source_xml.replace(
         "</sheetData>",
-        "</sheetData>\n  <dataValidations count=\"1\"><dataValidation type=\"custom\" sqref=\"D4:E5\"><formula1>=$A$1&gt;0</formula1></dataValidation></dataValidations>",
+        "</sheetData>\n  <dataValidations count=\"1\"><dataValidation type=\"custom\" sqref=\"D4:E5\"><formula1>=Sheet1!$A$1&gt;0</formula1></dataValidation></dataValidations>",
     );
     assert_ne!(
         validation_xml, source_xml,
@@ -935,7 +935,7 @@ fn range_structural_shifts_inventory_x14_data_validation_owners() {
         OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("formula base package");
     let formula_xml = source_xml.replace(
         "</worksheet>",
-        r#"  <extLst><ext uri="{CCE6A557-97BC-4B89-ADB6-D9C93CAAB3DF}"><x14:dataValidations xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main" xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main" count="1"><x14:dataValidation type="custom"><x14:formula1><xm:f>=$A$1&gt;0</xm:f></x14:formula1><xm:sqref>D4:E5</xm:sqref></x14:dataValidation></x14:dataValidations></ext></extLst>
+        r#"  <extLst><ext uri="{CCE6A557-97BC-4B89-ADB6-D9C93CAAB3DF}"><x14:dataValidations xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main" xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main" count="1"><x14:dataValidation type="custom"><x14:formula1><xm:f>=Sheet1!$A$1&gt;0</xm:f></x14:formula1><xm:sqref>D4:E5</xm:sqref></x14:dataValidation></x14:dataValidations></ext></extLst>
 </worksheet>"#,
     );
     formula_package
@@ -2136,6 +2136,99 @@ fn partial_corridor_shifts_move_worksheet_structure_inside_the_band() {
             "after reopen and band delete, missing {expected} in:\n{sheet}"
         );
     }
+}
+
+const RULE_SHEET: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main" xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main"><dimension ref="A1:A4"/><sheetData><row r="1"><c r="A1"><v>1</v></c></row><row r="2"><c r="A2"><v>2</v></c></row></sheetData><conditionalFormatting sqref="B2:B4"><cfRule type="expression" dxfId="0" priority="1"><formula>$A2&gt;$A$1</formula></cfRule></conditionalFormatting><dataValidations count="1"><dataValidation type="custom" sqref="C2:C4"><formula1>$A2&gt;0</formula1></dataValidation></dataValidations><extLst><ext uri="{78C0D931-6437-407d-A8EE-F0AAD7539E65}"><x14:conditionalFormattings><x14:conditionalFormatting><x14:cfRule type="expression" priority="2" id="{00000000-0000-0000-0000-000000000001}"><xm:f>$A$1&lt;3</xm:f><x14:dxf/></x14:cfRule><xm:sqref>D2:D4</xm:sqref></x14:conditionalFormatting></x14:conditionalFormattings></ext><ext uri="{CCE6A557-97BC-4B89-ADB6-D9C93CAAB3DF}"><x14:dataValidations count="1"><x14:dataValidation type="custom"><x14:formula1><xm:f>$A$2</xm:f></x14:formula1><xm:sqref>E2:E4</xm:sqref></x14:dataValidation></x14:dataValidations></ext></extLst></worksheet>"#;
+
+#[test]
+fn structural_shifts_retarget_conditional_format_and_validation_formulas() {
+    let mut package = OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("package");
+    package
+        .replace_part_bytes("xl/worksheets/sheet1.xml", RULE_SHEET.as_bytes().to_vec())
+        .expect("replace sheet");
+    let mut runtime = ExcelRuntime::new();
+    let workbook = runtime
+        .open_workbook(OpenWorkbookSpec {
+            bytes: package.to_bytes().expect("bytes"),
+            format_hint: Some(FileFormat::Xlsx),
+            profile: ExcelProfile::Excel365,
+            read_only: false,
+        })
+        .expect("open rule workbook");
+    let worksheet = worksheet_handle(&mut runtime, workbook);
+
+    // Ranges and rule formulas move together, so relative rules keep reading the same cells.
+    shift(&mut runtime, worksheet, "A1:XFD1", "Insert", XL_SHIFT_DOWN);
+    let (saved, sheet) = saved_sheet_xml(&runtime, workbook);
+    for expected in [
+        r#"<conditionalFormatting sqref="B3:B5"><cfRule type="expression" dxfId="0" priority="1"><formula>$A3&gt;$A$2</formula>"#,
+        r#"<dataValidation type="custom" sqref="C3:C5"><formula1>$A3&gt;0</formula1>"#,
+        r#"<xm:f>$A$2&lt;3</xm:f><x14:dxf/></x14:cfRule><xm:sqref>D3:D5</xm:sqref>"#,
+        r#"<xm:f>$A$3</xm:f></x14:formula1><xm:sqref>E3:E5</xm:sqref>"#,
+    ] {
+        assert!(
+            sheet.contains(expected),
+            "after row insert, missing {expected} in:\n{sheet}"
+        );
+    }
+
+    let reopened = runtime
+        .codec
+        .load(&saved, LoadOptions::default())
+        .expect("reopen rule workbook");
+    let owners = &reopened
+        .state
+        .worksheet_data_for_sheet(reopened.state.worksheets()[0].id)
+        .expect("reopened worksheet data")
+        .structural_owners;
+    assert_eq!(
+        owners
+            .conditional_formats
+            .iter()
+            .map(|format| (
+                format.ranges.clone(),
+                format.formulas.clone(),
+                format.extension
+            ))
+            .collect::<Vec<_>>(),
+        vec![
+            (
+                vec![Rect {
+                    row_first: 3,
+                    row_last: 5,
+                    col_first: 2,
+                    col_last: 2,
+                }],
+                vec!["$A3>$A$2".to_string()],
+                false,
+            ),
+            (
+                vec![Rect {
+                    row_first: 3,
+                    row_last: 5,
+                    col_first: 4,
+                    col_last: 4,
+                }],
+                vec!["$A$2<3".to_string()],
+                true,
+            ),
+        ],
+    );
+
+    // A band through part of a conditional format with relative rules would give its parts
+    // different anchors.
+    let target = range_handle(&mut runtime, worksheet, "B4");
+    assert_structural_failure_is_atomic(
+        &mut runtime,
+        workbook,
+        target,
+        "Insert",
+        XL_SHIFT_TO_RIGHT,
+        OmErrorCode::Unsupported,
+        &["structural conditional-format retarget", "R3C2:R5C2"],
+        "band cutting a conditional format",
+    );
 }
 
 #[test]

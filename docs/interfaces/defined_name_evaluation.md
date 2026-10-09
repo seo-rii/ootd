@@ -64,6 +64,13 @@ Worksheet structure moves with the cells. Each shift is recorded on the workshee
 - onto `mergeCell@ref`, `dataValidation@sqref`, `conditionalFormatting@sqref`, `hyperlink@ref`,
   `autoFilter@ref`, `selection@sqref`/`activeCell`, `pane@topLeftCell`, and `col@min`/`max`.
 
+Validation and conditional-format rules move with their ranges. The save rewrites the unqualified
+references in `dataValidation` `formula1`/`formula2`, `cfRule` `formula`, and their x14 `xm:f`
+forms, and replays x14 `xm:sqref` range lists, so a relative rule keeps reading the same cells.
+A band that cuts a conditional format with reference-bearing rules, or a deletion that removes
+every range of an x14 conditional format, is refused. Formula values in `cfvo` thresholds are
+not rewritten.
+
 Comment anchors (`comment@ref` in the comments part) and legacy VML shapes (zero-based
 `x:Row`/`x:Column` and the `x:Anchor` box) move too. The save writes the moved comment and VML
 parts next to the rewritten worksheet.
@@ -102,7 +109,8 @@ text, as in codec-only use, refuses the shift.
 The shift is refused atomically, as before, when it would need to rewrite any of:
 - a reference to an unknown sheet, or a 3D reference;
 - a name whose moving reference is relative or unqualified;
-- a data-validation formula that references the moved area;
+- a validation or conditional-format formula on another sheet that would change, or a
+  sheet-qualified reference in one to the edited sheet that would move;
 - table or chart formulas.
 
 It is also refused when it would:
@@ -134,6 +142,7 @@ The rules live in `office_common::retarget_formula_references` and `StructuralSh
 regressions are their unit tests, `partial_corridor_shifts_retarget_formulas_inside_the_band`,
 `partial_corridor_shifts_move_worksheet_structure_inside_the_band`,
 `structural_shifts_retarget_r1c1_formulas`, `structural_shifts_retarget_r1c1_formulas_and_names`,
+`structural_shifts_retarget_conditional_format_and_validation_formulas`,
 `whole_row_and_column_shifts_retarget_formulas_and_names`,
 `whole_row_and_column_shifts_move_worksheet_structure`,
 `whole_row_shifts_move_comments_notes_and_hyperlinks`,

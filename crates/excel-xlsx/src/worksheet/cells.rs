@@ -16,11 +16,13 @@ use super::super::{
 use super::cell_metadata::WorkbookCellMetadata;
 use super::formula_grammar::{file_formula_to_model, model_formula_to_file};
 use excel_model::{
-    CellData, FormulaGroup, FormulaGroupKind, WorksheetData, WorksheetStructuralOwners,
+    CellData, ConditionalFormatOwner, FormulaGroup, FormulaGroupKind, WorksheetData,
+    WorksheetStructuralOwners,
 };
 use office_common::{
     CellError, CellValue, ExcelLimits, FormulaSource, IsoDateTime, OmError, OmErrorCode, OmResult,
     Rect, RichTextSource, RichTextValue, StructuralAxis, StructuralShift, StyleId,
+    retarget_unqualified_references,
 };
 use quick_xml::escape::partial_escape;
 use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
@@ -421,6 +423,15 @@ fn shift_worksheet_element(
         shifted.push_attribute((key.as_slice(), value.as_bytes()));
     }
     Ok(Some(shifted))
+}
+
+/// Worksheet element text the rewriter moves through recorded structural shifts.
+#[derive(Clone, Copy)]
+enum StructuralText {
+    /// A validation or conditional-format formula on the edited sheet.
+    Formula,
+    /// An x14 `xm:sqref` range list.
+    Sqref,
 }
 
 fn rect_reference(rect: &Rect) -> String {
@@ -1564,9 +1575,46 @@ pub(crate) fn parse_worksheet_cells_with_cell_metadata(
     let mut seen_row_indices = BTreeSet::new();
     let mut row_metadata_ranges = Vec::new();
     let mut column_metadata_ranges = Vec::new();
+    let mut conditional_format_depth = None;
+    let mut conditional_format_text_depth = None;
+    let mut current_conditional_format: Option<ConditionalFormatOwner> = None;
+    let mut current_conditional_format_text = String::new();
+    let mut conditional_formats = Vec::new();
     loop {
         match metadata_reader.read_resolved_event_into(&mut metadata_buffer) {
             Ok((namespace, Event::Start(element))) => {
+                let is_standard_conditional_format = resolved_element_is(
+                    &namespace,
+                    element.local_name(),
+                    spreadsheet_namespace.as_bytes(),
+                    b"conditionalFormatting",
+                );
+                let is_conditional_format = is_standard_conditional_format
+                    || resolved_element_is(
+                        &namespace,
+                        element.local_name(),
+                        EXCEL_2010_SPREADSHEET_NAMESPACE,
+                        b"conditionalFormatting",
+                    );
+                let is_conditional_format_sqref = resolved_element_is(
+                    &namespace,
+                    element.local_name(),
+                    EXCEL_MAIN_NAMESPACE,
+                    b"sqref",
+                );
+                let is_conditional_format_text = is_conditional_format_sqref
+                    || resolved_element_is(
+                        &namespace,
+                        element.local_name(),
+                        spreadsheet_namespace.as_bytes(),
+                        b"formula",
+                    )
+                    || resolved_element_is(
+                        &namespace,
+                        element.local_name(),
+                        EXCEL_MAIN_NAMESPACE,
+                        b"f",
+                    );
                 let is_merge_cells = resolved_element_is(
                     &namespace,
                     element.local_name(),
@@ -1806,6 +1854,38 @@ pub(crate) fn parse_worksheet_cells_with_cell_metadata(
                         "{worksheet_part_uri}: worksheet dataValidation formula contains nested XML"
                     )));
                 }
+                // Conditional formats, standard or x14, keep their ranges and rule formulas.
+                if conditional_format_depth.is_none() && is_conditional_format {
+                    let mut ranges = Vec::new();
+                    for attr in element.attributes() {
+                        let attr = attr.map_err(xml_error)?;
+                        if attr.key.as_ref() == b"sqref" {
+                            let sqref = attr
+                                .decode_and_unescape_value(metadata_reader.decoder())
+                                .map_err(xml_error)?;
+                            for reference in sqref.split_ascii_whitespace() {
+                                ranges.push(parse_bounded_a1_rect(
+                                    reference,
+                                    worksheet_part_uri,
+                                    "conditional-format",
+                                )?);
+                            }
+                        }
+                    }
+                    current_conditional_format = Some(ConditionalFormatOwner {
+                        ranges,
+                        formulas: Vec::new(),
+                        extension: !is_standard_conditional_format,
+                    });
+                    conditional_format_depth = Some(element_depth + 1);
+                } else if conditional_format_depth.is_some()
+                    && conditional_format_text_depth.is_none()
+                    && is_conditional_format_text
+                {
+                    conditional_format_text_depth =
+                        Some((element_depth + 1, is_conditional_format_sqref));
+                    current_conditional_format_text.clear();
+                }
                 element_depth += 1;
             }
             Ok((namespace, Event::Empty(element))) => {
@@ -2010,6 +2090,10 @@ pub(crate) fn parse_worksheet_cells_with_cell_metadata(
                 }
             }
             Ok((_, Event::Text(text))) => {
+                if conditional_format_text_depth.is_some_and(|(depth, _)| depth == element_depth) {
+                    current_conditional_format_text
+                        .push_str(&text.xml_content().map_err(xml_error)?);
+                }
                 if x14_formula_value_depth == Some(element_depth)
                     && let Some(formula) = current_x14_formula.as_mut()
                 {
@@ -2030,6 +2114,10 @@ pub(crate) fn parse_worksheet_cells_with_cell_metadata(
                 }
             }
             Ok((_, Event::CData(text))) => {
+                if conditional_format_text_depth.is_some_and(|(depth, _)| depth == element_depth) {
+                    current_conditional_format_text
+                        .push_str(&text.xml_content().map_err(xml_error)?);
+                }
                 if x14_formula_value_depth == Some(element_depth)
                     && let Some(formula) = current_x14_formula.as_mut()
                 {
@@ -2051,6 +2139,9 @@ pub(crate) fn parse_worksheet_cells_with_cell_metadata(
             }
             Ok((_, Event::GeneralRef(reference))) => {
                 let value = decode_general_reference(&reference, worksheet_part_uri)?;
+                if conditional_format_text_depth.is_some_and(|(depth, _)| depth == element_depth) {
+                    current_conditional_format_text.push_str(&value);
+                }
                 if x14_formula_value_depth == Some(element_depth)
                     && let Some(formula) = current_x14_formula.as_mut()
                 {
@@ -2276,6 +2367,29 @@ pub(crate) fn parse_worksheet_cells_with_cell_metadata(
                     table_parts_depth = None;
                     table_parts_has_owner = false;
                 }
+                if let Some((depth, is_sqref)) = conditional_format_text_depth
+                    && depth == element_depth
+                {
+                    let value = std::mem::take(&mut current_conditional_format_text);
+                    if let Some(format) = current_conditional_format.as_mut() {
+                        if is_sqref {
+                            for reference in value.split_ascii_whitespace() {
+                                format.ranges.push(parse_bounded_a1_rect(
+                                    reference,
+                                    worksheet_part_uri,
+                                    "conditional-format",
+                                )?);
+                            }
+                        } else {
+                            format.formulas.push(value);
+                        }
+                    }
+                    conditional_format_text_depth = None;
+                }
+                if conditional_format_depth == Some(element_depth) {
+                    conditional_formats.extend(current_conditional_format.take());
+                    conditional_format_depth = None;
+                }
                 element_depth = element_depth.saturating_sub(1);
             }
             Ok((_, Event::Eof)) => break,
@@ -2305,6 +2419,7 @@ pub(crate) fn parse_worksheet_cells_with_cell_metadata(
             column_metadata_ranges,
             table_relationship_ids,
             table_owners: Vec::new(),
+            conditional_formats,
         },
     })
 }
@@ -2934,6 +3049,10 @@ pub(crate) fn rewrite_worksheet_xml_with_cell_metadata(
     let mut skipping_sheet_data = 0usize;
     let mut skipping_dimension = false;
     let mut skipping_moved_away = 0usize;
+    // Validation and conditional-format formula text, and x14 range text, buffered until the
+    // element closes so it can be rewritten through the recorded structural shifts.
+    let mut structural_text: Option<(StructuralText, String)> = None;
+    let mut x14_range_owner_depth = None;
     let support_part_dimension_coords = collect_support_part_dimension_coords(support_parts);
     let anchored_dirty_cells = support_part_dimension_coords
         .iter()
@@ -3923,17 +4042,89 @@ pub(crate) fn rewrite_worksheet_xml_with_cell_metadata(
                     )?;
                     inserted_sheet_data = true;
                 }
+                let in_main_namespace = matches!(
+                    namespace,
+                    quick_xml::name::ResolveResult::Bound(namespace)
+                        if namespace.as_ref() == EXCEL_MAIN_NAMESPACE
+                );
+                let text_kind = if worksheet.structural_shifts.is_empty() {
+                    None
+                } else if matches!(local_name, Some(b"formula" | b"formula1" | b"formula2"))
+                    || (x14_range_owner_depth.is_some()
+                        && in_main_namespace
+                        && element.local_name().as_ref() == b"f")
+                {
+                    Some(StructuralText::Formula)
+                } else if x14_range_owner_depth.is_some()
+                    && in_main_namespace
+                    && element.local_name().as_ref() == b"sqref"
+                {
+                    Some(StructuralText::Sqref)
+                } else {
+                    None
+                };
+                let opens_x14_range_owner = matches!(
+                    namespace,
+                    quick_xml::name::ResolveResult::Bound(namespace)
+                        if namespace.as_ref() == EXCEL_2010_SPREADSHEET_NAMESPACE
+                ) && matches!(
+                    element.local_name().as_ref(),
+                    b"dataValidation" | b"conditionalFormatting"
+                );
                 match shift_worksheet_element(&element, local_name, worksheet)? {
                     Some(element) => {
                         writer
                             .write_event(Event::Start(element))
                             .map_err(xml_error)?;
                         depth += 1;
+                        if opens_x14_range_owner {
+                            x14_range_owner_depth = Some(depth);
+                        }
+                        structural_text = text_kind.map(|kind| (kind, String::new()));
                     }
                     None => skipping_moved_away = 1,
                 }
             }
+            Ok((_, Event::Text(text))) if structural_text.is_some() => {
+                if let Some((_, value)) = structural_text.as_mut() {
+                    value.push_str(&text.xml_content().map_err(xml_error)?);
+                }
+            }
+            Ok((_, Event::CData(text))) if structural_text.is_some() => {
+                if let Some((_, value)) = structural_text.as_mut() {
+                    value.push_str(&text.xml_content().map_err(xml_error)?);
+                }
+            }
+            Ok((_, Event::GeneralRef(reference))) if structural_text.is_some() => {
+                let decoded = decode_general_reference(&reference, "worksheet")?;
+                if let Some((_, value)) = structural_text.as_mut() {
+                    value.push_str(&decoded);
+                }
+            }
             Ok((namespace, Event::End(element))) => {
+                if let Some((kind, value)) = structural_text.take() {
+                    let shifts = worksheet.structural_shifts.as_slice();
+                    let rewritten = match kind {
+                        StructuralText::Formula => shifts.iter().fold(value, |formula, shift| {
+                            retarget_unqualified_references(&formula, *shift)
+                        }),
+                        StructuralText::Sqref => {
+                            replay_shifts_on_sqref(shifts, &value)?.ok_or_else(|| {
+                                OmError::unsupported(format!(
+                                    "structural removal of extension range list {value} is not implemented"
+                                ))
+                            })?
+                        }
+                    };
+                    writer
+                        .write_event(Event::Text(BytesText::from_escaped(partial_escape(
+                            &rewritten,
+                        ))))
+                        .map_err(xml_error)?;
+                }
+                if x14_range_owner_depth == Some(depth) {
+                    x14_range_owner_depth = None;
+                }
                 if depth == 1
                     && resolved_element_is(
                         &namespace,

@@ -7,6 +7,7 @@ use office_common::{
     OmValue, OpaquePart, RangeRef, RangeSet, Rect, ReferenceTarget, SheetId, SheetKind, SheetMatch,
     SheetScope, SheetVisibility, StructuralAxis, StructuralShift, StyleId, WorkbookId,
     WorkbookModel, WorksheetModel, formula_contains_a1_reference, retarget_formula_references,
+    retarget_unqualified_references,
 };
 
 mod charts;
@@ -105,6 +106,16 @@ pub struct WorksheetStructuralOwners {
     pub column_metadata_ranges: Vec<Rect>,
     pub table_relationship_ids: Vec<String>,
     pub table_owners: Vec<TableStructuralOwner>,
+    pub conditional_formats: Vec<ConditionalFormatOwner>,
+}
+
+/// A conditional format's ranges and rule formulas, from `conditionalFormatting` or, when
+/// `extension` is set, its x14 `extLst` form.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConditionalFormatOwner {
+    pub ranges: Vec<Rect>,
+    pub formulas: Vec<String>,
+    pub extension: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1832,25 +1843,79 @@ impl WorkbookState {
                     formula_rewrites.push((owner_sheet_id, (row, col), rewritten));
                 }
             }
-            for (formula_index, formula) in owner
+            // Validation and conditional-format formulas on the edited sheet are retargeted when
+            // the save rewrites it, through their unqualified references. A formula elsewhere
+            // that would change, an unknown or 3D reference, or a sheet-qualified reference to the
+            // edited sheet that would move is refused.
+            let owner_formulas = owner
                 .structural_owners
                 .data_validation_formulas
                 .iter()
-                .enumerate()
-            {
-                let needs_retarget = match structural_shift {
-                    Some(shift) => retarget_formula_references(formula, shift, false, |q| {
+                .map(|formula| ("data-validation", formula))
+                .chain(
+                    owner
+                        .structural_owners
+                        .conditional_formats
+                        .iter()
+                        .flat_map(|format| &format.formulas)
+                        .map(|formula| ("conditional-format", formula)),
+                );
+            for (formula_index, (kind, formula)) in owner_formulas.enumerate() {
+                let refused = match structural_shift {
+                    Some(shift) => match retarget_formula_references(formula, shift, false, |q| {
                         classify(Some(owner_sheet_id), q)
-                    })
-                    .map_or(true, |rewritten| rewritten != *formula),
+                    }) {
+                        Err(_) => true,
+                        Ok(rewritten) if rewritten == *formula => false,
+                        Ok(rewritten) => {
+                            owner_sheet_id != sheet_id
+                                || retarget_unqualified_references(formula, shift) != rewritten
+                        }
+                    },
                     None => formula_contains_a1_reference(formula),
                 };
-                if needs_retarget {
+                if refused {
                     return Err(OmError::unsupported(format!(
-                        "Range.{member} structural data-validation formula retarget is not implemented for worksheet {} formula {}",
+                        "Range.{member} structural {kind} formula retarget is not implemented for worksheet {} formula {}",
                         owner_sheet_id.0,
                         formula_index + 1,
                     )));
+                }
+            }
+            if let Some(shift) = structural_shift.filter(|_| owner_sheet_id == sheet_id) {
+                for format in &owner.structural_owners.conditional_formats {
+                    // A band that splits a conditional format would give its parts different
+                    // anchors for relative rule references.
+                    let splits_references = format.ranges.iter().any(|range| shift.cuts(*range))
+                        && format
+                            .formulas
+                            .iter()
+                            .any(|formula| formula_contains_a1_reference(formula));
+                    // An extension conditional format keeps its ranges in element text, which the
+                    // save cannot remove.
+                    let removes_extension = format.extension
+                        && format
+                            .ranges
+                            .iter()
+                            .all(|range| shift.shift_rect(*range).is_none());
+                    if splits_references || removes_extension {
+                        return Err(OmError::unsupported(format!(
+                            "Range.{member} structural conditional-format retarget is not implemented for worksheet {} ranges {}",
+                            owner_sheet_id.0,
+                            format
+                                .ranges
+                                .iter()
+                                .map(|range| format!(
+                                    "R{}C{}:R{}C{}",
+                                    range.row_first,
+                                    range.col_first,
+                                    range.row_last,
+                                    range.col_last
+                                ))
+                                .collect::<Vec<_>>()
+                                .join(" "),
+                        )));
+                    }
                 }
             }
             let table_relationship_ids = owner
@@ -2528,6 +2593,20 @@ impl WorkbookState {
                     .filter_map(|range| shift.shift_rect(*range))
                     .collect();
             }
+            for formula in &mut owners.data_validation_formulas {
+                *formula = retarget_unqualified_references(formula, shift);
+            }
+            owners.conditional_formats.retain_mut(|format| {
+                format.ranges = format
+                    .ranges
+                    .iter()
+                    .flat_map(|range| shift.shift_rect_split(*range))
+                    .collect();
+                for formula in &mut format.formulas {
+                    *formula = retarget_unqualified_references(formula, shift);
+                }
+                !format.ranges.is_empty()
+            });
             worksheet.structural_shifts.push(shift);
             worksheet.dirty = true;
             changed = true;
@@ -3141,9 +3220,9 @@ fn checked_rect_cell_count_sum(rects: &[Rect]) -> OmResult<usize> {
 mod tests {
     use super::{
         CellData, CellShiftDirection, ChartModel, ChartObjectModel, ChartSheetBinding,
-        ChartSourceExpr, ChartType, DefinedNameTable, DrawingModel, DrawingObjectModel,
-        FormulaGroup, FormulaGroupKind, SeriesModel, TableStructuralOwner, WorkbookState,
-        WorkbookStateParts, WorksheetData, WorksheetStructuralOwners,
+        ChartSourceExpr, ChartType, ConditionalFormatOwner, DefinedNameTable, DrawingModel,
+        DrawingObjectModel, FormulaGroup, FormulaGroupKind, SeriesModel, TableStructuralOwner,
+        WorkbookState, WorkbookStateParts, WorksheetData, WorksheetStructuralOwners,
     };
     use std::collections::{BTreeMap, BTreeSet};
 
@@ -4341,7 +4420,7 @@ mod tests {
             .worksheet_data_for_sheet_mut(SheetId(3))
             .expect("worksheet data")
             .structural_owners = WorksheetStructuralOwners {
-            data_validation_formulas: vec!["=$D$4>0".to_string()],
+            data_validation_formulas: vec!["=Sheet1!$D$4>0".to_string()],
             ..WorksheetStructuralOwners::default()
         };
         let before = blocked.clone();
@@ -4352,7 +4431,7 @@ mod tests {
                 Rect::single_cell(1, 4),
                 CellShiftDirection::Down,
             )
-            .expect_err("data-validation reference formula must fail closed");
+            .expect_err("a self-qualified data-validation reference must fail closed");
 
         assert_eq!(error.code, OmErrorCode::Unsupported);
         assert_eq!(
@@ -4377,6 +4456,40 @@ mod tests {
                     CellShiftDirection::Down,
                 )
                 .expect("reference-free data-validation formulas must remain eligible"),
+        );
+
+        // Unqualified references in the edited sheet's own rules move with the cells.
+        let mut moved = sample_state();
+        moved
+            .worksheet_data_for_sheet_mut(SheetId(3))
+            .expect("worksheet data")
+            .structural_owners = WorksheetStructuralOwners {
+            data_validation_formulas: vec!["=$D$4>0".to_string()],
+            conditional_formats: vec![ConditionalFormatOwner {
+                ranges: vec![Rect::single_cell(6, 4)],
+                formulas: vec!["D6>$D$4".to_string()],
+                extension: false,
+            }],
+            ..WorksheetStructuralOwners::default()
+        };
+        assert!(
+            moved
+                .shift_cells_with_change(
+                    SheetId(3),
+                    Rect::single_cell(1, 4),
+                    CellShiftDirection::Down,
+                )
+                .expect("own-sheet rule references retarget"),
+        );
+        let owners = &moved.worksheet_data[&SheetId(3)].structural_owners;
+        assert_eq!(owners.data_validation_formulas, vec!["=$D$5>0".to_string()]);
+        assert_eq!(
+            owners.conditional_formats,
+            vec![ConditionalFormatOwner {
+                ranges: vec![Rect::single_cell(7, 4)],
+                formulas: vec!["D7>$D$5".to_string()],
+                extension: false,
+            }],
         );
     }
 

@@ -21,6 +21,7 @@ pub use reference::{
 };
 pub use retarget::{
     RetargetBlocker, SheetMatch, StructuralAxis, StructuralShift, retarget_formula_references,
+    retarget_unqualified_references,
 };
 
 pub type OmResult<T> = Result<T, OmError>;

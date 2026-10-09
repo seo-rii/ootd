@@ -152,6 +152,17 @@ pub fn retarget_formula_references(
     Ok(output)
 }
 
+/// Rewrites the unqualified references of a formula that lives on the edited sheet, such as a
+/// validation or conditional-format rule, leaving sheet-qualified references alone. A formula with
+/// a 3D reference is returned unchanged.
+pub fn retarget_unqualified_references(formula: &str, shift: StructuralShift) -> String {
+    retarget_formula_references(formula, shift, false, |qualifier| match qualifier {
+        None => SheetMatch::Edited,
+        Some(_) => SheetMatch::Other,
+    })
+    .unwrap_or_else(|_| formula.to_string())
+}
+
 enum Qualifier {
     Sheet(String),
     Span,
