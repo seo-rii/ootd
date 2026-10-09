@@ -2242,6 +2242,37 @@ fn whole_row_shifts_move_comments_notes_and_hyperlinks() {
                 .to_vec(),
         )
         .expect("replace VML");
+    // A threaded comment pairs with the legacy comment on A1.
+    const THREADED_TYPE: &str = "application/vnd.ms-excel.threadedcomments+xml";
+    for (part_name, from, to) in [
+        (
+            "[Content_Types].xml",
+            "</Types>",
+            r#"<Override PartName="/xl/threadedComments/threadedComment1.xml" ContentType="application/vnd.ms-excel.threadedcomments+xml"/></Types>"#,
+        ),
+        (
+            "xl/worksheets/_rels/sheet1.xml.rels",
+            "</Relationships>",
+            r#"<Relationship Id="rIdThreaded1" Type="http://schemas.microsoft.com/office/2017/10/relationships/threadedComment" Target="../threadedComments/threadedComment1.xml"/></Relationships>"#,
+        ),
+    ] {
+        let xml = String::from_utf8(package.part(part_name).expect(part_name).bytes.clone())
+            .expect("utf-8")
+            .replace(from, to);
+        package
+            .replace_part_bytes(part_name, xml.into_bytes())
+            .expect(part_name);
+    }
+    package
+        .add_part(OpcPart {
+            name: "xl/threadedComments/threadedComment1.xml".to_string(),
+            content_type: Some(THREADED_TYPE.to_string()),
+            compression: CompressionMethod::Deflated,
+            bytes: br#"<?xml version="1.0" encoding="UTF-8"?>
+<ThreadedComments xmlns="http://schemas.microsoft.com/office/spreadsheetml/2018/threadedcomments"><threadedComment ref="A1" dT="2026-01-01T00:00:00.00" personId="{00000000-0000-0000-0000-000000000001}" id="{00000000-0000-0000-0000-000000000002}"><text>Note</text></threadedComment></ThreadedComments>"#
+                .to_vec(),
+        })
+        .expect("add threaded comment part");
     let mut runtime = ExcelRuntime::new();
     let workbook = runtime
         .open_workbook(OpenWorkbookSpec {
@@ -2267,6 +2298,11 @@ fn whole_row_shifts_move_comments_notes_and_hyperlinks() {
     assert!(
         comments.contains(r#"<comment ref="A3" authorId="0">"#),
         "{comments}"
+    );
+    let threaded = part("xl/threadedComments/threadedComment1.xml");
+    assert!(
+        threaded.contains(r#"<threadedComment ref="A3" "#),
+        "{threaded}"
     );
     let vml = part("xl/drawings/vmlDrawing1.vml");
     assert!(

@@ -2,8 +2,9 @@
 //! VML shape anchors, hyperlink snapshots, table ranges, and drawing anchors.
 
 use super::{
-    WorksheetSupportParts, parse_comment_part_summary, parse_vml_drawing_part_summary,
-    replay_shifts_on_ref, xml_error, xml_local_name,
+    WorksheetSupportParts, parse_comment_part_summary, parse_relationship_entries_for_part,
+    parse_vml_drawing_part_summary, relationships_part_uri_for_part, replay_shifts_on_ref,
+    xml_error, xml_local_name,
 };
 use excel_model::{WorkbookState, WorksheetData};
 use office_common::{OmError, OmResult, StructuralAxis, StructuralShift};
@@ -209,6 +210,22 @@ fn shift_drawing_anchor(anchor: &str, shifts: &[StructuralShift]) -> OmResult<St
 /// Replays structural shifts onto a table part's `table`, `autoFilter`, `sortState`, and
 /// `sortCondition` references. The model only admits shifts the table can follow.
 pub(crate) fn shift_table_part(xml: &[u8], shifts: &[StructuralShift]) -> OmResult<Vec<u8>> {
+    shift_ref_attributes(
+        xml,
+        shifts,
+        &[b"table", b"autoFilter", b"sortState", b"sortCondition"],
+        "table reference",
+    )
+}
+
+/// Replays structural shifts onto the `ref` attribute of every element named in `local_names`.
+/// A reference the shifts delete is refused, naming it as `owner`.
+fn shift_ref_attributes(
+    xml: &[u8],
+    shifts: &[StructuralShift],
+    local_names: &[&[u8]],
+    owner: &str,
+) -> OmResult<Vec<u8>> {
     let mut reader = Reader::from_reader(Cursor::new(xml));
     reader.config_mut().trim_text(false);
     let mut writer = Writer::new(Cursor::new(Vec::new()));
@@ -222,7 +239,7 @@ pub(crate) fn shift_table_part(xml: &[u8], shifts: &[StructuralShift]) -> OmResu
                 let reference = attribute.unescape_value().map_err(xml_error)?;
                 let moved = replay_shifts_on_ref(shifts, &reference)?.ok_or_else(|| {
                     OmError::invalid_state(format!(
-                        "table reference {reference} was deleted by a structural shift"
+                        "{owner} {reference} was deleted by a structural shift"
                     ))
                 })?;
                 shifted.push_attribute(("ref", moved.as_str()));
@@ -232,12 +249,8 @@ pub(crate) fn shift_table_part(xml: &[u8], shifts: &[StructuralShift]) -> OmResu
         }
         Ok(shifted)
     };
-    let is_ranged = |element: &BytesStart<'_>| {
-        matches!(
-            xml_local_name(element.name().as_ref()),
-            b"table" | b"autoFilter" | b"sortState" | b"sortCondition"
-        )
-    };
+    let is_ranged =
+        |element: &BytesStart<'_>| local_names.contains(&xml_local_name(element.name().as_ref()));
     loop {
         let event = reader.read_event_into(&mut buffer).map_err(xml_error)?;
         let event = match event {
@@ -489,6 +502,42 @@ impl WorksheetSupportParts {
         }
         Ok(())
     }
+}
+
+/// Replays a worksheet's recorded structural shifts onto the `threadedComment@ref` anchors of its
+/// threaded comment parts, which pair with the legacy comments that move in the comments part.
+pub(crate) fn shift_threaded_comment_parts(
+    package: &mut OpcPackage,
+    worksheet_part_uri: &str,
+    sheet_data: &WorksheetData,
+) -> OmResult<()> {
+    if sheet_data.structural_shifts.is_empty() {
+        return Ok(());
+    }
+    let Some(relationships_part_uri) = relationships_part_uri_for_part(worksheet_part_uri) else {
+        return Ok(());
+    };
+    let Some(relationships) = package.part(&relationships_part_uri) else {
+        return Ok(());
+    };
+    let targets = parse_relationship_entries_for_part(&relationships.bytes, worksheet_part_uri)?
+        .into_iter()
+        .filter(|relationship| relationship.relationship_type.ends_with("/threadedComment"))
+        .map(|relationship| relationship.target)
+        .collect::<Vec<_>>();
+    for target in targets {
+        let Some(part) = package.part(&target) else {
+            continue;
+        };
+        let shifted = shift_ref_attributes(
+            &part.bytes,
+            &sheet_data.structural_shifts,
+            &[b"threadedComment"],
+            "threaded comment",
+        )?;
+        package.replace_part_bytes(&target, shifted)?;
+    }
+    Ok(())
 }
 
 /// Replays a worksheet's recorded structural shifts onto its table parts.

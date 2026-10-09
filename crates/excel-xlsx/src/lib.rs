@@ -3240,6 +3240,11 @@ impl XlsxCodec {
             )?;
             package.replace_part_bytes(part_uri, bytes)?;
             structural_shift::shift_table_parts(&mut package, sheet_data)?;
+            structural_shift::shift_threaded_comment_parts(
+                &mut package,
+                part_uri,
+                sheet_data,
+            )?;
             // Comment and VML anchors follow the worksheet's recorded structural shifts.
             if let Some(std::borrow::Cow::Owned(shifted)) = shifted_support_parts {
                 for (part_uri, bytes) in shifted
