@@ -126,6 +126,61 @@ pub struct TableStructuralOwner {
     pub formulas: Vec<String>,
 }
 
+/// The cells a raw drawing anchor covers: `Some(None)` for an `absoluteAnchor`, which is not tied
+/// to cells, the one-based rectangle between a cell anchor's `from` and `to` markers (`from` alone
+/// for a `oneCellAnchor`), or `None` when the anchor cannot be read.
+fn raw_anchor_cell_rect(raw_anchor_xml: &str) -> Option<Option<Rect>> {
+    let open_tag = raw_anchor_xml.trim_start();
+    let open_tag = &open_tag[..open_tag.find(['>', ' ', '/'])?];
+    if open_tag.ends_with("absoluteAnchor") {
+        return Some(None);
+    }
+    // The index just after the first `<local>` or `<prefix:local>` opening tag from `start`.
+    let open_tag_end = |start: usize, local: &str| -> Option<usize> {
+        let rest = &raw_anchor_xml[start..];
+        let suffix = format!("{local}>");
+        rest.match_indices(&suffix)
+            .map(|(index, _)| index)
+            .find(|&index| {
+                rest[..index].rfind('<').is_some_and(|open| {
+                    let name = &rest[open + 1..index];
+                    !name.contains(['/', '>', ' ']) && (name.is_empty() || name.ends_with(':'))
+                })
+            })
+            .map(|index| start + index + suffix.len())
+    };
+    // The number in the first `local` element from `start`, and the index after it.
+    let number_after = |start: usize, local: &str| -> Option<(u32, usize)> {
+        let value_start = open_tag_end(start, local)?;
+        let value_end = value_start + raw_anchor_xml[value_start..].find('<')?;
+        let value = raw_anchor_xml[value_start..value_end]
+            .trim()
+            .parse::<u32>()
+            .ok()?;
+        Some((value, value_end))
+    };
+    let marker = |local: &str| -> Option<(u32, u32)> {
+        let after_open = open_tag_end(0, local)?;
+        let (col, after_col) = number_after(after_open, "col")?;
+        let (row, _) = number_after(after_col, "row")?;
+        Some((row + 1, col + 1))
+    };
+    let from = marker("from")?;
+    let to = if open_tag.ends_with("twoCellAnchor") {
+        marker("to")?
+    } else if open_tag.ends_with("oneCellAnchor") {
+        from
+    } else {
+        return None;
+    };
+    Some(Some(Rect {
+        row_first: from.0.min(to.0),
+        row_last: from.0.max(to.0),
+        col_first: from.1.min(to.1),
+        col_last: from.1.max(to.1),
+    }))
+}
+
 /// Whether a table can follow a whole-row or whole-column shift. Rows may be inserted anywhere and
 /// deleted from the body while the header and one data row survive; columns may only move a
 /// table that lies entirely on one side of the edit, because inserting or deleting table columns
@@ -2745,12 +2800,20 @@ impl WorkbookState {
                 let chart_object = match object {
                     // Pictures and shapes move in the drawing part when the save replays the
                     // worksheet's recorded shifts; only cell or absolute anchors can be replayed.
-                    DrawingObjectModel::UnsupportedRaw { id, .. } if !shift.is_whole() => {
-                        return Err(OmError::unsupported(format!(
-                            "Range.{member} structural drawing anchor retarget is not implemented for drawing {} object {} worksheet {} opaque anchor",
-                            drawing_id.0, id.0, sheet_id.0,
-                        )));
-                    }
+                    // Banded shifts leave pictures and shapes in place, so one whose anchor cells
+                    // the band reaches, or whose anchor cannot be read, is refused.
+                    DrawingObjectModel::UnsupportedRaw {
+                        id, raw_anchor_xml, ..
+                    } if !shift.is_whole() => match raw_anchor_cell_rect(raw_anchor_xml) {
+                        Some(None) => continue,
+                        Some(Some(rect)) if !shift.reaches(rect) => continue,
+                        _ => {
+                            return Err(OmError::unsupported(format!(
+                                "Range.{member} structural drawing anchor retarget is not implemented for drawing {} object {} worksheet {} opaque anchor",
+                                drawing_id.0, id.0, sheet_id.0,
+                            )));
+                        }
+                    },
                     DrawingObjectModel::UnsupportedRaw {
                         id, raw_anchor_xml, ..
                     } => {
@@ -3703,6 +3766,38 @@ mod tests {
                 "worksheet 3 cell R5C5 numeric value must be finite"
             );
         }
+    }
+
+    #[test]
+    fn raw_anchor_cell_rects_read_cell_markers() {
+        let rect = |row_first, row_last, col_first, col_last| Rect {
+            row_first,
+            row_last,
+            col_first,
+            col_last,
+        };
+        assert_eq!(
+            super::raw_anchor_cell_rect(
+                "<xdr:twoCellAnchor editAs=\"oneCell\"><xdr:from><xdr:col>5</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>1</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>7</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>4</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><xdr:sp/></xdr:twoCellAnchor>"
+            ),
+            Some(Some(rect(2, 5, 6, 8))),
+        );
+        assert_eq!(
+            super::raw_anchor_cell_rect(
+                "<oneCellAnchor><from><col>0</col><colOff>0</colOff><row>2</row><rowOff>0</rowOff></from><ext cx=\"1\" cy=\"1\"/><pic/></oneCellAnchor>"
+            ),
+            Some(Some(rect(3, 3, 1, 1))),
+        );
+        assert_eq!(
+            super::raw_anchor_cell_rect(
+                "<xdr:absoluteAnchor><xdr:pos x=\"0\" y=\"0\"/></xdr:absoluteAnchor>"
+            ),
+            Some(None),
+        );
+        assert_eq!(
+            super::raw_anchor_cell_rect("<xdr:twoCellAnchor><xdr:sp/></xdr:twoCellAnchor>"),
+            None
+        );
     }
 
     #[test]

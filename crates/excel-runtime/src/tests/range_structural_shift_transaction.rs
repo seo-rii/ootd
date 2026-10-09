@@ -1746,7 +1746,7 @@ fn range_structural_shifts_inventory_drawing_anchor_owners() {
         })
         .expect("open opaque drawing anchor fixture");
     let opaque_worksheet = worksheet_handle(&mut opaque_runtime, opaque_workbook);
-    let opaque_target = range_handle(&mut opaque_runtime, opaque_worksheet, "J20");
+    let opaque_target = range_handle(&mut opaque_runtime, opaque_worksheet, "F1");
     assert_structural_failure_is_atomic(
         &mut opaque_runtime,
         opaque_workbook,
@@ -2628,6 +2628,57 @@ fn whole_row_and_column_shifts_move_tables() {
             col_first: 5,
             col_last: 6,
         }
+    );
+}
+
+#[test]
+fn partial_corridors_beside_shapes_leave_them_in_place() {
+    let open = |runtime: &mut ExcelRuntime| {
+        runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: synthetic_workbook_with_embedded_chart_and_raw_shape_bytes(),
+                format_hint: Some(FileFormat::Xlsx),
+                profile: ExcelProfile::Excel365,
+                read_only: false,
+            })
+            .expect("open shape workbook")
+    };
+    // A band in columns A:B does not reach the shape anchored in column F.
+    let mut runtime = ExcelRuntime::new();
+    let workbook = open(&mut runtime);
+    let worksheet = worksheet_handle(&mut runtime, workbook);
+    shift(&mut runtime, worksheet, "A1:B1", "Insert", XL_SHIFT_DOWN);
+    let (saved, _) = saved_sheet_xml(&runtime, workbook);
+    let drawing = String::from_utf8(
+        OpcPackage::from_bytes(&saved)
+            .expect("saved package")
+            .part("xl/drawings/drawing1.xml")
+            .expect("drawing")
+            .bytes
+            .clone(),
+    )
+    .expect("utf-8");
+    assert!(
+        drawing.contains(
+            "<xdr:from><xdr:col>5</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>1</xdr:row>"
+        ),
+        "the shape stays put: {drawing}"
+    );
+
+    // A band through the shape's cells would need the shape split from its cells.
+    let mut runtime = ExcelRuntime::new();
+    let workbook = open(&mut runtime);
+    let worksheet = worksheet_handle(&mut runtime, workbook);
+    let target = range_handle(&mut runtime, worksheet, "F1");
+    assert_structural_failure_is_atomic(
+        &mut runtime,
+        workbook,
+        target,
+        "Insert",
+        XL_SHIFT_DOWN,
+        OmErrorCode::Unsupported,
+        &["structural drawing anchor retarget", "opaque anchor"],
+        "band reaching a shape",
     );
 }
 

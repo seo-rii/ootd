@@ -137,8 +137,8 @@ row (or column) onward, as Excel shifts cells.
   inside the band moves and the parts beside it stay. A band through part of a hyperlink or
   auto-filter range is refused, because a single range cannot hold the split.
 - Row heights and column widths stay, because no whole row or column moves.
-- Tables and chart frames stay put; a band that reaches one is refused. A sheet that hosts
-  pictures or shapes refuses partial corridors.
+- Tables, chart frames, pictures, and shapes stay put; a band that reaches one, or a picture or
+  shape whose anchor cannot be read, is refused.
 
 The rules live in `office_common::retarget_formula_references` and `StructuralShift`. The
 regressions are their unit tests, `partial_corridor_shifts_retarget_formulas_inside_the_band`,
