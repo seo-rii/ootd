@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use office_common::r1c1::{convert_formula_a1_to_r1c1, convert_formula_r1c1_to_a1};
 use office_common::{
     CellValue, ChartId, DefinedName, DefinedNameId, DrawingId, ExcelLimits, FormulaSource,
     NameScope, NameValidationMode, ObjectPlacement, OmArray, OmError, OmErrorCode, OmResult,
@@ -1777,7 +1778,7 @@ impl WorkbookState {
         let mut formula_rewrites = Vec::<(SheetId, (u32, u32), String)>::new();
         // Shared-formula groups a whole-axis shift moves or rewrites become ordinary formulas.
         let mut unshared_groups = BTreeSet::<(SheetId, (u32, u32))>::new();
-        let mut name_rewrites = Vec::<(DefinedNameId, String)>::new();
+        let mut name_rewrites = Vec::<(DefinedNameId, FormulaSource)>::new();
         for (&owner_sheet_id, owner) in &self.worksheet_data {
             for (&(row, col), cell) in &owner.cells {
                 let Some(formula) = &cell.formula else {
@@ -1795,13 +1796,31 @@ impl WorkbookState {
                     }
                     continue;
                 };
-                if formula.is_r1c1 {
-                    return Err(blocked());
-                }
-                let rewritten = retarget_formula_references(&formula.text, shift, false, |q| {
-                    classify(Some(owner_sheet_id), q)
-                })
-                .map_err(|_| blocked())?;
+                let rewritten = if formula.is_r1c1 {
+                    // R1C1 references are relative to their cell, so the formula is retargeted in
+                    // A1 form at the cell's old position and rewritten relative to where it lands.
+                    let a1 = convert_formula_r1c1_to_a1(&formula.text, row, col);
+                    let retargeted = retarget_formula_references(&a1, shift, false, |q| {
+                        classify(Some(owner_sheet_id), q)
+                    })
+                    .map_err(|_| blocked())?;
+                    let (new_row, new_col) = if owner_sheet_id == sheet_id {
+                        shift.shift_cell((row, col)).unwrap_or((row, col))
+                    } else {
+                        (row, col)
+                    };
+                    let moved = convert_formula_a1_to_r1c1(&retargeted, new_row, new_col);
+                    if moved == convert_formula_a1_to_r1c1(&a1, row, col) {
+                        formula.text.clone()
+                    } else {
+                        moved
+                    }
+                } else {
+                    retarget_formula_references(&formula.text, shift, false, |q| {
+                        classify(Some(owner_sheet_id), q)
+                    })
+                    .map_err(|_| blocked())?
+                };
                 if rewritten != formula.text {
                     // A shared formula's children derive from its master, so a group whose
                     // members diverge is unshared into ordinary formulas.
@@ -1907,16 +1926,29 @@ impl WorkbookState {
                 }
                 continue;
             };
-            if refers_to.is_r1c1 {
-                return Err(blocked());
-            }
             // Relative parts of a name resolve at each caller, so only absolute references are
-            // retargeted, and unqualified references have no sheet to classify.
-            let rewritten =
-                retarget_formula_references(&refers_to.text, shift, true, |q| classify(None, q))
-                    .map_err(|_| blocked())?;
-            if rewritten != refers_to.text {
-                name_rewrites.push((defined_name.id, rewritten));
+            // retargeted, and unqualified references have no sheet to classify. An R1C1 name is
+            // retargeted in A1 form relative to A1, where name text is anchored.
+            let text = if refers_to.is_r1c1 {
+                convert_formula_r1c1_to_a1(&refers_to.text, 1, 1)
+            } else {
+                refers_to.text.clone()
+            };
+            let rewritten = retarget_formula_references(&text, shift, true, |q| classify(None, q))
+                .map_err(|_| blocked())?;
+            if rewritten != text {
+                let rewritten = if refers_to.is_r1c1 {
+                    convert_formula_a1_to_r1c1(&rewritten, 1, 1)
+                } else {
+                    rewritten
+                };
+                name_rewrites.push((
+                    defined_name.id,
+                    FormulaSource {
+                        text: rewritten,
+                        is_r1c1: refers_to.is_r1c1,
+                    },
+                ));
             }
         }
         let affected_rect = match direction {
@@ -2752,7 +2784,7 @@ impl WorkbookState {
         sheet_id: SheetId,
         shift: StructuralShift,
         formula_rewrites: Vec<(SheetId, (u32, u32), String)>,
-        name_rewrites: Vec<(DefinedNameId, String)>,
+        name_rewrites: Vec<(DefinedNameId, FormulaSource)>,
     ) -> OmResult<bool> {
         let moved = |key: (u32, u32)| shift.shift_cell(key);
         let mut changed = false;
@@ -2778,14 +2810,8 @@ impl WorkbookState {
             worksheet.dirty_cells.insert(key);
             changed = true;
         }
-        for (name_id, text) in name_rewrites {
-            changed |= self.defined_names.set_refers_to_by_id(
-                name_id,
-                FormulaSource {
-                    text,
-                    is_r1c1: false,
-                },
-            )?;
+        for (name_id, refers_to) in name_rewrites {
+            changed |= self.defined_names.set_refers_to_by_id(name_id, refers_to)?;
         }
         Ok(changed)
     }
@@ -3601,6 +3627,76 @@ mod tests {
     }
 
     #[test]
+    fn structural_shifts_retarget_r1c1_formulas_and_names() {
+        let mut state = sample_state();
+        let worksheet = state
+            .worksheet_data
+            .get_mut(&SheetId(3))
+            .expect("worksheet data");
+        for (key, text) in [
+            // J10 and the J9 it reads both move, so the relative text is unchanged.
+            ((10, 10), "R[-1]C+R1C1"),
+            // K10 moves below the insertion; the K4 it reads stays.
+            ((10, 11), "R[-6]C"),
+            // A3 stays above the insertion; the A8 it reads moves.
+            ((3, 1), "R[5]C"),
+        ] {
+            worksheet.cells.insert(
+                key,
+                CellData {
+                    value: CellValue::Blank,
+                    formula: Some(FormulaSource {
+                        text: text.to_string(),
+                        is_r1c1: true,
+                    }),
+                    style_id: None,
+                },
+            );
+        }
+        state
+            .add_defined_name(
+                NameScope::Workbook,
+                "Anchor",
+                FormulaSource {
+                    text: "Sheet1!R10C1:R12C2".to_string(),
+                    is_r1c1: true,
+                },
+                NameValidationMode::StrictExcel,
+            )
+            .expect("seed R1C1 name");
+
+        assert!(
+            state
+                .shift_cells_with_change(
+                    SheetId(3),
+                    Rect {
+                        row_first: 5,
+                        row_last: 5,
+                        col_first: 1,
+                        col_last: ExcelLimits::MAX_COLUMN_INDEX,
+                    },
+                    CellShiftDirection::Down,
+                )
+                .expect("whole-row insert retargets R1C1 formulas")
+        );
+        let cells = &state.worksheet_data[&SheetId(3)].cells;
+        let text_at = |key| {
+            cells[&key]
+                .formula
+                .as_ref()
+                .map(|formula| formula.text.as_str())
+        };
+        assert_eq!(text_at((11, 10)), Some("R[-1]C+R1C1"));
+        assert_eq!(text_at((11, 11)), Some("R[-7]C"));
+        assert_eq!(text_at((3, 1)), Some("R[6]C"));
+        let name = state
+            .lookup_name(None, "Anchor")
+            .expect("R1C1 name after shift");
+        assert_eq!(name.refers_to.text, "Sheet1!R11C1:R13C2");
+        assert!(name.refers_to.is_r1c1);
+    }
+
+    #[test]
     fn structural_cell_shifts_fail_closed_for_reference_formulas() {
         // A banded insert in column A retargets an A1 reference inside the band.
         let mut state = sample_state();
@@ -3635,7 +3731,7 @@ mod tests {
             Some("A2+B1")
         );
 
-        for (formula_text, is_r1c1) in [("R[-1]C", true), ("SUM(Sheet1:Sheet1!A1)", false)] {
+        for (formula_text, is_r1c1) in [("Missing!A1", false), ("SUM(Sheet1:Sheet1!A1)", false)] {
             let mut state = sample_state();
             state
                 .worksheet_data
@@ -3679,7 +3775,7 @@ mod tests {
             (NameScope::Workbook, "Sheet1!A50", false, "workbook"),
             (
                 NameScope::Worksheet(SheetId(3)),
-                "Sheet1!R1C1",
+                "Sheet1!R[49]C",
                 true,
                 "worksheet 3",
             ),

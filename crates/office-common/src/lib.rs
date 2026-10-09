@@ -8,6 +8,7 @@ use quick_xml::{NsReader, Writer};
 use serde::{Deserialize, Serialize};
 
 mod name;
+pub mod r1c1;
 mod reference;
 mod retarget;
 

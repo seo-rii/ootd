@@ -313,6 +313,45 @@ fn partial_corridor_shifts_retarget_formulas_inside_the_band() {
 }
 
 #[test]
+fn structural_shifts_retarget_r1c1_formulas() {
+    let mut runtime = ExcelRuntime::new();
+    let workbook = open_clean_workbook(&mut runtime);
+    let worksheet = worksheet_handle(&mut runtime, workbook);
+    for (address, formula) in [("D10", "=R[-6]C+R1C1"), ("B3", "=R[5]C[1]")] {
+        let range = range_handle(&mut runtime, worksheet, address);
+        runtime
+            .dispatch_set(
+                range,
+                "FormulaR1C1",
+                OmValue::Text(formula.to_string()),
+                &[],
+            )
+            .unwrap_or_else(|error| panic!("{address}.FormulaR1C1: {error:?}"));
+    }
+
+    shift(&mut runtime, worksheet, "A5:XFD6", "Insert", XL_SHIFT_DOWN);
+    shift(
+        &mut runtime,
+        worksheet,
+        "A1:A20",
+        "Insert",
+        XL_SHIFT_TO_RIGHT,
+    );
+
+    // D10 lands on E12 and still reads D4 (now E4); B3 lands on C3 and reads C8 (now D10).
+    for (address, formula) in [("E12", "=R[-8]C+R1C2"), ("C3", "=R[7]C[1]")] {
+        let range = range_handle(&mut runtime, worksheet, address);
+        assert_eq!(
+            runtime
+                .dispatch_get(range, "FormulaR1C1", &[])
+                .unwrap_or_else(|error| panic!("{address}.FormulaR1C1: {error:?}")),
+            OmValue::Text(formula.to_string()),
+            "{address}",
+        );
+    }
+}
+
+#[test]
 fn range_structural_shifts_fail_closed_for_reference_formulas_atomically() {
     for (member, target_address, shift, formula_address, formula_text, formula_cell, label) in [
         (
@@ -392,10 +431,10 @@ fn range_structural_shifts_fail_closed_for_reference_defined_names_atomically() 
             XL_SHIFT_TO_LEFT,
             true,
             "WorksheetShiftOwner",
-            "=Sheet1!R1C1",
+            "=Sheet1!RC[12]",
             true,
             "worksheet 1",
-            "delete with moved worksheet name owner",
+            "delete with a relative R1C1 worksheet name owner",
         ),
     ] {
         let mut runtime = ExcelRuntime::new();

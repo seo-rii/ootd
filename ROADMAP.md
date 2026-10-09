@@ -474,9 +474,10 @@ Active order:
    Pictures and shapes move in place in their drawing parts, and shared-formula groups that a
    shift moves or rewrites are unshared into ordinary formulas. Partial-width and partial-height
    corridors shift a band of cells: references, merges, validations, comments, and chart sources
-   wholly inside the band move, and conditional formats the band cuts are split. R1C1, 3D, and
+   wholly inside the band move, and conditional formats the band cuts are split. 3D and
    relative-name owners, column edits inside tables, bands that reach tables, drawings, or part
-   of a merge, and deletions of table headers or commented cells still fail closed. The
+   of a merge, and deletions of table headers or commented cells still fail closed. R1C1 cell
+   formulas and names retarget through their A1 form. The
    contract is `docs/interfaces/defined_name_evaluation.md`.
 
 Every numbered work unit starts with a failing regression and lands as its own reviewable commit.

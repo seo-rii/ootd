@@ -54,6 +54,9 @@ retarget every cell formula and defined name in the workbook that references the
 - References to other sheets, string literals, structured references, and external-workbook
   references are unchanged. Edited cells are marked dirty at their new positions, and names are
   rewritten through the name table.
+- An R1C1 formula is retargeted in A1 form at its cell's old position and written back relative
+  to where the cell lands, so `R[-1]C` keeps reading the same cell as both move. An R1C1 name is
+  retargeted relative to A1, where name text is anchored, and stays R1C1.
 
 Worksheet structure moves with the cells. Each shift is recorded on the worksheet
 (`WorksheetData::structural_shifts`), and the XLSX rewriter replays the recorded shifts:
@@ -97,7 +100,6 @@ children from their master at open), retargets like any other formula, and is sa
 text, as in codec-only use, refuses the shift.
 
 The shift is refused atomically, as before, when it would need to rewrite any of:
-- an R1C1 formula;
 - a reference to an unknown sheet, or a 3D reference;
 - a name whose moving reference is relative or unqualified;
 - a data-validation formula that references the moved area;
@@ -131,6 +133,7 @@ row (or column) onward, as Excel shifts cells.
 The rules live in `office_common::retarget_formula_references` and `StructuralShift`. The
 regressions are their unit tests, `partial_corridor_shifts_retarget_formulas_inside_the_band`,
 `partial_corridor_shifts_move_worksheet_structure_inside_the_band`,
+`structural_shifts_retarget_r1c1_formulas`, `structural_shifts_retarget_r1c1_formulas_and_names`,
 `whole_row_and_column_shifts_retarget_formulas_and_names`,
 `whole_row_and_column_shifts_move_worksheet_structure`,
 `whole_row_shifts_move_comments_notes_and_hyperlinks`,
