@@ -112,9 +112,26 @@ It is also refused when it would:
 - move a sheet that hosts a drawing object whose anchor kind is not two-cell, one-cell, or
   absolute, or a chart frame with a cell-bound absolute anchor.
 
-Partial-width or partial-height `Insert`/`Delete` still refuse any reference-bearing formula. The
-rules live in `office_common::retarget_formula_references` and `StructuralShift`. The regressions
-are their unit tests, `whole_row_and_column_shifts_retarget_formulas_and_names`,
+### Partial Corridors
+
+`Insert`/`Delete` of a partial-width or partial-height range (`B2:C3` shifted down) is a banded
+shift: it moves only the cells in the band of columns (or rows) the range spans, from the edited
+row (or column) onward, as Excel shifts cells.
+- A reference or range moves only when its whole span on the other axis lies inside the band;
+  `A1:C9` stays when only `B:C` shift. Whole-row and whole-column references never move.
+- Merged cells, validation ranges, comments, notes, and chart series sources inside the band move.
+  A band that cuts through a merged range or a validation range is refused.
+- A conditional format or selection the band cuts through is split, as Excel splits it: the part
+  inside the band moves and the parts beside it stay. A band through part of a hyperlink or
+  auto-filter range is refused, because a single range cannot hold the split.
+- Row heights and column widths stay, because no whole row or column moves.
+- Tables and chart frames stay put; a band that reaches one is refused. A sheet that hosts
+  pictures or shapes refuses partial corridors.
+
+The rules live in `office_common::retarget_formula_references` and `StructuralShift`. The
+regressions are their unit tests, `partial_corridor_shifts_retarget_formulas_inside_the_band`,
+`partial_corridor_shifts_move_worksheet_structure_inside_the_band`,
+`whole_row_and_column_shifts_retarget_formulas_and_names`,
 `whole_row_and_column_shifts_move_worksheet_structure`,
 `whole_row_shifts_move_comments_notes_and_hyperlinks`,
 `whole_row_shifts_move_chart_sources_and_frames`, `whole_row_and_column_shifts_move_tables`, and

@@ -260,6 +260,59 @@ fn range_insert_rejects_unmaterialized_spill_intersection() {
 }
 
 #[test]
+fn partial_corridor_shifts_retarget_formulas_inside_the_band() {
+    for (
+        member,
+        target_address,
+        direction,
+        formula_address,
+        formula_text,
+        moved_address,
+        moved_formula,
+    ) in [
+        (
+            "Insert",
+            "A1",
+            XL_SHIFT_DOWN,
+            "M50",
+            "=A2+B2",
+            "M50",
+            "=A3+B2",
+        ),
+        (
+            "Delete",
+            "A1",
+            XL_SHIFT_TO_LEFT,
+            "M1",
+            "=A1+M2",
+            "L1",
+            "=#REF!+M2",
+        ),
+        (
+            "Insert",
+            "B2:C3",
+            XL_SHIFT_DOWN,
+            "E1",
+            "=SUM(B2:C5)+SUM(A2:C5)",
+            "E1",
+            "=SUM(B4:C7)+SUM(A2:C5)",
+        ),
+    ] {
+        let label = format!("{member} {target_address}");
+        let mut runtime = ExcelRuntime::new();
+        let workbook = open_clean_workbook(&mut runtime);
+        let worksheet = worksheet_handle(&mut runtime, workbook);
+        set_formula(&mut runtime, worksheet, formula_address, formula_text);
+        shift(&mut runtime, worksheet, target_address, member, direction);
+        assert_eq!(
+            formula_of(&mut runtime, worksheet, moved_address),
+            OmValue::Text(moved_formula.to_string()),
+            "{label}",
+        );
+    }
+}
+
+#[test]
 fn range_structural_shifts_fail_closed_for_reference_formulas_atomically() {
     for (member, target_address, shift, formula_address, formula_text, formula_cell, label) in [
         (
@@ -267,18 +320,18 @@ fn range_structural_shifts_fail_closed_for_reference_formulas_atomically() {
             "A1",
             XL_SHIFT_DOWN,
             "M50",
-            "=A2",
+            "=SUM(Sheet1:Sheet1!A2)",
             "R50C13",
-            "insert with external formula owner",
+            "insert with a 3D formula owner",
         ),
         (
             "Delete",
             "A1",
             XL_SHIFT_TO_LEFT,
             "M1",
-            "=A1",
+            "=SUM(Sheet1:Sheet1!A1)",
             "R1C13",
-            "delete with moved formula owner",
+            "delete with a moved 3D formula owner",
         ),
     ] {
         let mut runtime = ExcelRuntime::new();
@@ -328,10 +381,10 @@ fn range_structural_shifts_fail_closed_for_reference_defined_names_atomically() 
             XL_SHIFT_DOWN,
             false,
             "WorkbookShiftOwner",
-            "=Sheet1!$M$50",
+            "=Sheet1!A50",
             false,
             "workbook",
-            "insert with external workbook name owner",
+            "insert with a relative workbook name owner",
         ),
         (
             "Delete",
@@ -424,9 +477,9 @@ fn range_structural_shifts_reject_intersecting_merged_cells_atomically() {
     for (member, target_address, shift, label) in [
         (
             "Insert",
-            "D1:E1",
+            "E1:F1",
             XL_SHIFT_DOWN,
-            "insert corridor through merged range",
+            "insert band cutting through merged range",
         ),
         (
             "Delete",
@@ -463,56 +516,62 @@ fn range_structural_shifts_reject_intersecting_merged_cells_atomically() {
         );
     }
 
-    let mut runtime = ExcelRuntime::new();
-    let workbook = runtime
-        .open_workbook(OpenWorkbookSpec {
-            bytes: input,
-            format_hint: Some(FileFormat::Xlsx),
-            profile: ExcelProfile::Excel365,
-            read_only: false,
-        })
-        .expect("open non-intersecting merge fixture");
-    let worksheet = worksheet_handle(&mut runtime, workbook);
-    let target = range_handle(&mut runtime, worksheet, "A1");
-    runtime
-        .dispatch_invoke(
-            target,
-            "Insert",
-            &[OmValue::Number(f64::from(XL_SHIFT_DOWN))],
-        )
-        .expect("non-intersecting merged range must remain eligible");
-
-    let mut saved = Vec::new();
-    runtime
-        .save_workbook_to_writer(
-            workbook,
-            SaveWorkbookSpec {
-                format: FileFormat::Xlsx,
+    // A corridor beside the merge leaves it; a band spanning its columns moves it.
+    for (target_address, expected_rows) in [("A1", (4, 5)), ("D1:E1", (5, 6))] {
+        let mut runtime = ExcelRuntime::new();
+        let workbook = runtime
+            .open_workbook(OpenWorkbookSpec {
+                bytes: input.clone(),
+                format_hint: Some(FileFormat::Xlsx),
                 profile: ExcelProfile::Excel365,
-                lossless: true,
-            },
-            &mut saved,
-        )
-        .expect("save non-intersecting merged range shift");
-    let reopened = runtime
-        .codec
-        .load(&saved, LoadOptions::default())
-        .expect("reopen non-intersecting merged range shift");
-    let reopened_sheet_id = reopened.state.worksheets()[0].id;
-    assert_eq!(
-        reopened
-            .state
-            .worksheet_data_for_sheet(reopened_sheet_id)
-            .expect("reopened worksheet data")
-            .structural_owners
-            .merged_ranges,
-        vec![Rect {
-            row_first: 4,
-            row_last: 5,
-            col_first: 4,
-            col_last: 5,
-        }],
-    );
+                read_only: false,
+            })
+            .expect("open merge fixture");
+        let worksheet = worksheet_handle(&mut runtime, workbook);
+        let target = range_handle(&mut runtime, worksheet, target_address);
+        runtime
+            .dispatch_invoke(
+                target,
+                "Insert",
+                &[OmValue::Number(f64::from(XL_SHIFT_DOWN))],
+            )
+            .unwrap_or_else(|error| {
+                panic!("{target_address}: merged range must follow: {error:?}")
+            });
+
+        let mut saved = Vec::new();
+        runtime
+            .save_workbook_to_writer(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+                &mut saved,
+            )
+            .expect("save merged range shift");
+        let reopened = runtime
+            .codec
+            .load(&saved, LoadOptions::default())
+            .expect("reopen merged range shift");
+        let reopened_sheet_id = reopened.state.worksheets()[0].id;
+        assert_eq!(
+            reopened
+                .state
+                .worksheet_data_for_sheet(reopened_sheet_id)
+                .expect("reopened worksheet data")
+                .structural_owners
+                .merged_ranges,
+            vec![Rect {
+                row_first: expected_rows.0,
+                row_last: expected_rows.1,
+                col_first: 4,
+                col_last: 5,
+            }],
+            "{target_address}",
+        );
+    }
 }
 
 #[test]
@@ -542,15 +601,15 @@ fn range_structural_shifts_reject_intersecting_data_validations_atomically() {
     for (member, target_address, shift, label) in [
         (
             "Insert",
-            "D1:E1",
+            "E1:F1",
             XL_SHIFT_DOWN,
-            "insert corridor through data validation",
+            "insert band cutting through data validation",
         ),
         (
             "Delete",
-            "D4:E4",
+            "E4:F4",
             XL_SHIFT_UP,
-            "delete corridor through data validation",
+            "delete band cutting through data validation",
         ),
     ] {
         let mut runtime = ExcelRuntime::new();
@@ -737,15 +796,15 @@ fn range_structural_shifts_inventory_x14_data_validation_owners() {
     for (member, target_address, shift, label) in [
         (
             "Insert",
-            "D1:E1",
+            "E1:F1",
             XL_SHIFT_DOWN,
-            "insert corridor through x14 validation",
+            "insert band cutting through x14 validation",
         ),
         (
             "Delete",
-            "D4:E4",
+            "E4:F4",
             XL_SHIFT_UP,
-            "delete corridor through x14 validation",
+            "delete band cutting through x14 validation",
         ),
     ] {
         let mut runtime = ExcelRuntime::new();
@@ -1303,23 +1362,11 @@ fn range_structural_shifts_inventory_row_and_column_metadata_owners() {
         r#"<row r="4" ht="24" customHeight="1"><extLst><ext uri="urn:row"><payload preserved="true"/></ext></extLst></row>"#,
     ));
 
-    for (target_address, shift, expected_message_fragments, label) in [
-        (
-            "A1",
-            XL_SHIFT_DOWN,
-            ["structural row metadata retarget", "worksheet 1", "row 4"],
-            "row metadata corridor",
-        ),
-        (
-            "A1",
-            XL_SHIFT_TO_RIGHT,
-            [
-                "structural column metadata retarget",
-                "worksheet 1",
-                "columns C4:C5",
-            ],
-            "column metadata corridor",
-        ),
+    // A partial corridor moves cells, not whole rows or columns, so row heights and column widths
+    // stay where they are.
+    for (shift, label) in [
+        (XL_SHIFT_DOWN, "row metadata beside a band"),
+        (XL_SHIFT_TO_RIGHT, "column metadata beside a band"),
     ] {
         let mut runtime = ExcelRuntime::new();
         let workbook = runtime
@@ -1331,17 +1378,38 @@ fn range_structural_shifts_inventory_row_and_column_metadata_owners() {
             })
             .unwrap_or_else(|error| panic!("{label}: open: {error:?}"));
         let worksheet = worksheet_handle(&mut runtime, workbook);
-        let target = range_handle(&mut runtime, worksheet, target_address);
-
-        assert_structural_failure_is_atomic(
-            &mut runtime,
-            workbook,
-            target,
-            "Insert",
-            shift,
-            OmErrorCode::Unsupported,
-            &expected_message_fragments,
-            label,
+        let target = range_handle(&mut runtime, worksheet, "A1");
+        runtime
+            .dispatch_invoke(target, "Insert", &[OmValue::Number(f64::from(shift))])
+            .unwrap_or_else(|error| panic!("{label}: {error:?}"));
+        let mut saved = Vec::new();
+        runtime
+            .save_workbook_to_writer(
+                workbook,
+                SaveWorkbookSpec {
+                    format: FileFormat::Xlsx,
+                    profile: ExcelProfile::Excel365,
+                    lossless: true,
+                },
+                &mut saved,
+            )
+            .unwrap_or_else(|error| panic!("{label}: save: {error:?}"));
+        let saved_xml = String::from_utf8(
+            OpcPackage::from_bytes(&saved)
+                .expect("saved package")
+                .part("xl/worksheets/sheet1.xml")
+                .expect("saved worksheet")
+                .bytes
+                .clone(),
+        )
+        .expect("saved worksheet XML");
+        assert!(
+            saved_xml.contains(r#"<col min="4" max="5" width="12" customWidth="1"/>"#),
+            "{label}: {saved_xml}",
+        );
+        assert!(
+            saved_xml.contains(r#"<row r="4" ht="24" customHeight="1">"#),
+            "{label}: {saved_xml}",
         );
     }
 }
@@ -1429,35 +1497,71 @@ fn range_structural_shifts_inventory_chart_source_owners() {
         "Sheet1!$A$1:$C$1",
     );
 
-    for (member, shift) in [("Insert", XL_SHIFT_DOWN), ("Delete", XL_SHIFT_UP)] {
-        let mut blocked_runtime = ExcelRuntime::new();
-        let blocked_workbook = blocked_runtime
-            .open_workbook(OpenWorkbookSpec {
-                bytes: input.clone(),
-                format_hint: Some(FileFormat::Xlsx),
-                profile: ExcelProfile::Excel365,
-                read_only: false,
-            })
-            .unwrap_or_else(|error| panic!("open intersecting chart source fixture: {error:?}"));
-        let blocked_worksheet = worksheet_handle(&mut blocked_runtime, blocked_workbook);
-        let blocked_target = range_handle(&mut blocked_runtime, blocked_worksheet, "A1");
-        assert_structural_failure_is_atomic(
-            &mut blocked_runtime,
-            blocked_workbook,
-            blocked_target,
-            member,
-            shift,
-            OmErrorCode::Unsupported,
-            &[
-                "structural chart source retarget",
-                "series 1",
-                "x-values",
-                "worksheet 1",
-                "range R1C1:R1C2",
-            ],
-            &format!("chart source corridor {member}"),
-        );
-    }
+    // A band that holds a whole series source moves it; one that deletes a whole source refuses.
+    let mut moved_runtime = ExcelRuntime::new();
+    let moved_workbook = moved_runtime
+        .open_workbook(OpenWorkbookSpec {
+            bytes: input.clone(),
+            format_hint: Some(FileFormat::Xlsx),
+            profile: ExcelProfile::Excel365,
+            read_only: false,
+        })
+        .expect("open chart source band fixture");
+    let moved_worksheet = worksheet_handle(&mut moved_runtime, moved_workbook);
+    shift(
+        &mut moved_runtime,
+        moved_worksheet,
+        "A1:C1",
+        "Insert",
+        XL_SHIFT_DOWN,
+    );
+    let moved_series = moved_runtime
+        .runtime_workbook_mut(moved_workbook)
+        .expect("runtime workbook")
+        .loaded
+        .state
+        .charts()
+        .values()
+        .next()
+        .expect("chart")
+        .series[0]
+        .clone();
+    assert_eq!(moved_series.name.expect("name").raw.text, "Sheet1!$C$2");
+    assert_eq!(
+        moved_series.x_values.expect("x-values").raw.text,
+        "Sheet1!$A$2:$B$2"
+    );
+    assert_eq!(
+        moved_series.values.expect("values").raw.text,
+        "Sheet1!$A$2:$C$2"
+    );
+
+    let mut blocked_runtime = ExcelRuntime::new();
+    let blocked_workbook = blocked_runtime
+        .open_workbook(OpenWorkbookSpec {
+            bytes: input.clone(),
+            format_hint: Some(FileFormat::Xlsx),
+            profile: ExcelProfile::Excel365,
+            read_only: false,
+        })
+        .unwrap_or_else(|error| panic!("open deleted chart source fixture: {error:?}"));
+    let blocked_worksheet = worksheet_handle(&mut blocked_runtime, blocked_workbook);
+    let blocked_target = range_handle(&mut blocked_runtime, blocked_worksheet, "A1:B1");
+    assert_structural_failure_is_atomic(
+        &mut blocked_runtime,
+        blocked_workbook,
+        blocked_target,
+        "Delete",
+        XL_SHIFT_UP,
+        OmErrorCode::Unsupported,
+        &[
+            "structural chart source retarget",
+            "series 1",
+            "x-values",
+            "range on deleted cells",
+        ],
+        "band deleting a whole chart source",
+    );
 }
 
 #[test]
@@ -1911,6 +2015,88 @@ fn whole_row_and_column_shifts_move_worksheet_structure() {
         !sheet.contains("C1:D1"),
         "the merge on deleted row 1 is removed:\n{sheet}"
     );
+}
+
+#[test]
+fn partial_corridor_shifts_move_worksheet_structure_inside_the_band() {
+    let sheet_xml = STRUCTURED_SHEET
+        .replace(r#"sqref="F10:F12""#, r#"sqref="E10:G12""#)
+        .replace(r#"<hyperlink ref="G12""#, r#"<hyperlink ref="G12:H12""#);
+    let mut package = OpcPackage::from_bytes(&synthetic_workbook_bytes()).expect("package");
+    package
+        .replace_part_bytes("xl/worksheets/sheet1.xml", sheet_xml.into_bytes())
+        .expect("replace sheet");
+    let mut runtime = ExcelRuntime::new();
+    let workbook = runtime
+        .open_workbook(OpenWorkbookSpec {
+            bytes: package.to_bytes().expect("bytes"),
+            format_hint: Some(FileFormat::Xlsx),
+            profile: ExcelProfile::Excel365,
+            read_only: false,
+        })
+        .expect("open structured workbook");
+    let worksheet = worksheet_handle(&mut runtime, workbook);
+
+    // Cells D5:F6 shift down: everything inside columns D:F from row 5 moves two rows, the
+    // conditional format the band cuts splits, and rows and columns keep their metadata.
+    shift(&mut runtime, worksheet, "D5:F6", "Insert", XL_SHIFT_DOWN);
+    let (saved, sheet) = saved_sheet_xml(&runtime, workbook);
+    for expected in [
+        r#"<selection activeCell="D12" sqref="D12"/>"#,
+        r#"<col min="3" max="3" width="20" customWidth="1"/>"#,
+        r#"<row r="12" ht="30" customHeight="1"><c r="D12"><v>10</v></c><c r="G12"><v>12</v></c></row>"#,
+        r#"<mergeCell ref="B1:C1"/><mergeCell ref="D12:E13"/>"#,
+        r#"<conditionalFormatting sqref="E12:F14 G10:G12">"#,
+        r#"sqref="D12:D22""#,
+        r#"<hyperlink ref="G12:H12""#,
+    ] {
+        assert!(
+            sheet.contains(expected),
+            "after band insert, missing {expected} in:\n{sheet}"
+        );
+    }
+
+    // A band through part of the hyperlink's range would split it.
+    let target = range_handle(&mut runtime, worksheet, "G1");
+    assert_structural_failure_is_atomic(
+        &mut runtime,
+        workbook,
+        target,
+        "Insert",
+        XL_SHIFT_DOWN,
+        OmErrorCode::Unsupported,
+        &["part of range G12:H12"],
+        "band cutting a hyperlink",
+    );
+
+    let mut reopened = ExcelRuntime::new();
+    let reopened_workbook = reopened
+        .open_workbook(OpenWorkbookSpec {
+            bytes: saved,
+            format_hint: Some(FileFormat::Xlsx),
+            profile: ExcelProfile::Excel365,
+            read_only: false,
+        })
+        .expect("reopen band-shifted workbook");
+    let reopened_sheet = worksheet_handle(&mut reopened, reopened_workbook);
+    shift(
+        &mut reopened,
+        reopened_sheet,
+        "D1:E2",
+        "Delete",
+        XL_SHIFT_UP,
+    );
+    let (_, sheet) = saved_sheet_xml(&reopened, reopened_workbook);
+    for expected in [
+        r#"<mergeCell ref="D10:E11"/>"#,
+        r#"<c r="D10"><v>10</v></c>"#,
+        r#"sqref="D10:D20""#,
+    ] {
+        assert!(
+            sheet.contains(expected),
+            "after reopen and band delete, missing {expected} in:\n{sheet}"
+        );
+    }
 }
 
 #[test]

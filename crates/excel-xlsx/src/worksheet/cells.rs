@@ -267,8 +267,8 @@ fn replay_shifts_on_rect(shifts: &[StructuralShift], rect: Rect) -> Option<Rect>
         .try_fold(rect, |rect, shift| shift.shift_rect(rect))
 }
 
-/// Replays structural shifts onto a space-separated `sqref`, dropping deleted ranges. `None`
-/// means every range was deleted.
+/// Replays structural shifts onto a space-separated `sqref`, dropping deleted ranges and
+/// splitting ranges a banded shift cuts through. `None` means every range was deleted.
 pub(crate) fn replay_shifts_on_sqref(
     shifts: &[StructuralShift],
     sqref: &str,
@@ -276,11 +276,31 @@ pub(crate) fn replay_shifts_on_sqref(
     let mut kept = Vec::new();
     for part in sqref.split_whitespace() {
         let rect = parse_bounded_a1_rect(&part.replace('$', ""), "worksheet", "range")?;
-        if let Some(rect) = replay_shifts_on_rect(shifts, rect) {
-            kept.push(rect_reference(&rect));
+        let mut rects = vec![rect];
+        for shift in shifts {
+            rects = rects
+                .into_iter()
+                .flat_map(|rect| shift.shift_rect_split(rect))
+                .collect();
         }
+        kept.extend(rects.iter().map(rect_reference));
     }
     Ok((!kept.is_empty()).then(|| kept.join(" ")))
+}
+
+/// Replays structural shifts onto a single-range `ref`. A banded shift that cuts through the
+/// range would split it, which a single range cannot hold, so it is refused.
+pub(crate) fn replay_shifts_on_ref(
+    shifts: &[StructuralShift],
+    reference: &str,
+) -> OmResult<Option<String>> {
+    let moved = replay_shifts_on_sqref(shifts, reference)?;
+    if moved.as_deref().is_some_and(|moved| moved.contains(' ')) {
+        return Err(OmError::unsupported(format!(
+            "structural shift through part of range {reference} is not implemented"
+        )));
+    }
+    Ok(moved)
 }
 
 /// Rewrites the range attributes of a worksheet element through recorded structural shifts.
@@ -352,7 +372,7 @@ fn shift_worksheet_element(
             let column_shifts = shifts
                 .iter()
                 .copied()
-                .filter(|shift| shift.axis == StructuralAxis::Columns)
+                .filter(|shift| shift.axis == StructuralAxis::Columns && shift.is_whole())
                 .collect::<Vec<_>>();
             let Some(rect) = replay_shifts_on_rect(&column_shifts, rect) else {
                 return Ok(None);
@@ -380,7 +400,12 @@ fn shift_worksheet_element(
             let Some(value) = value_of(name) else {
                 return Ok(Some(element.to_owned()));
             };
-            match replay_shifts_on_sqref(shifts, &value)? {
+            let moved = if name == b"sqref" {
+                replay_shifts_on_sqref(shifts, &value)?
+            } else {
+                replay_shifts_on_ref(shifts, &value)?
+            };
+            match moved {
                 Some(moved) => replacements.push((name, moved)),
                 None => return Ok(None),
             }
@@ -2890,12 +2915,12 @@ pub(crate) fn rewrite_worksheet_xml_with_cell_metadata(
             .filter_map(|(row, mut attributes)| {
                 let mut moved = Some(row);
                 for shift in shifts {
-                    match shift.axis {
-                        StructuralAxis::Rows => {
-                            moved = moved.and_then(|row| shift.shift_index(row))
-                        }
-                        // Column edits make the `spans` hint stale; it is optional.
-                        StructuralAxis::Columns => attributes.retain(|(key, _)| key != "spans"),
+                    if shift.axis == StructuralAxis::Rows && shift.is_whole() {
+                        moved = moved.and_then(|row| shift.shift_index(row));
+                    } else {
+                        // Rows stay put, but their cells move, so the optional `spans` hint is
+                        // stale.
+                        attributes.retain(|(key, _)| key != "spans");
                     }
                 }
                 moved.map(|row| (row, attributes))

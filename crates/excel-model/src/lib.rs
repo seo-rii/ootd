@@ -119,6 +119,10 @@ pub struct TableStructuralOwner {
 /// table that lies entirely on one side of the edit, because inserting or deleting table columns
 /// would change the table's column definitions.
 fn table_follows_structural_shift(range: Rect, shift: StructuralShift) -> bool {
+    if !shift.is_whole() {
+        // Shifting part of a table's rows or columns is not modeled.
+        return !shift.reaches(range);
+    }
     let last = shift.first + shift.count - 1;
     match shift.axis {
         StructuralAxis::Rows if shift.insert => shift.shift_rect(range).is_some(),
@@ -1707,6 +1711,7 @@ impl WorkbookState {
                     first: rect.row_first,
                     count: rect.height(),
                     insert: direction == CellShiftDirection::Down,
+                    band: None,
                 })
             }
             CellShiftDirection::Left | CellShiftDirection::Right
@@ -1717,9 +1722,24 @@ impl WorkbookState {
                     first: rect.col_first,
                     count: rect.width(),
                     insert: direction == CellShiftDirection::Right,
+                    band: None,
                 })
             }
-            _ => None,
+            // A partial corridor shifts the band of cells it spans.
+            CellShiftDirection::Up | CellShiftDirection::Down => Some(StructuralShift {
+                axis: StructuralAxis::Rows,
+                first: rect.row_first,
+                count: rect.height(),
+                insert: direction == CellShiftDirection::Down,
+                band: Some((rect.col_first, rect.col_last)),
+            }),
+            CellShiftDirection::Left | CellShiftDirection::Right => Some(StructuralShift {
+                axis: StructuralAxis::Columns,
+                first: rect.col_first,
+                count: rect.width(),
+                insert: direction == CellShiftDirection::Right,
+                band: Some((rect.row_first, rect.row_last)),
+            }),
         }
     }
 
@@ -2171,7 +2191,7 @@ impl WorkbookState {
         // column metadata. They still refuse a deletion that cuts through a merged range or
         // removes a whole validation range, and validation formulas they would have to rewrite.
         let merged_blocks = |range: &&Rect| match structural_shift {
-            Some(shift) => shift.partially_deletes(**range),
+            Some(shift) => shift.partially_deletes(**range) || shift.cuts(**range),
             None => in_corridor(range),
         };
         if let Some(merged_range) = worksheet
@@ -2190,7 +2210,7 @@ impl WorkbookState {
             )));
         }
         let validation_blocks = |range: &&Rect| match structural_shift {
-            Some(shift) => shift.shift_rect(**range).is_none(),
+            Some(shift) => shift.shift_rect(**range).is_none() || shift.cuts(**range),
             None => in_corridor(range),
         };
         if let Some(validation_range) = worksheet
@@ -2614,6 +2634,12 @@ impl WorkbookState {
                 let chart_object = match object {
                     // Pictures and shapes move in the drawing part when the save replays the
                     // worksheet's recorded shifts; only cell or absolute anchors can be replayed.
+                    DrawingObjectModel::UnsupportedRaw { id, .. } if !shift.is_whole() => {
+                        return Err(OmError::unsupported(format!(
+                            "Range.{member} structural drawing anchor retarget is not implemented for drawing {} object {} worksheet {} opaque anchor",
+                            drawing_id.0, id.0, sheet_id.0,
+                        )));
+                    }
                     DrawingObjectModel::UnsupportedRaw {
                         id, raw_anchor_xml, ..
                     } => {
@@ -2639,6 +2665,38 @@ impl WorkbookState {
                         drawing_id.0, chart_object.id.0, sheet_id.0,
                     ))
                 };
+                if !shift.is_whole() {
+                    // Banded shifts leave chart frames in place; frames over shifted cells refuse.
+                    let markers = match chart_object.anchor.as_ref() {
+                        Some(office_common::DrawingAnchor::TwoCell(anchor)) => {
+                            Some((anchor.from, anchor.to))
+                        }
+                        Some(office_common::DrawingAnchor::OneCell(anchor)) => {
+                            Some((anchor.from, anchor.from))
+                        }
+                        Some(office_common::DrawingAnchor::Absolute(_))
+                            if chart_object.placement == ObjectPlacement::FreeFloating =>
+                        {
+                            None
+                        }
+                        _ => return Err(blocked("anchor over shifted cells")),
+                    };
+                    if let Some((from, to)) = markers {
+                        let rect = Rect {
+                            row_first: from.row_zero_based + 1,
+                            row_last: to.row_zero_based.max(from.row_zero_based) + 1,
+                            col_first: from.col_zero_based + 1,
+                            col_last: to.col_zero_based.max(from.col_zero_based) + 1,
+                        };
+                        if shift.reaches(rect) {
+                            return Err(blocked(&format!(
+                                "range R{}C{}:R{}C{}",
+                                rect.row_first, rect.col_first, rect.row_last, rect.col_last
+                            )));
+                        }
+                    }
+                    continue;
+                }
                 let anchor = match chart_object.anchor.as_ref() {
                     Some(office_common::DrawingAnchor::TwoCell(anchor)) => {
                         let from = axis_of(&anchor.from);
@@ -2696,21 +2754,7 @@ impl WorkbookState {
         formula_rewrites: Vec<(SheetId, (u32, u32), String)>,
         name_rewrites: Vec<(DefinedNameId, String)>,
     ) -> OmResult<bool> {
-        let moved_index = |value: u32| -> Option<u32> {
-            if value < shift.first {
-                Some(value)
-            } else if shift.insert {
-                Some(value + shift.count)
-            } else if value < shift.first + shift.count {
-                None
-            } else {
-                Some(value - shift.count)
-            }
-        };
-        let moved = |(row, col): (u32, u32)| match shift.axis {
-            StructuralAxis::Rows => moved_index(row).map(|row| (row, col)),
-            StructuralAxis::Columns => moved_index(col).map(|col| (row, col)),
-        };
+        let moved = |key: (u32, u32)| shift.shift_cell(key);
         let mut changed = false;
         for (owner_sheet_id, key, text) in formula_rewrites {
             let key = if owner_sheet_id == sheet_id {
@@ -3258,10 +3302,10 @@ mod tests {
                 "shift",
                 state.shift_cells_with_change(
                     SheetId(3),
-                    Rect::single_cell(1, 3),
+                    Rect::single_cell(1, 5),
                     CellShiftDirection::Down,
                 ),
-                "cannot insert shared formula master R6C3; formula group anchor is R6C3",
+                "cannot insert data table cell R6C5; formula group anchor is R6C5",
             ),
             (
                 "fill source",
@@ -3558,7 +3602,40 @@ mod tests {
 
     #[test]
     fn structural_cell_shifts_fail_closed_for_reference_formulas() {
-        for (formula_text, is_r1c1) in [("A1", false), ("R[-1]C", true)] {
+        // A banded insert in column A retargets an A1 reference inside the band.
+        let mut state = sample_state();
+        let formula_cell = CellData {
+            value: CellValue::Blank,
+            formula: Some(FormulaSource {
+                text: "A1+B1".to_string(),
+                is_r1c1: false,
+            }),
+            style_id: None,
+        };
+        state
+            .worksheet_data
+            .get_mut(&SheetId(3))
+            .expect("worksheet data")
+            .cells
+            .insert((10, 10), formula_cell);
+        assert!(
+            state
+                .shift_cells_with_change(
+                    SheetId(3),
+                    Rect::single_cell(1, 1),
+                    CellShiftDirection::Down,
+                )
+                .expect("banded A1 shift retargets")
+        );
+        assert_eq!(
+            state.worksheet_data[&SheetId(3)].cells[&(10, 10)]
+                .formula
+                .as_ref()
+                .map(|formula| formula.text.as_str()),
+            Some("A2+B1")
+        );
+
+        for (formula_text, is_r1c1) in [("R[-1]C", true), ("SUM(Sheet1:Sheet1!A1)", false)] {
             let mut state = sample_state();
             state
                 .worksheet_data
@@ -3599,7 +3676,7 @@ mod tests {
     #[test]
     fn structural_cell_shifts_fail_closed_for_reference_defined_names() {
         for (scope, refers_to, is_r1c1, expected_scope) in [
-            (NameScope::Workbook, "Sheet1!$M$50", false, "workbook"),
+            (NameScope::Workbook, "Sheet1!A50", false, "workbook"),
             (
                 NameScope::Worksheet(SheetId(3)),
                 "Sheet1!R1C1",
@@ -3703,21 +3780,12 @@ mod tests {
         );
         let before = blocked.clone();
         let error = blocked
-            .shift_cells_with_change(
-                SheetId(3),
-                Rect {
-                    row_first: 1,
-                    row_last: 1,
-                    col_first: 4,
-                    col_last: 5,
-                },
-                CellShiftDirection::Down,
-            )
-            .expect_err("intersecting chart source must fail closed");
+            .shift_cells_with_change(SheetId(3), chart_range, CellShiftDirection::Up)
+            .expect_err("deleting a whole chart source must fail closed");
         assert_eq!(error.code, OmErrorCode::Unsupported);
         assert_eq!(
             error.message,
-            "Range.Insert structural chart source retarget is not implemented for chart 11 series 1 values worksheet 3 range R4C4:R5C5",
+            "Range.Delete structural chart source retarget is not implemented for chart 11 series 1 values range on deleted cells",
         );
         assert_eq!(blocked, before);
 
@@ -3744,22 +3812,13 @@ mod tests {
         );
         let before = full_reference.clone();
         let error = full_reference
-            .shift_cells_with_change(
-                SheetId(3),
-                Rect {
-                    row_first: 1,
-                    row_last: 1,
-                    col_first: 4,
-                    col_last: 5,
-                },
-                CellShiftDirection::Down,
-            )
-            .expect_err("intersecting full chart source must fail closed");
+            .shift_cells_with_change(SheetId(3), chart_range, CellShiftDirection::Up)
+            .expect_err("deleting a whole full chart source must fail closed");
         assert_eq!(error.code, OmErrorCode::Unsupported);
         assert!(
             error
                 .message
-                .contains("chart 11 series 1 values full-reference worksheet 3 range R4C4:R5C5"),
+                .contains("chart 11 series 1 values range on deleted cells"),
             "{error:?}",
         );
         assert_eq!(full_reference, before);
@@ -4047,12 +4106,12 @@ mod tests {
                 Rect {
                     row_first: 1,
                     row_last: 1,
-                    col_first: 4,
-                    col_last: 5,
+                    col_first: 5,
+                    col_last: 6,
                 },
                 CellShiftDirection::Down,
             )
-            .expect_err("intersecting merged range must fail closed");
+            .expect_err("a band cutting through a merged range must fail closed");
 
         assert_eq!(error.code, OmErrorCode::Unsupported);
         assert_eq!(
@@ -4086,6 +4145,32 @@ mod tests {
                 .merged_ranges,
             vec![merged_range],
         );
+
+        let mut moved = blocked.clone();
+        assert!(
+            moved
+                .shift_cells_with_change(
+                    SheetId(3),
+                    Rect {
+                        row_first: 1,
+                        row_last: 1,
+                        col_first: 4,
+                        col_last: 5,
+                    },
+                    CellShiftDirection::Down,
+                )
+                .expect("a merged range inside the band moves"),
+        );
+        assert_eq!(
+            moved.worksheet_data[&SheetId(3)]
+                .structural_owners
+                .merged_ranges,
+            vec![Rect {
+                row_first: 5,
+                row_last: 6,
+                ..merged_range
+            }],
+        );
     }
 
     #[test]
@@ -4112,8 +4197,8 @@ mod tests {
                 Rect {
                     row_first: 1,
                     row_last: 1,
-                    col_first: 4,
-                    col_last: 5,
+                    col_first: 5,
+                    col_last: 6,
                 },
                 CellShiftDirection::Down,
             )
@@ -4168,7 +4253,7 @@ mod tests {
         let error = blocked
             .shift_cells_with_change(
                 SheetId(3),
-                Rect::single_cell(1, 1),
+                Rect::single_cell(1, 4),
                 CellShiftDirection::Down,
             )
             .expect_err("data-validation reference formula must fail closed");
@@ -4338,20 +4423,22 @@ mod tests {
             .expect("worksheet data")
             .structural_owners
             .row_metadata_ranges = vec![row_metadata];
-        let row_before = row_blocked.clone();
-        let row_error = row_blocked
-            .shift_cells_with_change(
-                SheetId(3),
-                Rect::single_cell(1, 1),
-                CellShiftDirection::Down,
-            )
-            .expect_err("vertical shift through row metadata must fail closed");
-        assert_eq!(row_error.code, OmErrorCode::Unsupported);
-        assert_eq!(
-            row_error.message,
-            "Range.Insert structural row metadata retarget is not implemented for worksheet 3 row 4",
+        // A banded shift moves cells, not whole rows, so row metadata stays put.
+        assert!(
+            row_blocked
+                .shift_cells_with_change(
+                    SheetId(3),
+                    Rect::single_cell(1, 1),
+                    CellShiftDirection::Down,
+                )
+                .expect("banded shift beside row metadata"),
         );
-        assert_eq!(row_blocked, row_before);
+        assert_eq!(
+            row_blocked.worksheet_data[&SheetId(3)]
+                .structural_owners
+                .row_metadata_ranges,
+            vec![row_metadata],
+        );
 
         let mut row_allowed = sample_state();
         row_allowed
@@ -4378,20 +4465,21 @@ mod tests {
             .expect("worksheet data")
             .structural_owners
             .column_metadata_ranges = vec![column_metadata];
-        let column_before = column_blocked.clone();
-        let column_error = column_blocked
-            .shift_cells_with_change(
-                SheetId(3),
-                Rect::single_cell(1, 1),
-                CellShiftDirection::Right,
-            )
-            .expect_err("horizontal shift through column metadata must fail closed");
-        assert_eq!(column_error.code, OmErrorCode::Unsupported);
-        assert_eq!(
-            column_error.message,
-            "Range.Insert structural column metadata retarget is not implemented for worksheet 3 columns C4:C5",
+        assert!(
+            column_blocked
+                .shift_cells_with_change(
+                    SheetId(3),
+                    Rect::single_cell(1, 1),
+                    CellShiftDirection::Right,
+                )
+                .expect("banded shift beside column metadata"),
         );
-        assert_eq!(column_blocked, column_before);
+        assert_eq!(
+            column_blocked.worksheet_data[&SheetId(3)]
+                .structural_owners
+                .column_metadata_ranges,
+            vec![column_metadata],
+        );
 
         let mut column_allowed = sample_state();
         column_allowed

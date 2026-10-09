@@ -472,9 +472,11 @@ Active order:
    note anchors move in their own parts. Chart series sources and chart-frame anchors move as
    well, and tables move or grow with row edits and move with column edits on either side of them.
    Pictures and shapes move in place in their drawing parts, and shared-formula groups that a
-   shift moves or rewrites are unshared into ordinary formulas. Partial corridors, R1C1, 3D, and
-   relative-name owners, column edits inside tables, and deletions of table
-   headers or commented cells still fail closed. The
+   shift moves or rewrites are unshared into ordinary formulas. Partial-width and partial-height
+   corridors shift a band of cells: references, merges, validations, comments, and chart sources
+   wholly inside the band move, and conditional formats the band cuts are split. R1C1, 3D, and
+   relative-name owners, column edits inside tables, bands that reach tables, drawings, or part
+   of a merge, and deletions of table headers or commented cells still fail closed. The
    contract is `docs/interfaces/defined_name_evaluation.md`.
 
 Every numbered work unit starts with a failing regression and lands as its own reviewable commit.

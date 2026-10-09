@@ -1,10 +1,16 @@
-//! Moving worksheet comment anchors and legacy VML shape anchors through whole-row and
-//! whole-column shifts.
+//! Replaying recorded structural shifts onto the parts a worksheet owns: comment anchors, legacy
+//! VML shape anchors, hyperlink snapshots, table ranges, and drawing anchors.
 
-use super::{replay_shifts_on_sqref, xml_error, xml_local_name};
+use super::{
+    WorksheetSupportParts, parse_comment_part_summary, parse_vml_drawing_part_summary,
+    replay_shifts_on_ref, xml_error, xml_local_name,
+};
+use excel_model::{WorkbookState, WorksheetData};
 use office_common::{OmError, OmResult, StructuralAxis, StructuralShift};
+use office_opc::OpcPackage;
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::{Reader, Writer};
+use std::collections::BTreeSet;
 use std::io::Cursor;
 
 /// Rewrites every `comment@ref` in a comments part. A comment whose cell is deleted cannot be
@@ -42,7 +48,7 @@ fn shift_comment_element(
         let attribute = attribute.map_err(xml_error)?;
         if attribute.key.as_ref() == b"ref" {
             let reference = attribute.unescape_value().map_err(xml_error)?;
-            let moved = replay_shifts_on_sqref(&[shift], &reference)?.ok_or_else(|| {
+            let moved = replay_shifts_on_ref(&[shift], &reference)?.ok_or_else(|| {
                 OmError::unsupported(format!(
                     "structural comment removal is not implemented for comment {reference}"
                 ))
@@ -214,7 +220,7 @@ pub(crate) fn shift_table_part(xml: &[u8], shifts: &[StructuralShift]) -> OmResu
             let attribute = attribute.map_err(xml_error)?;
             if attribute.key.as_ref() == b"ref" {
                 let reference = attribute.unescape_value().map_err(xml_error)?;
-                let moved = replay_shifts_on_sqref(shifts, &reference)?.ok_or_else(|| {
+                let moved = replay_shifts_on_ref(shifts, &reference)?.ok_or_else(|| {
                     OmError::invalid_state(format!(
                         "table reference {reference} was deleted by a structural shift"
                     ))
@@ -276,6 +282,9 @@ fn shift_zero_based(value: u32, shift: StructuralShift) -> Option<u32> {
 }
 
 fn shift_client_data(block: &str, shift: StructuralShift) -> OmResult<String> {
+    if !shift.is_whole() {
+        return shift_banded_client_data(block, shift);
+    }
     let (cell_tag, anchor_indices): (&str, [usize; 2]) = match shift.axis {
         StructuralAxis::Rows => ("x:Row", [2, 6]),
         StructuralAxis::Columns => ("x:Column", [0, 4]),
@@ -327,6 +336,71 @@ fn shift_client_data(block: &str, shift: StructuralShift) -> OmResult<String> {
     Ok(block)
 }
 
+/// Moves a note whose cell lies in a banded shift by the cell's displacement, keeping the size of
+/// its box; notes outside the band stay put.
+fn shift_banded_client_data(block: &str, shift: StructuralShift) -> OmResult<String> {
+    let value_of = |tag: &str| -> OmResult<Option<u32>> {
+        let open = format!("<{tag}>");
+        let Some(start) = block.find(&open).map(|start| start + open.len()) else {
+            return Ok(None);
+        };
+        let end = start + block[start..].find('<').unwrap_or(0);
+        block[start..end]
+            .trim()
+            .parse::<u32>()
+            .map(Some)
+            .map_err(|_| OmError::parse(format!("legacy VML {tag} is not a number")))
+    };
+    let (Some(row), Some(col)) = (value_of("x:Row")?, value_of("x:Column")?) else {
+        return Ok(block.to_string());
+    };
+    let moved = shift.shift_cell((row + 1, col + 1)).ok_or_else(|| {
+        OmError::unsupported(
+            "structural comment removal is not implemented for a VML note on a deleted cell",
+        )
+    })?;
+    let (old, new, tag, anchor_indices) = match shift.axis {
+        StructuralAxis::Rows => (row + 1, moved.0, "x:Row", [2, 6]),
+        StructuralAxis::Columns => (col + 1, moved.1, "x:Column", [0, 4]),
+    };
+    if old == new {
+        return Ok(block.to_string());
+    }
+    let displace = |value: u32| -> u32 {
+        if new > old {
+            value.saturating_add(new - old)
+        } else {
+            value.saturating_sub(old - new)
+        }
+    };
+    let block = replace_tag_text(block, tag, |_| Ok((new - 1).to_string()))?;
+    replace_tag_text(&block, "x:Anchor", |value| {
+        let mut parts = value
+            .split(',')
+            .map(|part| part.trim().parse::<u32>())
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| OmError::parse(format!("legacy VML anchor is not numeric: {value}")))?;
+        if parts.len() != 8 {
+            return Err(OmError::parse(format!(
+                "legacy VML anchor needs 8 values: {value}"
+            )));
+        }
+        for index in anchor_indices {
+            parts[index] = displace(parts[index]);
+        }
+        let leading = &value[..value.len() - value.trim_start().len()];
+        let trailing = &value[value.trim_end().len()..];
+        Ok(format!(
+            "{leading}{}{trailing}",
+            parts
+                .iter()
+                .map(u32::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))
+    })
+}
+
 /// Replaces the text of every `<tag>…</tag>` in `block`.
 fn replace_tag_text(
     block: &str,
@@ -354,6 +428,125 @@ fn replace_tag_text(
     Ok(output)
 }
 
+impl WorksheetSupportParts {
+    /// Moves the worksheet snapshot's hyperlink references through a whole-row or whole-column
+    /// shift so save validation expects the rewritten worksheet. Shifts that would remove a
+    /// hyperlink, or that would need comment and VML anchors moved, are refused.
+    pub fn apply_structural_shift(&mut self, shift: StructuralShift) -> OmResult<()> {
+        if self.comment_part_uris.len() != self.comment_part_source_bytes.len()
+            || self.vml_drawing_part_uris.len() != self.vml_drawing_part_source_bytes.len()
+        {
+            return Err(OmError::unsupported(
+                "structural comment anchor retarget requires the source comment and VML parts",
+            ));
+        }
+        // Comment and VML parts move as bytes; their expected summaries are re-read from the
+        // moved bytes so save validation checks the parts the save writes.
+        for (part_uri, bytes) in &mut self.comment_part_source_bytes {
+            *bytes = shift_comment_part(bytes, shift)?;
+            let summary = parse_comment_part_summary(bytes)?;
+            if let Some(anchor_refs) = self.comment_anchor_refs.get_mut(part_uri) {
+                *anchor_refs = summary
+                    .comments
+                    .iter()
+                    .map(|comment| comment.reference.clone())
+                    .collect();
+            }
+            if self.comment_summaries.contains_key(part_uri) {
+                self.comment_summaries.insert(part_uri.clone(), summary);
+            }
+        }
+        for (part_uri, bytes) in &mut self.vml_drawing_part_source_bytes {
+            *bytes = shift_vml_part(bytes, shift)?;
+            if self.vml_drawing_summaries.contains_key(part_uri) {
+                self.vml_drawing_summaries
+                    .insert(part_uri.clone(), parse_vml_drawing_part_summary(bytes)?);
+            }
+        }
+        let shifts = [shift];
+        let moved = |reference: &str| -> OmResult<String> {
+            replay_shifts_on_ref(&shifts, reference)?.ok_or_else(|| {
+                OmError::unsupported(format!(
+                    "structural hyperlink removal is not implemented for hyperlink {reference}"
+                ))
+            })
+        };
+        for reference in &mut self.hyperlink_refs {
+            *reference = moved(reference)?;
+        }
+        for summary in &mut self.hyperlink_summaries {
+            summary.reference = moved(&summary.reference)?;
+        }
+        for binding in &mut self.hyperlink_bindings {
+            binding.reference = moved(&binding.reference)?;
+        }
+        if let Some(summary) = self.hyperlinks_part_summary.as_mut() {
+            for attributes in &mut summary.hyperlink_attr_maps {
+                if let Some(reference) = attributes.get_mut("ref") {
+                    *reference = moved(reference)?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Replays a worksheet's recorded structural shifts onto its table parts.
+pub(crate) fn shift_table_parts(
+    package: &mut OpcPackage,
+    sheet_data: &WorksheetData,
+) -> OmResult<()> {
+    if sheet_data.structural_shifts.is_empty() {
+        return Ok(());
+    }
+    for table_owner in &sheet_data.structural_owners.table_owners {
+        let Some(source) = package.part(&table_owner.part_uri) else {
+            continue;
+        };
+        let shifted = shift_table_part(&source.bytes, &sheet_data.structural_shifts)?;
+        package.replace_part_bytes(&table_owner.part_uri, shifted)?;
+    }
+    Ok(())
+}
+
+/// Moves pictures and shapes in each drawing part through its host worksheet's recorded
+/// structural shifts. This runs after every chart-frame rewrite, which moves chart anchors
+/// from the model.
+pub(crate) fn shift_drawing_parts(package: &mut OpcPackage, state: &WorkbookState) -> OmResult<()> {
+    let mut shifted_drawing_parts = BTreeSet::new();
+    for drawing in state.drawings.values() {
+        let Some(part_uri) = drawing.raw_part_uri.as_deref() else {
+            continue;
+        };
+        if !shifted_drawing_parts.insert(part_uri) {
+            continue;
+        }
+        let Some(shifts) = state
+            .worksheet_data()
+            .get(&drawing.host_sheet_id)
+            .map(|worksheet| worksheet.structural_shifts.as_slice())
+            .filter(|shifts| !shifts.is_empty())
+        else {
+            continue;
+        };
+        let Some(part) = package.part(part_uri) else {
+            continue;
+        };
+        // Banded shifts leave drawing objects in place; the model refuses any they reach.
+        let whole_shifts = shifts
+            .iter()
+            .copied()
+            .filter(|shift| shift.is_whole())
+            .collect::<Vec<_>>();
+        if whole_shifts.is_empty() {
+            continue;
+        }
+        let shifted = shift_drawing_part(&part.bytes, &whole_shifts)?;
+        package.replace_part_bytes(part_uri, shifted)?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -364,6 +557,7 @@ mod tests {
             first,
             count,
             insert,
+            band: None,
         }
     }
 
@@ -427,6 +621,7 @@ mod tests {
             first: 1,
             count: 1,
             insert: true,
+            band: None,
         };
         let shifted = String::from_utf8(shift_vml_part(vml, columns).unwrap()).unwrap();
         assert!(

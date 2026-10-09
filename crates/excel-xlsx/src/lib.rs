@@ -78,7 +78,7 @@ use worksheet::{
     dynamic_array_cell_metadata_xml, file_formula_to_model, format_cell_error,
     model_formula_to_file, parse_dynamic_array_cell_metadata,
     parse_worksheet_cells_with_cell_metadata, resolve_table_structural_owners,
-    replay_shifts_on_sqref, rewrite_worksheet_xml_with_cell_metadata,
+    replay_shifts_on_ref, rewrite_worksheet_xml_with_cell_metadata,
 };
 #[cfg(test)]
 use worksheet::{parse_worksheet_cells, rewrite_worksheet_xml};
@@ -1153,69 +1153,6 @@ pub struct WorksheetSupportParts {
     pub legacy_drawing_summaries: Vec<WorksheetLegacyDrawingSummary>,
     pub comment_relationships: Vec<WorksheetRelationshipBinding>,
     pub comment_relationship_ids: Vec<String>,
-}
-
-impl WorksheetSupportParts {
-    /// Moves the worksheet snapshot's hyperlink references through a whole-row or whole-column
-    /// shift so save validation expects the rewritten worksheet. Shifts that would remove a
-    /// hyperlink, or that would need comment and VML anchors moved, are refused.
-    pub fn apply_structural_shift(&mut self, shift: StructuralShift) -> OmResult<()> {
-        if self.comment_part_uris.len() != self.comment_part_source_bytes.len()
-            || self.vml_drawing_part_uris.len() != self.vml_drawing_part_source_bytes.len()
-        {
-            return Err(OmError::unsupported(
-                "structural comment anchor retarget requires the source comment and VML parts",
-            ));
-        }
-        // Comment and VML parts move as bytes; their expected summaries are re-read from the
-        // moved bytes so save validation checks the parts the save writes.
-        for (part_uri, bytes) in &mut self.comment_part_source_bytes {
-            *bytes = structural_shift::shift_comment_part(bytes, shift)?;
-            let summary = parse_comment_part_summary(bytes)?;
-            if let Some(anchor_refs) = self.comment_anchor_refs.get_mut(part_uri) {
-                *anchor_refs = summary
-                    .comments
-                    .iter()
-                    .map(|comment| comment.reference.clone())
-                    .collect();
-            }
-            if self.comment_summaries.contains_key(part_uri) {
-                self.comment_summaries.insert(part_uri.clone(), summary);
-            }
-        }
-        for (part_uri, bytes) in &mut self.vml_drawing_part_source_bytes {
-            *bytes = structural_shift::shift_vml_part(bytes, shift)?;
-            if self.vml_drawing_summaries.contains_key(part_uri) {
-                self.vml_drawing_summaries
-                    .insert(part_uri.clone(), parse_vml_drawing_part_summary(bytes)?);
-            }
-        }
-        let shifts = [shift];
-        let moved = |reference: &str| -> OmResult<String> {
-            replay_shifts_on_sqref(&shifts, reference)?.ok_or_else(|| {
-                OmError::unsupported(format!(
-                    "structural hyperlink removal is not implemented for hyperlink {reference}"
-                ))
-            })
-        };
-        for reference in &mut self.hyperlink_refs {
-            *reference = moved(reference)?;
-        }
-        for summary in &mut self.hyperlink_summaries {
-            summary.reference = moved(&summary.reference)?;
-        }
-        for binding in &mut self.hyperlink_bindings {
-            binding.reference = moved(&binding.reference)?;
-        }
-        if let Some(summary) = self.hyperlinks_part_summary.as_mut() {
-            for attributes in &mut summary.hyperlink_attr_maps {
-                if let Some(reference) = attributes.get_mut("ref") {
-                    *reference = moved(reference)?;
-                }
-            }
-        }
-        Ok(())
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -3302,19 +3239,7 @@ impl XlsxCodec {
                 &save_cell_metadata,
             )?;
             package.replace_part_bytes(part_uri, bytes)?;
-            // Table parts follow the worksheet's recorded structural shifts.
-            if !sheet_data.structural_shifts.is_empty() {
-                for table_owner in &sheet_data.structural_owners.table_owners {
-                    let Some(source) = package.part(&table_owner.part_uri) else {
-                        continue;
-                    };
-                    let shifted = structural_shift::shift_table_part(
-                        &source.bytes,
-                        &sheet_data.structural_shifts,
-                    )?;
-                    package.replace_part_bytes(&table_owner.part_uri, shifted)?;
-                }
-            }
+            structural_shift::shift_table_parts(&mut package, sheet_data)?;
             // Comment and VML anchors follow the worksheet's recorded structural shifts.
             if let Some(std::borrow::Cow::Owned(shifted)) = shifted_support_parts {
                 for (part_uri, bytes) in shifted
@@ -3961,31 +3886,7 @@ impl XlsxCodec {
             package.replace_part_bytes(chart_part_uri, encoded_xml)?;
         }
 
-        // Pictures and shapes follow their host worksheet's recorded structural shifts. This runs
-        // after every chart-frame rewrite, which moves chart anchors from the model.
-        let mut shifted_drawing_parts = BTreeSet::new();
-        for drawing in workbook.state.drawings.values() {
-            let Some(part_uri) = drawing.raw_part_uri.as_deref() else {
-                continue;
-            };
-            if !shifted_drawing_parts.insert(part_uri) {
-                continue;
-            }
-            let Some(shifts) = workbook
-                .state
-                .worksheet_data()
-                .get(&drawing.host_sheet_id)
-                .map(|worksheet| worksheet.structural_shifts.as_slice())
-                .filter(|shifts| !shifts.is_empty())
-            else {
-                continue;
-            };
-            let Some(part) = package.part(part_uri) else {
-                continue;
-            };
-            let shifted = structural_shift::shift_drawing_part(&part.bytes, shifts)?;
-            package.replace_part_bytes(part_uri, shifted)?;
-        }
+        structural_shift::shift_drawing_parts(&mut package, &workbook.state)?;
         ensure_support_parts_present_for_save(&package, &workbook.support_parts)?;
         ensure_worksheet_support_parts_present_for_save(
             &package,

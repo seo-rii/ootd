@@ -9,13 +9,17 @@ pub enum StructuralAxis {
     Columns,
 }
 
-/// Whole rows or columns inserted before `first`, or deleted from `first` onward.
+/// Rows or columns inserted before `first`, or deleted from `first` onward. `band` limits the
+/// shift to a strip of the other axis (the columns of a shifted-down range, or the rows of a
+/// shifted-right range); `None` shifts whole rows or columns. Inside a band, only references and
+/// ranges that lie entirely within the band move, as Excel shifts cells.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StructuralShift {
     pub axis: StructuralAxis,
     pub first: u32,
     pub count: u32,
     pub insert: bool,
+    pub band: Option<(u32, u32)>,
 }
 
 /// Why a formula's references cannot be retargeted automatically.
@@ -435,16 +439,31 @@ impl Reference {
             StructuralAxis::Rows => cell.1,
             StructuralAxis::Columns => cell.0,
         };
+        let cross = |cell: &(Endpoint, Endpoint)| match shift.axis {
+            StructuralAxis::Rows => cell.0.value,
+            StructuralAxis::Columns => cell.1.value,
+        };
         let (first, last, is_range) = match self {
-            Reference::Cells { first, last } => (
-                pick(first),
-                last.as_ref().map_or(pick(first), pick),
-                last.is_some(),
-            ),
-            Reference::Rows(first, last) if shift.axis == StructuralAxis::Rows => {
+            Reference::Cells { first, last } => {
+                let (a, b) = (cross(first), last.as_ref().map_or(cross(first), cross));
+                if !shift.band_contains(a.min(b), a.max(b)) {
+                    return Retargeted::Unchanged;
+                }
+                (
+                    pick(first),
+                    last.as_ref().map_or(pick(first), pick),
+                    last.is_some(),
+                )
+            }
+            // Whole-row and whole-column references span the other axis entirely.
+            Reference::Rows(first, last)
+                if shift.axis == StructuralAxis::Rows && shift.is_whole() =>
+            {
                 (*first, *last, true)
             }
-            Reference::Columns(first, last) if shift.axis == StructuralAxis::Columns => {
+            Reference::Columns(first, last)
+                if shift.axis == StructuralAxis::Columns && shift.is_whole() =>
+            {
                 (*first, *last, true)
             }
             _ => return Retargeted::Unchanged,
@@ -518,6 +537,56 @@ impl Reference {
 }
 
 impl StructuralShift {
+    /// Whether the shift moves whole rows or columns rather than a band of cells.
+    pub fn is_whole(self) -> bool {
+        self.band.is_none()
+    }
+
+    /// Whether a span of the other axis lies inside the shifted band.
+    pub fn band_contains(self, first: u32, last: u32) -> bool {
+        self.band
+            .is_none_or(|(band_first, band_last)| band_first <= first && last <= band_last)
+    }
+
+    /// A rectangle's span on the other axis.
+    fn cross_span(self, rect: crate::Rect) -> (u32, u32) {
+        match self.axis {
+            StructuralAxis::Rows => (rect.col_first, rect.col_last),
+            StructuralAxis::Columns => (rect.row_first, rect.row_last),
+        }
+    }
+
+    /// Whether the shifted cells (the band from `first` onward along the axis) include part of the
+    /// rectangle.
+    pub fn reaches(self, rect: crate::Rect) -> bool {
+        let (cross_first, cross_last) = self.cross_span(rect);
+        let along_last = match self.axis {
+            StructuralAxis::Rows => rect.row_last,
+            StructuralAxis::Columns => rect.col_last,
+        };
+        along_last >= self.first
+            && self.band.is_none_or(|(band_first, band_last)| {
+                cross_first <= band_last && band_first <= cross_last
+            })
+    }
+
+    /// Whether a banded shift cuts through a rectangle: the rectangle reaches the shifted cells
+    /// but extends past the band, so part of it would move and part would not.
+    pub fn cuts(self, rect: crate::Rect) -> bool {
+        let Some((band_first, band_last)) = self.band else {
+            return false;
+        };
+        let (cross_first, cross_last) = self.cross_span(rect);
+        let along_last = match self.axis {
+            StructuralAxis::Rows => rect.row_last,
+            StructuralAxis::Columns => rect.col_last,
+        };
+        cross_first <= band_last
+            && band_first <= cross_last
+            && !(band_first <= cross_first && cross_last <= band_last)
+            && along_last >= self.first
+    }
+
     /// The last row or column index on this shift's axis.
     pub fn axis_max(self) -> u32 {
         match self.axis {
@@ -543,6 +612,13 @@ impl StructuralShift {
 
     /// Where a cell lands, or `None` when its row or column is deleted or pushed off the grid.
     pub fn shift_cell(self, (row, col): (u32, u32)) -> Option<(u32, u32)> {
+        let cross = match self.axis {
+            StructuralAxis::Rows => col,
+            StructuralAxis::Columns => row,
+        };
+        if !self.band_contains(cross, cross) {
+            return Some((row, col));
+        }
         match self.axis {
             StructuralAxis::Rows => self.shift_index(row).map(|row| (row, col)),
             StructuralAxis::Columns => self.shift_index(col).map(|col| (row, col)),
@@ -552,6 +628,10 @@ impl StructuralShift {
     /// Moves a rectangle as Excel moves a range: inserted spans expand it, deleted spans shrink
     /// it, and `None` means the whole rectangle was deleted.
     pub fn shift_rect(self, rect: crate::Rect) -> Option<crate::Rect> {
+        let (cross_first, cross_last) = self.cross_span(rect);
+        if !self.band_contains(cross_first, cross_last) {
+            return Some(rect);
+        }
         let max = self.axis_max();
         match self.axis {
             StructuralAxis::Rows => retarget_span(rect.row_first, rect.row_last, self, max, true)
@@ -572,9 +652,44 @@ impl StructuralShift {
         }
     }
 
+    /// Moves a rectangle that a banded shift may cut, as Excel splits a multi-area range: the
+    /// parts outside the band stay and the part inside it moves. An uncut rectangle moves as
+    /// `shift_rect`; an empty result means the whole rectangle was deleted.
+    pub fn shift_rect_split(self, rect: crate::Rect) -> Vec<crate::Rect> {
+        let Some((band_first, band_last)) = self.band.filter(|_| self.cuts(rect)) else {
+            return self.shift_rect(rect).into_iter().collect();
+        };
+        let (cross_first, cross_last) = self.cross_span(rect);
+        let with_cross = |first: u32, last: u32| match self.axis {
+            StructuralAxis::Rows => crate::Rect {
+                col_first: first,
+                col_last: last,
+                ..rect
+            },
+            StructuralAxis::Columns => crate::Rect {
+                row_first: first,
+                row_last: last,
+                ..rect
+            },
+        };
+        let mut parts = Vec::new();
+        if cross_first < band_first {
+            parts.push(with_cross(cross_first, band_first - 1));
+        }
+        parts.extend(self.shift_rect(with_cross(
+            cross_first.max(band_first),
+            cross_last.min(band_last),
+        )));
+        if cross_last > band_last {
+            parts.push(with_cross(band_last + 1, cross_last));
+        }
+        parts
+    }
+
     /// Whether a deletion removes part, but not all, of the rectangle's span on this axis.
     pub fn partially_deletes(self, rect: crate::Rect) -> bool {
-        if self.insert {
+        let (cross_first, cross_last) = self.cross_span(rect);
+        if self.insert || !self.band_contains(cross_first, cross_last) {
             return false;
         }
         let (low, high) = match self.axis {
@@ -598,7 +713,46 @@ mod tests {
             first,
             count,
             insert,
+            band: None,
         }
+    }
+
+    #[test]
+    fn banded_shifts_move_only_references_inside_the_band() {
+        let banded = StructuralShift {
+            band: Some((2, 3)),
+            ..rows(5, 2, true)
+        };
+        for (before, after) in [
+            ("B5+C9", "B7+C11"),
+            ("A5+D9", "A5+D9"),
+            ("SUM(B4:C6)", "SUM(B4:C8)"),
+            ("SUM(A4:C6)", "SUM(A4:C6)"),
+            ("SUM(5:6)+SUM(B:B)", "SUM(5:6)+SUM(B:B)"),
+        ] {
+            assert_eq!(retarget(before, banded), after, "{before}");
+        }
+        let rect = |row_first, row_last, col_first, col_last| crate::Rect {
+            row_first,
+            row_last,
+            col_first,
+            col_last,
+        };
+        assert_eq!(banded.shift_rect(rect(5, 6, 1, 3)), Some(rect(5, 6, 1, 3)));
+        assert_eq!(banded.shift_rect(rect(5, 6, 2, 3)), Some(rect(7, 8, 2, 3)));
+        assert!(banded.cuts(rect(5, 6, 1, 3)));
+        assert!(!banded.cuts(rect(1, 4, 1, 3)), "above the shifted cells");
+        assert!(!banded.cuts(rect(5, 6, 4, 6)), "outside the band");
+        assert_eq!(
+            banded.shift_rect_split(rect(1, 6, 1, 4)),
+            vec![rect(1, 6, 1, 1), rect(1, 8, 2, 3), rect(1, 6, 4, 4)],
+        );
+        assert_eq!(
+            banded.shift_rect_split(rect(5, 6, 2, 3)),
+            vec![rect(7, 8, 2, 3)]
+        );
+        assert_eq!(banded.shift_cell((5, 1)), Some((5, 1)));
+        assert_eq!(banded.shift_cell((5, 2)), Some((7, 2)));
     }
 
     fn on_data(qualifier: Option<&str>) -> SheetMatch {
@@ -657,6 +811,7 @@ mod tests {
             first: 2,
             count: 1,
             insert: true,
+            band: None,
         };
         assert_eq!(
             retarget("A1+B1+SUM(B:C)+SUM(1:2)", insert),

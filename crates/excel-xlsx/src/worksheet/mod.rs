@@ -9,7 +9,7 @@ pub(super) use cell_metadata::{
 };
 pub(super) use cells::{
     cell_reference, collect_support_part_dimension_coords, format_cell_error,
-    parse_worksheet_cells_with_cell_metadata, replay_shifts_on_sqref,
+    parse_worksheet_cells_with_cell_metadata, replay_shifts_on_ref,
     rewrite_worksheet_xml_with_cell_metadata,
 };
 #[cfg(test)]
