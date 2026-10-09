@@ -77,7 +77,8 @@ use worksheet::{
     SHEET_METADATA_CONTENT_TYPE, cell_reference, collect_support_part_dimension_coords,
     dynamic_array_cell_metadata_xml, file_formula_to_model, format_cell_error,
     model_formula_to_file, parse_dynamic_array_cell_metadata,
-    parse_worksheet_cells_with_cell_metadata, resolve_table_structural_owners,
+    parse_bounded_a1_rect, parse_worksheet_cells_with_cell_metadata,
+    resolve_table_structural_owners,
     replay_shifts_on_ref, rewrite_worksheet_xml_with_cell_metadata,
 };
 #[cfg(test)]

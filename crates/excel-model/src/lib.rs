@@ -6,8 +6,8 @@ use office_common::{
     NameScope, NameValidationMode, ObjectPlacement, OmArray, OmError, OmErrorCode, OmResult,
     OmValue, OpaquePart, RangeRef, RangeSet, Rect, ReferenceTarget, SheetId, SheetKind, SheetMatch,
     SheetScope, SheetVisibility, StructuralAxis, StructuralShift, StyleId, WorkbookId,
-    WorkbookModel, WorksheetModel, formula_contains_a1_reference, retarget_formula_references,
-    retarget_unqualified_references,
+    WorkbookModel, WorksheetModel, formula_contains_a1_reference, new_table_column_names,
+    retarget_formula_references, retarget_unqualified_references,
 };
 
 mod charts;
@@ -124,6 +124,43 @@ pub struct TableStructuralOwner {
     pub part_uri: String,
     pub range: Rect,
     pub formulas: Vec<String>,
+    /// The table's display name, used by structured references.
+    pub name: String,
+    /// The `tableColumn` names, left to right.
+    pub column_names: Vec<String>,
+    /// Whether the table's first row is a header row (`headerRowCount` is not `0`).
+    pub header_row: bool,
+    /// Whether the table is bound to a query (`tableType="queryTable"`).
+    pub query_table: bool,
+}
+
+impl TableStructuralOwner {
+    /// The table's columns a whole-column shift inserts into (`Some((index, count))`, before the
+    /// zero-based column `index`) or deletes (the zero-based indexes), when the edit falls inside
+    /// the table rather than beside it.
+    fn column_edit(&self, shift: StructuralShift) -> Option<TableColumnEdit> {
+        if shift.axis != StructuralAxis::Columns || !shift.is_whole() {
+            return None;
+        }
+        let range = self.range;
+        if shift.insert {
+            (range.col_first < shift.first && shift.first <= range.col_last)
+                .then(|| TableColumnEdit::Insert(shift.first - range.col_first, shift.count))
+        } else {
+            let last = shift.first + shift.count - 1;
+            let deleted = (range.col_first..=range.col_last)
+                .filter(|col| (shift.first..=last).contains(col))
+                .map(|col| col - range.col_first)
+                .collect::<Vec<_>>();
+            (!deleted.is_empty()).then_some(TableColumnEdit::Delete(deleted))
+        }
+    }
+}
+
+/// Table columns a whole-column shift adds or removes inside a table.
+enum TableColumnEdit {
+    Insert(u32, u32),
+    Delete(Vec<u32>),
 }
 
 /// The cells a raw drawing anchor covers: `Some(None)` for an `absoluteAnchor`, which is not tied
@@ -182,10 +219,18 @@ fn raw_anchor_cell_rect(raw_anchor_xml: &str) -> Option<Option<Rect>> {
 }
 
 /// Whether a table can follow a whole-row or whole-column shift. Rows may be inserted anywhere and
-/// deleted from the body while the header and one data row survive; columns may only move a
-/// table that lies entirely on one side of the edit, because inserting or deleting table columns
-/// would change the table's column definitions.
-fn table_follows_structural_shift(range: Rect, shift: StructuralShift) -> bool {
+/// deleted from the body while the header and one data row survive. Columns inserted or deleted
+/// inside a table add or remove table columns, unless its calculated-column or totals formulas or
+/// a query binding would need rewriting, or every column would go.
+fn table_follows_structural_shift(owner: &TableStructuralOwner, shift: StructuralShift) -> bool {
+    let range = owner.range;
+    // Whole columns inserted or deleted inside a table become table columns added or removed,
+    // unless the table's own formulas or query binding would need rewriting.
+    if owner.column_edit(shift).is_some() {
+        return owner.formulas.is_empty()
+            && !owner.query_table
+            && shift.shift_rect(range).is_some();
+    }
     if !shift.is_whole() {
         // Shifting part of a table's rows or columns is not modeled.
         return !shift.reaches(range);
@@ -2386,7 +2431,7 @@ impl WorkbookState {
                 .table_owners
                 .iter()
                 .find(|table_owner| match structural_shift {
-                    Some(shift) => !table_follows_structural_shift(table_owner.range, shift),
+                    Some(shift) => !table_follows_structural_shift(table_owner, shift),
                     None => {
                         affected_rect.row_first <= table_owner.range.row_last
                             && table_owner.range.row_first <= affected_rect.row_last
@@ -2405,6 +2450,32 @@ impl WorkbookState {
                 table_owner.range.row_last,
                 table_owner.range.col_last,
             )));
+        }
+        // Deleting table columns would leave structured references to them dangling.
+        if let Some(shift) = structural_shift {
+            for table_owner in &worksheet.structural_owners.table_owners {
+                if !matches!(
+                    table_owner.column_edit(shift),
+                    Some(TableColumnEdit::Delete(_))
+                ) {
+                    continue;
+                }
+                let marker = format!("{}[", table_owner.name.to_lowercase());
+                let referenced = table_owner.name.is_empty()
+                    || self
+                        .worksheet_data
+                        .values()
+                        .flat_map(|data| data.cells.values())
+                        .filter_map(|cell| cell.formula.as_ref())
+                        .chain(self.defined_names.iter().map(|name| &name.refers_to))
+                        .any(|formula| formula.text.to_lowercase().contains(&marker));
+                if referenced {
+                    return Err(OmError::unsupported(format!(
+                        "Range.{member} structural table column removal is not implemented for table '{}' with structured references",
+                        table_owner.name,
+                    )));
+                }
+            }
         }
         if let Some(row_metadata_range) = worksheet
             .structural_owners
@@ -2634,11 +2705,54 @@ impl WorkbookState {
                 .iter()
                 .filter_map(|range| shift.shift_rect(*range))
                 .collect();
+            // Inserted table columns get unique names, which their header cells show.
+            let mut header_cells = Vec::new();
             for table_owner in &mut owners.table_owners {
+                match table_owner.column_edit(shift) {
+                    Some(TableColumnEdit::Insert(index, count)) => {
+                        let names = new_table_column_names(&table_owner.column_names, count);
+                        if table_owner.header_row {
+                            header_cells.extend(names.iter().enumerate().map(|(offset, name)| {
+                                (
+                                    (table_owner.range.row_first, shift.first + offset as u32),
+                                    name.clone(),
+                                )
+                            }));
+                        }
+                        let index = (index as usize).min(table_owner.column_names.len());
+                        table_owner.column_names.splice(index..index, names);
+                    }
+                    Some(TableColumnEdit::Delete(deleted)) => {
+                        table_owner.column_names = std::mem::take(&mut table_owner.column_names)
+                            .into_iter()
+                            .enumerate()
+                            .filter(|(index, _)| !deleted.contains(&(*index as u32)))
+                            .map(|(_, name)| name)
+                            .collect();
+                    }
+                    None => {}
+                }
                 if let Some(range) = shift.shift_rect(table_owner.range) {
                     table_owner.range = range;
                 }
             }
+            for (key, name) in header_cells {
+                // The new header takes the style of the header to its left, as Excel's does.
+                let style_id = worksheet
+                    .cells
+                    .get(&(key.0, shift.first - 1))
+                    .and_then(|cell| cell.style_id);
+                worksheet.cells.insert(
+                    key,
+                    CellData {
+                        value: CellValue::Text(name),
+                        formula: None,
+                        style_id,
+                    },
+                );
+                worksheet.dirty_cells.insert(key);
+            }
+            let owners = &mut worksheet.structural_owners;
             for ranges in [
                 &mut owners.merged_ranges,
                 &mut owners.data_validation_ranges,
@@ -4638,6 +4752,10 @@ mod tests {
                 part_uri: "xl/tables/table1.xml".to_string(),
                 range: table_range,
                 formulas,
+                name: "Table1".to_string(),
+                column_names: vec!["A".to_string(), "B".to_string()],
+                header_row: true,
+                query_table: false,
             }],
             ..WorksheetStructuralOwners::default()
         };

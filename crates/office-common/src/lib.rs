@@ -20,8 +20,8 @@ pub use reference::{
     ExternalReference, RangeArea, RangeSet, ReferenceTarget, formula_contains_a1_reference,
 };
 pub use retarget::{
-    RetargetBlocker, SheetMatch, StructuralAxis, StructuralShift, retarget_formula_references,
-    retarget_unqualified_references,
+    RetargetBlocker, SheetMatch, StructuralAxis, StructuralShift, new_table_column_names,
+    retarget_formula_references, retarget_unqualified_references,
 };
 
 pub type OmResult<T> = Result<T, OmError>;

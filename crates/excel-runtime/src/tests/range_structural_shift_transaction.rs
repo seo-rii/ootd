@@ -2589,22 +2589,12 @@ fn whole_row_and_column_shifts_move_tables() {
         "{table}"
     );
 
-    for (address, member, direction, label) in [
-        ("A4:XFD4", "Delete", XL_SHIFT_UP, "deleting the header row"),
-        (
-            "F1:F1048576",
-            "Insert",
-            XL_SHIFT_TO_RIGHT,
-            "inserting a column inside the table",
-        ),
-    ] {
-        let target = range_handle(&mut runtime, worksheet, address);
-        let error = runtime
-            .dispatch_invoke(target, member, &[OmValue::Number(f64::from(direction))])
-            .expect_err(label);
-        assert_eq!(error.code, OmErrorCode::Unsupported, "{label}");
-        assert!(error.message.contains("table range"), "{label}: {error:?}");
-    }
+    let target = range_handle(&mut runtime, worksheet, "A4:XFD4");
+    let error = runtime
+        .dispatch_invoke(target, "Delete", &[OmValue::Number(f64::from(XL_SHIFT_UP))])
+        .expect_err("deleting the header row");
+    assert_eq!(error.code, OmErrorCode::Unsupported);
+    assert!(error.message.contains("table range"), "{error:?}");
 
     shift(&mut runtime, worksheet, "A5:XFD6", "Delete", XL_SHIFT_UP);
     let (saved, table) = table_xml(&runtime);
@@ -2628,6 +2618,102 @@ fn whole_row_and_column_shifts_move_tables() {
             col_first: 5,
             col_last: 6,
         }
+    );
+}
+
+#[test]
+fn whole_column_edits_inside_tables_add_and_remove_table_columns() {
+    let bytes = table_fixture_bytes(
+        r#"<?xml version="1.0" encoding="UTF-8"?><table xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" id="1" name="Table1" displayName="Table1" ref="D4:F6" totalsRowShown="0"><autoFilter ref="D4:F6"><filterColumn colId="2"><filters><filter val="x"/></filters></filterColumn></autoFilter><tableColumns count="3"><tableColumn id="1" name="Left"/><tableColumn id="2" name="Mid"/><tableColumn id="3" name="Right"/></tableColumns><tableStyleInfo name="TableStyleMedium2" showRowStripes="1"/></table>"#,
+    );
+    let mut runtime = ExcelRuntime::new();
+    let workbook = runtime
+        .open_workbook(OpenWorkbookSpec {
+            bytes,
+            format_hint: Some(FileFormat::Xlsx),
+            profile: ExcelProfile::Excel365,
+            read_only: false,
+        })
+        .expect("open table workbook");
+    let worksheet = worksheet_handle(&mut runtime, workbook);
+    let table_xml = |runtime: &ExcelRuntime| {
+        let (saved, _) = saved_sheet_xml(runtime, workbook);
+        let table = String::from_utf8(
+            OpcPackage::from_bytes(&saved)
+                .expect("saved package")
+                .part("xl/tables/table1.xml")
+                .expect("table")
+                .bytes
+                .clone(),
+        )
+        .expect("utf-8");
+        (saved, table)
+    };
+
+    // A column inserted inside the table becomes a new table column with a unique name.
+    shift(
+        &mut runtime,
+        worksheet,
+        "E1:E1048576",
+        "Insert",
+        XL_SHIFT_TO_RIGHT,
+    );
+    let (saved, table) = table_xml(&runtime);
+    for expected in [
+        r#"ref="D4:G6""#,
+        r#"<autoFilter ref="D4:G6"><filterColumn colId="3">"#,
+        r#"<tableColumns count="4"><tableColumn id="1" name="Left"/><tableColumn id="4" name="Column1"/><tableColumn id="2" name="Mid"/><tableColumn id="3" name="Right"/></tableColumns>"#,
+    ] {
+        assert!(table.contains(expected), "missing {expected} in {table}");
+    }
+    assert_eq!(
+        value_of(&mut runtime, worksheet, "E4"),
+        OmValue::Text("Column1".to_string())
+    );
+    let reopened = runtime
+        .codec
+        .load(&saved, LoadOptions::default())
+        .expect("reopen table workbook");
+    assert_eq!(
+        reopened
+            .state
+            .worksheet_data_for_sheet(reopened.state.worksheets()[0].id)
+            .expect("worksheet")
+            .structural_owners
+            .table_owners[0]
+            .column_names,
+        ["Left", "Column1", "Mid", "Right"],
+    );
+
+    // Deleting table columns removes them, and the filter on a deleted column goes with it.
+    shift(
+        &mut runtime,
+        worksheet,
+        "F1:G1048576",
+        "Delete",
+        XL_SHIFT_TO_LEFT,
+    );
+    let (_, table) = table_xml(&runtime);
+    for expected in [
+        r#"ref="D4:E6""#,
+        r#"<autoFilter ref="D4:E6"></autoFilter>"#,
+        r#"<tableColumns count="2"><tableColumn id="1" name="Left"/><tableColumn id="4" name="Column1"/></tableColumns>"#,
+    ] {
+        assert!(table.contains(expected), "missing {expected} in {table}");
+    }
+
+    // Deleting a column that a structured reference may name would leave it dangling.
+    set_formula(&mut runtime, worksheet, "J1", "=SUM(Table1[Left])");
+    let target = range_handle(&mut runtime, worksheet, "E1:E1048576");
+    assert_structural_failure_is_atomic(
+        &mut runtime,
+        workbook,
+        target,
+        "Delete",
+        XL_SHIFT_TO_LEFT,
+        OmErrorCode::Unsupported,
+        &["table column removal", "Table1"],
+        "deleting a referenced table column",
     );
 }
 

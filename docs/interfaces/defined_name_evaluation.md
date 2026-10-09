@@ -80,8 +80,13 @@ Tables follow too. Their parts replay the recorded shifts onto `table@ref`, `aut
 `sortState@ref`, and `sortCondition@ref`:
 - Rows may be inserted anywhere: a table moves, or grows when the insertion is inside its body.
 - Body rows may be deleted while the header row and one data row survive.
-- A column insert or delete may only move a table that lies wholly to one side of it, because
-  adding or removing table columns would change the table's column definitions.
+- Whole columns inserted inside a table become table columns named with the next unused
+  `ColumnN`, written into their header cells with the style of the header to their left. Whole
+  columns deleted inside a table remove their table columns, along with any filter or sort
+  condition on them; `autoFilter` `filterColumn@colId` indexes follow.
+- Column edits inside a table are refused when it has calculated-column or totals formulas, is
+  bound to a query, would lose every column, or, for deletions, when any cell formula or name
+  holds a structured reference to it.
 - Table formulas must not need retargeting.
 
 Charts follow too:
@@ -118,8 +123,8 @@ It is also refused when it would:
 - delete through part of a merged range;
 - remove a whole data-validation range or a hyperlink, the last comment of a comments part, or a
   comment paired with a threaded comment;
-- delete a table's header row or all of its data rows, or insert or delete columns inside a
-  table;
+- delete a table's header row or all of its data rows, or edit columns inside a table in one
+  of the ways listed above;
 - leave a chart source whose whole range is deleted, or one that is unresolved or 3D;
 - move a sheet that hosts a drawing object whose anchor kind is not two-cell, one-cell, or
   absolute, or a chart frame with a cell-bound absolute anchor.
@@ -145,6 +150,7 @@ regressions are their unit tests, `partial_corridor_shifts_retarget_formulas_ins
 `partial_corridor_shifts_move_worksheet_structure_inside_the_band`,
 `structural_shifts_retarget_r1c1_formulas`, `structural_shifts_retarget_r1c1_formulas_and_names`,
 `structural_shifts_retarget_conditional_format_and_validation_formulas`,
+`whole_column_edits_inside_tables_add_and_remove_table_columns`,
 `whole_row_and_column_shifts_retarget_formulas_and_names`,
 `whole_row_and_column_shifts_move_worksheet_structure`,
 `whole_row_shifts_move_comments_notes_and_hyperlinks`,

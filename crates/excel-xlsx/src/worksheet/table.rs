@@ -197,9 +197,36 @@ pub(crate) fn parse_table_structural_owner(
         parse_bounded_a1_rect(&reference, table_part_uri, "table")
     };
 
+    // The unescaped value of an unqualified attribute.
+    let attribute_value = |element: &BytesStart<'_>,
+                           resolver: &NamespaceResolver,
+                           decoder: quick_xml::encoding::Decoder,
+                           name: &[u8]|
+     -> OmResult<Option<String>> {
+        for attr in element.attributes() {
+            let attr = attr.map_err(|error| {
+                OmError::parse(format!(
+                    "{table_part_uri}: invalid table attribute: {error}"
+                ))
+            })?;
+            if unqualified_attribute_is(resolver, attr.key, name) {
+                return Ok(Some(
+                    attr.decode_and_unescape_value(decoder)
+                        .map_err(xml_error)?
+                        .into_owned(),
+                ));
+            }
+        }
+        Ok(None)
+    };
+
     let mut reader = NsReader::from_reader(Cursor::new(table_xml));
     reader.config_mut().trim_text(false);
     let mut buffer = Vec::new();
+    let mut table_name = String::new();
+    let mut header_row = true;
+    let mut query_table = false;
+    let mut column_names = Vec::new();
     let mut element_depth = 0usize;
     let mut root_seen = false;
     let mut table_range = None;
@@ -230,6 +257,17 @@ pub(crate) fn parse_table_structural_owner(
                         reader.resolver(),
                         reader.decoder(),
                     )?);
+                    let (resolver, decoder) = (reader.resolver(), reader.decoder());
+                    table_name = match attribute_value(&element, resolver, decoder, b"displayName")?
+                    {
+                        Some(name) => name,
+                        None => attribute_value(&element, resolver, decoder, b"name")?
+                            .unwrap_or_default(),
+                    };
+                    header_row = attribute_value(&element, resolver, decoder, b"headerRowCount")?
+                        .is_none_or(|count| count.trim() != "0");
+                    query_table = attribute_value(&element, resolver, decoder, b"tableType")?
+                        .is_some_and(|kind| kind == "queryTable");
                 } else if element_depth == 1
                     && resolved_element_is(
                         &namespace,
@@ -247,6 +285,10 @@ pub(crate) fn parse_table_structural_owner(
                         b"tableColumn",
                     )
                 {
+                    column_names.push(
+                        attribute_value(&element, reader.resolver(), reader.decoder(), b"name")?
+                            .unwrap_or_default(),
+                    );
                     table_column_depth = Some(element_depth + 1);
                 } else if table_column_depth == Some(element_depth)
                     && (resolved_element_is(
@@ -290,6 +332,29 @@ pub(crate) fn parse_table_structural_owner(
                         reader.resolver(),
                         reader.decoder(),
                     )?);
+                    let (resolver, decoder) = (reader.resolver(), reader.decoder());
+                    table_name = match attribute_value(&element, resolver, decoder, b"displayName")?
+                    {
+                        Some(name) => name,
+                        None => attribute_value(&element, resolver, decoder, b"name")?
+                            .unwrap_or_default(),
+                    };
+                    header_row = attribute_value(&element, resolver, decoder, b"headerRowCount")?
+                        .is_none_or(|count| count.trim() != "0");
+                    query_table = attribute_value(&element, resolver, decoder, b"tableType")?
+                        .is_some_and(|kind| kind == "queryTable");
+                } else if table_columns_depth == Some(element_depth)
+                    && resolved_element_is(
+                        &namespace,
+                        element.local_name(),
+                        spreadsheet_namespace.as_bytes(),
+                        b"tableColumn",
+                    )
+                {
+                    column_names.push(
+                        attribute_value(&element, reader.resolver(), reader.decoder(), b"name")?
+                            .unwrap_or_default(),
+                    );
                 } else if table_column_depth == Some(element_depth)
                     && (resolved_element_is(
                         &namespace,
@@ -412,5 +477,9 @@ pub(crate) fn parse_table_structural_owner(
         part_uri: table_part_uri.to_string(),
         range,
         formulas,
+        name: table_name,
+        column_names,
+        header_row,
+        query_table,
     })
 }

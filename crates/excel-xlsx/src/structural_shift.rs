@@ -2,12 +2,12 @@
 //! VML shape anchors, hyperlink snapshots, table ranges, and drawing anchors.
 
 use super::{
-    WorksheetSupportParts, parse_comment_part_summary, parse_relationship_entries_for_part,
-    parse_vml_drawing_part_summary, relationships_part_uri_for_part, replay_shifts_on_ref,
-    xml_error, xml_local_name,
+    WorksheetSupportParts, parse_bounded_a1_rect, parse_comment_part_summary,
+    parse_relationship_entries_for_part, parse_vml_drawing_part_summary,
+    relationships_part_uri_for_part, replay_shifts_on_ref, xml_error, xml_local_name,
 };
 use excel_model::{WorkbookState, WorksheetData};
-use office_common::{OmError, OmResult, StructuralAxis, StructuralShift};
+use office_common::{OmError, OmResult, StructuralAxis, StructuralShift, new_table_column_names};
 use office_opc::OpcPackage;
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::{Reader, Writer};
@@ -248,12 +248,226 @@ fn shift_drawing_anchor(anchor: &str, shifts: &[StructuralShift]) -> OmResult<St
 /// Replays structural shifts onto a table part's `table`, `autoFilter`, `sortState`, and
 /// `sortCondition` references. The model only admits shifts the table can follow.
 pub(crate) fn shift_table_part(xml: &[u8], shifts: &[StructuralShift]) -> OmResult<Vec<u8>> {
-    shift_ref_attributes(
-        xml,
-        shifts,
-        &[b"table", b"autoFilter", b"sortState", b"sortCondition"],
-        "table reference",
-    )
+    let mut xml = xml.to_vec();
+    for &shift in shifts {
+        xml = shift_table_columns(&xml, shift)?;
+        xml = shift_ref_attributes(
+            &xml,
+            &[shift],
+            &[b"table", b"autoFilter", b"sortState", b"sortCondition"],
+            "table reference",
+        )?;
+    }
+    Ok(xml)
+}
+
+/// Adds or removes the `tableColumn` entries of a table that a whole-column shift edits inside
+/// it, as Excel does: inserted columns get the next unused `ColumnN` names and ids, and the
+/// table's `autoFilter` `filterColumn` indexes follow. Filters and sort conditions on deleted
+/// columns are dropped. Edits beside the table leave the part unchanged.
+fn shift_table_columns(xml: &[u8], shift: StructuralShift) -> OmResult<Vec<u8>> {
+    if shift.axis != StructuralAxis::Columns || !shift.is_whole() {
+        return Ok(xml.to_vec());
+    }
+    let attribute = |element: &BytesStart<'_>, name: &[u8]| -> OmResult<Option<String>> {
+        for attribute in element.attributes() {
+            let attribute = attribute.map_err(xml_error)?;
+            if attribute.key.as_ref() == name {
+                return Ok(Some(
+                    attribute.unescape_value().map_err(xml_error)?.into_owned(),
+                ));
+            }
+        }
+        Ok(None)
+    };
+    let columns_of = |reference: &str| -> OmResult<(u32, u32)> {
+        let rect = parse_bounded_a1_rect(&reference.replace('$', ""), "table", "table")?;
+        Ok((rect.col_first, rect.col_last))
+    };
+
+    // The table's columns, their names and largest id, and its filter's first column.
+    let mut reader = Reader::from_reader(Cursor::new(xml));
+    let mut buffer = Vec::new();
+    let mut table_columns = None;
+    let mut filter_first = None;
+    let mut names = Vec::new();
+    let mut max_id = 0u32;
+    loop {
+        match reader.read_event_into(&mut buffer).map_err(xml_error)? {
+            Event::Start(element) | Event::Empty(element) => {
+                match xml_local_name(element.name().as_ref()) {
+                    b"table" if table_columns.is_none() => {
+                        if let Some(reference) = attribute(&element, b"ref")? {
+                            table_columns = Some(columns_of(&reference)?);
+                        }
+                    }
+                    b"autoFilter" if filter_first.is_none() => {
+                        if let Some(reference) = attribute(&element, b"ref")? {
+                            filter_first = Some(columns_of(&reference)?.0);
+                        }
+                    }
+                    b"tableColumn" => {
+                        names.push(attribute(&element, b"name")?.unwrap_or_default());
+                        if let Some(id) = attribute(&element, b"id")? {
+                            max_id = max_id.max(id.trim().parse::<u32>().map_err(|_| {
+                                OmError::parse(format!("table column id is not a number: {id}"))
+                            })?);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    let Some((col_first, col_last)) = table_columns else {
+        return Ok(xml.to_vec());
+    };
+    let last = shift.first + shift.count - 1;
+    let (insert_at, deleted) = if shift.insert {
+        if !(col_first < shift.first && shift.first <= col_last) {
+            return Ok(xml.to_vec());
+        }
+        (Some(shift.first - col_first), Vec::new())
+    } else {
+        let deleted = (col_first..=col_last)
+            .filter(|col| (shift.first..=last).contains(col))
+            .map(|col| col - col_first)
+            .collect::<Vec<_>>();
+        if deleted.is_empty() {
+            return Ok(xml.to_vec());
+        }
+        (None, deleted)
+    };
+    if filter_first.is_some_and(|first| first != col_first) {
+        return Err(OmError::unsupported(
+            "structural table column edit is not implemented for a filter that starts beside its table",
+        ));
+    }
+    let inserted = insert_at
+        .map(|_| new_table_column_names(&names, shift.count))
+        .unwrap_or_default();
+    let column_count = names.len() + inserted.len() - deleted.len();
+    // A table-relative column index after the edit, or `None` when the column is deleted.
+    let moved_index = |index: u32| -> Option<u32> {
+        match insert_at {
+            Some(at) if index >= at => Some(index + shift.count),
+            Some(_) => Some(index),
+            None if deleted.contains(&index) => None,
+            None => Some(index - deleted.iter().filter(|&&gone| gone < index).count() as u32),
+        }
+    };
+
+    let mut reader = Reader::from_reader(Cursor::new(xml));
+    reader.config_mut().trim_text(false);
+    let mut writer = Writer::new(Cursor::new(Vec::new()));
+    let mut buffer = Vec::new();
+    let mut column_index = 0u32;
+    // Depth inside a removed element, whose events are skipped.
+    let mut skipping = 0usize;
+    let with_attribute = |element: &BytesStart<'_>, name: &[u8], value: &str| {
+        let mut rewritten =
+            BytesStart::new(String::from_utf8_lossy(element.name().as_ref()).into_owned());
+        for attribute in element.attributes().flatten() {
+            if attribute.key.as_ref() == name {
+                rewritten.push_attribute((name, value.as_bytes()));
+            } else {
+                rewritten.push_attribute(attribute);
+            }
+        }
+        rewritten
+    };
+    loop {
+        let event = reader.read_event_into(&mut buffer).map_err(xml_error)?;
+        if skipping > 0 {
+            match event {
+                Event::Start(_) => skipping += 1,
+                Event::End(_) => skipping -= 1,
+                Event::Eof => break,
+                _ => {}
+            }
+            buffer.clear();
+            continue;
+        }
+        let (element, is_start) = match &event {
+            Event::Start(element) => (Some(element.clone().into_owned()), true),
+            Event::Empty(element) => (Some(element.clone().into_owned()), false),
+            Event::Eof => break,
+            _ => (None, false),
+        };
+        let mut replacement = None;
+        if let Some(element) = element {
+            let removed = match xml_local_name(element.name().as_ref()) {
+                b"tableColumns" => {
+                    replacement = Some(with_attribute(
+                        &element,
+                        b"count",
+                        &column_count.to_string(),
+                    ));
+                    false
+                }
+                b"tableColumn" => {
+                    let index = column_index;
+                    column_index += 1;
+                    if insert_at == Some(index) {
+                        let name = String::from_utf8_lossy(element.name().as_ref()).into_owned();
+                        for (offset, column_name) in inserted.iter().enumerate() {
+                            let mut column = BytesStart::new(name.clone());
+                            let id = (max_id + 1 + offset as u32).to_string();
+                            column.push_attribute(("id", id.as_str()));
+                            column.push_attribute(("name", column_name.as_str()));
+                            writer
+                                .write_event(Event::Empty(column))
+                                .map_err(xml_error)?;
+                        }
+                    }
+                    moved_index(index).is_none()
+                }
+                b"filterColumn" => match attribute(&element, b"colId")? {
+                    Some(column) => {
+                        let column = column.trim().parse::<u32>().map_err(|_| {
+                            OmError::parse(format!("filter column id is not a number: {column}"))
+                        })?;
+                        match moved_index(column) {
+                            Some(moved) => {
+                                replacement =
+                                    Some(with_attribute(&element, b"colId", &moved.to_string()));
+                                false
+                            }
+                            None => true,
+                        }
+                    }
+                    None => false,
+                },
+                b"sortCondition" if !deleted.is_empty() => match attribute(&element, b"ref")? {
+                    Some(reference) => {
+                        let (first, last) = columns_of(&reference)?;
+                        (first..=last)
+                            .all(|col| col >= col_first && deleted.contains(&(col - col_first)))
+                    }
+                    None => false,
+                },
+                _ => false,
+            };
+            if removed {
+                if is_start {
+                    skipping = 1;
+                }
+                buffer.clear();
+                continue;
+            }
+        }
+        let event = match (replacement, event) {
+            (Some(element), Event::Start(_)) => Event::Start(element),
+            (Some(element), Event::Empty(_)) => Event::Empty(element),
+            (_, event) => event.into_owned(),
+        };
+        writer.write_event(event).map_err(xml_error)?;
+        buffer.clear();
+    }
+    Ok(writer.into_inner().into_inner())
 }
 
 /// Replays structural shifts onto the `ref` attribute of every element named in `local_names`.

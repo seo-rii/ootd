@@ -163,6 +163,25 @@ pub fn retarget_unqualified_references(formula: &str, shift: StructuralShift) ->
     .unwrap_or_else(|_| formula.to_string())
 }
 
+/// The names Excel gives `count` table columns inserted into a table whose columns are named
+/// `existing`: `ColumnN` with the smallest numbers not already taken, compared case-insensitively.
+pub fn new_table_column_names(existing: &[String], count: u32) -> Vec<String> {
+    let mut taken = existing
+        .iter()
+        .map(|name| name.to_lowercase())
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut names = Vec::new();
+    let mut number = 1u32;
+    while names.len() < count as usize {
+        let name = format!("Column{number}");
+        if taken.insert(name.to_lowercase()) {
+            names.push(name);
+        }
+        number += 1;
+    }
+    names
+}
+
 enum Qualifier {
     Sheet(String),
     Span,
@@ -849,6 +868,19 @@ mod tests {
         assert_eq!(rows(5, 2, false).shift_cell((6, 1)), None);
         assert_eq!(rows(5, 2, false).shift_cell((9, 1)), Some((7, 1)));
         assert_eq!(rows(5, 2, true).shift_cell((1_048_576, 1)), None);
+    }
+
+    #[test]
+    fn new_table_columns_take_unused_names() {
+        let existing = [
+            "Left".to_string(),
+            "column1".to_string(),
+            "Column3".to_string(),
+        ];
+        assert_eq!(
+            new_table_column_names(&existing, 3),
+            ["Column2", "Column4", "Column5"]
+        );
     }
 
     #[test]

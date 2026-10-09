@@ -474,12 +474,14 @@ Active order:
    Pictures and shapes move in place in their drawing parts, and shared-formula groups that a
    shift moves or rewrites are unshared into ordinary formulas. Partial-width and partial-height
    corridors shift a band of cells: references, merges, validations, comments, and chart sources
-   wholly inside the band move, and conditional formats the band cuts are split. 3D and
-   relative-name owners, column edits inside tables, bands that reach tables, drawings, or part
-   of a merge, deletions of table headers, and deletions of threaded or last comments still fail
-   closed. Comments on deleted cells are removed with their notes. R1C1 cell
-   formulas and names retarget through their A1 form, and validation and conditional-format rules
-   retarget with their ranges, including their x14 forms. The
+   wholly inside the band move, and conditional formats the band cuts are split, while pictures
+   and shapes the band does not reach stay put. Whole columns inserted or deleted inside a table
+   add or remove table columns. Comments on deleted cells are removed with their notes, and
+   threaded comment anchors move with their legacy comments. R1C1 cell formulas and names
+   retarget through their A1 form, and validation and conditional-format rules retarget with
+   their ranges, including their x14 forms. 3D and relative-name owners, bands that reach tables,
+   drawings, or part of a merge, deletions of table headers or of structurally referenced table
+   columns, and deletions of threaded or last comments still fail closed. The
    contract is `docs/interfaces/defined_name_evaluation.md`.
 
 Every numbered work unit starts with a failing regression and lands as its own reviewable commit.
