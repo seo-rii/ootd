@@ -14,21 +14,55 @@ use quick_xml::{Reader, Writer};
 use std::collections::BTreeSet;
 use std::io::Cursor;
 
-/// Rewrites every `comment@ref` in a comments part. A comment whose cell is deleted cannot be
-/// removed yet, so the shift is refused.
+/// Rewrites every `comment@ref` in a comments part and removes the comments whose cells are
+/// deleted. Removing every comment would leave an empty part, which is refused.
 pub(crate) fn shift_comment_part(xml: &[u8], shift: StructuralShift) -> OmResult<Vec<u8>> {
     let mut reader = Reader::from_reader(Cursor::new(xml));
     reader.config_mut().trim_text(false);
     let mut writer = Writer::new(Cursor::new(Vec::new()));
     let mut buffer = Vec::new();
+    let (mut kept, mut removed) = (0usize, 0usize);
+    // Depth inside a removed comment element, whose events are skipped.
+    let mut skipping = 0usize;
     loop {
         let event = reader.read_event_into(&mut buffer).map_err(xml_error)?;
+        if skipping > 0 {
+            match event {
+                Event::Start(_) => skipping += 1,
+                Event::End(_) => skipping -= 1,
+                Event::Eof => break,
+                _ => {}
+            }
+            buffer.clear();
+            continue;
+        }
         let event = match event {
             Event::Start(element) if xml_local_name(element.name().as_ref()) == b"comment" => {
-                Event::Start(shift_comment_element(&element, shift)?)
+                match shift_comment_element(&element, shift)? {
+                    Some(element) => {
+                        kept += 1;
+                        Event::Start(element)
+                    }
+                    None => {
+                        removed += 1;
+                        skipping = 1;
+                        buffer.clear();
+                        continue;
+                    }
+                }
             }
             Event::Empty(element) if xml_local_name(element.name().as_ref()) == b"comment" => {
-                Event::Empty(shift_comment_element(&element, shift)?)
+                match shift_comment_element(&element, shift)? {
+                    Some(element) => {
+                        kept += 1;
+                        Event::Empty(element)
+                    }
+                    None => {
+                        removed += 1;
+                        buffer.clear();
+                        continue;
+                    }
+                }
             }
             Event::Eof => break,
             event => event.into_owned(),
@@ -36,30 +70,34 @@ pub(crate) fn shift_comment_part(xml: &[u8], shift: StructuralShift) -> OmResult
         writer.write_event(event).map_err(xml_error)?;
         buffer.clear();
     }
+    if removed > 0 && kept == 0 {
+        return Err(OmError::unsupported(
+            "structural removal of every comment in a comments part is not implemented",
+        ));
+    }
     Ok(writer.into_inner().into_inner())
 }
 
+/// A comment element with its `ref` moved, or `None` when its cell is deleted.
 fn shift_comment_element(
     element: &BytesStart<'_>,
     shift: StructuralShift,
-) -> OmResult<BytesStart<'static>> {
+) -> OmResult<Option<BytesStart<'static>>> {
     let mut shifted =
         BytesStart::new(String::from_utf8_lossy(element.name().as_ref()).into_owned());
     for attribute in element.attributes() {
         let attribute = attribute.map_err(xml_error)?;
         if attribute.key.as_ref() == b"ref" {
             let reference = attribute.unescape_value().map_err(xml_error)?;
-            let moved = replay_shifts_on_ref(&[shift], &reference)?.ok_or_else(|| {
-                OmError::unsupported(format!(
-                    "structural comment removal is not implemented for comment {reference}"
-                ))
-            })?;
+            let Some(moved) = replay_shifts_on_ref(&[shift], &reference)? else {
+                return Ok(None);
+            };
             shifted.push_attribute(("ref", moved.as_str()));
         } else {
             shifted.push_attribute(attribute);
         }
     }
-    Ok(shifted)
+    Ok(Some(shifted))
 }
 
 /// Replays structural shifts onto the cell anchors of every picture, shape, and other non-chart
@@ -272,6 +310,67 @@ pub(crate) fn shift_vml_part(xml: &[u8], shift: StructuralShift) -> OmResult<Vec
         .map_err(|_| OmError::parse("legacy VML drawing part is not UTF-8"))?;
     let mut output = String::with_capacity(text.len());
     let mut rest = text;
+    const OPEN: &str = "<v:shape";
+    const CLOSE: &str = "</v:shape>";
+    // `<v:shapetype` shares the prefix but is not a shape.
+    let shape_start = |text: &str| {
+        text.match_indices(OPEN)
+            .map(|(index, _)| index)
+            .find(|index| {
+                text[index + OPEN.len()..]
+                    .chars()
+                    .next()
+                    .is_some_and(|ch| ch.is_whitespace() || ch == '>')
+            })
+    };
+    while let Some(start) = shape_start(rest) {
+        let Some(end) = rest[start..]
+            .find(CLOSE)
+            .map(|end| start + end + CLOSE.len())
+        else {
+            break;
+        };
+        output.push_str(&shift_client_data_blocks(&rest[..start], shift)?);
+        let shape = &rest[start..end];
+        // A note whose cell is deleted is removed with its comment.
+        if !note_cell_is_deleted(shape, shift)? {
+            output.push_str(&shift_client_data_blocks(shape, shift)?);
+        }
+        rest = &rest[end..];
+    }
+    output.push_str(&shift_client_data_blocks(rest, shift)?);
+    Ok(output.into_bytes())
+}
+
+/// The zero-based number in a VML `<tag>…</tag>`, if the block has one.
+fn vml_tag_number(block: &str, tag: &str) -> OmResult<Option<u32>> {
+    let open = format!("<{tag}>");
+    let Some(start) = block.find(&open).map(|start| start + open.len()) else {
+        return Ok(None);
+    };
+    let end = start + block[start..].find('<').unwrap_or(0);
+    block[start..end]
+        .trim()
+        .parse::<u32>()
+        .map(Some)
+        .map_err(|_| OmError::parse(format!("legacy VML {tag} is not a number")))
+}
+
+/// Whether a VML shape is a note whose cell the shift deletes.
+fn note_cell_is_deleted(shape: &str, shift: StructuralShift) -> OmResult<bool> {
+    let (Some(row), Some(col)) = (
+        vml_tag_number(shape, "x:Row")?,
+        vml_tag_number(shape, "x:Column")?,
+    ) else {
+        return Ok(false);
+    };
+    Ok(shift.shift_cell((row + 1, col + 1)).is_none())
+}
+
+/// Moves every `x:ClientData` block in `text`.
+fn shift_client_data_blocks(text: &str, shift: StructuralShift) -> OmResult<String> {
+    let mut output = String::with_capacity(text.len());
+    let mut rest = text;
     const OPEN: &str = "<x:ClientData";
     const CLOSE: &str = "</x:ClientData>";
     while let Some(start) = rest.find(OPEN) {
@@ -286,7 +385,7 @@ pub(crate) fn shift_vml_part(xml: &[u8], shift: StructuralShift) -> OmResult<Vec
         rest = &rest[end..];
     }
     output.push_str(rest);
-    Ok(output.into_bytes())
+    Ok(output)
 }
 
 /// The one-based position a zero-based VML row or column index moves to on the shifted axis.
@@ -453,6 +552,26 @@ impl WorksheetSupportParts {
                 "structural comment anchor retarget requires the source comment and VML parts",
             ));
         }
+        // A legacy comment on a deleted cell is removed with its note, but a threaded comment
+        // paired with it, and its replies, would be left behind.
+        let has_threaded_comments = match (
+            self.relationships_part_source_bytes.as_deref(),
+            self.worksheet_part_uri.as_deref(),
+        ) {
+            (Some(bytes), Some(part_uri)) => parse_relationship_entries_for_part(bytes, part_uri)?
+                .iter()
+                .any(|relationship| relationship.relationship_type.ends_with("/threadedComment")),
+            _ => false,
+        };
+        if has_threaded_comments {
+            for reference in self.comment_anchor_refs.values().flatten() {
+                if replay_shifts_on_ref(&[shift], reference)?.is_none() {
+                    return Err(OmError::unsupported(format!(
+                        "structural threaded comment removal is not implemented for comment {reference}"
+                    )));
+                }
+            }
+        }
         // Comment and VML parts move as bytes; their expected summaries are re-read from the
         // moved bytes so save validation checks the parts the save writes.
         for (part_uri, bytes) in &mut self.comment_part_source_bytes {
@@ -611,7 +730,7 @@ mod tests {
     }
 
     #[test]
-    fn comment_refs_move_and_deleted_comments_are_refused() {
+    fn comment_refs_move_and_deleted_comments_are_removed() {
         let xml = br#"<comments xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><commentList><comment ref="B4" authorId="0"><text><t>x</t></text></comment><comment ref="A1" authorId="0"/></commentList></comments>"#;
         let shifted =
             String::from_utf8(shift_comment_part(xml, rows(3, 2, true)).unwrap()).unwrap();
@@ -623,8 +742,18 @@ mod tests {
             shifted.contains(r#"<comment ref="A1" authorId="0"/>"#),
             "{shifted}"
         );
-        let error = shift_comment_part(xml, rows(4, 1, false)).unwrap_err();
-        assert!(error.message.contains("comment B4"), "{error:?}");
+        let removed =
+            String::from_utf8(shift_comment_part(xml, rows(4, 1, false)).unwrap()).unwrap();
+        assert!(
+            !removed.contains("B4") && !removed.contains("<t>x</t>"),
+            "{removed}"
+        );
+        assert!(
+            removed.contains(r#"<commentList><comment ref="A1" authorId="0"/></commentList>"#),
+            "{removed}"
+        );
+        let error = shift_comment_part(xml, rows(1, 4, false)).unwrap_err();
+        assert!(error.message.contains("every comment"), "{error:?}");
     }
 
     #[test]

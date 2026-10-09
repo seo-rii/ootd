@@ -476,7 +476,8 @@ Active order:
    corridors shift a band of cells: references, merges, validations, comments, and chart sources
    wholly inside the band move, and conditional formats the band cuts are split. 3D and
    relative-name owners, column edits inside tables, bands that reach tables, drawings, or part
-   of a merge, and deletions of table headers or commented cells still fail closed. R1C1 cell
+   of a merge, deletions of table headers, and deletions of threaded or last comments still fail
+   closed. Comments on deleted cells are removed with their notes. R1C1 cell
    formulas and names retarget through their A1 form, and validation and conditional-format rules
    retarget with their ranges, including their x14 forms. The
    contract is `docs/interfaces/defined_name_evaluation.md`.

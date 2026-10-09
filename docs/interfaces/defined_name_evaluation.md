@@ -73,7 +73,8 @@ not rewritten.
 
 Comment anchors (`comment@ref` in the comments part) and legacy VML shapes (zero-based
 `x:Row`/`x:Column` and the `x:Anchor` box) move too. The save writes the moved comment and VML
-parts next to the rewritten worksheet.
+parts next to the rewritten worksheet. A comment on a deleted cell is removed with its note, and
+the `threadedComment@ref` anchors of Excel 365 threaded comments move with their legacy comments.
 
 Tables follow too. Their parts replay the recorded shifts onto `table@ref`, `autoFilter@ref`,
 `sortState@ref`, and `sortCondition@ref`:
@@ -115,7 +116,8 @@ The shift is refused atomically, as before, when it would need to rewrite any of
 
 It is also refused when it would:
 - delete through part of a merged range;
-- remove a whole data-validation range, a hyperlink, or a commented cell;
+- remove a whole data-validation range or a hyperlink, the last comment of a comments part, or a
+  comment paired with a threaded comment;
 - delete a table's header row or all of its data rows, or insert or delete columns inside a
   table;
 - leave a chart source whose whole range is deleted, or one that is unresolved or 3D;

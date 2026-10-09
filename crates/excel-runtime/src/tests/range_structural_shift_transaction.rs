@@ -2315,9 +2315,14 @@ fn whole_row_shifts_move_comments_notes_and_hyperlinks() {
     let target = range_handle(&mut runtime, worksheet, "A3:XFD3");
     let error = runtime
         .dispatch_invoke(target, "Delete", &[OmValue::Number(f64::from(XL_SHIFT_UP))])
-        .expect_err("deleting a commented cell fails closed");
+        .expect_err("deleting a cell with a threaded comment fails closed");
     assert_eq!(error.code, OmErrorCode::Unsupported);
-    assert!(error.message.contains("comment"), "{error:?}");
+    assert!(
+        error
+            .message
+            .contains("structural threaded comment removal"),
+        "{error:?}"
+    );
 
     let mut reopened = ExcelRuntime::new();
     let reopened_workbook = reopened
@@ -2349,6 +2354,79 @@ fn whole_row_shifts_move_comments_notes_and_hyperlinks() {
     assert!(
         comments.contains(r#"<comment ref="A2" authorId="0">"#),
         "{comments}"
+    );
+}
+
+#[test]
+fn structural_deletes_remove_comments_on_deleted_cells() {
+    let mut package =
+        OpcPackage::from_bytes(&synthetic_comment_workbook_bytes()).expect("comment package");
+    package
+        .replace_part_bytes(
+            "xl/comments1.xml",
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<comments xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><authors><author>Codex</author></authors><commentList><comment ref="A1" authorId="0"><text><t>Remove me</t></text></comment><comment ref="B5" authorId="0"><text><t>Keep me</t></text></comment></commentList></comments>"#
+                .to_vec(),
+        )
+        .expect("replace comments");
+    package
+        .replace_part_bytes(
+            "xl/drawings/vmlDrawing1.vml",
+            br#"<xml xmlns:v="urn:schemas-microsoft-com:vml" xmlns:x="urn:schemas-microsoft-com:office:excel"><v:shapetype id="_x0000_t202"/><v:shape id="_x0000_s1025"><x:ClientData ObjectType="Note"><x:Anchor>1, 15, 0, 2, 3, 15, 4, 16</x:Anchor><x:Row>0</x:Row><x:Column>0</x:Column></x:ClientData></v:shape><v:shape id="_x0000_s1026"><x:ClientData ObjectType="Note"><x:Anchor>1, 15, 4, 2, 3, 15, 8, 16</x:Anchor><x:Row>4</x:Row><x:Column>1</x:Column></x:ClientData></v:shape></xml>"#
+                .to_vec(),
+        )
+        .expect("replace VML");
+    let mut runtime = ExcelRuntime::new();
+    let workbook = runtime
+        .open_workbook(OpenWorkbookSpec {
+            bytes: package.to_bytes().expect("bytes"),
+            format_hint: Some(FileFormat::Xlsx),
+            profile: ExcelProfile::Excel365,
+            read_only: false,
+        })
+        .expect("open comment workbook");
+    let worksheet = worksheet_handle(&mut runtime, workbook);
+
+    // Deleting column A removes the comment on A1 and its note; the comment on B5 moves to A5.
+    shift(
+        &mut runtime,
+        worksheet,
+        "A1:A1048576",
+        "Delete",
+        XL_SHIFT_TO_LEFT,
+    );
+    let (saved, _) = saved_sheet_xml(&runtime, workbook);
+    let saved_package = OpcPackage::from_bytes(&saved).expect("saved package");
+    let part = |name: &str| {
+        String::from_utf8(saved_package.part(name).expect(name).bytes.clone()).expect("utf-8")
+    };
+    let comments = part("xl/comments1.xml");
+    assert!(!comments.contains("Remove me"), "{comments}");
+    assert!(
+        comments.contains(r#"<comment ref="A5" authorId="0"><text><t>Keep me</t>"#),
+        "{comments}"
+    );
+    let vml = part("xl/drawings/vmlDrawing1.vml");
+    assert!(!vml.contains("_x0000_s1025"), "{vml}");
+    assert!(vml.contains(r#"<v:shapetype id="_x0000_t202"/>"#), "{vml}");
+    assert!(
+        vml.contains(
+            "<x:Anchor>0, 15, 4, 2, 2, 15, 8, 16</x:Anchor><x:Row>4</x:Row><x:Column>0</x:Column>"
+        ),
+        "{vml}"
+    );
+
+    // Removing the last comment would leave an empty comments part.
+    let target = range_handle(&mut runtime, worksheet, "A1:A1048576");
+    assert_structural_failure_is_atomic(
+        &mut runtime,
+        workbook,
+        target,
+        "Delete",
+        XL_SHIFT_TO_LEFT,
+        OmErrorCode::Unsupported,
+        &["removal of every comment"],
+        "deleting the last comment",
     );
 }
 
