@@ -480,7 +480,8 @@ Active order:
    threaded comment anchors move with their legacy comments. R1C1 cell formulas and names
    retarget through their A1 form, and validation and conditional-format rules retarget with
    their ranges, including their x14 forms. `Names.Add` and `Name.RefersTo` read and report
-   relative text at the active cell. 3D and relative-name owners, bands that reach tables,
+   relative text at the active cell, and formulas use built-in names such as `Print_Area`
+   without their `_xlnm.` prefix. 3D and relative-name owners, bands that reach tables,
    drawings, or part of a merge, deletions of table headers or of structurally referenced table
    columns, and deletions of threaded or last comments still fail closed. The
    contract is `docs/interfaces/defined_name_evaluation.md`.

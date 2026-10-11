@@ -1883,12 +1883,15 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             self.evaluator
                 .state
                 .defined_names
-                .lookup_in_scope(NameScope::Worksheet(qualified_sheet_id), name.as_str())
+                .lookup_formula_name_in_scope(
+                    NameScope::Worksheet(qualified_sheet_id),
+                    name.as_str(),
+                )
         } else {
             self.evaluator
                 .state
                 .defined_names
-                .lookup(Some(self.sheet_id), name.as_str())
+                .lookup_formula_name(Some(self.sheet_id), name.as_str())
         };
         let Some(defined_name) = defined_name else {
             return Ok(None);
@@ -1935,7 +1938,7 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             .evaluator
             .state
             .defined_names
-            .lookup(Some(self.sheet_id), name)
+            .lookup_formula_name(Some(self.sheet_id), name)
             .map(|defined_name| {
                 (
                     defined_name.id,

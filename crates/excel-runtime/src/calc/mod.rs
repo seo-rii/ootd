@@ -1769,7 +1769,7 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             .evaluator
             .state
             .defined_names
-            .lookup(Some(self.sheet_id), identifier.as_str())
+            .lookup_formula_name(Some(self.sheet_id), identifier.as_str())
             .filter(|name| {
                 !name.refers_to.is_r1c1 && name.refers_to.text.trim_start().starts_with('{')
             })

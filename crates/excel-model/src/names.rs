@@ -147,6 +147,39 @@ impl DefinedNameTable {
         self.lookup_in_scope(NameScope::Workbook, name)
     }
 
+    /// Looks a name up in one scope as a formula spells it. Formulas write built-in names without
+    /// their `_xlnm.` prefix (`Print_Area`), so an unprefixed miss falls back to the built-in name.
+    pub fn lookup_formula_name_in_scope(
+        &self,
+        scope: NameScope,
+        name: &str,
+    ) -> Option<&DefinedName> {
+        self.lookup_in_scope(scope, name).or_else(|| {
+            let prefixed = name
+                .get(..6)
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case("_xlnm."));
+            (!prefixed)
+                .then(|| self.lookup_in_scope(scope, &format!("_xlnm.{name}")))
+                .flatten()
+        })
+    }
+
+    /// [`Self::lookup`] as a formula spells the name, built-in names included.
+    pub fn lookup_formula_name(
+        &self,
+        current_sheet: Option<SheetId>,
+        name: &str,
+    ) -> Option<&DefinedName> {
+        if let Some(sheet_id) = current_sheet
+            && let Some(defined_name) =
+                self.lookup_formula_name_in_scope(NameScope::Worksheet(sheet_id), name)
+        {
+            return Some(defined_name);
+        }
+
+        self.lookup_formula_name_in_scope(NameScope::Workbook, name)
+    }
+
     pub fn add(
         &mut self,
         scope: NameScope,

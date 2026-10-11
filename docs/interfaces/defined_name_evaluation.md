@@ -25,6 +25,13 @@ and store it relative to A1, as desktop Excel does: `=Sheet1!B1` added with B2 a
 text back at the active cell, so that name reports `=Sheet1!D4` and `=Sheet1!R[-1]C` with D5
 active. With nothing in the workbook selected, A1 is the active cell.
 
+## Built-in Names
+
+Excel stores built-in names with an `_xlnm.` prefix (`_xlnm.Print_Area`) and formulas spell them
+without it. A formula name that misses in a scope falls back to the prefixed built-in name in
+that scope before the lookup moves on to the workbook scope, so `=ROWS(Print_Area)` and
+`=SUM(Sheet1!Print_Area)` read a sheet's print area. The prefixed spelling also resolves.
+
 ## Name Formulas
 
 | Name formula | Use | Result |
@@ -170,6 +177,6 @@ regressions are their unit tests, `partial_corridor_shifts_retarget_formulas_ins
 
 ## Remaining Boundaries
 
-- Built-in `_xlnm.` names (`Print_Area`, `_FilterDatabase`, `Print_Titles`) are preserved but not
-  given special evaluation meaning.
+- Built-in `_xlnm.` names evaluate as ordinary names; their print and filter meaning outside
+  formulas is not derived from them.
 - External-workbook references in name formulas are not evaluated.

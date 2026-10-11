@@ -340,3 +340,59 @@ fn names_add_and_refers_to_read_relative_text_at_the_active_cell() {
         OmValue::Number(31.0)
     );
 }
+
+#[test]
+fn formulas_use_built_in_names_without_their_prefix() {
+    let (mut runtime, workbook, sheet, sheet_id) = open_runtime();
+    let sheet_name = runtime.worksheets(workbook).expect("worksheets")[0]
+        .name
+        .clone();
+    for row in 1..=3 {
+        let cell = range(&mut runtime, sheet, &format!("P{row}"));
+        runtime
+            .dispatch_set(cell, "Value2", OmValue::Number(f64::from(row * 10)), &[])
+            .expect("seed value");
+    }
+    // Excel stores a print area as the sheet-scoped `_xlnm.Print_Area` and formulas spell it
+    // `Print_Area`.
+    runtime
+        .runtime_workbook_mut(workbook)
+        .expect("runtime workbook")
+        .loaded
+        .state
+        .defined_names_mut()
+        .add(
+            NameScope::Worksheet(sheet_id),
+            "_xlnm.Print_Area",
+            FormulaSource {
+                text: format!("{sheet_name}!$P$1:$P$3"),
+                is_r1c1: false,
+            },
+            NameValidationMode::PreserveLoadedInvalid,
+        )
+        .expect("add print area");
+
+    let cases = [
+        ("R1", "=ROWS(Print_Area)".to_string(), 3.0),
+        ("R2", "=SUM(print_area)".to_string(), 60.0),
+        ("R3", format!("=SUM({sheet_name}!Print_Area)"), 60.0),
+        ("R4", "=INDEX(_xlnm.Print_Area,2)".to_string(), 20.0),
+    ];
+    for (address, formula, _) in &cases {
+        let cell = range(&mut runtime, sheet, address);
+        runtime
+            .dispatch_set(cell, "Formula", OmValue::Text(formula.clone()), &[])
+            .unwrap_or_else(|error| panic!("set {address}: {error:?}"));
+    }
+    runtime
+        .calculate_workbook_with_report(workbook)
+        .expect("calculate built-in names");
+    for (address, formula, expected) in cases {
+        let cell = range(&mut runtime, sheet, address);
+        assert_eq!(
+            runtime.dispatch_get(cell, "Value2", &[]).expect("value"),
+            OmValue::Number(expected),
+            "{address} {formula}"
+        );
+    }
+}
