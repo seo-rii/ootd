@@ -142,6 +142,13 @@ fn defined_names_evaluate_constants_ranges_and_scopes() {
         ("R14", "=SUM({1,2;3,4},P1)", OmValue::Number(20.0)),
         ("R15", "=AVERAGE({2,\"a\",TRUE,4})", OmValue::Number(3.0)),
         ("R16", "=MAX(-1,{-5,-2})", OmValue::Number(-1.0)),
+        // Text passed straight to an aggregate is coerced as VALUE coerces it.
+        ("R17", "=SUM(\"3\",P1&\"\")", OmValue::Number(13.0)),
+        (
+            "R18",
+            "=SUM(\"x\"&1)",
+            OmValue::from(CellValue::Error(CellError::Value)),
+        ),
     ];
     for (address, formula, _) in &cases {
         let cell = range(&mut runtime, sheet, address);

@@ -454,14 +454,20 @@ impl<'a> FormulaEvaluator<'a> {
                 probe => formula_cell_value_from_probe(probe).ok_or(FormulaEvalError::Unsupported),
             }
         };
-        // A top-level `&` makes the result text, which the numeric parser cannot produce.
-        if formula_has_top_level_concatenation(formula_text) {
-            return evaluate_typed(self);
+        // A top-level `&` makes the result text, which the numeric parser cannot produce. The scan
+        // does not track parentheses, so a numeric formula with a nested `&`, such as
+        // `SUM("x"&1)`, falls back to the numeric parser.
+        let concatenates = formula_has_top_level_concatenation(formula_text);
+        if concatenates {
+            match evaluate_typed(self) {
+                Err(FormulaEvalError::Unsupported) => {}
+                result => return result,
+            }
         }
         let numeric_result = FormulaParser::new(formula_text, self, sheet_id, current_position)
             .parse_formula()
             .map(CellValue::Number);
-        if !matches!(numeric_result, Err(FormulaEvalError::Unsupported)) {
+        if concatenates || !matches!(numeric_result, Err(FormulaEvalError::Unsupported)) {
             return numeric_result;
         }
         evaluate_typed(self)

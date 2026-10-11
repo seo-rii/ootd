@@ -2125,7 +2125,39 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             }
             return Ok(numbers);
         }
-        Ok(vec![self.parse_comparison()?])
+        let checkpoint = self.index;
+        let numeric = self.parse_comparison();
+        self.skip_whitespace();
+        let continues_as_text = self.peek_char() == Some('&');
+        match numeric {
+            Ok(_) if continues_as_text => self.parse_text_aggregate_argument(checkpoint),
+            Err(FormulaEvalError::Unsupported) => self.parse_text_aggregate_argument(checkpoint),
+            result => Ok(vec![result?]),
+        }
+    }
+
+    /// Reparses an aggregate argument from `checkpoint` as text, which only a text expression
+    /// such as `"3"` or `"x"&1` produces.
+    fn parse_text_aggregate_argument(
+        &mut self,
+        checkpoint: usize,
+    ) -> Result<Vec<f64>, FormulaEvalError> {
+        // Text passed straight to an aggregate is coerced as VALUE coerces it: a number, or
+        // #VALUE!.
+        self.index = checkpoint;
+        let value = self.parse_value_probe_argument();
+        self.skip_whitespace();
+        match value {
+            Ok(FormulaValueProbe::Text(text)) if matches!(self.peek_char(), Some(',' | ')')) => {
+                Ok(vec![formula_value_text(
+                    self.evaluator.context.date_system(),
+                    self.evaluator.context.locale(),
+                    text.as_str(),
+                )?])
+            }
+            Ok(FormulaValueProbe::Error(error)) => Err(error),
+            _ => Err(FormulaEvalError::Unsupported),
+        }
     }
 
     pub(super) fn parse_subtotal_numeric_argument(&mut self) -> Result<Vec<f64>, FormulaEvalError> {

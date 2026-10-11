@@ -39,7 +39,9 @@ caller.
 - **Array constants.** `{1,2;3,4}` uses `,` between columns and `;` between rows. Elements are
   signed numbers, strings, `TRUE`/`FALSE`, and error literals, and every row must be the same
   width. Numeric aggregates (`SUM`, `AVERAGE`, `MAX`, and relatives) accept an array constant
-  written inline or through a name. Like a reference, it contributes only its numbers.
+  written inline or through a name. Like a reference, it contributes only its numbers. Text
+  passed straight to an aggregate, such as `SUM("3")` or `SUM("x"&1)`, is coerced as `VALUE`
+  coerces it, to a number or `#VALUE!`.
 
 The regression is `crates/excel-runtime/src/tests/defined_name_semantics.rs`.
 
@@ -168,5 +170,3 @@ regressions are their unit tests, `partial_corridor_shifts_retarget_formulas_ins
 - Built-in `_xlnm.` names (`Print_Area`, `_FilterDatabase`, `Print_Titles`) are preserved but not
   given special evaluation meaning.
 - External-workbook references in name formulas are not evaluated.
-- A text argument passed straight to a numeric aggregate (`SUM("x"&1)`) is unsupported rather
-  than `#VALUE!`.
