@@ -69,8 +69,8 @@ Validation and conditional-format rules move with their ranges. The save rewrite
 references in `dataValidation` `formula1`/`formula2`, `cfRule` `formula`, and their x14 `xm:f`
 forms, and replays x14 `xm:sqref` range lists, so a relative rule keeps reading the same cells.
 A band that cuts a conditional format with reference-bearing rules, or a deletion that removes
-every range of an x14 conditional format, is refused. Formula values in `cfvo` thresholds are
-not rewritten.
+every range of an x14 conditional format, is refused. Colour-scale, data-bar, and icon-set
+thresholds (`cfvo@val`) are rewritten the same way.
 
 Comment anchors (`comment@ref` in the comments part) and legacy VML shapes (zero-based
 `x:Row`/`x:Column` and the `x:Anchor` box) move too. The save writes the moved comment and VML

@@ -2158,7 +2158,7 @@ fn partial_corridor_shifts_move_worksheet_structure_inside_the_band() {
 }
 
 const RULE_SHEET: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
-<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main" xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main"><dimension ref="A1:A4"/><sheetData><row r="1"><c r="A1"><v>1</v></c></row><row r="2"><c r="A2"><v>2</v></c></row></sheetData><conditionalFormatting sqref="B2:B4"><cfRule type="expression" dxfId="0" priority="1"><formula>$A2&gt;$A$1</formula></cfRule></conditionalFormatting><dataValidations count="1"><dataValidation type="custom" sqref="C2:C4"><formula1>$A2&gt;0</formula1></dataValidation></dataValidations><extLst><ext uri="{78C0D931-6437-407d-A8EE-F0AAD7539E65}"><x14:conditionalFormattings><x14:conditionalFormatting><x14:cfRule type="expression" priority="2" id="{00000000-0000-0000-0000-000000000001}"><xm:f>$A$1&lt;3</xm:f><x14:dxf/></x14:cfRule><xm:sqref>D2:D4</xm:sqref></x14:conditionalFormatting></x14:conditionalFormattings></ext><ext uri="{CCE6A557-97BC-4B89-ADB6-D9C93CAAB3DF}"><x14:dataValidations count="1"><x14:dataValidation type="custom"><x14:formula1><xm:f>$A$2</xm:f></x14:formula1><xm:sqref>E2:E4</xm:sqref></x14:dataValidation></x14:dataValidations></ext></extLst></worksheet>"#;
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main" xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main"><dimension ref="A1:A4"/><sheetData><row r="1"><c r="A1"><v>1</v></c></row><row r="2"><c r="A2"><v>2</v></c></row></sheetData><conditionalFormatting sqref="B2:B4"><cfRule type="expression" dxfId="0" priority="1"><formula>$A2&gt;$A$1</formula></cfRule></conditionalFormatting><conditionalFormatting sqref="F2:F4"><cfRule type="colorScale" priority="3"><colorScale><cfvo type="formula" val="$A$1"/><cfvo type="max"/><color rgb="FFFF0000"/><color rgb="FF00FF00"/></colorScale></cfRule></conditionalFormatting><dataValidations count="1"><dataValidation type="custom" sqref="C2:C4"><formula1>$A2&gt;0</formula1></dataValidation></dataValidations><extLst><ext uri="{78C0D931-6437-407d-A8EE-F0AAD7539E65}"><x14:conditionalFormattings><x14:conditionalFormatting><x14:cfRule type="expression" priority="2" id="{00000000-0000-0000-0000-000000000001}"><xm:f>$A$1&lt;3</xm:f><x14:dxf/></x14:cfRule><xm:sqref>D2:D4</xm:sqref></x14:conditionalFormatting></x14:conditionalFormattings></ext><ext uri="{CCE6A557-97BC-4B89-ADB6-D9C93CAAB3DF}"><x14:dataValidations count="1"><x14:dataValidation type="custom"><x14:formula1><xm:f>$A$2</xm:f></x14:formula1><xm:sqref>E2:E4</xm:sqref></x14:dataValidation></x14:dataValidations></ext></extLst></worksheet>"#;
 
 #[test]
 fn structural_shifts_retarget_conditional_format_and_validation_formulas() {
@@ -2183,6 +2183,7 @@ fn structural_shifts_retarget_conditional_format_and_validation_formulas() {
     for expected in [
         r#"<conditionalFormatting sqref="B3:B5"><cfRule type="expression" dxfId="0" priority="1"><formula>$A3&gt;$A$2</formula>"#,
         r#"<dataValidation type="custom" sqref="C3:C5"><formula1>$A3&gt;0</formula1>"#,
+        r#"<conditionalFormatting sqref="F3:F5"><cfRule type="colorScale" priority="3"><colorScale><cfvo type="formula" val="$A$2"/><cfvo type="max"/>"#,
         r#"<xm:f>$A$2&lt;3</xm:f><x14:dxf/></x14:cfRule><xm:sqref>D3:D5</xm:sqref>"#,
         r#"<xm:f>$A$3</xm:f></x14:formula1><xm:sqref>E3:E5</xm:sqref>"#,
     ] {
@@ -2220,6 +2221,16 @@ fn structural_shifts_retarget_conditional_format_and_validation_formulas() {
                     col_last: 2,
                 }],
                 vec!["$A3>$A$2".to_string()],
+                false,
+            ),
+            (
+                vec![Rect {
+                    row_first: 3,
+                    row_last: 5,
+                    col_first: 6,
+                    col_last: 6,
+                }],
+                vec!["$A$2".to_string()],
                 false,
             ),
             (

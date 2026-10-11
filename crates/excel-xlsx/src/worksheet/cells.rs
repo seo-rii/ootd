@@ -340,6 +340,7 @@ fn shift_worksheet_element(
         b"selection" => &[b"sqref", b"activeCell"],
         b"pane" => &[b"topLeftCell"],
         b"col" => &[b"min", b"max"],
+        b"cfvo" => &[b"val"],
         _ => return Ok(Some(element.to_owned())),
     };
     let mut attributes = Vec::new();
@@ -381,6 +382,15 @@ fn shift_worksheet_element(
             };
             replacements.push((b"min", rect.col_first.to_string()));
             replacements.push((b"max", rect.col_last.to_string()));
+        }
+        b"cfvo" => {
+            // A threshold value may be a formula on the edited sheet.
+            if let Some(value) = value_of(b"val") {
+                let moved = shifts.iter().fold(value, |formula, shift| {
+                    retarget_unqualified_references(&formula, *shift)
+                });
+                replacements.push((b"val", moved));
+            }
         }
         b"selection" | b"pane" => {
             for &name in range_attributes {
@@ -1889,6 +1899,14 @@ pub(crate) fn parse_worksheet_cells_with_cell_metadata(
                 element_depth += 1;
             }
             Ok((namespace, Event::Empty(element))) => {
+                // Threshold values of colour scales, data bars, and icon sets may be formulas.
+                let is_conditional_format_threshold = conditional_format_depth.is_some()
+                    && resolved_element_is(
+                        &namespace,
+                        element.local_name(),
+                        spreadsheet_namespace.as_bytes(),
+                        b"cfvo",
+                    );
                 if sheet_data_depth == Some(element_depth)
                     && resolved_element_is(
                         &namespace,
@@ -2087,6 +2105,20 @@ pub(crate) fn parse_worksheet_cells_with_cell_metadata(
                     return Err(OmError::parse(format!(
                         "{worksheet_part_uri}: worksheet dataValidation formula contains nested XML"
                     )));
+                }
+                if is_conditional_format_threshold
+                    && let Some(format) = current_conditional_format.as_mut()
+                {
+                    for attr in element.attributes() {
+                        let attr = attr.map_err(xml_error)?;
+                        if attr.key.as_ref() == b"val" {
+                            format.formulas.push(
+                                attr.decode_and_unescape_value(metadata_reader.decoder())
+                                    .map_err(xml_error)?
+                                    .into_owned(),
+                            );
+                        }
+                    }
                 }
             }
             Ok((_, Event::Text(text))) => {
