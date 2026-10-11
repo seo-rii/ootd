@@ -146,7 +146,11 @@ pub fn retarget_formula_references(
                 output.push_str(qualifier_text);
                 output.push_str(&moved.render());
             }
-            Retargeted::Deleted => output.push_str("#REF!"),
+            // Excel keeps the sheet qualifier of a deleted reference: `Sheet1!#REF!`.
+            Retargeted::Deleted => {
+                output.push_str(qualifier_text);
+                output.push_str("#REF!");
+            }
         }
     }
     Ok(output)
@@ -825,6 +829,7 @@ mod tests {
             ("A4+A8", "A4+A5"),
             ("A6", "#REF!"),
             ("SUM(A5:A7)", "SUM(#REF!)"),
+            ("Data!A6+'Data'!A5:A7", "Data!#REF!+'Data'!#REF!"),
             ("SUM(A3:A10)", "SUM(A3:A7)"),
             ("SUM(A6:A10)", "SUM(A5:A7)"),
             ("SUM(A2:A6)", "SUM(A2:A4)"),

@@ -1810,6 +1810,34 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             ("#CALC!", FormulaEvalError::Calc),
         ];
         let rest = &self.input[self.index..];
+        // A deleted reference keeps its sheet qualifier: `Sheet1!#REF!` or `'My Sheet'!#REF!`.
+        let qualifier_end = if rest.starts_with('\'') {
+            let mut end = None;
+            let mut chars = rest.char_indices().skip(1).peekable();
+            while let Some((index, ch)) = chars.next() {
+                if ch == '\'' {
+                    if chars.peek().is_some_and(|(_, next)| *next == '\'') {
+                        chars.next();
+                        continue;
+                    }
+                    end = Some(index + 1);
+                    break;
+                }
+            }
+            end
+        } else {
+            rest.find(|ch: char| !(ch.is_alphanumeric() || matches!(ch, '_' | '.')))
+                .filter(|&end| end > 0)
+        };
+        if let Some(end) = qualifier_end
+            && rest[end..].starts_with('!')
+            && rest
+                .get(end + 1..end + 6)
+                .is_some_and(|literal| literal.eq_ignore_ascii_case("#REF!"))
+        {
+            self.index += end + 6;
+            return Some(FormulaEvalError::Ref);
+        }
         let (literal, error) = LITERALS.into_iter().find(|(literal, _)| {
             rest.get(..literal.len())
                 .is_some_and(|prefix| prefix.eq_ignore_ascii_case(literal))

@@ -50,7 +50,8 @@ retarget every cell formula and defined name in the workbook that references the
 - On insert, endpoints at or after the insertion point move. A range end pushed past the grid
   stays on the last row or column; any other endpoint pushed past it becomes `#REF!`.
 - On delete, endpoints after the deleted span move back. A range that loses only part of its span
-  shrinks, and a reference entirely inside the span becomes `#REF!`.
+  shrinks, and a reference entirely inside the span becomes `#REF!`, keeping its sheet qualifier
+  (`Sheet1!#REF!`) as Excel does; the evaluator reads that as a `#REF!` error.
 - References to other sheets, string literals, structured references, and external-workbook
   references are unchanged. Edited cells are marked dirty at their new positions, and names are
   rewritten through the name table.
@@ -167,7 +168,5 @@ regressions are their unit tests, `partial_corridor_shifts_retarget_formulas_ins
 - Built-in `_xlnm.` names (`Print_Area`, `_FilterDatabase`, `Print_Titles`) are preserved but not
   given special evaluation meaning.
 - External-workbook references in name formulas are not evaluated.
-- A deleted reference is written as `#REF!` without its sheet qualifier (Excel shows
-  `Sheet1!#REF!`).
 - A text argument passed straight to a numeric aggregate (`SUM("x"&1)`) is unsupported rather
   than `#VALUE!`.

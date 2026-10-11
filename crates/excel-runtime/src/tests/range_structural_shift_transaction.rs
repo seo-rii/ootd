@@ -289,6 +289,15 @@ fn partial_corridor_shifts_retarget_formulas_inside_the_band() {
             "=#REF!+M2",
         ),
         (
+            "Delete",
+            "A1",
+            XL_SHIFT_TO_LEFT,
+            "M1",
+            "=Sheet1!A1+M2",
+            "L1",
+            "=Sheet1!#REF!+M2",
+        ),
+        (
             "Insert",
             "B2:C3",
             XL_SHIFT_DOWN,
@@ -309,6 +318,16 @@ fn partial_corridor_shifts_retarget_formulas_inside_the_band() {
             OmValue::Text(moved_formula.to_string()),
             "{label}",
         );
+        if moved_formula.contains("#REF!") {
+            runtime
+                .calculate_workbook_with_report(workbook)
+                .expect("calculate after delete");
+            assert_eq!(
+                value_of(&mut runtime, worksheet, moved_address),
+                OmValue::from(CellValue::Error(CellError::Ref)),
+                "{label}",
+            );
+        }
     }
 }
 
