@@ -13,7 +13,8 @@ use calc::{
     format_formula_string_literal,
     format_rect_address_with_flags, format_rect_r1c1_address_with_flags, formula_cell_error_text,
     formula_sheet_address_qualifier, parse_rect_a1, render_range_text_value,
-    shift_formula_a1_references, split_reference_union_text, worksheet_function_formula_name,
+    shift_formula_a1_references, shift_formula_a1_references_wrapping,
+    split_reference_union_text, worksheet_function_formula_name,
 };
 #[cfg(test)]
 use calc::{
@@ -4558,6 +4559,13 @@ impl ExcelRuntime {
                                 "Name.{member} expects a string value"
                             )));
                         };
+                        let is_r1c1 = matches!(member, "RefersToR1C1" | "RefersToR1C1Local");
+                        let refers_to = refers_to.trim_start_matches('=');
+                        let refers_to = if is_r1c1 {
+                            refers_to.to_string()
+                        } else {
+                            self.name_text_from_active_cell(workbook, refers_to)
+                        };
                         let runtime = self.runtime_workbook_mut(workbook)?;
                         if runtime.read_only {
                             return Err(OmError::new(
@@ -4568,8 +4576,8 @@ impl ExcelRuntime {
                         if runtime.loaded.state.defined_names.set_refers_to_by_id(
                             name_id,
                             FormulaSource {
-                                text: refers_to.trim_start_matches('=').to_string(),
-                                is_r1c1: matches!(member, "RefersToR1C1" | "RefersToR1C1Local"),
+                                text: refers_to,
+                                is_r1c1,
                             },
                         )? {
                             let workbook_id = runtime.loaded.state.model().id;

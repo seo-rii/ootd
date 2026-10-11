@@ -239,3 +239,104 @@ fn relative_name_references_resolve_at_the_calling_cell() {
         );
     }
 }
+
+#[test]
+fn names_add_and_refers_to_read_relative_text_at_the_active_cell() {
+    let (mut runtime, workbook, sheet, _) = open_runtime();
+    let sheet_name = runtime.worksheets(workbook).expect("worksheets")[0]
+        .name
+        .clone();
+    for row in 1..=4 {
+        let cell = range(&mut runtime, sheet, &format!("P{row}"));
+        runtime
+            .dispatch_set(cell, "Value2", OmValue::Number(f64::from(row * 10)), &[])
+            .expect("seed value");
+    }
+    let select = |runtime: &mut ExcelRuntime, address: &str| {
+        let cell = range(runtime, sheet, address);
+        runtime
+            .dispatch_invoke(cell, "Select", &[])
+            .unwrap_or_else(|error| panic!("select {address}: {error:?}"));
+    };
+    let stored = |runtime: &ExcelRuntime, name: &str| {
+        runtime
+            .runtime_workbook(workbook)
+            .expect("runtime workbook")
+            .loaded
+            .state
+            .defined_names
+            .lookup_in_scope(NameScope::Workbook, name)
+            .expect("defined name")
+            .refers_to
+            .text
+            .clone()
+    };
+    let names = expect_object_handle(
+        runtime
+            .dispatch_get(workbook.0, "Names", &[])
+            .expect("Workbook.Names"),
+    );
+
+    // Typed at B2, `B1` is "the row above" and `$P$1` stays put.
+    select(&mut runtime, "B2");
+    let above = expect_object_handle(
+        runtime
+            .dispatch_invoke(
+                names,
+                "Add",
+                &[
+                    OmValue::Text("Above".to_string()),
+                    OmValue::Text(format!("={sheet_name}!B1+{sheet_name}!$P$1")),
+                ],
+            )
+            .expect("Names.Add"),
+    );
+    assert_eq!(
+        stored(&runtime, "Above"),
+        format!("{sheet_name}!A1048576+{sheet_name}!$P$1")
+    );
+    assert_eq!(
+        runtime
+            .dispatch_get(above, "RefersTo", &[])
+            .expect("RefersTo"),
+        OmValue::Text(format!("={sheet_name}!B1+{sheet_name}!$P$1"))
+    );
+
+    // Read from D5, the same name reads as the row above D5.
+    select(&mut runtime, "D5");
+    assert_eq!(
+        runtime
+            .dispatch_get(above, "RefersTo", &[])
+            .expect("RefersTo"),
+        OmValue::Text(format!("={sheet_name}!D4+{sheet_name}!$P$1"))
+    );
+    assert_eq!(
+        runtime
+            .dispatch_get(above, "RefersToR1C1", &[])
+            .expect("RefersToR1C1"),
+        OmValue::Text(format!("={sheet_name}!R[-1]C+{sheet_name}!R1C16"))
+    );
+
+    // Assigned at D5, `C5` is "the column to the left".
+    runtime
+        .dispatch_set(
+            above,
+            "RefersTo",
+            OmValue::Text(format!("={sheet_name}!C5")),
+            &[],
+        )
+        .expect("set RefersTo");
+    assert_eq!(stored(&runtime, "Above"), format!("{sheet_name}!XFD1"));
+
+    let cell = range(&mut runtime, sheet, "Q3");
+    runtime
+        .dispatch_set(cell, "Formula", OmValue::Text("=Above+1".to_string()), &[])
+        .expect("set formula");
+    runtime
+        .calculate_workbook_with_report(workbook)
+        .expect("calculate");
+    assert_eq!(
+        runtime.dispatch_get(cell, "Value2", &[]).expect("value"),
+        OmValue::Number(31.0)
+    );
+}

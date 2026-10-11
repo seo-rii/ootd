@@ -479,7 +479,8 @@ Active order:
    add or remove table columns. Comments on deleted cells are removed with their notes, and
    threaded comment anchors move with their legacy comments. R1C1 cell formulas and names
    retarget through their A1 form, and validation and conditional-format rules retarget with
-   their ranges, including their x14 forms. 3D and relative-name owners, bands that reach tables,
+   their ranges, including their x14 forms. `Names.Add` and `Name.RefersTo` read and report
+   relative text at the active cell. 3D and relative-name owners, bands that reach tables,
    drawings, or part of a merge, deletions of table headers or of structurally referenced table
    columns, and deletions of threaded or last comments still fail closed. The
    contract is `docs/interfaces/defined_name_evaluation.md`.

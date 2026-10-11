@@ -1,7 +1,7 @@
 use super::super::{
     ExcelRuntime, RuntimeNamesScope, XL_CREATOR_CODE, coerce_optional_bool_arg, coerce_u32_arg,
     convert_formula_a1_to_r1c1, convert_formula_r1c1_to_a1, om_value_is_omitted,
-    runtime_name_scope,
+    runtime_name_scope, shift_formula_a1_references_wrapping,
 };
 use excel_model::{ChartSourceExpr, DrawingObjectModel, resolve_chart_source_reference_with_names};
 use office_common::{
@@ -328,6 +328,11 @@ impl ExcelRuntime {
                 } else {
                     None
                 };
+                let stored_refers_to = if is_r1c1 {
+                    refers_to
+                } else {
+                    self.name_text_from_active_cell(workbook, refers_to.as_str())
+                };
                 let name_id = {
                     let runtime = self.runtime_workbook_mut(workbook)?;
                     if runtime.read_only {
@@ -346,7 +351,7 @@ impl ExcelRuntime {
                         runtime_name_scope(scope),
                         name,
                         FormulaSource {
-                            text: refers_to,
+                            text: stored_refers_to,
                             is_r1c1,
                         },
                         metadata,
@@ -409,6 +414,32 @@ impl ExcelRuntime {
         }
     }
 
+    /// The cell Excel reads relative name references against: the workbook's active cell, or A1
+    /// when nothing in the workbook is selected.
+    fn name_reference_anchor(&self, workbook: WorkbookHandle) -> (u32, u32) {
+        self.selection
+            .filter(|selection| selection.workbook == workbook)
+            .map(|selection| (selection.rect.row_first, selection.rect.col_first))
+            .unwrap_or((1, 1))
+    }
+
+    /// A1 name text typed with the active cell selected, stored relative to A1 as name formulas
+    /// are kept: `=A1` typed at B2 means "up one, left one" and is stored as `XFD1048576`.
+    pub(crate) fn name_text_from_active_cell(
+        &self,
+        workbook: WorkbookHandle,
+        text: &str,
+    ) -> String {
+        let (row, col) = self.name_reference_anchor(workbook);
+        shift_formula_a1_references_wrapping(text, 1 - i64::from(row), 1 - i64::from(col))
+    }
+
+    /// Stored A1 name text as it reads from the active cell.
+    fn name_text_at_active_cell(&self, workbook: WorkbookHandle, text: &str) -> String {
+        let (row, col) = self.name_reference_anchor(workbook);
+        shift_formula_a1_references_wrapping(text, i64::from(row) - 1, i64::from(col) - 1)
+    }
+
     pub(crate) fn dispatch_get_name(
         &mut self,
         workbook: WorkbookHandle,
@@ -434,25 +465,33 @@ impl ExcelRuntime {
             "RefersTo" | "RefersToLocal" | "RefersToR1C1" | "RefersToR1C1Local" => {
                 let refers_to = self.defined_name(workbook, name_id)?.refers_to.clone();
                 let reference = refers_to.text.trim_start_matches('=');
+                let (row, col) = self.name_reference_anchor(workbook);
                 let reference = if matches!(member, "RefersToR1C1" | "RefersToR1C1Local") {
                     if refers_to.is_r1c1 {
                         reference.to_string()
                     } else {
-                        convert_formula_a1_to_r1c1(reference, 1, 1)
+                        convert_formula_a1_to_r1c1(
+                            self.name_text_at_active_cell(workbook, reference).as_str(),
+                            row,
+                            col,
+                        )
                     }
                 } else if refers_to.is_r1c1 {
-                    convert_formula_r1c1_to_a1(reference, 1, 1)
+                    convert_formula_r1c1_to_a1(reference, row, col)
                 } else {
-                    reference.to_string()
+                    self.name_text_at_active_cell(workbook, reference)
                 };
                 Ok(OmValue::Text(format!("={reference}")))
             }
             "RefersToRange" => {
                 let refers_to = self.defined_name(workbook, name_id)?.refers_to.clone();
-                let mut reference = refers_to.text.trim_start_matches('=').to_string();
-                if refers_to.is_r1c1 {
-                    reference = convert_formula_r1c1_to_a1(reference.as_str(), 1, 1);
-                }
+                let reference = refers_to.text.trim_start_matches('=');
+                let reference = if refers_to.is_r1c1 {
+                    let (row, col) = self.name_reference_anchor(workbook);
+                    convert_formula_r1c1_to_a1(reference, row, col)
+                } else {
+                    self.name_text_at_active_cell(workbook, reference)
+                };
                 let (target_workbook, range) =
                     self.resolve_application_range_text(reference.as_str())?;
                 if target_workbook != workbook {

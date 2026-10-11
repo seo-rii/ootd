@@ -19,6 +19,12 @@ every caller. `Sheet1!$P$1:$P1048576` means "column P from row 1 to the row abov
 calling cell (`Application.Evaluate`) A1 is the caller. R1C1 name formulas already resolve at the
 caller.
 
+`Names.Add` and the `Name.RefersTo` setter read A1 text relative to the workbook's active cell
+and store it relative to A1, as desktop Excel does: `=Sheet1!B1` added with B2 active is stored as
+`Sheet1!A1048576`. The `RefersTo`, `RefersToR1C1`, and `RefersToRange` getters read the stored
+text back at the active cell, so that name reports `=Sheet1!D4` and `=Sheet1!R[-1]C` with D5
+active. With nothing in the workbook selected, A1 is the active cell.
+
 ## Name Formulas
 
 | Name formula | Use | Result |
@@ -164,9 +170,6 @@ regressions are their unit tests, `partial_corridor_shifts_retarget_formulas_ins
 
 ## Remaining Boundaries
 
-- `Names.Add` and `Name.RefersTo` treat A1 text as relative to A1. Desktop Excel reads and
-  reports it relative to the active cell, so the two differ when relative names are added or
-  read with another cell active.
 - Built-in `_xlnm.` names (`Print_Area`, `_FilterDatabase`, `Print_Titles`) are preserved but not
   given special evaluation meaning.
 - External-workbook references in name formulas are not evaluated.
