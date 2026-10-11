@@ -6,6 +6,7 @@ use super::{
 use excel_model::{FormulaGroupKind, WorkbookState};
 use office_common::{CellError, CellValue, ObjectHandle, OmResult, Rect, SheetId, WorkbookHandle};
 use sha2::{Digest, Sha256};
+use std::collections::BTreeSet;
 
 /// Whether an iterative pass changed no formula result by more than `max_change`. A change of type
 /// (for example, a number becoming an error) always counts as unconverged.
@@ -506,6 +507,7 @@ impl ExcelRuntime {
         let mut dynamic_updates = Vec::<((u32, u32), FormulaArrayResult)>::new();
         let mut legacy_array_updates = Vec::<(Rect, FormulaArrayResult)>::new();
         let mut scalar_formula_cells = Vec::new();
+        let mut external_cells = BTreeSet::new();
         for (row, col, formula, is_dynamic, legacy_array_range) in formula_cells {
             let calculation_cell = CalculationCell {
                 sheet_id,
@@ -515,9 +517,10 @@ impl ExcelRuntime {
             if formula_is_volatile(&formula) {
                 report.volatile.push(calculation_cell);
             }
+            // External references read the link caches; a formula they leave unresolved keeps
+            // its cached value and is reported as external rather than unsupported.
             if formula_has_external_workbook_reference(&formula) {
-                report.external.push(calculation_cell);
-                continue;
+                external_cells.insert((row, col));
             }
             if let Some(range) = legacy_array_range {
                 let mut evaluator = FormulaEvaluator::new(&snapshot, context);
@@ -536,7 +539,11 @@ impl ExcelRuntime {
                         result
                     }
                     Err(FormulaEvalError::Unsupported) => {
-                        report.unsupported.push(calculation_cell);
+                        if external_cells.contains(&(row, col)) {
+                            report.external.push(calculation_cell);
+                        } else {
+                            report.unsupported.push(calculation_cell);
+                        }
                         continue;
                     }
                     Err(FormulaEvalError::Circular) => {
@@ -570,7 +577,11 @@ impl ExcelRuntime {
                         dynamic_updates.push(((row, col), result));
                     }
                     Err(FormulaEvalError::Unsupported) => {
-                        report.unsupported.push(calculation_cell);
+                        if external_cells.contains(&(row, col)) {
+                            report.external.push(calculation_cell);
+                        } else {
+                            report.unsupported.push(calculation_cell);
+                        }
                     }
                     Err(FormulaEvalError::Circular) => {
                         report.circular.push(calculation_cell);
@@ -750,7 +761,11 @@ impl ExcelRuntime {
                         scalar_updates.push(((row, col), value));
                     }
                     Err(FormulaEvalError::Unsupported) => {
-                        report.unsupported.push(calculation_cell);
+                        if external_cells.contains(&(row, col)) {
+                            report.external.push(calculation_cell);
+                        } else {
+                            report.unsupported.push(calculation_cell);
+                        }
                     }
                     Err(FormulaEvalError::Circular) => {
                         report.circular.push(calculation_cell);

@@ -32,6 +32,16 @@ without it. A formula name that misses in a scope falls back to the prefixed bui
 that scope before the lookup moves on to the workbook scope, so `=ROWS(Print_Area)` and
 `=SUM(Sheet1!Print_Area)` read a sheet's print area. The prefixed spelling also resolves.
 
+## External Workbooks
+
+`[1]Sheet1!A1` in a cell or name formula reads the first `externalReference`'s link cache: the
+sheet names and cell values Excel saved in its `externalLink` part, as Excel reads them while the
+link is not updated. `'[1]Sheet 1'!A1`, ranges, and the file-name form `[Book2.xlsx]Sheet1!A1`
+(matched against the link target's file name, with any path before the bracket ignored) resolve
+the same way, and an uncached cell is blank. Nothing opens the linked file. A formula whose
+external reference has no cache (a missing link, a DDE or OLE link, an unknown sheet, or the
+`[1]!Name` form) keeps its saved value and is reported as external.
+
 ## Name Formulas
 
 | Name formula | Use | Result |
@@ -179,4 +189,5 @@ regressions are their unit tests, `partial_corridor_shifts_retarget_formulas_ins
 
 - Built-in `_xlnm.` names evaluate as ordinary names; their print and filter meaning outside
   formulas is not derived from them.
-- External-workbook references in name formulas are not evaluated.
+- External defined names (`[1]!Name`) and 3D spans into external workbooks are not read from
+  the link cache.

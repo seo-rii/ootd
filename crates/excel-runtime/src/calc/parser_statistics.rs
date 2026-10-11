@@ -1765,8 +1765,7 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             ($sheet_id:expr, $row:expr, $col:expr) => {{
                 self.evaluator
                     .state
-                    .worksheet_data()
-                    .get(&$sheet_id)
+                    .formula_sheet_data($sheet_id)
                     .and_then(|worksheet| worksheet.cells.get(&($row, $col)))
                     .and_then(|cell| cell.formula.as_ref())
                     .is_some_and(|formula| {

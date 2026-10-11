@@ -20,8 +20,10 @@ The inventory exposes sorted kinds, part URIs, relationship-part URIs, and relat
 inventory with a fresh scan of the public package, so replacing or adding a package part cannot
 erase the original security observation.
 
-External formula-token classification and every vendor-specific Power Query/Data Model extension
-are not yet complete. Unknown parts remain subject to the normal lossless-preservation contract.
+Formulas read external workbook references from the cached sheet names and cell values in
+`externalLink` parts (`docs/interfaces/defined_name_evaluation.md`); reading them never opens the
+linked file. External formula-token classification and every vendor-specific Power Query/Data
+Model extension are not yet complete. Unknown parts remain subject to the normal lossless-preservation contract.
 
 ## Runtime Policy
 

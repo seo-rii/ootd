@@ -396,3 +396,58 @@ fn formulas_use_built_in_names_without_their_prefix() {
         );
     }
 }
+
+#[test]
+fn external_workbook_references_read_cached_link_values() {
+    // The first link caches sheet `Cached` of `external.xlsx` with A1 = 42.
+    let mut runtime = ExcelRuntime::new();
+    let workbook = runtime
+        .open_workbook(OpenWorkbookSpec {
+            bytes: external_data_fixture::package_with_external_data(&synthetic_workbook_bytes()),
+            format_hint: Some(FileFormat::Xlsx),
+            profile: ExcelProfile::Excel365,
+            read_only: false,
+        })
+        .expect("open workbook with external links");
+    let sheet = expect_object_handle(
+        runtime
+            .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+            .expect("ActiveSheet"),
+    );
+    add_name(
+        &mut runtime,
+        workbook,
+        NameScope::Workbook,
+        "Linked",
+        "[1]Cached!$A$1",
+    );
+
+    let cases = [
+        ("R1", "=[1]Cached!A1*2", 84.0),
+        ("R2", "='[1]Cached'!A1+1", 43.0),
+        ("R3", "=SUM([1]Cached!A1:B2)", 42.0),
+        ("R4", "=[external.xlsx]Cached!A1", 42.0),
+        ("R5", "=[1]Cached!B5+1", 1.0),
+        ("R6", "=Linked+1", 43.0),
+    ];
+    for (address, formula, _) in &cases {
+        let cell = range(&mut runtime, sheet, address);
+        runtime
+            .dispatch_set(cell, "Formula", OmValue::Text(formula.to_string()), &[])
+            .unwrap_or_else(|error| panic!("set {address}: {error:?}"));
+    }
+    runtime
+        .calculate_workbook_with_report(workbook)
+        .expect("calculate external references");
+    let mut failures = Vec::new();
+    for (address, formula, expected) in cases {
+        let cell = range(&mut runtime, sheet, address);
+        let actual = runtime.dispatch_get(cell, "Value2", &[]).expect("value");
+        if actual != OmValue::Number(expected) {
+            failures.push(format!(
+                "{address} {formula}: expected {expected}, got {actual:?}"
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}

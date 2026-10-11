@@ -43,6 +43,7 @@ mod dialect;
 mod digital_signature;
 mod encryption;
 mod external_data;
+mod external_link_cache;
 mod pivot;
 mod relationships;
 mod shared_strings;
@@ -1830,7 +1831,7 @@ impl XlsxCodec {
             &defined_names,
             &sheet_drawing_support_parts,
         )?;
-        let state = WorkbookState::try_new(WorkbookStateParts {
+        let mut state = WorkbookState::try_new(WorkbookStateParts {
             model: WorkbookModel {
                 id: WorkbookId(0),
                 display_name: workbook_display_name.to_string(),
@@ -1846,6 +1847,11 @@ impl XlsxCodec {
             chart_sheets,
             opaque_parts,
         })?;
+        state.external_books = external_link_cache::parse_external_book_caches(
+            workbook_part.bytes.as_slice(),
+            &relationships,
+            &package,
+        );
         ensure_workbook_grid_coordinates_are_valid(&state)?;
         ensure_workbook_style_ids_are_valid(&state, &support_parts)?;
 

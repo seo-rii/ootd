@@ -1743,8 +1743,7 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             rect = self
                 .evaluator
                 .state
-                .worksheet_data()
-                .get(&sheet_id)
+                .formula_sheet_data(sheet_id)
                 .and_then(|worksheet| {
                     worksheet
                         .spill_ranges
@@ -2019,7 +2018,7 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                     }
                     let sheet_id = self
                         .resolve_sheet_name(sheet_name.as_str())
-                        .ok_or(FormulaEvalError::Ref)?;
+                        .ok_or_else(|| unresolved_sheet_error(sheet_name.as_str()))?;
                     return Ok((sheet_id, next_cursor + 1));
                 }
                 sheet_name.push(ch);
@@ -2037,10 +2036,11 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                 }
                 let sheet_id = self
                     .resolve_sheet_name(sheet_name)
-                    .ok_or(FormulaEvalError::Ref)?;
+                    .ok_or_else(|| unresolved_sheet_error(sheet_name))?;
                 return Ok((sheet_id, cursor + 1));
             }
-            if ch.is_ascii_alphanumeric() || ch == '_' || ch == '.' {
+            // `[1]Sheet1!A1` names a sheet of the first external workbook.
+            if ch.is_ascii_alphanumeric() || matches!(ch, '_' | '.' | '[' | ']') {
                 cursor += ch.len_utf8();
             } else {
                 break;
@@ -2050,11 +2050,6 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
     }
 
     pub(super) fn resolve_sheet_name(&self, name: &str) -> Option<SheetId> {
-        self.evaluator
-            .state
-            .worksheets()
-            .iter()
-            .find(|worksheet| worksheet.name.eq_ignore_ascii_case(name))
-            .map(|worksheet| worksheet.id)
+        resolve_formula_sheet_name(self.evaluator.state, name)
     }
 }

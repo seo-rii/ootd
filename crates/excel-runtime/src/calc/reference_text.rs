@@ -76,23 +76,35 @@ pub(super) fn resolve_formula_sheet_name_or_span(
     name_or_span: &str,
 ) -> Result<Vec<SheetId>, FormulaEvalError> {
     if let Some((start_sheet, end_sheet)) = name_or_span.split_once(':') {
-        let start =
-            resolve_formula_sheet_name(state, start_sheet.trim()).ok_or(FormulaEvalError::Ref)?;
-        let end =
-            resolve_formula_sheet_name(state, end_sheet.trim()).ok_or(FormulaEvalError::Ref)?;
+        let start = resolve_formula_sheet_name(state, start_sheet.trim())
+            .ok_or_else(|| unresolved_sheet_error(start_sheet))?;
+        let end = resolve_formula_sheet_name(state, end_sheet.trim())
+            .ok_or_else(|| unresolved_sheet_error(end_sheet))?;
         return formula_sheets_in_3d_span(state, start, end);
     }
     resolve_formula_sheet_name(state, name_or_span)
         .map(|sheet_id| vec![sheet_id])
-        .ok_or(FormulaEvalError::Ref)
+        .ok_or_else(|| unresolved_sheet_error(name_or_span))
 }
 
+/// A sheet of this workbook, or a cached sheet of an external workbook (`[1]Sheet1`).
 pub(super) fn resolve_formula_sheet_name(state: &WorkbookState, name: &str) -> Option<SheetId> {
     state
         .worksheets()
         .iter()
         .find(|worksheet| worksheet.name.eq_ignore_ascii_case(name))
         .map(|worksheet| worksheet.id)
+        .or_else(|| state.resolve_external_sheet(name))
+}
+
+/// `#REF!` for a missing sheet of this workbook. An external sheet without a cache, or a link
+/// form the cache does not model, stays unsupported so the cell keeps the value Excel saved.
+pub(super) fn unresolved_sheet_error(name: &str) -> FormulaEvalError {
+    if name.contains('[') {
+        FormulaEvalError::Unsupported
+    } else {
+        FormulaEvalError::Ref
+    }
 }
 
 pub(super) fn formula_sheets_in_3d_span(

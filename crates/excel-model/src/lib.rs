@@ -391,6 +391,21 @@ impl WorksheetData {
     }
 }
 
+/// Sheet ids with this bit set name sheets of external workbooks, whose cells are the values
+/// Excel cached for them in the workbook's `externalLink` parts.
+const EXTERNAL_SHEET_ID_BIT: u64 = 1 << 63;
+
+/// A workbook an `externalLink` part points at, with the values Excel cached for it. Formulas
+/// read `[n]Sheet!A1` from the cache while the link is not updated.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ExternalBookCache {
+    /// The linked file as the link's relationship names it.
+    pub target: Option<String>,
+    pub sheet_names: Vec<String>,
+    /// Cached cell values, one entry per sheet in `sheet_names` order.
+    pub sheets: Vec<WorksheetData>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct WorkbookState {
     model: WorkbookModel,
@@ -401,6 +416,9 @@ pub struct WorkbookState {
     pub drawings: BTreeMap<DrawingId, DrawingModel>,
     pub chart_sheets: BTreeMap<SheetId, ChartSheetBinding>,
     pub opaque_parts: Vec<OpaquePart>,
+    /// External link caches in `externalReferences` order: `[n]` names entry `n - 1`. Links that
+    /// are not workbooks (DDE, OLE) keep their place as `None`.
+    pub external_books: Vec<Option<ExternalBookCache>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -436,6 +454,7 @@ impl WorkbookState {
             drawings,
             chart_sheets,
             opaque_parts,
+            external_books: Vec::new(),
         };
         state.validate_for_save()?;
         Ok(state)
@@ -451,6 +470,7 @@ impl WorkbookState {
             drawings,
             chart_sheets,
             opaque_parts,
+            external_books: _,
         } = self;
         WorkbookStateParts {
             model,
@@ -1325,6 +1345,55 @@ impl WorkbookState {
 
     pub fn worksheet_data(&self) -> &BTreeMap<SheetId, WorksheetData> {
         &self.worksheet_data
+    }
+
+    /// The id formulas use for sheet `sheet` (zero-based) of external book `[book]`.
+    pub fn external_sheet_id(book: usize, sheet: usize) -> SheetId {
+        SheetId(EXTERNAL_SHEET_ID_BIT | ((book as u64) << 32) | sheet as u64)
+    }
+
+    /// Resolves an external sheet qualifier, `[1]Sheet1` or `[Book2.xlsx]Sheet1`, to the id of
+    /// its cached sheet. A bracketed file name matches a link target's file name, and a path
+    /// before it (`C:\Data\[Book2.xlsx]Sheet1`) is ignored.
+    pub fn resolve_external_sheet(&self, qualifier: &str) -> Option<SheetId> {
+        let qualifier = &qualifier[qualifier.find('[')?..];
+        let (book, sheet) = qualifier.strip_prefix('[')?.split_once(']')?;
+        let book_index = match book.parse::<usize>() {
+            Ok(index) => index,
+            Err(_) => {
+                self.external_books.iter().position(|cache| {
+                    cache
+                        .as_ref()
+                        .and_then(|cache| cache.target.as_deref())
+                        .and_then(|target| target.rsplit(['/', '\\']).next())
+                        .is_some_and(|file| file.eq_ignore_ascii_case(book))
+                })? + 1
+            }
+        };
+        let cache = self
+            .external_books
+            .get(book_index.checked_sub(1)?)?
+            .as_ref()?;
+        let sheet_index = cache
+            .sheet_names
+            .iter()
+            .position(|name| name.eq_ignore_ascii_case(sheet))?;
+        Some(Self::external_sheet_id(book_index, sheet_index))
+    }
+
+    /// The cells a formula reads for a sheet id: a worksheet of this workbook, or the cached
+    /// values of an external sheet.
+    pub fn formula_sheet_data(&self, sheet_id: SheetId) -> Option<&WorksheetData> {
+        if sheet_id.0 & EXTERNAL_SHEET_ID_BIT == 0 {
+            return self.worksheet_data.get(&sheet_id);
+        }
+        let book = ((sheet_id.0 & !EXTERNAL_SHEET_ID_BIT) >> 32) as usize;
+        let sheet = (sheet_id.0 & 0xffff_ffff) as usize;
+        self.external_books
+            .get(book.checked_sub(1)?)?
+            .as_ref()?
+            .sheets
+            .get(sheet)
     }
 
     pub fn replace_worksheet_data_for_sheet(
@@ -3463,6 +3532,7 @@ mod tests {
             drawings: BTreeMap::new(),
             chart_sheets: BTreeMap::new(),
             opaque_parts: Vec::new(),
+            external_books: Vec::new(),
         }
     }
 
