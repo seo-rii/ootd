@@ -14,8 +14,9 @@ This is not full Excel parity, but it is no longer accurate to describe the runt
 
 ### Core expression support
 
-- arithmetic operators: `+`, `-`, `*`, `/`
+- arithmetic operators: `+`, `-`, `*`, `/`, `^`, and postfix `%`
 - comparison operators: `=`, `<>`, `<`, `<=`, `>`, `>=`
+- the `&` text operator
 - parentheses and unary sign
 - boolean literals: `TRUE`, `FALSE`
 - A1 single-cell references
@@ -715,7 +716,15 @@ External data notes:
 
 ## Current Boundaries
 
-- The evaluator is still numeric-first. It includes focused scalar text and date/time text-parse subsets, but broader string semantics, locale-sensitive date/time parsing, and richer coercion rules are not implemented.
+- Whole formulas evaluate in a typed expression grammar (`calc/parser_value.rs`) with Excel's
+  operator precedence (comparisons, `&`, `+ -`, `* /`, `^`, `%`, then negation, so `=-2^2` is 4).
+  Comparisons return TRUE or FALSE, compare text without case, order numbers before text before
+  logicals, and treat a blank as the other operand's empty value; arithmetic coerces logicals,
+  blanks, and numeric text (`="3"+1` is 4); logical functions such as `AND` and `ISNUMBER` return
+  TRUE or FALSE. Function arguments still use the numeric grammar, so operators inside numeric
+  function arguments keep the narrower numeric rules, and text comparison uses lowercase ordinal
+  order rather than Excel's collation.
+- The evaluator is otherwise numeric-first. It includes focused scalar text and date/time text-parse subsets, but broader string semantics, locale-sensitive date/time parsing, and richer coercion rules are not implemented.
 - Dynamic array support currently covers in-memory `Formula2`/`Formula2Local` spill materialization for the projection functions listed above, spill replacement, and obstruction errors. XLSX dynamic-array metadata round-trip, spill-reference operators, remaining array-producing and higher-order functions, and broader `Formula2` parity remain incomplete.
 - Lookup/reference support now includes workbook and worksheet scoped names, explicit multi-area references for supported functions, and 3D reference expansion for aggregate-style formulas. External workbook references (`[1]Sheet1!A1`) read the cached values in the workbook's `externalLink` parts without opening the linked file. It is still a focused subset and does not model broader lookup/reference families yet.
 - Runtime Range object support preserves explicit multi-area order for address, areas, count, scalar assignment, calculation, find/replace, clear, fill, offset/resize, first-area row/column projections, same-sheet `Range.Select`/`Application.Goto`/`Application.Selection`, and focused chart source binding. Active-cell fallbacks and cross-sheet selection fallbacks still use first-area boundaries; `Worksheet.Range` endpoint arguments, `Range.Sort` keys, `Worksheet.Paste` destinations, and `Range.Copy`/`Range.Cut` with `Destination` require single-area ranges, copied/cut cell paste materialization requires an explicit single-area destination when the current selection is multi-area, and `Range.PasteSpecial` requires a single-area clipboard source, while clipboard payloads retain `RangeSet` metadata for chart source binding.

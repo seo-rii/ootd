@@ -442,6 +442,21 @@ impl<'a> FormulaEvaluator<'a> {
             Err(FormulaEvalError::Unsupported) => {}
             Err(error) => return Err(error),
         }
+        // The typed grammar models Excel's operators over typed values; what it does not model
+        // falls through to the numeric and value-probe grammars below.
+        let typed_result = FormulaParser::new(formula_text, self, sheet_id, current_position)
+            .parse_typed_formula();
+        match typed_result {
+            // A formula that reads a blank cell shows 0.
+            Ok(FormulaValueProbe::Blank) => return Ok(CellValue::Number(0.0)),
+            Ok(value) => {
+                if let Some(value) = formula_cell_value_from_probe(value) {
+                    return Ok(value);
+                }
+            }
+            Err(FormulaEvalError::Unsupported) => {}
+            Err(error) => return Err(error),
+        }
         let evaluate_typed = |evaluator: &mut Self| {
             let probe = FormulaParser::new(formula_text, evaluator, sheet_id, current_position)
                 .parse_value_probe_formula()?;
@@ -725,7 +740,7 @@ impl<'a> FormulaEvaluator<'a> {
         row: u32,
         col: u32,
     ) -> Result<CellValue, FormulaEvalError> {
-        if !self.state.formula_sheet_data(sheet_id).is_some() {
+        if self.state.formula_sheet_data(sheet_id).is_none() {
             return Err(FormulaEvalError::Ref);
         }
         match self.evaluate_cell(sheet_id, row, col) {
@@ -746,7 +761,7 @@ impl<'a> FormulaEvaluator<'a> {
         rect: Rect,
         orientation: FormulaLookupOrientation,
     ) -> Result<Vec<FormulaValueProbe>, FormulaEvalError> {
-        if !self.state.formula_sheet_data(sheet_id).is_some() {
+        if self.state.formula_sheet_data(sheet_id).is_none() {
             return Err(FormulaEvalError::Ref);
         }
         let mut values = Vec::new();
@@ -784,7 +799,7 @@ impl<'a> FormulaEvaluator<'a> {
         row: u32,
         col: u32,
     ) -> Result<Option<FormulaSource>, FormulaEvalError> {
-        if !self.state.formula_sheet_data(sheet_id).is_some() {
+        if self.state.formula_sheet_data(sheet_id).is_none() {
             return Err(FormulaEvalError::Ref);
         }
         Ok(self

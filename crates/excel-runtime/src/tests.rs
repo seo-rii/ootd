@@ -44,6 +44,7 @@
     mod range_structural_shift_transaction;
     mod runtime_environment;
     mod shared_formula_calculation;
+    mod typed_operators;
 
     mod encrypted_ooxml_fixture {
         include!(concat!(
@@ -10261,11 +10262,11 @@
                 OmValue::Number(9.0),
                 OmValue::Number(11.0),
                 OmValue::Error(CellError::Div0),
-                OmValue::Number(1.0),
-                OmValue::Number(1.0),
-                OmValue::Number(1.0),
-                OmValue::Number(0.0),
-                OmValue::Number(0.0),
+                OmValue::Bool(true),
+                OmValue::Bool(true),
+                OmValue::Bool(true),
+                OmValue::Bool(false),
+                OmValue::Bool(false),
                 OmValue::Error(CellError::Null),
                 OmValue::Error(CellError::GettingData),
                 OmValue::Error(CellError::Spill),
@@ -10278,11 +10279,11 @@
                 OmValue::Error(CellError::Python),
                 OmValue::Error(CellError::Timeout),
                 OmValue::Number(99.0),
-                OmValue::Number(1.0),
-                OmValue::Number(1.0),
+                OmValue::Bool(true),
+                OmValue::Bool(true),
                 OmValue::Number(123.0),
-                OmValue::Number(1.0),
-                OmValue::Number(1.0),
+                OmValue::Bool(true),
+                OmValue::Bool(true),
                 OmValue::Number(1.0),
                 OmValue::Number(8.0),
                 OmValue::Number(9.0),
@@ -10410,31 +10411,31 @@
         assert_eq!(
             values.values,
             vec![
-                OmValue::Number(1.0),
-                OmValue::Number(0.0),
-                OmValue::Number(1.0),
-                OmValue::Number(0.0),
-                OmValue::Number(1.0),
-                OmValue::Number(1.0),
-                OmValue::Number(1.0),
-                OmValue::Number(0.0),
-                OmValue::Number(0.0),
-                OmValue::Number(1.0),
-                OmValue::Number(0.0),
-                OmValue::Number(0.0),
-                OmValue::Number(1.0),
-                OmValue::Number(1.0),
-                OmValue::Number(1.0),
-                OmValue::Number(0.0),
-                OmValue::Number(0.0),
-                OmValue::Number(0.0),
-                OmValue::Number(1.0),
-                OmValue::Number(1.0),
-                OmValue::Number(1.0),
-                OmValue::Number(1.0),
-                OmValue::Number(1.0),
-                OmValue::Number(0.0),
-                OmValue::Number(0.0),
+                OmValue::Bool(true),
+                OmValue::Bool(false),
+                OmValue::Bool(true),
+                OmValue::Bool(false),
+                OmValue::Bool(true),
+                OmValue::Bool(true),
+                OmValue::Bool(true),
+                OmValue::Bool(false),
+                OmValue::Bool(false),
+                OmValue::Bool(true),
+                OmValue::Bool(false),
+                OmValue::Bool(false),
+                OmValue::Bool(true),
+                OmValue::Bool(true),
+                OmValue::Bool(true),
+                OmValue::Bool(false),
+                OmValue::Bool(false),
+                OmValue::Bool(false),
+                OmValue::Bool(true),
+                OmValue::Bool(true),
+                OmValue::Bool(true),
+                OmValue::Bool(true),
+                OmValue::Bool(true),
+                OmValue::Bool(false),
+                OmValue::Bool(false),
                 OmValue::Number(0.0),
                 OmValue::Number(5.0),
                 OmValue::Number(1.0),
@@ -10562,8 +10563,8 @@
                 OmValue::Number(6.0),
                 OmValue::Number(7.0),
                 OmValue::Error(CellError::NA),
-                OmValue::Number(1.0),
-                OmValue::Number(0.0),
+                OmValue::Bool(true),
+                OmValue::Bool(false),
                 OmValue::Text("=B2+1".to_string()),
             ]
         );
@@ -10646,11 +10647,11 @@
         assert_eq!(
             values.values,
             vec![
-                OmValue::Number(1.0),
-                OmValue::Number(0.0),
-                OmValue::Number(1.0),
-                OmValue::Number(0.0),
-                OmValue::Number(1.0),
+                OmValue::Bool(true),
+                OmValue::Bool(false),
+                OmValue::Bool(true),
+                OmValue::Bool(false),
+                OmValue::Bool(true),
                 OmValue::Error(CellError::Value),
                 OmValue::Error(CellError::Div0),
             ]
@@ -15174,8 +15175,8 @@
         assert_eq!(
             values.values,
             vec![
-                OmValue::Number(1.0),
-                OmValue::Number(0.0),
+                OmValue::Bool(true),
+                OmValue::Bool(false),
                 OmValue::Number(100.0),
                 OmValue::Number(9.0),
                 OmValue::Number(2.3),
@@ -15283,22 +15284,22 @@
         assert_eq!(
             values.values,
             vec![
-                OmValue::Number(1.0),
-                OmValue::Number(0.0),
-                OmValue::Number(1.0),
-                OmValue::Number(1.0),
-                OmValue::Number(0.0),
+                OmValue::Bool(true),
+                OmValue::Bool(false),
+                OmValue::Bool(true),
+                OmValue::Bool(true),
+                OmValue::Bool(false),
                 OmValue::Number(99.0),
-                OmValue::Number(1.0),
-                OmValue::Number(0.0),
+                OmValue::Bool(true),
+                OmValue::Bool(false),
                 OmValue::Number(2.0),
-                OmValue::Number(1.0),
-                OmValue::Number(0.0),
-                OmValue::Number(0.0),
+                OmValue::Bool(true),
+                OmValue::Bool(false),
+                OmValue::Bool(false),
                 OmValue::Error(CellError::Value),
-                OmValue::Number(1.0),
-                OmValue::Number(0.0),
-                OmValue::Number(1.0),
+                OmValue::Bool(true),
+                OmValue::Bool(false),
+                OmValue::Bool(true),
                 OmValue::Error(CellError::Value),
                 OmValue::Error(CellError::Value),
             ]
@@ -15435,8 +15436,8 @@
                 OmValue::Number(3.0),
                 OmValue::Number(5.0),
                 OmValue::Number(2.0),
-                OmValue::Number(0.0),
-                OmValue::Number(1.0),
+                OmValue::Bool(false),
+                OmValue::Bool(true),
                 OmValue::Number(65.0),
                 OmValue::Error(CellError::Value),
                 OmValue::Number(9731.0),
@@ -18670,9 +18671,9 @@
         assert_eq!(
             values.values,
             vec![
-                OmValue::Number(1.0),
-                OmValue::Number(0.0),
-                OmValue::Number(1.0),
+                OmValue::Bool(true),
+                OmValue::Bool(false),
+                OmValue::Bool(true),
                 OmValue::Text("42".to_string()),
                 OmValue::Text("Order".to_string()),
                 OmValue::Text("Order".to_string()),
@@ -21802,20 +21803,20 @@
             -4.0
         );
         assert_eq!(
-            expect_number(
+            expect_bool(
                 runtime
                     .dispatch_invoke(worksheet_function, "IsEven", &[OmValue::Number(2.5)])
                     .expect("WorksheetFunction.IsEven")
             ),
-            1.0
+            true
         );
         assert_eq!(
-            expect_number(
+            expect_bool(
                 runtime
                     .dispatch_invoke(worksheet_function, "IsOdd", &[OmValue::Number(-1.5)])
                     .expect("WorksheetFunction.IsOdd")
             ),
-            1.0
+            true
         );
         assert_eq!(
             expect_number(
@@ -22096,7 +22097,7 @@
             "ab"
         );
         assert_eq!(
-            expect_number(
+            expect_bool(
                 runtime
                     .dispatch_invoke(
                         worksheet_function,
@@ -22108,7 +22109,7 @@
                     )
                     .expect("WorksheetFunction.Exact")
             ),
-            1.0
+            true
         );
         assert_eq!(
             expect_number(
@@ -22815,23 +22816,23 @@
             5.0
         );
         assert_eq!(
-            expect_number(
+            expect_bool(
                 runtime
                     .dispatch_invoke(worksheet_function, "IsError", &[OmValue::Number(5.0)],)
                     .expect("WorksheetFunction.IsError")
             ),
-            0.0
+            false
         );
         assert_eq!(
-            expect_number(
+            expect_bool(
                 runtime
                     .dispatch_invoke(worksheet_function, "IsNA", &[OmValue::Number(5.0)],)
                     .expect("WorksheetFunction.IsNA")
             ),
-            0.0
+            false
         );
         assert_eq!(
-            expect_number(
+            expect_bool(
                 runtime
                     .dispatch_invoke(
                         worksheet_function,
@@ -22840,18 +22841,18 @@
                     )
                     .expect("WorksheetFunction.IsBlank")
             ),
-            0.0
+            false
         );
         assert_eq!(
-            expect_number(
+            expect_bool(
                 runtime
                     .dispatch_invoke(worksheet_function, "IsNumber", &[OmValue::Number(3.0)])
                     .expect("WorksheetFunction.IsNumber")
             ),
-            1.0
+            true
         );
         assert_eq!(
-            expect_number(
+            expect_bool(
                 runtime
                     .dispatch_invoke(
                         worksheet_function,
@@ -22860,26 +22861,26 @@
                     )
                     .expect("WorksheetFunction.IsText")
             ),
-            1.0
+            true
         );
         assert_eq!(
-            expect_number(
+            expect_bool(
                 runtime
                     .dispatch_invoke(worksheet_function, "IsLogical", &[OmValue::Bool(true)])
                     .expect("WorksheetFunction.IsLogical")
             ),
-            1.0
+            true
         );
         assert_eq!(
-            expect_number(
+            expect_bool(
                 runtime
                     .dispatch_invoke(worksheet_function, "IsNonText", &[OmValue::Number(3.0)])
                     .expect("WorksheetFunction.IsNonText")
             ),
-            1.0
+            true
         );
         assert_eq!(
-            expect_number(
+            expect_bool(
                 runtime
                     .dispatch_invoke(
                         worksheet_function,
@@ -22888,7 +22889,7 @@
                     )
                     .expect("WorksheetFunction.IsRef")
             ),
-            1.0
+            true
         );
         assert_eq!(
             expect_number(
@@ -24116,15 +24117,15 @@
             7.0
         );
         assert_eq!(
-            expect_number(
+            expect_bool(
                 runtime
                     .dispatch_invoke(worksheet_function, "Not", &[OmValue::Bool(false)])
                     .expect("WorksheetFunction.Not")
             ),
-            1.0
+            true
         );
         assert_eq!(
-            expect_number(
+            expect_bool(
                 runtime
                     .dispatch_invoke(
                         worksheet_function,
@@ -24133,10 +24134,10 @@
                     )
                     .expect("WorksheetFunction.And")
             ),
-            1.0
+            true
         );
         assert_eq!(
-            expect_number(
+            expect_bool(
                 runtime
                     .dispatch_invoke(
                         worksheet_function,
@@ -24145,10 +24146,10 @@
                     )
                     .expect("WorksheetFunction.Or")
             ),
-            1.0
+            true
         );
         assert_eq!(
-            expect_number(
+            expect_bool(
                 runtime
                     .dispatch_invoke(
                         worksheet_function,
@@ -24157,7 +24158,7 @@
                     )
                     .expect("WorksheetFunction.Xor")
             ),
-            1.0
+            true
         );
         assert_eq!(
             expect_number(

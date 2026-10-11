@@ -30,6 +30,7 @@ mod parser_lookup;
 mod parser_math;
 mod parser_statistics;
 mod parser_text;
+mod parser_value;
 mod reference_text;
 mod scalar_functions;
 mod text;
