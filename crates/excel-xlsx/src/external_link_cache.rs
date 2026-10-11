@@ -11,7 +11,7 @@ use super::relationships::{
 };
 use super::worksheet::parse_cell_reference;
 use super::xml::decode_general_reference;
-use excel_model::{CellData, ExternalBookCache, WorksheetData};
+use excel_model::{CellData, ExternalBookCache, ExternalDefinedName, WorksheetData};
 use office_common::{CellError, CellValue};
 use office_opc::OpcPackage;
 use quick_xml::Reader;
@@ -117,6 +117,16 @@ fn parse_external_book_cache(
                         cache
                             .sheet_names
                             .push(attribute(&element, &reader, b"val").unwrap_or_default());
+                    }
+                }
+                b"definedName" => {
+                    if let Some(cache) = cache.as_mut() {
+                        cache.defined_names.push(ExternalDefinedName {
+                            name: attribute(&element, &reader, b"name").unwrap_or_default(),
+                            refers_to: attribute(&element, &reader, b"refersTo"),
+                            sheet: attribute(&element, &reader, b"sheetId")
+                                .and_then(|id| id.parse().ok()),
+                        });
                     }
                 }
                 b"sheetData" => {

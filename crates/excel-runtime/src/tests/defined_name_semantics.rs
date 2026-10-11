@@ -451,3 +451,70 @@ fn external_workbook_references_read_cached_link_values() {
     }
     assert!(failures.is_empty(), "{failures:#?}");
 }
+
+#[test]
+fn external_workbook_names_read_their_cached_references() {
+    let mut package = office_opc::OpcPackage::from_bytes(
+        &external_data_fixture::package_with_external_data(&synthetic_workbook_bytes()),
+    )
+    .expect("parse fixture");
+    package
+        .replace_part_bytes(
+            "xl/externalLinks/externalLink1.xml",
+            br#"<externalLink xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><externalBook r:id="rIdPath"><sheetNames><sheetName val="Cached"/></sheetNames><definedNames><definedName name="Rate" refersTo="=Cached!$A$1"/><definedName name="Block" refersTo="='Cached'!$A$1:$B$2"/><definedName name="Const" refersTo="=5"/><definedName name="Local" refersTo="=Cached!$B$2" sheetId="0"/></definedNames><sheetDataSet><sheetData sheetId="0"><row r="1"><cell r="A1"><v>42</v></cell></row><row r="2"><cell r="B2"><v>8</v></cell></row></sheetData></sheetDataSet></externalBook></externalLink>"#
+                .to_vec(),
+        )
+        .expect("replace link cache");
+    let mut runtime = ExcelRuntime::new();
+    let workbook = runtime
+        .open_workbook(OpenWorkbookSpec {
+            bytes: package.to_bytes().expect("serialize fixture"),
+            format_hint: Some(FileFormat::Xlsx),
+            profile: ExcelProfile::Excel365,
+            read_only: false,
+        })
+        .expect("open workbook with external names");
+    let sheet = expect_object_handle(
+        runtime
+            .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+            .expect("ActiveSheet"),
+    );
+    add_name(
+        &mut runtime,
+        workbook,
+        NameScope::Workbook,
+        "Via",
+        "[1]!Rate",
+    );
+
+    let cases = [
+        ("R1", "=[1]!Rate*2", OmValue::Number(84.0)),
+        ("R2", "=SUM([1]!Block)", OmValue::Number(50.0)),
+        ("R3", "=[external.xlsx]!Rate+1", OmValue::Number(43.0)),
+        ("R4", "=Via+1", OmValue::Number(43.0)),
+        // A constant name, or a sheet-scoped name read at workbook level, keeps its saved value.
+        ("R5", "=[1]!Const", OmValue::Empty),
+        ("R6", "=[1]!Local", OmValue::Empty),
+    ];
+    for (address, formula, _) in &cases {
+        let cell = range(&mut runtime, sheet, address);
+        runtime
+            .dispatch_set(cell, "Formula", OmValue::Text(formula.to_string()), &[])
+            .unwrap_or_else(|error| panic!("set {address}: {error:?}"));
+    }
+    let report = runtime
+        .calculate_workbook_with_report(workbook)
+        .expect("calculate external names");
+    assert_eq!(report.external.len(), 2, "{report:?}");
+    let mut failures = Vec::new();
+    for (address, formula, expected) in cases {
+        let cell = range(&mut runtime, sheet, address);
+        let actual = runtime.dispatch_get(cell, "Value2", &[]).expect("value");
+        if actual != expected {
+            failures.push(format!(
+                "{address} {formula}: expected {expected:?}, got {actual:?}"
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}

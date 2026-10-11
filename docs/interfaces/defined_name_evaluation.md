@@ -39,8 +39,12 @@ sheet names and cell values Excel saved in its `externalLink` part, as Excel rea
 link is not updated. `'[1]Sheet 1'!A1`, ranges, and the file-name form `[Book2.xlsx]Sheet1!A1`
 (matched against the link target's file name, with any path before the bracket ignored) resolve
 the same way, and an uncached cell is blank. Nothing opens the linked file. A formula whose
-external reference has no cache (a missing link, a DDE or OLE link, an unknown sheet, or the
-`[1]!Name` form) keeps its saved value and is reported as external.
+external reference has no cache (a missing link, a DDE or OLE link, or an unknown sheet) keeps
+its saved value and is reported as external.
+
+`[1]!Name` reads a workbook-level name of the linked workbook: the link caches the name's formula
+(`=Sheet1!$A$1`), which resolves against the book's cached sheets. A name that is not a reference,
+a sheet-scoped external name, or a name the cache does not hold keeps its saved value the same way.
 
 ## Name Formulas
 
@@ -189,5 +193,5 @@ regressions are their unit tests, `partial_corridor_shifts_retarget_formulas_ins
 
 - Built-in `_xlnm.` names evaluate as ordinary names; their print and filter meaning outside
   formulas is not derived from them.
-- External defined names (`[1]!Name`) and 3D spans into external workbooks are not read from
-  the link cache.
+- Sheet-scoped external names (`[1]Sheet1!Name`), constant external names, and 3D spans into
+  external workbooks are not read from the link cache.

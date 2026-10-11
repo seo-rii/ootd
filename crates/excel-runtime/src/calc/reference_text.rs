@@ -57,6 +57,9 @@ pub(super) fn parse_formula_reference_area_text(
             cursor += ch.len_utf8();
         }
     } else if let Some((sheet_name, reference_text)) = input.split_once('!') {
+        if let Some(book) = external_book_qualifier(sheet_name.trim()) {
+            return external_name_reference(state, book, reference_text.trim());
+        }
         let sheet_ids = resolve_formula_sheet_name_or_span(state, sheet_name.trim())?;
         (sheet_ids, reference_text)
     } else {
@@ -95,6 +98,48 @@ pub(super) fn resolve_formula_sheet_name(state: &WorkbookState, name: &str) -> O
         .find(|worksheet| worksheet.name.eq_ignore_ascii_case(name))
         .map(|worksheet| worksheet.id)
         .or_else(|| state.resolve_external_sheet(name))
+}
+
+/// The book of an external workbook-level name qualifier, `1` in `[1]!Name`.
+pub(super) fn external_book_qualifier(qualifier: &str) -> Option<&str> {
+    qualifier.strip_prefix('[')?.strip_suffix(']')
+}
+
+/// The reference a workbook-level name of an external workbook (`[1]!Name`) holds, read from the
+/// name's cached formula against the book's cached sheets. A name the cache does not hold, or one
+/// that is not a reference, stays unsupported so the cell keeps the value Excel saved.
+pub(super) fn external_name_reference(
+    state: &WorkbookState,
+    book: &str,
+    name: &str,
+) -> Result<FormulaReference, FormulaEvalError> {
+    let (book_index, cache) = state
+        .external_book(book)
+        .ok_or(FormulaEvalError::Unsupported)?;
+    let refers_to = cache
+        .defined_names
+        .iter()
+        .find(|defined_name| {
+            defined_name.sheet.is_none() && defined_name.name.eq_ignore_ascii_case(name)
+        })
+        .and_then(|defined_name| defined_name.refers_to.as_deref())
+        .ok_or(FormulaEvalError::Unsupported)?;
+    let refers_to = refers_to.trim().trim_start_matches('=');
+    // The name's sheets are the external book's, so qualify them with the book.
+    let qualified = match refers_to.strip_prefix('\'') {
+        Some(rest) => format!("'[{book_index}]{rest}"),
+        None => format!("[{book_index}]{refers_to}"),
+    };
+    let reference = parse_formula_reference_area_text(&qualified, SheetId(0), state)
+        .map_err(|_| FormulaEvalError::Unsupported)?;
+    if reference
+        .areas()
+        .iter()
+        .any(|(sheet_id, _)| state.formula_sheet_data(*sheet_id).is_none())
+    {
+        return Err(FormulaEvalError::Unsupported);
+    }
+    Ok(reference)
 }
 
 /// `#REF!` for a missing sheet of this workbook. An external sheet without a cache, or a link

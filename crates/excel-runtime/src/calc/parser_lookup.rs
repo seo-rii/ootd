@@ -1687,6 +1687,9 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
     pub(super) fn try_parse_reference_set(
         &self,
     ) -> Result<Option<(FormulaReference, usize)>, FormulaEvalError> {
+        if let Some((reference, next_index)) = self.try_parse_external_name_reference()? {
+            return Ok(Some((reference, next_index)));
+        }
         if let Some((reference, next_index)) = self.try_parse_3d_reference()? {
             return Ok(Some((reference, next_index)));
         }
@@ -1860,6 +1863,32 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             }
         }
         Ok(None)
+    }
+
+    /// `[1]!Name`: a workbook-level name of an external workbook, read through its link cache.
+    fn try_parse_external_name_reference(
+        &self,
+    ) -> Result<Option<(FormulaReference, usize)>, FormulaEvalError> {
+        let rest = &self.input[self.index..];
+        let Some(close) = rest.strip_prefix('[').and_then(|rest| rest.find("]!")) else {
+            return Ok(None);
+        };
+        let book = &rest[1..=close];
+        if book.contains(['[', ']']) {
+            return Ok(None);
+        }
+        let Some((name, cursor)) = self.parse_identifier_at(self.index + close + 3) else {
+            return Ok(None);
+        };
+        let next_is_boundary = self.input[cursor..]
+            .chars()
+            .next()
+            .is_none_or(|ch| !ch.is_ascii_alphanumeric() && ch != '_' && ch != '.');
+        if !next_is_boundary {
+            return Ok(None);
+        }
+        let reference = external_name_reference(self.evaluator.state, book, name.as_str())?;
+        Ok(Some((reference, cursor)))
     }
 
     pub(super) fn try_parse_named_reference(

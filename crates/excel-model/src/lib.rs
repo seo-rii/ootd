@@ -404,6 +404,17 @@ pub struct ExternalBookCache {
     pub sheet_names: Vec<String>,
     /// Cached cell values, one entry per sheet in `sheet_names` order.
     pub sheets: Vec<WorksheetData>,
+    pub defined_names: Vec<ExternalDefinedName>,
+}
+
+/// A defined name of an external workbook as its link caches it.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ExternalDefinedName {
+    pub name: String,
+    /// The name's formula in the linked workbook, such as `=Sheet1!$A$1`.
+    pub refers_to: Option<String>,
+    /// The zero-based sheet a sheet-scoped name belongs to, or `None` for a workbook name.
+    pub sheet: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1358,6 +1369,17 @@ impl WorkbookState {
     pub fn resolve_external_sheet(&self, qualifier: &str) -> Option<SheetId> {
         let qualifier = &qualifier[qualifier.find('[')?..];
         let (book, sheet) = qualifier.strip_prefix('[')?.split_once(']')?;
+        let (book_index, cache) = self.external_book(book)?;
+        let sheet_index = cache
+            .sheet_names
+            .iter()
+            .position(|name| name.eq_ignore_ascii_case(sheet))?;
+        Some(Self::external_sheet_id(book_index, sheet_index))
+    }
+
+    /// The one-based index and cache of an external book named by position (`1`) or by the file
+    /// name of its link target (`Book2.xlsx`).
+    pub fn external_book(&self, book: &str) -> Option<(usize, &ExternalBookCache)> {
         let book_index = match book.parse::<usize>() {
             Ok(index) => index,
             Err(_) => {
@@ -1374,11 +1396,7 @@ impl WorkbookState {
             .external_books
             .get(book_index.checked_sub(1)?)?
             .as_ref()?;
-        let sheet_index = cache
-            .sheet_names
-            .iter()
-            .position(|name| name.eq_ignore_ascii_case(sheet))?;
-        Some(Self::external_sheet_id(book_index, sheet_index))
+        Some((book_index, cache))
     }
 
     /// The cells a formula reads for a sheet id: a worksheet of this workbook, or the cached
