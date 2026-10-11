@@ -89,6 +89,24 @@ fn operators_coerce_and_compare_typed_values() {
         ("=+P2", text("abc")),
         ("=-P1", number(-10.0)),
         ("=IF(P1>5,\"y\",\"n\")", text("y")),
+        // Function arguments use the same operators and coercions.
+        ("=SUM(2^3,\"3\")", number(11.0)),
+        ("=ABS(-2^2)", number(4.0)),
+        ("=IF(\"a\"=\"A\",\"y\",\"n\")", text("y")),
+        ("=ROUND(10%*P1+0.25,1)", number(1.3)),
+        ("=LEN(1=1)", number(4.0)),
+        ("=UPPER(\"a\"&1=1)", text("FALSE")),
+        ("=CONCAT(\"x\",2^2)", text("x4")),
+        ("=IFERROR(1/0,\"z\")", text("z")),
+        ("=ISERROR(P2+1)", logical(true)),
+        // Errors are values: they stop at the operator or function that catches them.
+        ("=ISERROR(\"abc\")", logical(false)),
+        ("=ISERROR(1/0+5)", logical(true)),
+        ("=IFERROR(SUM(1/0,2),0)", number(0.0)),
+        ("=IFERROR(P2*2,\"bad\")", text("bad")),
+        ("=IFNA(#N/A,1)", number(1.0)),
+        ("=#N/A&\"x\"", error(CellError::NA)),
+        ("=1/0>#N/A", error(CellError::Div0)),
     ];
     for (index, (formula, _)) in cases.iter().enumerate() {
         let cell = range(&mut runtime, &format!("R{}", index + 1));

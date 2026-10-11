@@ -69,6 +69,18 @@ pub(super) fn formula_compare_values(
     })
 }
 
+/// An evaluation error as a value, so the expression around it keeps parsing and functions such
+/// as `IFERROR` can catch it. Only `Unsupported` stays an `Err`.
+fn formula_error_value(
+    result: Result<FormulaValueProbe, FormulaEvalError>,
+) -> Result<FormulaValueProbe, FormulaEvalError> {
+    match result {
+        Err(FormulaEvalError::Unsupported) => Err(FormulaEvalError::Unsupported),
+        Err(error) => Ok(FormulaValueProbe::Error(error)),
+        value => value,
+    }
+}
+
 /// The result of an arithmetic operator, or `#NUM!` when it leaves the finite numbers.
 fn formula_finite_number(value: f64) -> Result<FormulaValueProbe, FormulaEvalError> {
     if value.is_finite() {
@@ -115,15 +127,16 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                 return Ok(value);
             };
             let right = self.parse_typed_concatenation()?;
-            let ordering = formula_compare_values(&value, &right)?;
-            value = FormulaValueProbe::Bool(match operator {
-                FormulaComparisonOperator::Equal => ordering == Ordering::Equal,
-                FormulaComparisonOperator::NotEqual => ordering != Ordering::Equal,
-                FormulaComparisonOperator::LessThan => ordering == Ordering::Less,
-                FormulaComparisonOperator::LessThanOrEqual => ordering != Ordering::Greater,
-                FormulaComparisonOperator::GreaterThan => ordering == Ordering::Greater,
-                FormulaComparisonOperator::GreaterThanOrEqual => ordering != Ordering::Less,
-            });
+            value = formula_error_value(formula_compare_values(&value, &right).map(|ordering| {
+                FormulaValueProbe::Bool(match operator {
+                    FormulaComparisonOperator::Equal => ordering == Ordering::Equal,
+                    FormulaComparisonOperator::NotEqual => ordering != Ordering::Equal,
+                    FormulaComparisonOperator::LessThan => ordering == Ordering::Less,
+                    FormulaComparisonOperator::LessThanOrEqual => ordering != Ordering::Greater,
+                    FormulaComparisonOperator::GreaterThan => ordering == Ordering::Greater,
+                    FormulaComparisonOperator::GreaterThanOrEqual => ordering != Ordering::Less,
+                })
+            }))?;
         }
     }
 
@@ -134,10 +147,12 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             if !self.consume_char('&') {
                 return Ok(value);
             }
-            let mut text = self.typed_text(value)?;
             let right = self.parse_typed_additive()?;
-            text.push_str(&self.typed_text(right)?);
-            value = FormulaValueProbe::Text(text);
+            value = formula_error_value((|| {
+                let mut text = self.typed_text(value)?;
+                text.push_str(&self.typed_text(right)?);
+                Ok(FormulaValueProbe::Text(text))
+            })())?;
         }
     }
 
@@ -152,10 +167,10 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             } else {
                 return Ok(value);
             };
-            let left = self.typed_number(value)?;
             let right = self.parse_typed_multiplicative()?;
-            let right = self.typed_number(right)?;
-            value = formula_finite_number(if subtract { left - right } else { left + right })?;
+            value = self.typed_arithmetic(value, right, |left, right| {
+                Ok(if subtract { left - right } else { left + right })
+            })?;
         }
     }
 
@@ -170,13 +185,16 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             } else {
                 return Ok(value);
             };
-            let left = self.typed_number(value)?;
             let right = self.parse_typed_power()?;
-            let right = self.typed_number(right)?;
-            if divide && right == 0.0 {
-                return Err(FormulaEvalError::Div0);
-            }
-            value = formula_finite_number(if divide { left / right } else { left * right })?;
+            value = self.typed_arithmetic(value, right, |left, right| {
+                if !divide {
+                    Ok(left * right)
+                } else if right == 0.0 {
+                    Err(FormulaEvalError::Div0)
+                } else {
+                    Ok(left / right)
+                }
+            })?;
         }
     }
 
@@ -187,10 +205,8 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             if !self.consume_char('^') {
                 return Ok(value);
             }
-            let base = self.typed_number(value)?;
             let exponent = self.parse_typed_percent()?;
-            let exponent = self.typed_number(exponent)?;
-            value = FormulaValueProbe::Number(formula_power(base, exponent)?);
+            value = self.typed_arithmetic(value, exponent, formula_power)?;
         }
     }
 
@@ -201,7 +217,10 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             if !self.consume_char('%') {
                 return Ok(value);
             }
-            value = FormulaValueProbe::Number(self.typed_number(value)? / 100.0);
+            value = formula_error_value(
+                self.typed_number(value)
+                    .map(|number| FormulaValueProbe::Number(number / 100.0)),
+            )?;
         }
     }
 
@@ -209,17 +228,16 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         self.skip_whitespace();
         if self.consume_char('-') {
             let value = self.parse_typed_unary()?;
-            return Ok(FormulaValueProbe::Number(-self.typed_number(value)?));
+            return formula_error_value(
+                self.typed_number(value)
+                    .map(|number| FormulaValueProbe::Number(-number)),
+            );
         }
         // Unary plus leaves its operand as it is: `=+"a"` is text.
         if self.consume_char('+') {
             return self.parse_typed_unary();
         }
-        match self.parse_typed_primary()? {
-            FormulaValueProbe::Error(error) => Err(error),
-            FormulaValueProbe::Omitted => Err(FormulaEvalError::Unsupported),
-            value => Ok(value),
-        }
+        self.parse_typed_primary()
     }
 
     fn parse_typed_primary(&mut self) -> Result<FormulaValueProbe, FormulaEvalError> {
@@ -238,13 +256,22 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             return Ok(FormulaValueProbe::Number(number));
         }
         if let Some(error) = self.parse_error_literal() {
-            return Err(error);
+            return Ok(FormulaValueProbe::Error(error));
         }
         let checkpoint = self.index;
         if let Some(identifier) = self.parse_identifier() {
             self.skip_whitespace();
             if self.consume_char('(') {
-                return self.parse_typed_function(identifier.as_str());
+                let arguments_start = self.index;
+                return match self.parse_typed_function(identifier.as_str()) {
+                    Err(FormulaEvalError::Unsupported) => Err(FormulaEvalError::Unsupported),
+                    // A function that fails is its error, wherever in its arguments it stopped.
+                    Err(error) => {
+                        self.index = self.call_end(arguments_start)?;
+                        Ok(FormulaValueProbe::Error(error))
+                    }
+                    value => value,
+                };
             }
         }
         self.index = checkpoint;
@@ -252,13 +279,13 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             self.index = next_index;
             let (sheet_id, rect) = reference.single_area()?;
             if rect.row_first != rect.row_last || rect.col_first != rect.col_last {
-                // A range operand is an array, which the older grammars handle.
-                return Err(FormulaEvalError::Unsupported);
+                return Ok(FormulaValueProbe::Error(FormulaEvalError::Value));
             }
-            let value =
+            return formula_error_value(
                 self.evaluator
-                    .cell_value_or_blank(sheet_id, rect.row_first, rect.col_first)?;
-            return Ok(formula_value_probe_from_cell_value(value));
+                    .cell_value_or_blank(sheet_id, rect.row_first, rect.col_first)
+                    .map(formula_value_probe_from_cell_value),
+            );
         }
         if let Some(identifier) = self.parse_identifier() {
             if identifier.eq_ignore_ascii_case("TRUE") {
@@ -273,8 +300,59 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             if let Some(value) = self.defined_name_value_probe(identifier.as_str())? {
                 return Ok(value);
             }
+            return Ok(FormulaValueProbe::Error(FormulaEvalError::Name));
         }
         Err(FormulaEvalError::Unsupported)
+    }
+
+    /// The index just past the `)` that closes a call whose arguments start at `start`, skipping
+    /// string literals, quoted sheet names, and nested parentheses and brackets.
+    fn call_end(&self, start: usize) -> Result<usize, FormulaEvalError> {
+        let bytes = self.input.as_bytes();
+        let mut depth = 1usize;
+        let mut index = start;
+        while index < bytes.len() {
+            match bytes[index] {
+                quote @ (b'"' | b'\'') => {
+                    index += 1;
+                    while index < bytes.len() {
+                        if bytes[index] == quote {
+                            if bytes.get(index + 1) == Some(&quote) {
+                                index += 1;
+                            } else {
+                                break;
+                            }
+                        }
+                        index += 1;
+                    }
+                }
+                b'(' | b'[' | b'{' => depth += 1,
+                b')' | b']' | b'}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Ok(index + 1);
+                    }
+                }
+                _ => {}
+            }
+            index += 1;
+        }
+        Err(FormulaEvalError::Unsupported)
+    }
+
+    /// A binary arithmetic operator: an error operand is the result, left first; otherwise both
+    /// operands coerce to numbers and `operation` combines them.
+    fn typed_arithmetic(
+        &self,
+        left: FormulaValueProbe,
+        right: FormulaValueProbe,
+        operation: impl Fn(f64, f64) -> Result<f64, FormulaEvalError>,
+    ) -> Result<FormulaValueProbe, FormulaEvalError> {
+        formula_error_value((|| {
+            let left = self.typed_number(left)?;
+            let right = self.typed_number(right)?;
+            formula_finite_number(operation(left, right)?)
+        })())
     }
 
     /// A function call whose name and `(` are consumed, as a typed value: functions with typed
@@ -285,9 +363,19 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if let Some(value) = self.parse_bound_lambda_call_value(name)? {
             return Ok(value);
         }
+        if name.eq_ignore_ascii_case("LAMBDA") {
+            let lambda = self.parse_lambda_value_function()?;
+            self.skip_whitespace();
+            if self.consume_char('(') {
+                return self.parse_lambda_call_arguments(lambda);
+            }
+            return Ok(lambda);
+        }
         let upper = name.to_ascii_uppercase();
         let typed = match upper.as_str() {
             "IF" => Some(self.parse_if_value_function()),
+            "IFERROR" => Some(self.parse_error_fallback_value_function(false)),
+            "IFNA" => Some(self.parse_error_fallback_value_function(true)),
             "IFS" => Some(self.parse_ifs_value_function()),
             "SWITCH" => Some(self.parse_switch_value_function()),
             "CHOOSE" => Some(self.parse_choose_value_function()),
@@ -331,7 +419,7 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
 
     /// An operand of an arithmetic operator: blanks are 0, logicals 1 or 0, and text converts as
     /// `VALUE` converts it or is `#VALUE!`.
-    fn typed_number(&self, value: FormulaValueProbe) -> Result<f64, FormulaEvalError> {
+    pub(super) fn typed_number(&self, value: FormulaValueProbe) -> Result<f64, FormulaEvalError> {
         match value {
             FormulaValueProbe::Text(text) => formula_value_text(
                 self.evaluator.context.date_system(),
@@ -339,16 +427,14 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                 text.as_str(),
             )
             .map_err(|_| FormulaEvalError::Value),
-            FormulaValueProbe::Lambda { .. } => Err(FormulaEvalError::Unsupported),
             value => formula_number_from_value_probe(value),
         }
     }
 
     /// An operand of `&`: numbers in their general text form, logicals as TRUE or FALSE.
-    fn typed_text(&self, value: FormulaValueProbe) -> Result<String, FormulaEvalError> {
+    pub(super) fn typed_text(&self, value: FormulaValueProbe) -> Result<String, FormulaEvalError> {
         match value {
             FormulaValueProbe::Error(error) => Err(error),
-            FormulaValueProbe::Lambda { .. } => Err(FormulaEvalError::Unsupported),
             value => formula_value_to_text(value, false),
         }
     }

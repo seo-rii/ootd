@@ -449,6 +449,7 @@ impl<'a> FormulaEvaluator<'a> {
         match typed_result {
             // A formula that reads a blank cell shows 0.
             Ok(FormulaValueProbe::Blank) => return Ok(CellValue::Number(0.0)),
+            Ok(FormulaValueProbe::Error(error)) => return Err(error),
             Ok(value) => {
                 if let Some(value) = formula_cell_value_from_probe(value) {
                     return Ok(value);

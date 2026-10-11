@@ -430,9 +430,11 @@ Active order:
    `FormulaParser` impl blocks, leaving `calc/mod.rs` at about 4,100 lines of shared types,
    expression grammar, and dispatch. Whole formulas now evaluate in a typed expression
    grammar with Excel's operators (`^`, `%`, `&`, typed comparisons returning TRUE/FALSE) and
-   coercions, and logical functions return logicals. Moving function arguments onto the typed
-   grammar, the rest of the common value/coercion/error model, and a persistent dependency index
-   with dirty propagation remain open under the same IDs. The contract is
+   coercions, and logical functions return logicals. Function arguments parse through the same
+   grammar, replacing the separate numeric, value-probe, and text operand grammars, and errors are
+   values that operators and catching functions see. Array and reference values in the typed
+   grammar and a persistent dependency index with dirty propagation remain open under the same
+   IDs. The contract is
    `docs/interfaces/calculation_order.md`.
 68. Dynamic-array cell metadata is complete (2026-09-30, synthetic, part of
    `OOTD-075`/`OOTD-076`/`OOTD-077`): load resolves the workbook `sheetMetadata` part, and a

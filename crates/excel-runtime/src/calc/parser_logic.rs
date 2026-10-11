@@ -495,22 +495,32 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         &mut self,
         catch_only_na: bool,
     ) -> Result<f64, FormulaEvalError> {
-        let primary = self.parse_catchable_argument()?;
+        formula_number_from_value_probe(self.parse_error_fallback_value_function(catch_only_na)?)
+    }
+
+    /// `IFERROR` and `IFNA`: the first argument, or the second when the first is an error they
+    /// catch. Either may be any type.
+    pub(super) fn parse_error_fallback_value_function(
+        &mut self,
+        catch_only_na: bool,
+    ) -> Result<FormulaValueProbe, FormulaEvalError> {
+        let primary = self.parse_value_probe_argument()?;
         self.skip_whitespace();
         if !self.consume_char(',') {
             return Err(FormulaEvalError::Unsupported);
         }
-        let fallback = self.parse_comparison()?;
+        let fallback = self.parse_value_probe_argument()?;
         self.skip_whitespace();
         if !self.consume_char(')') {
             return Err(FormulaEvalError::Unsupported);
         }
-        match primary {
-            Ok(value) => Ok(value),
-            Err(FormulaEvalError::NA) => Ok(fallback),
-            Err(_error) if !catch_only_na => Ok(fallback),
-            Err(error) => Err(error),
-        }
+        Ok(match primary {
+            FormulaValueProbe::Error(FormulaEvalError::NA) => fallback,
+            FormulaValueProbe::Error(_) if !catch_only_na => fallback,
+            // A blank result reads as 0, as it does in a cell.
+            FormulaValueProbe::Blank => FormulaValueProbe::Number(0.0),
+            primary => primary,
+        })
     }
 
     pub(super) fn parse_error_test_function(
@@ -518,15 +528,15 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         match_any_error: bool,
         match_only_na: bool,
     ) -> Result<f64, FormulaEvalError> {
-        let value = self.parse_catchable_argument()?;
+        let value = self.parse_value_probe_argument()?;
         self.skip_whitespace();
         if !self.consume_char(')') {
             return Err(FormulaEvalError::Unsupported);
         }
         let is_match = match value {
-            Ok(_) => false,
-            Err(FormulaEvalError::NA) => match_any_error || match_only_na,
-            Err(_) => match_any_error || !match_only_na,
+            FormulaValueProbe::Error(FormulaEvalError::NA) => match_any_error || match_only_na,
+            FormulaValueProbe::Error(_) => match_any_error || !match_only_na,
+            _ => false,
         };
         Ok(if is_match { 1.0 } else { 0.0 })
     }

@@ -1576,122 +1576,11 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         }
     }
 
+    /// A numeric argument or operand: a typed expression coerced to a number as arithmetic
+    /// coerces it.
     fn parse_comparison(&mut self) -> Result<f64, FormulaEvalError> {
-        let mut value = self.parse_expression()?;
-        loop {
-            self.skip_whitespace();
-            let Some(operator) = self.consume_comparison_operator() else {
-                return Ok(value);
-            };
-            let right = self.parse_expression()?;
-            value = if operator.evaluate(value, right) {
-                1.0
-            } else {
-                0.0
-            };
-        }
-    }
-
-    fn parse_expression(&mut self) -> Result<f64, FormulaEvalError> {
-        let mut value = self.parse_term()?;
-        loop {
-            self.skip_whitespace();
-            if self.consume_char('+') {
-                value += self.parse_term()?;
-            } else if self.consume_char('-') {
-                value -= self.parse_term()?;
-            } else {
-                return Ok(value);
-            }
-        }
-    }
-
-    fn parse_term(&mut self) -> Result<f64, FormulaEvalError> {
-        let mut value = self.parse_factor()?;
-        loop {
-            self.skip_whitespace();
-            if self.consume_char('*') {
-                value *= self.parse_factor()?;
-            } else if self.consume_char('/') {
-                let divisor = self.parse_factor()?;
-                if divisor == 0.0 {
-                    return Err(FormulaEvalError::Div0);
-                }
-                value /= divisor;
-            } else {
-                return Ok(value);
-            }
-        }
-    }
-
-    fn parse_factor(&mut self) -> Result<f64, FormulaEvalError> {
-        self.skip_whitespace();
-        if self.consume_char('+') {
-            return self.parse_factor();
-        }
-        if self.consume_char('-') {
-            return Ok(-self.parse_factor()?);
-        }
-        if self.consume_char('(') {
-            let value = self.parse_expression()?;
-            self.skip_whitespace();
-            if !self.consume_char(')') {
-                return Err(FormulaEvalError::Unsupported);
-            }
-            return Ok(value);
-        }
-        if let Some(number) = self.parse_number()? {
-            return Ok(number);
-        }
-        if let Some(error) = self.parse_error_literal() {
-            return Err(error);
-        }
-        let checkpoint = self.index;
-        if let Some(identifier) = self.parse_identifier() {
-            self.skip_whitespace();
-            if self.consume_char('(') {
-                if let Some(value) = self.parse_bound_lambda_call_value(identifier.as_str())? {
-                    return formula_number_from_value_probe(value);
-                }
-                return self.parse_function(identifier.as_str());
-            }
-        }
-        self.index = checkpoint;
-        if let Some((reference, next_index)) = self.try_parse_reference_set()? {
-            self.index = next_index;
-            let (target_sheet_id, rect) = reference.single_area()?;
-            if rect.row_first == rect.row_last && rect.col_first == rect.col_last {
-                return self.evaluator.numeric_cell_value(
-                    target_sheet_id,
-                    rect.row_first,
-                    rect.col_first,
-                );
-            }
-            return Err(FormulaEvalError::Value);
-        }
-        if let Some(identifier) = self.parse_identifier() {
-            self.skip_whitespace();
-            if self.consume_char('(') {
-                if let Some(value) = self.parse_bound_lambda_call_value(identifier.as_str())? {
-                    return formula_number_from_value_probe(value);
-                }
-                return self.parse_function(identifier.as_str());
-            }
-            if identifier.eq_ignore_ascii_case("TRUE") {
-                return Ok(1.0);
-            }
-            if identifier.eq_ignore_ascii_case("FALSE") {
-                return Ok(0.0);
-            }
-            if let Some(value) = self.binding_value(identifier.as_str()) {
-                return formula_number_from_value_probe(value);
-            }
-            if let Some(value) = self.defined_name_value_probe(identifier.as_str())? {
-                return formula_number_from_value_probe(value);
-            }
-            return Err(FormulaEvalError::Name);
-        }
-        Err(FormulaEvalError::Unsupported)
+        let value = self.parse_typed_comparison()?;
+        self.typed_number(value)
     }
 
     /// Parses an array constant such as `{1,2;"a",TRUE}` into rows of values. Elements are signed
@@ -3967,75 +3856,10 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         }
     }
 
-    /// Parses one text argument, joining `&`-separated operands.
+    /// Parses one text argument: a typed expression in its text form.
     fn parse_text_value_argument(&mut self) -> Result<String, FormulaEvalError> {
-        let mut text = self.parse_text_value_operand()?;
-        self.skip_whitespace();
-        while self.consume_char('&') {
-            text.push_str(&self.parse_text_value_operand()?);
-            self.skip_whitespace();
-        }
-        Ok(text)
-    }
-
-    fn parse_text_value_operand(&mut self) -> Result<String, FormulaEvalError> {
-        self.skip_whitespace();
-        if let Some(text) = self.parse_string_literal()? {
-            return Ok(text);
-        }
-        let checkpoint = self.index;
-        if let Some((reference, next_index)) = self.try_parse_reference_set()? {
-            self.index = next_index;
-            let (target_sheet_id, rect) = reference.single_area()?;
-            if rect.row_first != rect.row_last || rect.col_first != rect.col_last {
-                return Err(FormulaEvalError::Value);
-            }
-            let value = self.evaluator.cell_value_or_blank(
-                target_sheet_id,
-                rect.row_first,
-                rect.col_first,
-            )?;
-            return formula_text_from_value_probe(formula_value_probe_from_cell_value(value));
-        }
-        self.index = checkpoint;
-        if let Some(identifier) = self.parse_identifier() {
-            self.skip_whitespace();
-            if self.consume_char('(') {
-                if let Some(value) = self.parse_bound_lambda_call_value(identifier.as_str())? {
-                    return formula_text_from_value_probe(value);
-                }
-                if identifier.eq_ignore_ascii_case("LAMBDA")
-                    || formula_text_function_name(identifier.as_str())
-                {
-                    match self.parse_text_function(identifier.as_str()) {
-                        Ok(text) => return Ok(text),
-                        Err(FormulaEvalError::Unsupported) => self.index = checkpoint,
-                        Err(error) => return Err(error),
-                    }
-                } else {
-                    self.index = checkpoint;
-                }
-            } else {
-                if identifier.eq_ignore_ascii_case("TRUE") {
-                    return Ok("TRUE".to_string());
-                }
-                if identifier.eq_ignore_ascii_case("FALSE") {
-                    return Ok("FALSE".to_string());
-                }
-                if let Some(value) = self.binding_value(identifier.as_str())
-                    && self.peek_char().is_none_or(|ch| matches!(ch, ',' | ')'))
-                {
-                    return formula_text_from_value_probe(value);
-                }
-                if self.peek_char().is_none_or(|ch| matches!(ch, ',' | ')'))
-                    && let Some(value) = self.defined_name_value_probe(identifier.as_str())?
-                {
-                    return formula_text_from_value_probe(value);
-                }
-                self.index = checkpoint;
-            }
-        }
-        formula_text_from_number(self.parse_comparison()?)
+        let value = self.parse_typed_comparison()?;
+        self.typed_text(value)
     }
 
     fn parse_text_values_argument(&mut self) -> Result<Vec<String>, FormulaEvalError> {
@@ -4059,121 +3883,11 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         Ok(vec![self.parse_text_value_argument()?])
     }
 
-    /// Parses one argument, joining `&`-separated operands into text. Blank operands contribute
-    /// nothing, numbers and booleans use their text forms, and the first error operand is the
-    /// result.
+    /// Parses one argument as a typed value. An error the argument evaluates to is its value, so
+    /// functions such as `IFERROR` and `ISERROR` can inspect it.
     fn parse_value_probe_argument(&mut self) -> Result<FormulaValueProbe, FormulaEvalError> {
-        let first = self.parse_value_probe_operand()?;
-        self.skip_whitespace();
-        if self.peek_char() != Some('&') {
-            return Ok(first);
-        }
-        let mut parts = vec![first];
-        while self.consume_char('&') {
-            parts.push(self.parse_value_probe_operand()?);
-            self.skip_whitespace();
-        }
-        let mut text = String::new();
-        for part in parts {
-            match part {
-                FormulaValueProbe::Error(error) => return Ok(FormulaValueProbe::Error(error)),
-                part => text.push_str(&formula_value_to_text(part, false)?),
-            }
-        }
-        Ok(FormulaValueProbe::Text(text))
-    }
-
-    /// One operand of a value-probe argument. An operand that a following arithmetic operator
-    /// extends is reparsed as a numeric expression, so `A1+1&"x"` concatenates `A1+1`.
-    fn parse_value_probe_operand(&mut self) -> Result<FormulaValueProbe, FormulaEvalError> {
-        let checkpoint = self.index;
-        let value = self.parse_value_probe_single_operand()?;
-        self.skip_whitespace();
-        if matches!(self.peek_char(), Some('+' | '-' | '*' | '/'))
-            && !matches!(
-                value,
-                FormulaValueProbe::Text(_) | FormulaValueProbe::Lambda { .. }
-            )
-        {
-            self.index = checkpoint;
-            return match self.parse_expression() {
-                Ok(value) => Ok(FormulaValueProbe::Number(value)),
-                Err(FormulaEvalError::Unsupported) => Err(FormulaEvalError::Unsupported),
-                Err(error) => Ok(FormulaValueProbe::Error(error)),
-            };
-        }
-        Ok(value)
-    }
-
-    fn parse_value_probe_single_operand(&mut self) -> Result<FormulaValueProbe, FormulaEvalError> {
-        self.skip_whitespace();
-        if let Some(text) = self.parse_string_literal()? {
-            return Ok(FormulaValueProbe::Text(text));
-        }
-        let checkpoint = self.index;
-        if let Some((reference, next_index)) = self.try_parse_reference_set()? {
-            self.index = next_index;
-            let (target_sheet_id, rect) = reference.single_area()?;
-            if rect.row_first != rect.row_last || rect.col_first != rect.col_last {
-                return Err(FormulaEvalError::Value);
-            }
-            let value = self.evaluator.cell_value_or_blank(
-                target_sheet_id,
-                rect.row_first,
-                rect.col_first,
-            )?;
-            return Ok(formula_value_probe_from_cell_value(value));
-        }
-        self.index = checkpoint;
-        if let Some(identifier) = self.parse_identifier() {
-            self.skip_whitespace();
-            if self.consume_char('(') {
-                if let Some(value) = self.parse_bound_lambda_call_value(identifier.as_str())? {
-                    return Ok(value);
-                }
-                if identifier.eq_ignore_ascii_case("LAMBDA") {
-                    let lambda = self.parse_lambda_value_function()?;
-                    self.skip_whitespace();
-                    if self.consume_char('(') {
-                        return self.parse_lambda_call_arguments(lambda);
-                    }
-                    return Ok(lambda);
-                }
-                if formula_text_function_name(identifier.as_str()) {
-                    match self.parse_text_function(identifier.as_str()) {
-                        Ok(text) => return Ok(FormulaValueProbe::Text(text)),
-                        Err(FormulaEvalError::Unsupported) => self.index = checkpoint,
-                        Err(error) => return Err(error),
-                    }
-                } else {
-                    self.index = checkpoint;
-                }
-            } else {
-                if identifier.eq_ignore_ascii_case("TRUE") {
-                    return Ok(FormulaValueProbe::Bool(true));
-                }
-                if identifier.eq_ignore_ascii_case("FALSE") {
-                    return Ok(FormulaValueProbe::Bool(false));
-                }
-                if let Some(value) = self.binding_value(identifier.as_str())
-                    && self
-                        .peek_char()
-                        .is_none_or(|ch| matches!(ch, ',' | ')' | '&'))
-                {
-                    return Ok(value);
-                }
-                if self
-                    .peek_char()
-                    .is_none_or(|ch| matches!(ch, ',' | ')' | '&'))
-                    && let Some(value) = self.defined_name_value_probe(identifier.as_str())?
-                {
-                    return Ok(value);
-                }
-                self.index = checkpoint;
-            }
-        }
-        match self.parse_comparison() {
-            Ok(value) => Ok(FormulaValueProbe::Number(value)),
+        match self.parse_typed_comparison() {
+            Ok(value) => Ok(value),
             Err(FormulaEvalError::Unsupported) => Err(FormulaEvalError::Unsupported),
             Err(error) => Ok(FormulaValueProbe::Error(error)),
         }

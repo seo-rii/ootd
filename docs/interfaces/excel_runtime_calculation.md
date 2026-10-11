@@ -721,9 +721,12 @@ External data notes:
   Comparisons return TRUE or FALSE, compare text without case, order numbers before text before
   logicals, and treat a blank as the other operand's empty value; arithmetic coerces logicals,
   blanks, and numeric text (`="3"+1` is 4); logical functions such as `AND` and `ISNUMBER` return
-  TRUE or FALSE. Function arguments still use the numeric grammar, so operators inside numeric
-  function arguments keep the narrower numeric rules, and text comparison uses lowercase ordinal
-  order rather than Excel's collation.
+  TRUE or FALSE. Function arguments parse through the same grammar: a numeric argument is the
+  typed value coerced as arithmetic coerces it, a text argument is its text form, and a value
+  argument keeps its type. Errors are values inside an expression: an operator returns its left
+  error operand first, and a function that fails is its error, so `=ISERROR(1/0+5)` and
+  `=IFERROR(SUM(1/0,2),0)` catch them. `IFERROR`/`IFNA` return either argument's type. Text
+  comparison uses lowercase ordinal order rather than Excel's collation.
 - The evaluator is otherwise numeric-first. It includes focused scalar text and date/time text-parse subsets, but broader string semantics, locale-sensitive date/time parsing, and richer coercion rules are not implemented.
 - Dynamic array support currently covers in-memory `Formula2`/`Formula2Local` spill materialization for the projection functions listed above, spill replacement, and obstruction errors. XLSX dynamic-array metadata round-trip, spill-reference operators, remaining array-producing and higher-order functions, and broader `Formula2` parity remain incomplete.
 - Lookup/reference support now includes workbook and worksheet scoped names, explicit multi-area references for supported functions, and 3D reference expansion for aggregate-style formulas. External workbook references (`[1]Sheet1!A1`) read the cached values in the workbook's `externalLink` parts without opening the linked file. It is still a focused subset and does not model broader lookup/reference families yet.
