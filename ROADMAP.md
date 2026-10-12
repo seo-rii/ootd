@@ -432,9 +432,12 @@ Active order:
    grammar with Excel's operators (`^`, `%`, `&`, typed comparisons returning TRUE/FALSE) and
    coercions, and logical functions return logicals. Function arguments parse through the same
    grammar, replacing the separate numeric, value-probe, and text operand grammars, and errors are
-   values that operators and catching functions see. Array and reference values in the typed
-   grammar and a persistent dependency index with dirty propagation remain open under the same
-   IDs. The contract is
+   values that operators and catching functions see. Ranges, array constants, and spill
+   functions are array values: operators broadcast element by element, `IF` selects per element,
+   aggregates, `SUMPRODUCT`, logical functions, and `CONCAT`/`TEXTJOIN` read them, and
+   dynamic-array formulas spill computed arrays. Lifting scalar functions over arrays, array
+   arguments for reference functions (`INDEX`, `ROWS`, `MMULT`), and a persistent dependency index
+   with dirty propagation remain open under the same IDs. The contract is
    `docs/interfaces/calculation_order.md`.
 68. Dynamic-array cell metadata is complete (2026-09-30, synthetic, part of
    `OOTD-075`/`OOTD-076`/`OOTD-077`): load resolves the workbook `sheetMetadata` part, and a

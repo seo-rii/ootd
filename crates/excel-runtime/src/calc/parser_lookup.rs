@@ -1066,7 +1066,9 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                     FormulaValueProbe::Text(_) => 2,
                     FormulaValueProbe::Bool(_) => 3,
                     FormulaValueProbe::Error(_) => 4,
-                    FormulaValueProbe::Omitted | FormulaValueProbe::Lambda { .. } => 5,
+                    FormulaValueProbe::Omitted
+                    | FormulaValueProbe::Lambda { .. }
+                    | FormulaValueProbe::Array(_) => 5,
                 };
                 Ok(rank(left).cmp(&rank(right)))
             };

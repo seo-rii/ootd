@@ -127,3 +127,111 @@ fn operators_coerce_and_compare_typed_values() {
     }
     assert!(failures.is_empty(), "{failures:#?}");
 }
+
+/// Arrays from ranges, constants, and array functions, with operators applied element by
+/// element. P1:P3 holds 1, 2, 3 and Q1:Q3 holds 10, 20, 30.
+#[test]
+fn operators_apply_element_by_element_to_arrays() {
+    let mut runtime = ExcelRuntime::new();
+    let workbook = runtime
+        .open_workbook(OpenWorkbookSpec {
+            bytes: synthetic_workbook_bytes(),
+            format_hint: Some(FileFormat::Xlsx),
+            profile: ExcelProfile::Excel365,
+            read_only: false,
+        })
+        .expect("open workbook");
+    let sheet = expect_object_handle(
+        runtime
+            .dispatch_get(runtime.root_application(), "ActiveSheet", &[])
+            .expect("ActiveSheet"),
+    );
+    let range = |runtime: &mut ExcelRuntime, address: &str| {
+        expect_object_handle(
+            runtime
+                .dispatch_invoke(sheet, "Range", &[OmValue::Text(address.to_string())])
+                .unwrap_or_else(|error| panic!("Range({address}): {error:?}")),
+        )
+    };
+    for (address, value) in [
+        ("P1", 1.0),
+        ("P2", 2.0),
+        ("P3", 3.0),
+        ("Q1", 10.0),
+        ("Q2", 20.0),
+        ("Q3", 30.0),
+    ] {
+        let cell = range(&mut runtime, address);
+        runtime
+            .dispatch_set(cell, "Value2", OmValue::Number(value), &[])
+            .expect("seed value");
+    }
+    let number = OmValue::Number;
+    let logical = OmValue::Bool;
+    let text = |value: &str| OmValue::Text(value.to_string());
+    let cases = [
+        ("=SUM((P1:P3>1)*1)", number(2.0)),
+        ("=SUMPRODUCT((P1:P3>1)*Q1:Q3)", number(50.0)),
+        ("=SUMPRODUCT(--(P1:P3>1))", number(2.0)),
+        ("=SUM(--(P1:P3>1))", number(2.0)),
+        ("=SUM(P1:P3*Q1:Q3)", number(140.0)),
+        ("=SUM(P1:P3*2)", number(12.0)),
+        ("=SUM({1,2,3}*2)", number(12.0)),
+        ("=MAX(P1:P3-Q1:Q3)", number(-9.0)),
+        ("=AVERAGE(P1:P3^2)", number(14.0 / 3.0)),
+        ("=SUM(IF(P1:P3>1,Q1:Q3,0))", number(50.0)),
+        ("=COUNT(IF(P1:P3>1,1,\"\"))", number(2.0)),
+        ("=AND(P1:P3>0)", logical(true)),
+        ("=OR(P1:P3>2)", logical(true)),
+        ("=CONCAT(P1:P3&\"x\")", text("1x2x3x")),
+        ("=TEXTJOIN(\",\",TRUE,P1:P3*2)", text("2,4,6")),
+        ("=SUM(SEQUENCE(3)*P1:P3)", number(14.0)),
+        // A single row or column stretches across the other operand; a larger array's extra
+        // positions are #N/A.
+        ("=SUM({1,2;3,4}*{10,100})", number(640.0)),
+        ("=SUM(P1:P3*{1,2})", number(18.0)),
+        (
+            "=SUM(P1:P3*{1;2})",
+            OmValue::from(CellValue::Error(CellError::NA)),
+        ),
+        // Where one value is wanted, a computed array shows its top-left element.
+        ("=SUM(P1:P3)*{2,3}", number(12.0)),
+    ];
+    for (index, (formula, _)) in cases.iter().enumerate() {
+        let cell = range(&mut runtime, &format!("R{}", index + 1));
+        runtime
+            .dispatch_set(cell, "Formula", OmValue::Text(formula.to_string()), &[])
+            .unwrap_or_else(|error| panic!("set {formula}: {error:?}"));
+    }
+    // A dynamic-array formula spills the array an expression computes.
+    let spill = range(&mut runtime, "T1");
+    runtime
+        .dispatch_set(
+            spill,
+            "Formula2",
+            OmValue::Text("=P1:P3*2".to_string()),
+            &[],
+        )
+        .expect("set spilling formula");
+    runtime
+        .calculate_workbook_with_report(workbook)
+        .expect("calculate arrays");
+    let mut failures = Vec::new();
+    for (index, (formula, expected)) in cases.into_iter().enumerate() {
+        let cell = range(&mut runtime, &format!("R{}", index + 1));
+        let actual = runtime.dispatch_get(cell, "Value2", &[]).expect("value");
+        if actual != expected {
+            failures.push(format!("{formula}: expected {expected:?}, got {actual:?}"));
+        }
+    }
+    for (address, expected) in [("T1", 2.0), ("T2", 4.0), ("T3", 6.0)] {
+        let cell = range(&mut runtime, address);
+        let actual = runtime.dispatch_get(cell, "Value2", &[]).expect("value");
+        if actual != OmValue::Number(expected) {
+            failures.push(format!(
+                "spill {address}: expected {expected}, got {actual:?}"
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}

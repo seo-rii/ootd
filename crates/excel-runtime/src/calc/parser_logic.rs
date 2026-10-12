@@ -190,29 +190,31 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
     pub(super) fn parse_if_value_function(
         &mut self,
     ) -> Result<FormulaValueProbe, FormulaEvalError> {
-        let condition = self.parse_comparison()?;
+        let condition = self.parse_value_probe_argument()?;
         self.skip_whitespace();
         if !self.consume_char(',') {
             return Err(FormulaEvalError::Unsupported);
         }
         let true_value = self.parse_value_probe_argument()?;
         self.skip_whitespace();
-        if self.consume_char(')') {
-            return Ok(if condition != 0.0 {
-                true_value
-            } else {
-                FormulaValueProbe::Bool(false)
-            });
+        let false_value = if self.consume_char(')') {
+            FormulaValueProbe::Bool(false)
+        } else {
+            if !self.consume_char(',') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            let false_value = self.parse_value_probe_argument()?;
+            self.skip_whitespace();
+            if !self.consume_char(')') {
+                return Err(FormulaEvalError::Unsupported);
+            }
+            false_value
+        };
+        // An array condition selects element by element.
+        if matches!(condition, FormulaValueProbe::Array(_)) {
+            return Ok(formula_select(condition, true_value, false_value));
         }
-        if !self.consume_char(',') {
-            return Err(FormulaEvalError::Unsupported);
-        }
-        let false_value = self.parse_value_probe_argument()?;
-        self.skip_whitespace();
-        if !self.consume_char(')') {
-            return Err(FormulaEvalError::Unsupported);
-        }
-        Ok(if condition != 0.0 {
+        Ok(if self.typed_number(condition)? != 0.0 {
             true_value
         } else {
             false_value
@@ -564,7 +566,9 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             FormulaValueProbe::Text(_) => 2.0,
             FormulaValueProbe::Bool(_) => 4.0,
             FormulaValueProbe::Error(_) => 16.0,
-            FormulaValueProbe::Omitted | FormulaValueProbe::Lambda { .. } => 64.0,
+            FormulaValueProbe::Omitted
+            | FormulaValueProbe::Lambda { .. }
+            | FormulaValueProbe::Array(_) => 64.0,
         })
     }
 

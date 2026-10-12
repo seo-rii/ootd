@@ -17,7 +17,7 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             return self.parse_unary_text_function(|text| text);
         }
         if name.eq_ignore_ascii_case("CONCAT") || name.eq_ignore_ascii_case("CONCATENATE") {
-            return self.parse_concat_text_function();
+            return self.parse_concat_text_function(name.eq_ignore_ascii_case("CONCAT"));
         }
         if name.eq_ignore_ascii_case("DGET") {
             return formula_selected_text_from_value_probe(
@@ -445,7 +445,8 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                 | FormulaValueProbe::Bool(_)
                 | FormulaValueProbe::Number(_)
                 | FormulaValueProbe::Omitted
-                | FormulaValueProbe::Lambda { .. } => Ok(String::new()),
+                | FormulaValueProbe::Lambda { .. }
+                | FormulaValueProbe::Array(_) => Ok(String::new()),
             };
         }
         if name.eq_ignore_ascii_case("UPPER") {
@@ -529,7 +530,11 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         Err(FormulaEvalError::Unsupported)
     }
 
-    pub(super) fn parse_concat_text_function(&mut self) -> Result<String, FormulaEvalError> {
+    /// `CONCAT` joins every cell of its ranges and arrays; `CONCATENATE` joins single values.
+    pub(super) fn parse_concat_text_function(
+        &mut self,
+        joins_ranges: bool,
+    ) -> Result<String, FormulaEvalError> {
         let mut output = String::new();
         let mut saw_argument = false;
         loop {
@@ -541,7 +546,11 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                     Err(FormulaEvalError::Value)
                 };
             }
-            output.push_str(self.parse_text_value_argument()?.as_str());
+            if joins_ranges {
+                output.extend(self.parse_text_values_argument()?);
+            } else {
+                output.push_str(self.parse_text_value_argument()?.as_str());
+            }
             saw_argument = true;
             self.skip_whitespace();
             if self.consume_char(',') {
@@ -843,7 +852,8 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                 FormulaValueProbe::Blank
                 | FormulaValueProbe::Text(_)
                 | FormulaValueProbe::Omitted
-                | FormulaValueProbe::Lambda { .. } => {
+                | FormulaValueProbe::Lambda { .. }
+                | FormulaValueProbe::Array(_) => {
                     return Err(FormulaEvalError::Value);
                 }
             };
@@ -1376,7 +1386,8 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             | FormulaValueProbe::Bool(_)
             | FormulaValueProbe::Number(_)
             | FormulaValueProbe::Omitted
-            | FormulaValueProbe::Lambda { .. } => Ok(String::new()),
+            | FormulaValueProbe::Lambda { .. }
+            | FormulaValueProbe::Array(_) => Ok(String::new()),
         }
     }
 

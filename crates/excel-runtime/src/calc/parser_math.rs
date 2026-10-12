@@ -318,7 +318,8 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             | FormulaValueProbe::Bool(_)
             | FormulaValueProbe::Number(_)
             | FormulaValueProbe::Omitted
-            | FormulaValueProbe::Lambda { .. } => Err(FormulaEvalError::Value),
+            | FormulaValueProbe::Lambda { .. }
+            | FormulaValueProbe::Array(_) => Err(FormulaEvalError::Value),
         }
     }
 }

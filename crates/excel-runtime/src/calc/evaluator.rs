@@ -32,6 +32,20 @@ fn formula_has_top_level_concatenation(formula: &str) -> bool {
     false
 }
 
+/// Whether a formula is only a reference, such as `=A1:A3` or `=Name`.
+fn formula_is_bare_reference(
+    evaluator: &mut FormulaEvaluator<'_>,
+    sheet_id: SheetId,
+    formula_text: &str,
+    current_position: Option<(u32, u32)>,
+) -> bool {
+    let parser = FormulaParser::new(formula_text, evaluator, sheet_id, current_position);
+    matches!(
+        parser.try_parse_reference_set(),
+        Ok(Some((_, next_index))) if parser.input[next_index..].trim().is_empty()
+    )
+}
+
 /// The single cell an implicit intersection selects from `rect` at `position`.
 fn implicit_intersection_cell(rect: Rect, position: Option<(u32, u32)>) -> Option<(u32, u32)> {
     if rect.row_first == rect.row_last && rect.col_first == rect.col_last {
@@ -265,6 +279,19 @@ impl<'a> FormulaEvaluator<'a> {
             let mut parser = FormulaParser::new(&formula_text, self, sheet_id, Some((row, col)));
             parser.parse_dynamic_array_formula()
         };
+        // An expression the array grammar does not model, such as `A1:A3*2`, spills the array
+        // the typed grammar computes.
+        let result = match result {
+            Err(FormulaEvalError::Unsupported) => {
+                let typed = FormulaParser::new(&formula_text, self, sheet_id, Some((row, col)))
+                    .parse_typed_formula();
+                match typed {
+                    Ok(FormulaValueProbe::Array(array)) => Ok(array),
+                    _ => Err(FormulaEvalError::Unsupported),
+                }
+            }
+            result => result,
+        };
         let result = match result {
             Ok(result) => Ok(result),
             Err(FormulaEvalError::Unsupported) => {
@@ -450,6 +477,17 @@ impl<'a> FormulaEvaluator<'a> {
             // A formula that reads a blank cell shows 0.
             Ok(FormulaValueProbe::Blank) => return Ok(CellValue::Number(0.0)),
             Ok(FormulaValueProbe::Error(error)) => return Err(error),
+            // A computed array shows its top-left element where one value is wanted; a bare
+            // range is left to the older grammars.
+            Ok(FormulaValueProbe::Array(array))
+                if !formula_is_bare_reference(self, sheet_id, formula_text, current_position) =>
+            {
+                return match array.values.into_iter().next() {
+                    None | Some(CellValue::Blank) => Ok(CellValue::Number(0.0)),
+                    Some(CellValue::Error(error)) => Err(formula_eval_error_from_cell_error(error)),
+                    Some(value) => Ok(value),
+                };
+            }
             Ok(value) => {
                 if let Some(value) = formula_cell_value_from_probe(value) {
                     return Ok(value);

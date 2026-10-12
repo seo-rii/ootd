@@ -1348,7 +1348,8 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                     FormulaValueProbe::Blank
                     | FormulaValueProbe::Bool(_)
                     | FormulaValueProbe::Omitted
-                    | FormulaValueProbe::Lambda { .. } => {
+                    | FormulaValueProbe::Lambda { .. }
+                    | FormulaValueProbe::Array(_) => {
                         return Err(FormulaEvalError::Value);
                     }
                 }
@@ -1787,7 +1788,8 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                     | FormulaValueProbe::Bool(_)
                     | FormulaValueProbe::Text(_)
                     | FormulaValueProbe::Omitted
-                    | FormulaValueProbe::Lambda { .. } => {}
+                    | FormulaValueProbe::Lambda { .. }
+                    | FormulaValueProbe::Array(_) => {}
                 }
             }};
         }
@@ -1867,7 +1869,9 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                         FormulaValueProbe::Bool(_)
                         | FormulaValueProbe::Number(_)
                         | FormulaValueProbe::Text(_) => counta += 1,
-                        FormulaValueProbe::Omitted | FormulaValueProbe::Lambda { .. } => {}
+                        FormulaValueProbe::Omitted
+                        | FormulaValueProbe::Lambda { .. }
+                        | FormulaValueProbe::Array(_) => {}
                     }
                 }
             }};
@@ -2112,7 +2116,13 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         if let Some(reference) = self.parse_reference_set_before_boundary(&[',', ')'])? {
             return self.evaluator.numeric_values_in_reference(&reference);
         }
-        if let Some(values) = self.try_parse_array_constant_argument()? {
+        let checkpoint = self.index;
+        if let Some(values) = self.try_parse_array_constant_argument()?
+            && {
+                self.skip_whitespace();
+                matches!(self.peek_char(), Some(',' | ')'))
+            }
+        {
             // Like references, array constants contribute only their numbers.
             let mut numbers = Vec::new();
             for value in values {
@@ -2124,38 +2134,48 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             }
             return Ok(numbers);
         }
-        let checkpoint = self.index;
-        let numeric = self.parse_comparison();
-        self.skip_whitespace();
-        let continues_as_text = self.peek_char() == Some('&');
-        match numeric {
-            Ok(_) if continues_as_text => self.parse_text_aggregate_argument(checkpoint),
-            Err(FormulaEvalError::Unsupported) => self.parse_text_aggregate_argument(checkpoint),
-            result => Ok(vec![result?]),
+        // An array constant that an operator extends, such as `{1,2}*2`, is an expression.
+        self.index = checkpoint;
+        // Text passed straight to an aggregate is coerced as VALUE coerces it, while an array
+        // contributes only its numbers, as a range does.
+        match self.parse_typed_comparison()? {
+            FormulaValueProbe::Array(array) => {
+                let mut numbers = Vec::new();
+                for value in array.values {
+                    match value {
+                        CellValue::Number(number) => numbers.push(number),
+                        CellValue::Error(error) => {
+                            return Err(formula_eval_error_from_cell_error(error));
+                        }
+                        _ => {}
+                    }
+                }
+                Ok(numbers)
+            }
+            value => Ok(vec![self.typed_number(value)?]),
         }
     }
 
-    /// Reparses an aggregate argument from `checkpoint` as text, which only a text expression
-    /// such as `"3"` or `"x"&1` produces.
-    fn parse_text_aggregate_argument(
+    /// A `SUMPRODUCT` argument that is not a plain range: an array, whose non-numbers count as
+    /// 0, or a single number.
+    pub(super) fn parse_sumproduct_value_argument(
         &mut self,
-        checkpoint: usize,
-    ) -> Result<Vec<f64>, FormulaEvalError> {
-        // Text passed straight to an aggregate is coerced as VALUE coerces it: a number, or
-        // #VALUE!.
-        self.index = checkpoint;
-        let value = self.parse_value_probe_argument();
-        self.skip_whitespace();
-        match value {
-            Ok(FormulaValueProbe::Text(text)) if matches!(self.peek_char(), Some(',' | ')')) => {
-                Ok(vec![formula_value_text(
-                    self.evaluator.context.date_system(),
-                    self.evaluator.context.locale(),
-                    text.as_str(),
-                )?])
+    ) -> Result<(u32, u32, Vec<f64>), FormulaEvalError> {
+        match self.parse_typed_comparison()? {
+            FormulaValueProbe::Array(array) => {
+                let mut numbers = Vec::with_capacity(array.values.len());
+                for value in array.values {
+                    numbers.push(match value {
+                        CellValue::Number(number) => number,
+                        CellValue::Error(error) => {
+                            return Err(formula_eval_error_from_cell_error(error));
+                        }
+                        _ => 0.0,
+                    });
+                }
+                Ok((array.rows as u32, array.cols as u32, numbers))
             }
-            Ok(FormulaValueProbe::Error(error)) => Err(error),
-            _ => Err(FormulaEvalError::Unsupported),
+            value => Ok((1, 1, vec![self.typed_number(value)?])),
         }
     }
 
@@ -2218,9 +2238,9 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             FormulaValueProbe::Bool(value) => Ok(vec![if value { 1.0 } else { 0.0 }]),
             FormulaValueProbe::Number(value) => Ok(vec![value]),
             FormulaValueProbe::Error(error) => Err(error),
-            FormulaValueProbe::Omitted | FormulaValueProbe::Lambda { .. } => {
-                Err(FormulaEvalError::Value)
-            }
+            FormulaValueProbe::Omitted
+            | FormulaValueProbe::Lambda { .. }
+            | FormulaValueProbe::Array(_) => Err(FormulaEvalError::Value),
         }
     }
 

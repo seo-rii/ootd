@@ -727,6 +727,18 @@ External data notes:
   error operand first, and a function that fails is its error, so `=ISERROR(1/0+5)` and
   `=IFERROR(SUM(1/0,2),0)` catch them. `IFERROR`/`IFNA` return either argument's type. Text
   comparison uses lowercase ordinal order rather than Excel's collation.
+- Typed expressions carry arrays: a multi-cell range operand, an array constant, and an
+  array-returning function (`SEQUENCE`, `FILTER`, `SORT`, and the other spill functions) are
+  arrays, and operators apply element by element. Shapes broadcast as Excel's do: a scalar, a
+  single row, or a single column stretches across the other operand, and positions past a smaller
+  array's edge are `#N/A`. `IF` with an array condition selects element by element. Aggregates
+  read an array's numbers as they read a range's, `SUMPRODUCT` counts non-numbers as 0, `AND`/
+  `OR`/`XOR` read its logicals and numbers, and `CONCAT`/`TEXTJOIN` join its elements, so
+  `=SUMPRODUCT((A1:A3>1)*B1:B3)` and `=SUM(IF(A1:A3>1,B1:B3))` work. A dynamic-array formula
+  spills the array its expression computes (`=A1:A3*2`); where one value is wanted, a computed
+  array shows its top-left element. Scalar functions are not yet lifted over array arguments
+  (`=SUM(LEN(A1:A3))`), and functions such as `INDEX`, `ROWS`, and `MMULT` do not yet take
+  computed arrays.
 - The evaluator is otherwise numeric-first. It includes focused scalar text and date/time text-parse subsets, but broader string semantics, locale-sensitive date/time parsing, and richer coercion rules are not implemented.
 - Dynamic array support currently covers in-memory `Formula2`/`Formula2Local` spill materialization for the projection functions listed above, spill replacement, and obstruction errors. XLSX dynamic-array metadata round-trip, spill-reference operators, remaining array-producing and higher-order functions, and broader `Formula2` parity remain incomplete.
 - Lookup/reference support now includes workbook and worksheet scoped names, explicit multi-area references for supported functions, and 3D reference expansion for aggregate-style formulas. External workbook references (`[1]Sheet1!A1`) read the cached values in the workbook's `externalLink` parts without opening the linked file. It is still a focused subset and does not model broader lookup/reference families yet.

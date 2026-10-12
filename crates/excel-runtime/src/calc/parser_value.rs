@@ -43,7 +43,9 @@ pub(super) fn formula_compare_values(
     for value in [left, right] {
         match value {
             FormulaValueProbe::Error(error) => return Err(*error),
-            FormulaValueProbe::Omitted | FormulaValueProbe::Lambda { .. } => {
+            FormulaValueProbe::Omitted
+            | FormulaValueProbe::Lambda { .. }
+            | FormulaValueProbe::Array(_) => {
                 return Err(FormulaEvalError::Unsupported);
             }
             _ => {}
@@ -79,6 +81,123 @@ fn formula_error_value(
         Err(error) => Ok(FormulaValueProbe::Error(error)),
         value => value,
     }
+}
+
+/// The largest range a typed expression reads as an array.
+const MAX_TYPED_ARRAY_CELLS: usize = 1 << 22;
+
+/// The rows and columns of a value: an array's shape, or one cell for a scalar.
+fn formula_value_shape(value: &FormulaValueProbe) -> (usize, usize) {
+    match value {
+        FormulaValueProbe::Array(array) => (array.rows, array.cols),
+        _ => (1, 1),
+    }
+}
+
+/// The element of a value at `row`, `col` of a broadcast result. A scalar, a single row, or a
+/// single column repeats to fill the result; a position past a larger array's edge is `#N/A`.
+fn formula_value_element(value: &FormulaValueProbe, row: usize, col: usize) -> FormulaValueProbe {
+    let FormulaValueProbe::Array(array) = value else {
+        return value.clone();
+    };
+    let row = if array.rows == 1 { 0 } else { row };
+    let col = if array.cols == 1 { 0 } else { col };
+    if row >= array.rows || col >= array.cols {
+        return FormulaValueProbe::Error(FormulaEvalError::NA);
+    }
+    formula_value_probe_from_cell_value(array.values[row * array.cols + col].clone())
+}
+
+/// An array of typed values in row order.
+fn formula_array_from_probes(
+    rows: usize,
+    cols: usize,
+    values: impl IntoIterator<Item = FormulaValueProbe>,
+) -> FormulaValueProbe {
+    FormulaValueProbe::Array(FormulaArrayResult {
+        rows,
+        cols,
+        values: values
+            .into_iter()
+            .map(|value| {
+                formula_cell_value_from_probe(value).unwrap_or(CellValue::Error(CellError::Value))
+            })
+            .collect(),
+    })
+}
+
+/// Applies a binary operator element by element when either operand is an array, broadcasting
+/// to the larger shape as Excel does.
+pub(super) fn formula_lift2(
+    left: FormulaValueProbe,
+    right: FormulaValueProbe,
+    operation: impl Fn(
+        FormulaValueProbe,
+        FormulaValueProbe,
+    ) -> Result<FormulaValueProbe, FormulaEvalError>,
+) -> Result<FormulaValueProbe, FormulaEvalError> {
+    if !matches!(left, FormulaValueProbe::Array(_)) && !matches!(right, FormulaValueProbe::Array(_))
+    {
+        return operation(left, right);
+    }
+    let (left_rows, left_cols) = formula_value_shape(&left);
+    let (right_rows, right_cols) = formula_value_shape(&right);
+    let rows = left_rows.max(right_rows);
+    let cols = left_cols.max(right_cols);
+    let mut values = Vec::with_capacity(rows * cols);
+    for row in 0..rows {
+        for col in 0..cols {
+            values.push(operation(
+                formula_value_element(&left, row, col),
+                formula_value_element(&right, row, col),
+            )?);
+        }
+    }
+    Ok(formula_array_from_probes(rows, cols, values))
+}
+
+/// `IF` over an array condition: each element selects from the matching element of
+/// `when_true` or `when_false`, broadcast to the largest shape. A text condition is `#VALUE!`.
+pub(super) fn formula_select(
+    condition: FormulaValueProbe,
+    when_true: FormulaValueProbe,
+    when_false: FormulaValueProbe,
+) -> FormulaValueProbe {
+    let shapes = [&condition, &when_true, &when_false].map(formula_value_shape);
+    let rows = shapes.iter().map(|shape| shape.0).max().unwrap_or(1);
+    let cols = shapes.iter().map(|shape| shape.1).max().unwrap_or(1);
+    let mut values = Vec::with_capacity(rows * cols);
+    for row in 0..rows {
+        for col in 0..cols {
+            values.push(match formula_value_element(&condition, row, col) {
+                FormulaValueProbe::Bool(true) => formula_value_element(&when_true, row, col),
+                FormulaValueProbe::Number(number) if number != 0.0 => {
+                    formula_value_element(&when_true, row, col)
+                }
+                FormulaValueProbe::Bool(false)
+                | FormulaValueProbe::Number(_)
+                | FormulaValueProbe::Blank => formula_value_element(&when_false, row, col),
+                FormulaValueProbe::Error(error) => FormulaValueProbe::Error(error),
+                _ => FormulaValueProbe::Error(FormulaEvalError::Value),
+            });
+        }
+    }
+    formula_array_from_probes(rows, cols, values)
+}
+
+/// Applies a unary operator element by element to an array operand.
+pub(super) fn formula_lift1(
+    value: FormulaValueProbe,
+    operation: impl Fn(FormulaValueProbe) -> Result<FormulaValueProbe, FormulaEvalError>,
+) -> Result<FormulaValueProbe, FormulaEvalError> {
+    let FormulaValueProbe::Array(array) = value else {
+        return operation(value);
+    };
+    let mut values = Vec::with_capacity(array.values.len());
+    for value in array.values {
+        values.push(operation(formula_value_probe_from_cell_value(value))?);
+    }
+    Ok(formula_array_from_probes(array.rows, array.cols, values))
 }
 
 /// The result of an arithmetic operator, or `#NUM!` when it leaves the finite numbers.
@@ -127,16 +246,18 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                 return Ok(value);
             };
             let right = self.parse_typed_concatenation()?;
-            value = formula_error_value(formula_compare_values(&value, &right).map(|ordering| {
-                FormulaValueProbe::Bool(match operator {
-                    FormulaComparisonOperator::Equal => ordering == Ordering::Equal,
-                    FormulaComparisonOperator::NotEqual => ordering != Ordering::Equal,
-                    FormulaComparisonOperator::LessThan => ordering == Ordering::Less,
-                    FormulaComparisonOperator::LessThanOrEqual => ordering != Ordering::Greater,
-                    FormulaComparisonOperator::GreaterThan => ordering == Ordering::Greater,
-                    FormulaComparisonOperator::GreaterThanOrEqual => ordering != Ordering::Less,
-                })
-            }))?;
+            value = formula_lift2(value, right, |left, right| {
+                formula_error_value(formula_compare_values(&left, &right).map(|ordering| {
+                    FormulaValueProbe::Bool(match operator {
+                        FormulaComparisonOperator::Equal => ordering == Ordering::Equal,
+                        FormulaComparisonOperator::NotEqual => ordering != Ordering::Equal,
+                        FormulaComparisonOperator::LessThan => ordering == Ordering::Less,
+                        FormulaComparisonOperator::LessThanOrEqual => ordering != Ordering::Greater,
+                        FormulaComparisonOperator::GreaterThan => ordering == Ordering::Greater,
+                        FormulaComparisonOperator::GreaterThanOrEqual => ordering != Ordering::Less,
+                    })
+                }))
+            })?;
         }
     }
 
@@ -148,11 +269,13 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                 return Ok(value);
             }
             let right = self.parse_typed_additive()?;
-            value = formula_error_value((|| {
-                let mut text = self.typed_text(value)?;
-                text.push_str(&self.typed_text(right)?);
-                Ok(FormulaValueProbe::Text(text))
-            })())?;
+            value = formula_lift2(value, right, |left, right| {
+                formula_error_value((|| {
+                    let mut text = self.typed_text(left)?;
+                    text.push_str(&self.typed_text(right)?);
+                    Ok(FormulaValueProbe::Text(text))
+                })())
+            })?;
         }
     }
 
@@ -217,10 +340,12 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             if !self.consume_char('%') {
                 return Ok(value);
             }
-            value = formula_error_value(
-                self.typed_number(value)
-                    .map(|number| FormulaValueProbe::Number(number / 100.0)),
-            )?;
+            value = formula_lift1(value, |value| {
+                formula_error_value(
+                    self.typed_number(value)
+                        .map(|number| FormulaValueProbe::Number(number / 100.0)),
+                )
+            })?;
         }
     }
 
@@ -228,10 +353,12 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         self.skip_whitespace();
         if self.consume_char('-') {
             let value = self.parse_typed_unary()?;
-            return formula_error_value(
-                self.typed_number(value)
-                    .map(|number| FormulaValueProbe::Number(-number)),
-            );
+            return formula_lift1(value, |value| {
+                formula_error_value(
+                    self.typed_number(value)
+                        .map(|number| FormulaValueProbe::Number(-number)),
+                )
+            });
         }
         // Unary plus leaves its operand as it is: `=+"a"` is text.
         if self.consume_char('+') {
@@ -259,10 +386,29 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             return Ok(FormulaValueProbe::Error(error));
         }
         let checkpoint = self.index;
+        if let Some(rows) = self.parse_array_constant()? {
+            let cols = rows.first().map_or(0, Vec::len);
+            if rows.is_empty() || rows.iter().any(|row| row.len() != cols) {
+                return Ok(FormulaValueProbe::Error(FormulaEvalError::Value));
+            }
+            let row_count = rows.len();
+            return Ok(formula_array_from_probes(
+                row_count,
+                cols,
+                rows.into_iter().flatten(),
+            ));
+        }
+        self.index = checkpoint;
         if let Some(identifier) = self.parse_identifier() {
             self.skip_whitespace();
             if self.consume_char('(') {
                 let arguments_start = self.index;
+                if DYNAMIC_ARRAY_FUNCTION_NAMES
+                    .iter()
+                    .any(|name| identifier.eq_ignore_ascii_case(name))
+                {
+                    return self.parse_typed_array_function(checkpoint, arguments_start);
+                }
                 return match self.parse_typed_function(identifier.as_str()) {
                     Err(FormulaEvalError::Unsupported) => Err(FormulaEvalError::Unsupported),
                     // A function that fails is its error, wherever in its arguments it stopped.
@@ -277,9 +423,12 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         self.index = checkpoint;
         if let Some((reference, next_index)) = self.try_parse_reference_set()? {
             self.index = next_index;
+            if reference.areas().len() != 1 {
+                return Ok(FormulaValueProbe::Error(FormulaEvalError::Value));
+            }
             let (sheet_id, rect) = reference.single_area()?;
             if rect.row_first != rect.row_last || rect.col_first != rect.col_last {
-                return Ok(FormulaValueProbe::Error(FormulaEvalError::Value));
+                return self.typed_range_array(sheet_id, rect);
             }
             return formula_error_value(
                 self.evaluator
@@ -303,6 +452,66 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             return Ok(FormulaValueProbe::Error(FormulaEvalError::Name));
         }
         Err(FormulaEvalError::Unsupported)
+    }
+
+    /// An array-returning function call such as `SEQUENCE(3)`, which starts at `start` and whose
+    /// arguments start at `arguments_start`, evaluated as an array operand.
+    fn parse_typed_array_function(
+        &mut self,
+        start: usize,
+        arguments_start: usize,
+    ) -> Result<FormulaValueProbe, FormulaEvalError> {
+        let end = self.call_end(arguments_start)?;
+        let input = self.input;
+        let mut parser = FormulaParser::new(
+            &input[start..end],
+            &mut *self.evaluator,
+            self.sheet_id,
+            self.current_position,
+        );
+        parser.bindings = self.bindings.clone();
+        let result = parser.parse_dynamic_array_formula();
+        self.index = end;
+        formula_error_value(result.map(FormulaValueProbe::Array))
+    }
+
+    /// A multi-cell range as an array of its cells' values, row by row.
+    fn typed_range_array(
+        &mut self,
+        sheet_id: SheetId,
+        rect: Rect,
+    ) -> Result<FormulaValueProbe, FormulaEvalError> {
+        let count = rect
+            .checked_cell_count_usize()
+            .map_err(|_| FormulaEvalError::Num)?;
+        if count > MAX_TYPED_ARRAY_CELLS {
+            return Ok(FormulaValueProbe::Error(FormulaEvalError::Num));
+        }
+        let Some(worksheet) = self.evaluator.state.formula_sheet_data(sheet_id) else {
+            return Ok(FormulaValueProbe::Error(FormulaEvalError::Ref));
+        };
+        // Only stored cells need reading; the rest of the range is blank.
+        let stored = worksheet
+            .cells
+            .range((rect.row_first, rect.col_first)..=(rect.row_last, rect.col_last))
+            .map(|(coordinates, _)| *coordinates)
+            .filter(|(_, col)| (rect.col_first..=rect.col_last).contains(col))
+            .collect::<Vec<_>>();
+        let width = rect.width() as usize;
+        let mut values = vec![CellValue::Blank; count];
+        for (row, col) in stored {
+            let index = (row - rect.row_first) as usize * width + (col - rect.col_first) as usize;
+            values[index] = match self.evaluator.cell_value_or_blank(sheet_id, row, col) {
+                Ok(value) => value,
+                Err(FormulaEvalError::Unsupported) => return Err(FormulaEvalError::Unsupported),
+                Err(error) => return Ok(FormulaValueProbe::Error(error)),
+            };
+        }
+        Ok(FormulaValueProbe::Array(FormulaArrayResult {
+            rows: rect.height() as usize,
+            cols: width,
+            values,
+        }))
     }
 
     /// The index just past the `)` that closes a call whose arguments start at `start`, skipping
@@ -348,11 +557,13 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         right: FormulaValueProbe,
         operation: impl Fn(f64, f64) -> Result<f64, FormulaEvalError>,
     ) -> Result<FormulaValueProbe, FormulaEvalError> {
-        formula_error_value((|| {
-            let left = self.typed_number(left)?;
-            let right = self.typed_number(right)?;
-            formula_finite_number(operation(left, right)?)
-        })())
+        formula_lift2(left, right, |left, right| {
+            formula_error_value((|| {
+                let left = self.typed_number(left)?;
+                let right = self.typed_number(right)?;
+                formula_finite_number(operation(left, right)?)
+            })())
+        })
     }
 
     /// A function call whose name and `(` are consumed, as a typed value: functions with typed

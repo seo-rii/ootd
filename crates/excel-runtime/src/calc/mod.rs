@@ -48,6 +48,7 @@ use financial::*;
 use lookup::*;
 use matrix::*;
 use numeric::*;
+use parser_value::*;
 pub(super) use reference_text::*;
 use scalar_functions::*;
 pub(super) use text::*;
@@ -317,6 +318,8 @@ enum FormulaValueProbe {
         parameters: Vec<String>,
         body: String,
     },
+    /// A range or array value of a typed expression, such as `A1:A3*2` or `{1,2;3,4}`.
+    Array(FormulaArrayResult),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -370,7 +373,9 @@ impl FormulaGroupByAggregation {
                     numbers.push(*number);
                 }
                 FormulaValueProbe::Error(error) => return Err(*error),
-                FormulaValueProbe::Omitted | FormulaValueProbe::Lambda { .. } => {}
+                FormulaValueProbe::Omitted
+                | FormulaValueProbe::Lambda { .. }
+                | FormulaValueProbe::Array(_) => {}
             }
         }
         match self {
@@ -454,7 +459,9 @@ fn formula_cell_value_from_probe(value: FormulaValueProbe) -> Option<CellValue> 
         FormulaValueProbe::Number(value) => Some(CellValue::Number(value)),
         FormulaValueProbe::Text(value) => Some(CellValue::Text(value)),
         FormulaValueProbe::Error(error) => error.into_cell_value(),
-        FormulaValueProbe::Omitted | FormulaValueProbe::Lambda { .. } => None,
+        FormulaValueProbe::Omitted
+        | FormulaValueProbe::Lambda { .. }
+        | FormulaValueProbe::Array(_) => None,
     }
 }
 
@@ -465,9 +472,9 @@ fn formula_number_from_value_probe(value: FormulaValueProbe) -> Result<f64, Form
         FormulaValueProbe::Number(value) => Ok(value),
         FormulaValueProbe::Text(_) => Err(FormulaEvalError::Value),
         FormulaValueProbe::Error(error) => Err(error),
-        FormulaValueProbe::Omitted | FormulaValueProbe::Lambda { .. } => {
-            Err(FormulaEvalError::Value)
-        }
+        FormulaValueProbe::Omitted
+        | FormulaValueProbe::Lambda { .. }
+        | FormulaValueProbe::Array(_) => Err(FormulaEvalError::Value),
     }
 }
 
@@ -478,9 +485,9 @@ fn formula_text_from_value_probe(value: FormulaValueProbe) -> Result<String, For
         FormulaValueProbe::Number(value) => formula_text_from_number(value),
         FormulaValueProbe::Text(value) => Ok(value),
         FormulaValueProbe::Error(error) => Err(error),
-        FormulaValueProbe::Omitted | FormulaValueProbe::Lambda { .. } => {
-            Err(FormulaEvalError::Value)
-        }
+        FormulaValueProbe::Omitted
+        | FormulaValueProbe::Lambda { .. }
+        | FormulaValueProbe::Array(_) => Err(FormulaEvalError::Value),
     }
 }
 
@@ -563,6 +570,27 @@ fn div_floor(value: i64, divisor: i64) -> i64 {
     }
 }
 
+/// Functions whose results are arrays, evaluated by `parse_dynamic_array_formula`.
+const DYNAMIC_ARRAY_FUNCTION_NAMES: [&str; 17] = [
+    "FILTER",
+    "SORT",
+    "SORTBY",
+    "UNIQUE",
+    "TAKE",
+    "DROP",
+    "CHOOSECOLS",
+    "CHOOSEROWS",
+    "TRANSPOSE",
+    "SEQUENCE",
+    "EXPAND",
+    "HSTACK",
+    "VSTACK",
+    "TOCOL",
+    "TOROW",
+    "WRAPROWS",
+    "WRAPCOLS",
+];
+
 struct FormulaParser<'a, 'b, 'state> {
     input: &'a str,
     index: usize,
@@ -594,27 +622,9 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
         let Some(identifier) = self.parse_identifier() else {
             return Err(FormulaEvalError::Unsupported);
         };
-        if ![
-            "FILTER",
-            "SORT",
-            "SORTBY",
-            "UNIQUE",
-            "TAKE",
-            "DROP",
-            "CHOOSECOLS",
-            "CHOOSEROWS",
-            "TRANSPOSE",
-            "SEQUENCE",
-            "EXPAND",
-            "HSTACK",
-            "VSTACK",
-            "TOCOL",
-            "TOROW",
-            "WRAPROWS",
-            "WRAPCOLS",
-        ]
-        .iter()
-        .any(|name| identifier.eq_ignore_ascii_case(name))
+        if !DYNAMIC_ARRAY_FUNCTION_NAMES
+            .iter()
+            .any(|name| identifier.eq_ignore_ascii_case(name))
         {
             return Err(FormulaEvalError::Unsupported);
         }
@@ -1048,7 +1058,9 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                         FormulaValueProbe::Text(_) => 2,
                         FormulaValueProbe::Bool(_) => 3,
                         FormulaValueProbe::Error(_) => 4,
-                        FormulaValueProbe::Omitted | FormulaValueProbe::Lambda { .. } => 5,
+                        FormulaValueProbe::Omitted
+                        | FormulaValueProbe::Lambda { .. }
+                        | FormulaValueProbe::Array(_) => 5,
                     };
                     Ok(rank(&left).cmp(&rank(&right)))
                 };
@@ -1983,9 +1995,9 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                 FormulaValueProbe::Bool(value) => Ok(if value { 1.0 } else { 0.0 }),
                 FormulaValueProbe::Number(value) => Ok(value),
                 FormulaValueProbe::Error(error) => Err(error),
-                FormulaValueProbe::Omitted | FormulaValueProbe::Lambda { .. } => {
-                    Err(FormulaEvalError::Value)
-                }
+                FormulaValueProbe::Omitted
+                | FormulaValueProbe::Lambda { .. }
+                | FormulaValueProbe::Array(_) => Err(FormulaEvalError::Value),
             };
         }
         if name.eq_ignore_ascii_case("DECIMAL") {
@@ -3184,10 +3196,10 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                         arguments.push((rect.height(), rect.width(), values));
                     } else {
                         self.index = checkpoint;
-                        arguments.push((1, 1, vec![self.parse_comparison()?]));
+                        arguments.push(self.parse_sumproduct_value_argument()?);
                     }
                 } else {
-                    arguments.push((1, 1, vec![self.parse_comparison()?]));
+                    arguments.push(self.parse_sumproduct_value_argument()?);
                 }
 
                 self.skip_whitespace();
@@ -3771,7 +3783,9 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                     }
                     FormulaValueProbe::Text(_) => return Err(FormulaEvalError::Value),
                     FormulaValueProbe::Error(error) => return Err(error),
-                    FormulaValueProbe::Omitted | FormulaValueProbe::Lambda { .. } => {
+                    FormulaValueProbe::Omitted
+                    | FormulaValueProbe::Lambda { .. }
+                    | FormulaValueProbe::Array(_) => {
                         return Err(FormulaEvalError::Value);
                     }
                 }
@@ -3826,12 +3840,14 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
                 }
             } else {
                 self.skip_whitespace();
-                if self.parse_string_literal()?.is_some() {
-                    return Err(FormulaEvalError::Value);
-                }
-                match self.parse_catchable_argument()? {
-                    Ok(value) => record_value!(FormulaValueProbe::Number(value), false),
-                    Err(error) => record_value!(FormulaValueProbe::Error(error), false),
+                match self.parse_value_probe_argument()? {
+                    // Like a range, an array contributes its logicals and numbers.
+                    FormulaValueProbe::Array(array) => {
+                        for value in array.values {
+                            record_value!(formula_value_probe_from_cell_value(value), true);
+                        }
+                    }
+                    value => record_value!(value, false),
                 }
             }
 
@@ -3880,7 +3896,14 @@ impl<'a, 'b, 'state> FormulaParser<'a, 'b, 'state> {
             }
             return Ok(values);
         }
-        Ok(vec![self.parse_text_value_argument()?])
+        match self.parse_typed_comparison()? {
+            FormulaValueProbe::Array(array) => array
+                .values
+                .into_iter()
+                .map(|value| self.typed_text(formula_value_probe_from_cell_value(value)))
+                .collect(),
+            value => Ok(vec![self.typed_text(value)?]),
+        }
     }
 
     /// Parses one argument as a typed value. An error the argument evaluates to is its value, so

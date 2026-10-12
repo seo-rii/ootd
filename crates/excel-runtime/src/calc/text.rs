@@ -84,9 +84,9 @@ pub(super) fn formula_value_to_text(
         FormulaValueProbe::Text(value) if strict => Ok(formula_strict_text_literal(value.as_str())),
         FormulaValueProbe::Text(value) => Ok(value),
         FormulaValueProbe::Error(error) => Ok(formula_eval_error_text(error).to_string()),
-        FormulaValueProbe::Omitted | FormulaValueProbe::Lambda { .. } => {
-            Err(FormulaEvalError::Value)
-        }
+        FormulaValueProbe::Omitted
+        | FormulaValueProbe::Lambda { .. }
+        | FormulaValueProbe::Array(_) => Err(FormulaEvalError::Value),
     }
 }
 
@@ -176,7 +176,8 @@ pub(super) fn formula_selected_text_from_value_probe(
         | FormulaValueProbe::Bool(_)
         | FormulaValueProbe::Number(_)
         | FormulaValueProbe::Omitted
-        | FormulaValueProbe::Lambda { .. } => Err(FormulaEvalError::Unsupported),
+        | FormulaValueProbe::Lambda { .. }
+        | FormulaValueProbe::Array(_) => Err(FormulaEvalError::Unsupported),
     }
 }
 
